@@ -1,0 +1,14 @@
+dv-testset is MIT licensed (see LICENSE).
+
+This repository ships no third-party source, binaries, audio or bitstreams.
+The rig builds third-party software from sources fetched at run time by the
+scripts/pre-fetch-*.sh scripts, into the gitignored .cache/ directory:
+
+- xlxd (GPL-3.0), https://github.com/LX3JL/xlxd
+- codec2 (LGPL-2.1), https://github.com/drowe67/codec2
+- AllStarLink 3 / app_rpt (GPL-2.0), installed from repo.allstarlink.org
+  inside rig/Dockerfile.allstar
+
+Those components remain under their own licences. Transcoder images are
+supplied by the user through TRANSCODER_IMAGE and are not part of this
+repository.

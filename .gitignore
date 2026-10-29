@@ -1,0 +1,20 @@
+# fetched sources, local secrets, run output
+.cache/
+.local/
+out/
+*-ctx/
+**/bin/
+
+# audio and bitstreams are never committed
+*.pcm
+*.bin
+*.wav
+*.raw
+*.frames
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+.venv/

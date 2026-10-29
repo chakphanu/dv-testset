@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dvtest"
+version = "0.1.0"
+description = "Black-box test clients and rig for digital-voice reflectors and transcoders"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.setuptools.packages.find]
+include = ["dvtest*"]
+
+[tool.pytest.ini_options]
+testpaths = ["cases"]
+markers = [
+    "unit: offline codec round trips, no network",
+    "wire: needs a running transcoder (DVT_AMBED_ADDR or TRANSCODER_IMAGE)",
+    "netns: needs a built xlxd (pre-fetch-xlxd.sh + make) and unshare -rn",
+    "rig: needs the docker rig (rig/compose.yml, profile core)",
+    "allstar: needs the docker rig with profile allstar",
+]
