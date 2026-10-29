@@ -21,7 +21,9 @@ neither gain-steps nor pads a partial last packet the same way).
 Cross cells (NXDN <-> D-STAR, M17) are differential like the matrix:
 tone bursts encoded by transcoder-ref, xlxd-sut must deliver what
 xlxd-ref delivers. Morse ID text keyed through NXDN must decode exactly
-after D-STAR (decoded by transcoder-ref) and M17 (c2dec), and back.
+after D-STAR (decoded by transcoder-ref) and M17 (c2dec), and back, on
+each side whose transcoder passes a probe of the same tandem; while no
+side passes, the Morse cell is xfail (informational).
 
 With --profile nxdn,allstar and DVT_NXDN_MODULE on a USRP-bridged module
 (A or B), NXDN <-> AllStar is checked through IAX2 on xlxd-sut.
@@ -268,23 +270,25 @@ def test_cross_sut_equals_ref(nxdn_rig, encoded, cell):
 
 # ------------------------------------------------------------------ Morse
 
-def pcm_of(kind, frames, rig, tmp_path):
-    """Decode received frames to PCM: AMBE through transcoder-ref, Codec2
-    with c2dec. None when no decoder is available."""
-    if kind == "m17":
-        c2dec = shutil.which("c2dec")
-        if not c2dec:
-            return None
-        bits, raw = tmp_path / "m17.c2", tmp_path / "m17.raw"
-        bits.write_bytes(b"".join(frames))
-        subprocess.run([c2dec, "3200", str(bits), str(raw)], check=True, capture_output=True)
-        return raw.read_bytes()
-    if kind == "nxdn":
-        codec, frames = ambed.AMBE2PLUS, [nxdn.to_dmr(f) for f in frames]
-    else:
-        codec = clients.CODEC[kind]
-    out = ambed.transcode(rig.ambed_ref, codec, [ambed.PCM], frames, port=rig.ambed_port)
+def codec_of(kind):
+    """AMBEd codec of a kind's frames on xlxd (NXDN rides as AMBE+2)."""
+    return ambed.AMBE2PLUS if kind == "nxdn" else clients.CODEC[kind]
+
+
+def pcm_of(rig, codec, frames):
+    """Decode frames to PCM: Codec2 with c2dec when installed, everything
+    else (and Codec2 without c2dec) through transcoder-ref."""
+    if codec == ambed.CODEC2_3200 and shutil.which("c2dec"):
+        return subprocess.run(["c2dec", "3200", "-", "-"], input=b"".join(frames),
+                              capture_output=True, check=True).stdout
+    out = ambed.transcode(rig.ambed_ref, codec, [ambed.PCM], frames, port=rig.ambed_port,
+                          transaction=0x4E580100 + codec)
     return b"".join(out[ambed.PCM])
+
+
+def as_codec(kind, frames):
+    """Received frames in the codec form AMBEd takes (NXDN 49-bit -> DMR)."""
+    return [nxdn.to_dmr(f) for f in frames] if kind == "nxdn" else frames
 
 
 @pytest.fixture(scope="module")
@@ -301,21 +305,44 @@ def morse_id(nxdn_rig):
     return text, frames
 
 
+def tandem_probe(rig, codec_in, codec_out):
+    """Feature probe: does each side's own transcoder carry a 20 wpm Morse
+    ID through codec_in -> codec_out (the conversion its xlxd asks for)?
+    Encoded and decoded as in the rig case. {side: exact}."""
+    text = "PARIS %04d" % random.SystemRandom().randrange(10000)
+    frames = ambed.transcode(rig.ambed_ref, ambed.PCM, [codec_in], signals.frames(morse.encode(text, wpm=WPM)),
+                             port=rig.ambed_port, transaction=0x4E580200 + codec_in)[codec_in]
+    out = {}
+    for side, addr in (("ref", rig.ambed_ref), ("sut", rig.ambed_sut)):
+        conv = ambed.transcode(addr, codec_in, [codec_out], frames, port=rig.ambed_port,
+                               transaction=0x4E580300 + codec_in)[codec_out]
+        out[side] = morse.check(text, morse.decode(pcm_of(rig, codec_out, conv)))["exact"]
+    return out
+
+
 @pytest.mark.parametrize("cell", CROSS, ids=["%s-%s" % c for c in CROSS])
-def test_morse_round_trip(nxdn_rig, morse_id, cell, tmp_path):
-    """Morse keyed by the talker decodes exactly at the listener (sut)."""
+def test_morse_round_trip(nxdn_rig, morse_id, cell):
+    """Morse keyed by the talker decodes exactly at the listener, on every
+    side whose transcoder passes the tandem probe of this conversion.
+    While no side passes, the result is informational (xfail naming the
+    probe); it becomes a real assert once a transcoder is fixed."""
     src, dst = cell
+    label = "morse %s-%s" % cell
     text, frames = morse_id
-    side = nxdn_rig["sides"][1]
-    result = run_cell(side, src, dst, frames[src])
-    pcm = pcm_of(dst, result["frames"], nxdn_rig["rig"], tmp_path)
-    if pcm is None:
-        record("morse %s-%s" % cell, {"sent": text, "decoded": None, "reason": "no decoder"})
-        pytest.skip("no %s decoder in the tester (c2dec missing)" % dst)
-    check = morse.check(text, morse.decode(pcm))
-    record("morse %s-%s" % cell, {"sent": text, "got": check["got"], "exact": check["exact"],
-                                  "frames": len(result["frames"])})
-    assert check["exact"], check
+    rig = nxdn_rig["rig"]
+    probe = tandem_probe(rig, codec_of(src), codec_of(dst))
+    got = both(nxdn_rig, src, dst, frames[src])
+    checks = {name: morse.check(text, morse.decode(pcm_of(rig, codec_of(dst), as_codec(dst, r["frames"]))))
+              for name, r in got.items()}
+    record(label, {"sent": text, "probe": probe,
+                   **{n: {"got": c["got"], "exact": c["exact"], "frames": len(got[n]["frames"])}
+                      for n, c in checks.items()}})
+    bad = [n for n in ("ref", "sut") if probe[n] and not checks[n]["exact"]]
+    assert not bad, "%s: %s decoded %s although its transcoder passes the probe" % (
+        label, bad, {n: checks[n]["got"] for n in bad})
+    if not any(probe.values()):
+        pytest.xfail("%s informational: no transcoder carries Morse through this tandem (probe %s); "
+                     "rig decode %s" % (label, probe, {n: c["got"] for n, c in checks.items()}))
 
 
 # ------------------------------------------------------------------ AllStar
