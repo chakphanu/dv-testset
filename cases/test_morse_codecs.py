@@ -5,7 +5,8 @@ was keyed exactly (20 wpm, 800 Hz).
 unit: upstream Codec2 3200 and 1600 round trip (c2enc/c2dec on PATH).
 wire: PCM -> AMBE+ / AMBE2+ / Codec2 / IMBE -> PCM through a transcoder
 (DVT_AMBED_ADDR or TRANSCODER_IMAGE); codecs come from its CAPS reply.
-Tandems IMBE <-> AMBE+ / AMBE2+ / Codec2 run at tandem.WPM (12 wpm).
+Tandems IMBE <-> AMBE+ / AMBE2+ / Codec2 and AMBE+ / AMBE2+ <-> Codec2
+run at tandem.WPM (12 wpm) with a fixed set of texts.
 rig: dvtest.tools.live_id sends the ID to xlxd-sut, a D-STAR listener on
 the same module decodes it.
 allstar: D-STAR talker -> IAX2 caller, and IAX2 caller -> M17 listener
@@ -31,6 +32,10 @@ WIRE_CODECS = {"ambeplus": ambed.AMBEPLUS, "ambe2plus": ambed.AMBE2PLUS, "codec2
                "imbe": ambed.IMBE}
 TANDEM = [(src, dst) for other in ("ambeplus", "ambe2plus", "codec2_3200")
           for src, dst in (("imbe", other), (other, "imbe"))]
+TANDEM += [(src, dst) for other in ("ambeplus", "ambe2plus")
+           for src, dst in ((other, "codec2_3200"), ("codec2_3200", other))]
+# fixed tandem texts: short, NXDN-style call (a live AMBE2+ -> Codec2 finding), longer QSO line
+TANDEM_TEXTS = ["PARIS 4821", "N0TEST NXDN 5836", "CQ CQ DE N0CALL K"]
 
 
 def id_text():
@@ -91,32 +96,36 @@ def test_morse_through_transcoder(wire, name):
 
 @pytest.fixture(scope="module")
 def tandem_wire(wire):
-    """(text, {codec: frames}): a tandem.WPM (12 wpm) ID encoded once into
-    every served codec; two MBE hops close 20 wpm gaps."""
-    (addr, port), caps, _text, encoded = wire
-    text = tandem.id_text()
-    frames = tandem.encode(text)
-    outs = list(encoded)
-    out = {}
-    for i in range(0, len(outs), caps.max_outputs):
-        out.update(ambed.transcode(addr, ambed.PCM, outs[i:i + caps.max_outputs], frames, port=port,
-                                   transaction=0x4D4F0400 + i))
-    return text, out
+    """encoded(text) -> {codec: frames}: the text at tandem.WPM (12 wpm)
+    encoded once into every served codec (two MBE hops close 20 wpm gaps)."""
+    (addr, port), caps, _text, served = wire
+    cache = {}
+
+    def encoded(text):
+        if text not in cache:
+            outs, out = list(served), {}
+            for i in range(0, len(outs), caps.max_outputs):
+                out.update(ambed.transcode(addr, ambed.PCM, outs[i:i + caps.max_outputs], tandem.encode(text),
+                                           port=port, transaction=0x4D4F0400 + 0x10000 * len(cache) + i))
+            cache[text] = out
+        return cache[text]
+    return encoded
 
 
 @pytest.mark.wire
+@pytest.mark.parametrize("text", TANDEM_TEXTS)
 @pytest.mark.parametrize("src,dst", TANDEM, ids=["%s-%s" % t for t in TANDEM])
-def test_morse_tandem(wire, tandem_wire, src, dst):
-    """PCM -> src -> dst -> PCM at tandem.WPM: one codec-to-codec hop
-    inside the transcoder."""
-    (addr, port), caps, _text, _encoded = wire
-    text, encoded = tandem_wire
+def test_morse_tandem(wire, tandem_wire, src, dst, text):
+    """PCM -> src (encoded by the transcoder) -> dst -> PCM at tandem.WPM:
+    one codec-to-codec hop inside the transcoder."""
+    (addr, port), caps, _text, served = wire
     a, b = WIRE_CODECS[src], WIRE_CODECS[dst]
-    missing = [n for n in (src, dst) if WIRE_CODECS[n] not in encoded]
+    missing = [n for n in (src, dst) if WIRE_CODECS[n] not in served]
     if missing:
         pytest.skip("transcoder does not announce %s (mask 0x%02x)" % (" ".join(missing), caps.mask))
-    hop = ambed.transcode(addr, a, [b], encoded[a], port=port, transaction=0x4D4F0200 + 8 * a + b)[b]
-    pcm = ambed.transcode(addr, b, [ambed.PCM], hop, port=port, transaction=0x4D4F0300 + 8 * a + b)[ambed.PCM]
+    tx = 0x4D4F0000 + 0x10000 * TANDEM_TEXTS.index(text) + 8 * a + b
+    hop = ambed.transcode(addr, a, [b], tandem_wire(text)[a], port=port, transaction=tx + 0x200)[b]
+    pcm = ambed.transcode(addr, b, [ambed.PCM], hop, port=port, transaction=tx + 0x300)[ambed.PCM]
     result = morse.check(text, morse.decode(b"".join(pcm), wpm=tandem.WPM))
     print("PCM -> %s -> %s -> PCM at %d wpm: sent %r got %r" % (src, dst, tandem.WPM, text, result["got"]))
     assert result["exact"], result
