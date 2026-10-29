@@ -189,8 +189,8 @@ class Checker:
             return
         if st["stream"] is None:
             st["stream"] = Stream(NAME, st["flow"], st["name"], 256, 0.020, d)
-            # xlxd feeds DMR (3 frames per 60 ms burst) and paced sources alike
-            st["stream"].warn_ms = 60.0
+            # xlxd feeds bursts: DMR 3 frames per 60 ms, NXDN 4 frames per 80 ms
+            st["stream"].warn_ms = 80.0
         seq_finding(r, NAME, d, st["stream"], st["stream"].add(d, req[1]), "pid")
         st["pending"].append((d, req[1]))
 

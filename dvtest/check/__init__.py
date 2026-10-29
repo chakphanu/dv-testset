@@ -20,13 +20,14 @@ from datetime import datetime
 
 from .. import pcap
 from ..target import DEFAULT_SUBNET, HOST_OFFSETS
-from . import ambed, dextra, dmr, iax2, m17, usrp
+from . import ambed, dextra, dmr, iax2, m17, nxdn, p25, usrp
 from .common import ERROR, WARN, Report, flow_of
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # capture file stem -> rig host key (dvtest.target.HOST_OFFSETS)
 RIG_FILES = {"xlxd-ref": "xlxd_ref", "xlxd-sut": "xlxd_sut", "transcoder-ref": "ambed_ref",
-             "transcoder-sut": "ambed_sut", "tester": "tester", "allstar": "allstar"}
+             "transcoder-sut": "ambed_sut", "tester": "tester", "allstar": "allstar",
+             "nxdn-ref": "nxdn_ref", "nxdn-sut": "nxdn_sut", "p25-ref": "p25_ref", "p25-sut": "p25_sut"}
 
 
 def rig_config(subnet=None):
@@ -99,7 +100,7 @@ def check_file(path, rig=None, jitter_ms=None, windows=()):
     datagrams = list(pcap.udp_datagrams(path, stats))
     stem = os.path.basename(path).split(".")[0]
     own = None
-    if rig and stem in RIG_FILES:
+    if rig and rig["hosts"].get(RIG_FILES.get(stem)):
         own = rig["hosts"][RIG_FILES[stem]]
         if datagrams and not any(own in (d.src, d.dst) for d in datagrams):
             raise pcap.CaptureError("rig host %s of %s is in no datagram; wrong DVT_SUBNET (%s)?" % (
@@ -114,9 +115,9 @@ def check_file(path, rig=None, jitter_ms=None, windows=()):
     rig_hosts = set(rig["hosts"].values()) if rig else None
     m17_checker = m17.Checker(report)
     checkers = [ambed.Checker(report), dextra.Checker(report, m17_checker), dmr.Checker(report),
-                m17_checker, iax2.Checker(report),
+                m17_checker, iax2.Checker(report), nxdn.Checker(report), p25.Checker(report),
                 usrp.Checker(report, rig["usrp"] if rig else ())]
-    names = [ambed.NAME, dextra.NAME, dmr.NAME, m17.NAME, iax2.NAME, usrp.NAME]
+    names = [ambed.NAME, dextra.NAME, dmr.NAME, m17.NAME, iax2.NAME, nxdn.NAME, p25.NAME, usrp.NAME]
     foreign = multicast = 0
     other = Counter()
     other_flows = {}

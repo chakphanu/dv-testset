@@ -18,6 +18,15 @@ def flow_of(d):
     return "%s:%d>%s:%d" % (d.src, d.sport, d.dst, d.dport)
 
 
+def client_of(flow, port):
+    """(ip, port) of the side of a flow_of() name that is not on `port`."""
+    a, b = flow.split(">")
+    ip, p = a.rsplit(":", 1)
+    if int(p) == port:
+        ip, p = b.rsplit(":", 1)
+    return ip, int(p)
+
+
 class Report:
     """Findings and counters of one capture file."""
 
