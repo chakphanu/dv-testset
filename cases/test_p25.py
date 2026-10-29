@@ -12,7 +12,7 @@ P25 listeners also check the record lifecycle (LDU1 0x62..0x6A, LDU2
 0x6B..0x73, terminator 0x80; this link has no header record) and the
 talker must never hear its own call back.
 
-Morse (dvtest.audio.tandem): 20 wpm ID text P25 -> M17 (Codec2 decoded by c2dec, else by
+Morse (dvtest.audio.tandem, its WPM): ID text P25 -> M17 (Codec2 decoded by c2dec, else by
 transcoder-ref) and M17 -> P25 (IMBE decoded to PCM by transcoder-ref);
 exact decode is required for each side whose transcoder passes a morse
 probe of the same codec tandem, informational (xfail) while none does.
@@ -31,14 +31,13 @@ from pathlib import Path
 import pytest
 
 from dvtest import clients
-from dvtest.audio import morse, score, signals, tandem
+from dvtest.audio import score, signals, tandem
 from dvtest.proto import ambed, dextra, dmr, iax2, m17, p25
 
 pytestmark = [pytest.mark.rig, pytest.mark.p25]
 
 FRAMES = 63                                  # 7 whole LDUs
 KINDS = clients.KINDS                        # xlxd-side clients
-WPM = 20
 ALLSTAR_NODES = {"A": "1901", "B": "1902"}   # rig/config/xlxd.usrp.in
 RESULTS = {}
 
@@ -268,7 +267,7 @@ def morse_cell(rig, setup, run, kind, codec_in, codec_out, label):
     dec = tandem.decoder(rig, transaction=0x50320000)
     probed = tandem.probe(rig, codec_in, codec_out, dec, transaction=0x50320000)
     text = id_text()
-    frames = encode(rig, codec_in, signals.frames(morse.encode(text, wpm=WPM)))
+    frames = encode(rig, codec_in, tandem.encode(text))
     got = both(run, setup, kind, setup["module"], setup["tg"], frames)
     verdict, rec = tandem.judge(text, {n: dec(codec_out, v["frames"]) for n, v in got.items()}, probed)
     save(label, {"sent": text, **rec})
