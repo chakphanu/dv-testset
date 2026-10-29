@@ -52,13 +52,17 @@ x-capture: &capture
   entrypoint:
     - /bin/sh
     - -c
+    # first start: <service>.pcapng; a restart (service restarted through
+    # the control channel) continues in <service>.2.pcapng, .3, ...
     - >-
-      exec dumpcap -q -i eth0 -a filesize:${CAPTURE_FILESIZE_KB:-65536}
-      -w "/out/${DVT_RUN_ID:-manual}/capture/$$0.pcapng"
+      d="/out/${DVT_RUN_ID:-manual}/capture"; f="$$d/$$0.pcapng"; n=1;
+      while [ -e "$$f" ]; do n=$$((n+1)); f="$$d/$$0.$$n.pcapng"; done;
+      exec dumpcap -q -i eth0 -a filesize:${CAPTURE_FILESIZE_KB:-65536} -w "$$f"
 
 services:
   xlxd-ref:
     <<: *xlxd
+    image: dvt-xlxd:${XLXD_REF_DIR:-ref}
     build:
       context: .
       dockerfile: Dockerfile.xlxd
@@ -77,6 +81,7 @@ services:
 
   xlxd-sut:
     <<: *xlxd
+    image: dvt-xlxd:${XLXD_SUT_DIR:-sut}
     build:
       context: .
       dockerfile: Dockerfile.xlxd
@@ -118,6 +123,7 @@ services:
   tester:
     profiles: [core]
     init: true
+    image: dvt-tester:local
     build:
       context: .
       dockerfile: Dockerfile.tester
@@ -133,6 +139,7 @@ services:
       DVT_AMBED_REF: ${DVT_NET:-172.30.0}.20
       DVT_AMBED_SUT: ${DVT_NET:-172.30.0}.21
       DVT_ALLSTAR: ${DVT_NET:-172.30.0}.40
+      DVT_SUBNET: ${DVT_NET:-172.30.0}.0/24
       # wire cases: transcoder under test when run inside the rig
       DVT_AMBED_ADDR: ${DVT_AMBED_ADDR:-${DVT_NET:-172.30.0}.21}
       # on when xlxd-sut has USRP endpoints (A/B -> allstar, C -> tester)
@@ -150,6 +157,7 @@ services:
   allstar:
     profiles: [allstar]
     init: true
+    image: dvt-allstar:local
     build:
       context: .
       dockerfile: Dockerfile.allstar

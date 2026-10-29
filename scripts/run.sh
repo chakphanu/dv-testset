@@ -3,15 +3,24 @@
 # Bring the rig up, run pytest inside the tester, collect logs, bring it down.
 #
 #   scripts/run.sh [-m MARKERS] [--profile core|allstar] [--capture] [--keep] [-- PYTEST_ARGS...]
+#   scripts/run.sh --down
 #
 #   -m MARKERS         pytest marker expression (default: rig)
 #   --profile allstar  core plus the AllStar node; sets DVT_SUT_USRP=on
 #   --capture          sniffers on xlxd-ref/xlxd-sut/transcoder-sut (+allstar): pcapng in
 #                      out/<utc>/capture/<service>.pcapng (decode: scripts/tshark.sh)
 #   --keep             leave the rig running (default: compose down at the end)
+#   --down             take the lock, bring every profile down, exit (the only
+#                      cleanup for a --keep rig)
 #
-# One run at a time: the whole up..down span holds an flock on .cache/rig.lock;
-# a second caller waits.
+# Parallel rigs: DVT_INSTANCE=<n> (1..99; default 0 = project dvt, net DVT_NET)
+# uses project dvt<n>, network <a.b>.<n>.0/24 (first two octets of DVT_NET),
+# lock .cache/rig<n>.lock and out/<utc>-i<n>. Images are shared; builds are
+# serialized by .cache/build.lock.
+#
+# One run at a time per instance: the whole up..down span holds an flock on .cache/rig.lock;
+# a second caller waits. If project containers are already up (a --keep rig),
+# run.sh refuses with exit 3; their owner cleans up with run.sh --down.
 #
 # Settings: .env.example, then .env, then .local/rig.env (scripts/lib/env.sh);
 # TRANSCODER_IMAGE must be set in .env or the shell.
@@ -25,6 +34,11 @@
 #   service transcoder-ref | transcoder-sut | allstar
 # The answer is <id>.ack: "ok", "error <rc>" or "error refused" (anything else
 # is refused and nothing runs); the request is renamed to <id>.done.
+# control/control.log gets "<utc> request <line>" before the action and
+# "<utc> <line> -> <rc>" after it.
+#
+# With --capture, scripts/dvcheck.sh checks out/<utc>/ after the rig is down
+# (out/<utc>/check.txt); its non-zero exit fails the run when pytest passed.
 set -euo pipefail
 
 . "$(dirname "$0")/lib/env.sh"
@@ -35,17 +49,61 @@ markers="rig"
 profile="core"
 keep=0
 capture=0
+down_only=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -m) [ "$#" -ge 2 ] || { echo "run.sh: -m needs a value" >&2; exit 2; }; markers="$2"; shift 2 ;;
     --profile) [ "$#" -ge 2 ] || { echo "run.sh: --profile needs a value" >&2; exit 2; }; profile="$2"; shift 2 ;;
     --keep) keep=1; shift ;;
     --capture) capture=1; shift ;;
+    --down) down_only=1; shift ;;
     --) shift; break ;;
-    -h|--help) sed -n '3,27p' "$0"; exit 0 ;;
+    -h|--help) sed -n '3,41p' "$0"; exit 0 ;;
     *) echo "run.sh: unknown argument '$1' (see --help)" >&2; exit 2 ;;
   esac
 done
+
+# DVT_SUBNET (a /24), when set, wins over DVT_NET.
+if [ -n "${DVT_SUBNET:-}" ]; then
+  case "$DVT_SUBNET" in
+    *.0/24) export DVT_NET="${DVT_SUBNET%.0/24}" ;;
+    *) echo "run.sh: DVT_SUBNET must be a /24 like 172.30.0.0/24" >&2; exit 2 ;;
+  esac
+fi
+instance="${DVT_INSTANCE:-0}"
+[[ "$instance" =~ ^([0-9]|[1-9][0-9])$ ]] || { echo "run.sh: DVT_INSTANCE must be 0..99" >&2; exit 2; }
+lock=".cache/rig.lock"
+suffix=""
+if [ "$instance" != 0 ]; then
+  export COMPOSE_PROJECT_NAME="dvt$instance"
+  net="${DVT_NET:-172.30.0}"
+  export DVT_NET="${net%.*}.$instance"
+  lock=".cache/rig$instance.lock"
+  suffix="-i$instance"
+fi
+export DVT_SUBNET="${DVT_NET:-172.30.0}.0/24"
+
+# Serialize users of this instance: project and subnet are shared. The lock
+# is released when this script exits, after compose down.
+take_lock() {
+  mkdir -p .cache
+  exec 9>> "$lock"
+  if ! flock -n 9; then
+    echo "run.sh: waiting for rig lock $lock held by pid $(head -n 1 "$lock" 2>/dev/null || echo '?')"
+    flock 9
+  fi
+  printf '%s\n' "$$" > "$lock"
+}
+# Every profile, so "down" also removes allstar/capture containers
+dvt_env_files
+compose_all=(docker compose -p "${COMPOSE_PROJECT_NAME:-dvt}" -f rig/compose.yml "${DVT_ENV_FILES[@]}"
+  --profile core --profile allstar --profile capture --profile capture-allstar)
+
+if [ "$down_only" = 1 ]; then
+  take_lock
+  "${compose_all[@]}" down --remove-orphans
+  exit 0
+fi
 
 profiles=(--profile core)
 case "$profile" in
@@ -74,14 +132,6 @@ if [ -z "${TRANSCODER_IMAGE:-}" ]; then
   exit 2
 fi
 
-# DVT_SUBNET (a /24), when set, wins over DVT_NET.
-if [ -n "${DVT_SUBNET:-}" ]; then
-  case "$DVT_SUBNET" in
-    *.0/24) export DVT_NET="${DVT_SUBNET%.0/24}" ;;
-    *) echo "run.sh: DVT_SUBNET must be a /24 like 172.30.0.0/24" >&2; exit 2 ;;
-  esac
-fi
-
 for name in "${XLXD_REF_DIR:-ref}" "${XLXD_SUT_DIR:-sut}"; do
   [ -f ".cache/xlxd/$name/src/main.h" ] || { echo "run.sh: .cache/xlxd/$name missing; run scripts/pre-fetch-xlxd.sh" >&2; exit 2; }
 done
@@ -89,25 +139,24 @@ done
 
 scripts/pii-check.sh
 
-# Serialize rig users: project and subnet are shared. The lock is released
-# when this script exits, after compose down.
-mkdir -p .cache
-exec 9>> .cache/rig.lock
-if ! flock -n 9; then
-  echo "run.sh: waiting for rig lock held by pid $(head -n 1 .cache/rig.lock 2>/dev/null || echo '?')"
-  flock 9
+take_lock
+# Containers that are up while we hold the lock belong to a --keep rig (or a
+# manual compose up) that someone may still use: never take it over.
+if [ -n "$(docker compose -p "${COMPOSE_PROJECT_NAME:-dvt}" ps -a -q 2>/dev/null)" ]; then
+  echo "run.sh: project ${COMPOSE_PROJECT_NAME:-dvt} already has containers (a --keep rig?);" \
+       "its owner must clean up first with scripts/run.sh --down" >&2
+  exit 3
 fi
-printf '%s\n' "$$" > .cache/rig.lock
 
 DVT_RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
 DVT_UID="$(id -u)"
 DVT_GID="$(id -g)"
+DVT_RUN_ID="$DVT_RUN_ID$suffix"
 export DVT_RUN_ID DVT_UID DVT_GID
 out="out/$DVT_RUN_ID"
 mkdir -p "$out/logs"
 [ "$capture" = 0 ] || mkdir -p "$out/capture"
 
-dvt_env_files
 compose=(docker compose -p "${COMPOSE_PROJECT_NAME:-dvt}" -f rig/compose.yml "${DVT_ENV_FILES[@]}" "${profiles[@]}")
 
 watcher_pid=""
@@ -122,6 +171,7 @@ watch_control() {
       line="$(head -n 1 -- "$req")"
       action="" svc="" extra=""
       read -r action svc extra <<< "$line" || true
+      printf '%s request %s\n' "$(date -u +%FT%T.%3NZ)" "$line" >> "$control/control.log"
       rc=refused
       if [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] && [ -z "$extra" ]; then
         case "$svc" in transcoder-ref|transcoder-sut|allstar) ;; *) action="" ;; esac
@@ -132,6 +182,11 @@ watch_control() {
           kill)  "${compose[@]}" kill -s SIGKILL "$svc" >> "$control/control.log" 2>&1 || rc=$? ;;
           *)     rc=refused ;;
         esac
+        # a sniffer shares the namespace of its service and dies with it:
+        # restart it, it writes <service>.<n>.pcapng
+        if [ "$action" = start ] && [ "$rc" = 0 ] && [[ " ${capture_svcs[*]} " == *" capture-$svc "* ]]; then
+          "${compose[@]}" up -d --no-deps "capture-$svc" >> "$control/control.log" 2>&1 || true
+        fi
       fi
       printf '%s %s\n' "$(date -u +%FT%T.%3NZ)" "$line -> $rc" >> "$control/control.log"
       if [ "$rc" = 0 ]; then printf 'ok\n'; else printf 'error %s\n' "$rc"; fi > "$control/$id.ack.tmp"
@@ -159,9 +214,9 @@ collect() {
     "${compose[@]}" logs --no-color --timestamps "$svc" > "$out/logs/$svc.log" 2>&1 || true
   done
   if [ "$keep" = 1 ]; then
-    echo "run.sh: --keep, rig left running (stop it: docker compose -p ${COMPOSE_PROJECT_NAME:-dvt} -f rig/compose.yml ${profiles[*]} down)"
+    echo "run.sh: --keep, rig left running; bring it down with scripts/run.sh --down"
   else
-    "${compose[@]}" down --remove-orphans || true
+    "${compose_all[@]}" down --remove-orphans || true
   fi
 }
 trap collect EXIT
@@ -171,7 +226,13 @@ printf 'markers=%s profile=%s xlxd_ref=%s xlxd_sut=%s transcoder=%s\n' \
   > "$out/run.txt"
 cat ".cache/xlxd/${XLXD_REF_DIR:-ref}.fetched" ".cache/xlxd/${XLXD_SUT_DIR:-sut}.fetched" >> "$out/run.txt" 2>/dev/null || true
 
-"${compose[@]}" up -d --build
+# Images are shared by all instances: one build at a time (fd 8, own lock).
+(
+  exec 8>> .cache/build.lock
+  flock 8
+  "${compose[@]}" build
+)
+"${compose[@]}" up -d
 
 for svc in "${capture_svcs[@]}"; do
   f="$out/capture/${svc#capture-}.pcapng"
@@ -188,4 +249,18 @@ rc=0
   python -m pytest -m "$markers" -p no:cacheprovider -rs \
   --junitxml="/dvt/$out/junit.xml" "$@" 2>&1 | tee "$out/pytest.log" || rc=$?
 echo "run.sh: pytest exit $rc, results in $out/"
+
+# sniffers stopped and rig down before the capture check reads the files
+trap - EXIT
+collect
+if [ "$capture" = 1 ]; then
+  if [ -x scripts/dvcheck.sh ]; then
+    check_rc=0
+    scripts/dvcheck.sh "$out" > "$out/check.txt" 2>&1 || check_rc=$?
+    echo "run.sh: wire check exit $check_rc, see $out/check.txt"
+    [ "$rc" != 0 ] || rc=$check_rc
+  else
+    echo "run.sh: scripts/dvcheck.sh missing, capture not checked" >&2
+  fi
+fi
 exit "$rc"
