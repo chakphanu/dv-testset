@@ -8,9 +8,10 @@ N0TEST, DMR ids 1023007 and 1023008 (both in `rig/config/dmrid.dat`),
 reflector XLX999.
 
 Dissectors for the captures: `tools/wireshark/dvtest.lua` (`ambed`, `usrp`,
-`dextra`, `mmdvm`, `m17ref`); IAX2 uses the Wireshark built-in `iax2`.
-Wireshark 4.4 has no built-in dissector for DExtra, MMDVM/Homebrew or the
-M17 reflector link, so minimal ones are in the Lua file.
+`dextra`, `mmdvm`, `m17ref`, `nxdnref`, `p25ref`); IAX2 uses the Wireshark
+built-in `iax2`. Wireshark 4.4 has no built-in dissector for DExtra,
+MMDVM/Homebrew or the M17, NXDN and P25 reflector links, so minimal ones are
+in the Lua file.
 
 ## Summary
 
@@ -22,6 +23,8 @@ M17 reflector link, so minimal ones are in the Lua file.
 | `proto/dmr.py` | MMDVM/Homebrew DMR | 62030 | RPTL/RPTK/RPTPING login, TG join/unlink by data-sync header/terminator, voice bursts with 3 AMBE2+ frames | RPTC config, real SHA256 auth (sends zeros, xlxd does not check), embedded LC, BER/RSSI |
 | `proto/m17.py` | M17 reflector link | 17000 | CONN/DISC, PONG answer to PING, 54 B voice with two Codec2 3200 frames | LSF/META content, CRC (zero), packet mode |
 | `proto/iax2.py` | IAX2 (RFC 5456) | 4569 | NEW (CALLTOKEN when asked), MD5 auth, ACCEPT of SLIN, ANSWER, `!NEWKEY!` text link-up, radio key/unkey (control 12/13), SLIN full and mini voice frames, PING/LAGRQ answers, HANGUP | other codecs, trunking, encryption, transfers |
+| `proto/nxdn.py` | NXDNReflector network | 41400 | NXDNP poll/link, NXDNU unlink, NXDND header (FACCH1 VCALL), voice (4 x 49-bit AMBE+2, SACCH VCALL in 4 parts), trailer (FACCH1 TX_REL), CRC-6/CRC-12, 49-bit <-> DMR 72-bit frame conversion | data calls, private calls, RAN, Icom/Kenwood links |
+| `proto/p25.py` | P25Reflector network | 41000 | poll/unlink, LDU1/LDU2 voice records with one IMBE each, LCF, TG, source id, ALGID clear, terminator, silence padding to whole LDUs | HDU/TDU with LC, LC/ES parity, low-speed data, encryption |
 | `clients.py` | - | - | one make/talk/collect API over dstar, dmr and m17 | - |
 
 ## AMBEd (`proto/ambed.py`)
@@ -92,6 +95,51 @@ terminator (0xA2) to TG 4001 + (X - 'A'); TG 4000 unlinks. Voice: three
 
 Packet 0 opens the stream and is not forwarded by xlxd; the EOT packet
 repeats the last payload.
+
+## NXDN (`proto/nxdn.py`)
+
+xlxd talks NXDN only as a peer of an NXDNReflector (UDP 41400; xlxd
+interlink row `NX<tg> <ip>:41400 <module>`), so the client links to the
+reflector the way an NXDNGateway does. All integers big endian.
+
+| Packet | Size | Layout |
+|--------|------|--------|
+| NXDNP poll / link | 17 B | `NXDNP` + callsign (10, space padded) + TG u16; the reflector echoes the same 17 B |
+| NXDNU unlink | 17 B | `NXDNU` + callsign (10) + TG u16 |
+| NXDND | 43 B | `NXDND` + source id u16 + destination id (TG) u16 + flags + payload (33) |
+
+Flags: 0x01 group, 0x02 data, 0x04 header (VCALL), 0x08 trailer (TX_REL).
+Payload: LICH (1: RF channel type, functional channel type, option,
+direction, parity), SACCH (4), block 1 (14), block 2 (14). Voice: two 49-bit
+AMBE+2 frames per block (four per packet, every 80 ms), SACCH carries the
+VCALL message 18 bits at a time; header / trailer: FACCH1 (layer 3 message
+type, options, 0x20 group, source u16, destination u16, CRC-12) in both
+blocks. Identities 1001 N0CALL / 1002 N0TEST (`rig/config/nxdn.csv`).
+
+## P25 (`proto/p25.py`)
+
+xlxd talks P25 only as a peer of a P25Reflector (UDP 41000; interlink row
+`P25<tg> <ip>:41000 <module>`, xlxd sends from an ephemeral port). The
+client links like a P25Gateway; the reflector relays every record to all
+other linked endpoints, never back to the sender.
+
+| Packet | Size | Layout |
+|--------|------|--------|
+| poll | 11 B | 0xF0 + callsign (10, space padded); echoed by the reflector, every 5 s |
+| unlink | 11 B | 0xF1 + callsign |
+| LDU1 / LDU2 voice 1 | 22 B | 0x62 / 0x6B, IMBE (11) at offset 10 |
+| voice 2 | 14 B | 0x63 / 0x6C, IMBE at 1 |
+| voice 3..8 | 17 B | 0x64..0x69 / 0x6D..0x72, IMBE at 5 |
+| voice 9 | 16 B | 0x6A / 0x73, IMBE at 4 |
+| terminator | 17 B | 0x80 + 16 zero bytes |
+
+Fields in the 17 B records: 0x64 [1] LCF (0 = group), [2] MFID, [3]
+service options; 0x65 [1..3] destination TG u24; 0x66 [1..3] source id u24
+(the DMR id of the MY callsign); 0x70 [1] ALGID (0x80 = clear), [2..3] key
+id. 18 records per superframe, one per 20 ms; there is no header record on
+this link, the first 0x62 opens the call. The client pads to whole LDUs with
+the IMBE silence frame; xlxd does not pad (it ends a call where the source
+ends) and sends a lone terminator for a stream without voice.
 
 ## IAX2 (`proto/iax2.py`)
 
@@ -173,3 +221,46 @@ Not observed: DExtra NAK and DISCONNECTED (every link was accepted), M17
 NACK, IAX2 CALLTOKEN (the rig node does not ask for it), PING/PONG (IAX)
 and LAGRP: the node's LAGRQ arrive after the tester has hung up and get
 ICMP port unreachable.
+
+NXDN: run `out/20261029T155701Z-i5` (`TRANSCODER_IMAGE=vambed-neo:local
+DVT_INSTANCE=5 scripts/run.sh --capture --profile nxdn -m nxdn`; 7 passed,
+3 failed, 2 skipped: the failures are Morse round trips nxdn -> dstar,
+nxdn -> m17 and dstar -> nxdn, i.e. audio quality through this transcoder,
+not framing), file `nxdn-sut.pcapng` (`-Y "nxdnref && !icmp"`; reflector .51,
+tester .30, xlxd-sut .11; addresses `172.30.5.x`):
+
+| Packet | tester -> reflector | reflector -> xlxd | xlxd -> reflector | reflector -> tester |
+|--------|---------------------|-------------------|-------------------|---------------------|
+| NXDND voice 43 B (flags 0x01, LICH 0xAC) | 309 | 309 | 314 | 314 |
+| NXDND header 43 B (flags 0x05, LICH 0x81, FACCH1 VCALL) | 5 | 5 | 9 | 8 |
+| NXDND trailer 43 B (flags 0x09, LICH 0x81, FACCH1 TX_REL) | 5 | 5 | 9 | 8 |
+| NXDNP poll 17 B | 16 | 37 (echo) | 37 | 16 (echo) |
+| NXDNU unlink 17 B | 11 | - | - | - |
+
+Fields: destination id 31672 (the reflector TG) in every NXDND; source id
+1001 (N0CALL) in every voice packet; FACCH1 source/destination equal the
+NXDND header fields. xlxd polls every 5.01 s (median, n 37). xlxd also sends
+header + trailer pairs without voice (one with source 1002 / N0TEST: an
+empty stream such as the DMR join). The reflector relays unchanged and never
+back to the sender. Expert info: no `nxdnref` errors or warnings.
+
+P25: run `out/20261029T155148Z-i10` (`DVT_P25_MODULE=B DVT_INSTANCE=10
+TRANSCODER_IMAGE=vambed-neo:local scripts/run.sh --capture --profile
+allstar,p25 -m p25`, 9 passed, 1 xfailed), file `p25-sut.pcapng`
+(`-Y "p25ref && !icmp"`; reflector .61, tester .30, xlxd-sut .11; instance 10
+addresses `172.30.10.x`):
+
+| Records | tester -> reflector | reflector -> xlxd | xlxd -> reflector | reflector -> tester |
+|---------|---------------------|-------------------|-------------------|---------------------|
+| LDU1 22 / 14 / 17 / 16 B | 53 / 53 / 318 / 53 | 53 / 53 / 318 / 53 | 57 / 57 / 335 / 55 | 57 / 57 / 335 / 55 |
+| LDU2 22 / 14 / 17 / 16 B | 50 / 50 / 300 / 50 | 50 / 50 / 300 / 50 | 53 / 53 / 312 / 51 | 53 / 53 / 312 / 51 |
+| terminator 17 B | 5 | 5 | 8 | 7 |
+| poll 11 B | 20 | 35 (echo) | 35 | 20 (echo) |
+| unlink 11 B | 11 | - | - | - |
+
+Fields: LCF 0 (group) and ALGID 0x80 (clear) in every 0x64 / 0x70 record,
+destination TG 31672 in every 0x65, source id 1023007 (N0CALL) or 1023008
+(N0TEST) in every 0x66, from the tester, the reflector and xlxd alike. The
+reflector relays records unchanged (its counts equal its sender's) and never
+back to the sender. xlxd's 17 B record count is not a multiple of 6 per
+LDU: it ends calls mid-LDU. Expert info: no `p25ref` errors or warnings.

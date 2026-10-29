@@ -13,8 +13,11 @@
 -- DExtra  D-STAR DSVT header/voice and link/keepalive packets on UDP 30001.
 -- MMDVM   minimal Homebrew DMR repeater link on UDP 62030 (tags, DMRD).
 -- M17     minimal M17 reflector link on UDP 17000 (CONN/ACKN/PING/PONG/
---         DISC, 54 B voice). Wireshark 4.4 has no built-in dissector for
---         DExtra, MMDVM or M17; IAX2 is built in and not duplicated.
+--         DISC, 54 B voice).
+-- NXDN    minimal NXDNReflector network link on UDP 41400 (NXDNP/NXDNU/NXDND).
+-- P25     minimal P25Reflector network link on UDP 41000 (poll, LDU records,
+--         terminator). Wireshark 4.4 has no built-in dissector for DExtra,
+--         MMDVM, M17, NXDN or P25 network links; IAX2 is built in.
 --
 -- All three are also available in "Decode As" (UDP port).
 -- Multi-byte AMBEd stream id and port are little endian (memcpy of a host
@@ -708,6 +711,148 @@ function p_m17.dissector(buf, pinfo, tree)
 end
 
 ----------------------------------------------------------------------------
+-- NXDN reflector network (UDP 41400), minimal
+----------------------------------------------------------------------------
+
+local p_nxdn = Proto("nxdnref", "NXDNReflector network link")
+local NX_L3 = { [0x01] = "VCALL", [0x08] = "TX_REL" }
+local xf = {
+  tag      = ProtoField.string("nxdnref.tag", "Tag"),
+  callsign = ProtoField.string("nxdnref.callsign", "Callsign"),
+  tg       = ProtoField.uint16("nxdnref.tg", "Talkgroup", base.DEC),
+  src      = ProtoField.uint16("nxdnref.src", "Source id", base.DEC),
+  dst      = ProtoField.uint16("nxdnref.dst", "Destination id (TG)", base.DEC),
+  flags    = ProtoField.uint8("nxdnref.flags", "Flags", base.HEX),
+  f_group  = ProtoField.bool("nxdnref.flags.group", "Group call", 8, nil, 0x01),
+  f_data   = ProtoField.bool("nxdnref.flags.data", "Data", 8, nil, 0x02),
+  f_header = ProtoField.bool("nxdnref.flags.header", "Header (VCALL)", 8, nil, 0x04),
+  f_trail  = ProtoField.bool("nxdnref.flags.trailer", "Trailer (TX_REL)", 8, nil, 0x08),
+  lich     = ProtoField.uint8("nxdnref.lich", "LICH", base.HEX),
+  rfct     = ProtoField.uint8("nxdnref.lich.rfct", "RF channel type", base.DEC, nil, 0xC0),
+  fct      = ProtoField.uint8("nxdnref.lich.fct", "Functional channel type", base.DEC, nil, 0x30),
+  option   = ProtoField.uint8("nxdnref.lich.option", "Option", base.DEC, nil, 0x0C),
+  outbound = ProtoField.bool("nxdnref.lich.outbound", "Outbound", 8, nil, 0x02),
+  sacch    = ProtoField.bytes("nxdnref.sacch", "SACCH"),
+  l3msg    = ProtoField.uint8("nxdnref.facch1.msg", "FACCH1 message", base.HEX, NX_L3, 0x3F),
+  l3src    = ProtoField.uint16("nxdnref.facch1.src", "FACCH1 source id", base.DEC),
+  l3dst    = ProtoField.uint16("nxdnref.facch1.dst", "FACCH1 destination id", base.DEC),
+  block    = ProtoField.bytes("nxdnref.block", "Block (2 x 49-bit voice or FACCH1)"),
+}
+p_nxdn.fields = xf
+local xe = ProtoExpert.new("nxdnref.malformed", "Malformed NXDN reflector packet",
+                           expert.group.MALFORMED, expert.severity.ERROR)
+p_nxdn.experts = { xe }
+
+function p_nxdn.dissector(buf, pinfo, tree)
+  local len = buf:len()
+  if len < 5 then return 0 end
+  pinfo.cols.protocol = "NXDN"
+  local t = tree:add(p_nxdn, buf())
+  local tag = buf:raw(0, 5)
+  t:add(xf.tag, buf(0, 5))
+  local info
+  if (tag == "NXDNP" or tag == "NXDNU") and len == 17 then
+    t:add(xf.callsign, buf(5, 10)); t:add(xf.tg, buf(15, 2))
+    info = string.format("%s %s tg=%d", tag == "NXDNP" and "poll" or "unlink", trim(buf(5, 10):string()), buf(15, 2):uint())
+  elseif tag == "NXDND" and len == 43 then
+    t:add(xf.src, buf(5, 2)); t:add(xf.dst, buf(7, 2))
+    local fl = t:add(xf.flags, buf(9, 1))
+    fl:add(xf.f_group, buf(9, 1)); fl:add(xf.f_data, buf(9, 1)); fl:add(xf.f_header, buf(9, 1)); fl:add(xf.f_trail, buf(9, 1))
+    local li = t:add(xf.lich, buf(10, 1))
+    li:add(xf.rfct, buf(10, 1)); li:add(xf.fct, buf(10, 1)); li:add(xf.option, buf(10, 1)); li:add(xf.outbound, buf(10, 1))
+    t:add(xf.sacch, buf(11, 4))
+    local f = buf(9, 1):uint()
+    local kind = (bit.band(f, 0x04) ~= 0) and "header" or ((bit.band(f, 0x08) ~= 0) and "trailer" or "voice")
+    if kind ~= "voice" then
+      t:add(xf.l3msg, buf(15, 1)); t:add(xf.l3src, buf(18, 2)); t:add(xf.l3dst, buf(20, 2))
+    end
+    t:add(xf.block, buf(15, 14)); t:add(xf.block, buf(29, 14))
+    info = string.format("data %s %d->%d", kind, buf(5, 2):uint(), buf(7, 2):uint())
+  else
+    t:add_proto_expert_info(xe, string.format("unknown NXDN packet %q of %d bytes", tag, len))
+    info = "unknown"
+  end
+  pinfo.cols.info = info
+  t:append_text(", " .. info)
+  return len
+end
+
+----------------------------------------------------------------------------
+-- P25 reflector network (UDP 41000), minimal
+----------------------------------------------------------------------------
+
+local p_p25 = Proto("p25ref", "P25Reflector network link")
+-- position in an LDU (0..8) -> record size, IMBE offset
+local P25_SLOT = { {22, 10}, {14, 1}, {17, 5}, {17, 5}, {17, 5}, {17, 5}, {17, 5}, {17, 5}, {16, 4} }
+local pf = {
+  rtype    = ProtoField.uint8("p25ref.type", "Record type", base.HEX),
+  kind     = ProtoField.string("p25ref.kind", "Record"),
+  ldu      = ProtoField.uint8("p25ref.ldu", "LDU", base.DEC),
+  slot     = ProtoField.uint8("p25ref.slot", "Voice frame in LDU", base.DEC),
+  callsign = ProtoField.string("p25ref.callsign", "Callsign"),
+  lcf      = ProtoField.uint8("p25ref.lcf", "LCF", base.HEX),
+  mfid     = ProtoField.uint8("p25ref.mfid", "MFID", base.HEX),
+  svc      = ProtoField.uint8("p25ref.service_options", "Service options", base.HEX),
+  dst      = ProtoField.uint24("p25ref.dst", "Destination (TG)", base.DEC),
+  src      = ProtoField.uint24("p25ref.src", "Source id", base.DEC),
+  algid    = ProtoField.uint8("p25ref.algid", "ALGID", base.HEX, { [0x80] = "clear" }),
+  keyid    = ProtoField.uint16("p25ref.key_id", "Key id", base.HEX),
+  imbe     = ProtoField.bytes("p25ref.imbe", "IMBE frame"),
+  other    = ProtoField.bytes("p25ref.other", "Other bytes (LC/ES parity, LSD, status)"),
+}
+p_p25.fields = pf
+local pe = ProtoExpert.new("p25ref.malformed", "Malformed P25 reflector record",
+                           expert.group.MALFORMED, expert.severity.ERROR)
+p_p25.experts = { pe }
+
+function p_p25.dissector(buf, pinfo, tree)
+  local len = buf:len()
+  if len == 0 then return 0 end
+  pinfo.cols.protocol = "P25"
+  local t = tree:add(p_p25, buf())
+  local rt = buf(0, 1):uint()
+  t:add(pf.rtype, buf(0, 1))
+  local info
+  if (rt == 0xF0 or rt == 0xF1) and len == 11 then
+    t:add(pf.kind, rt == 0xF0 and "poll" or "unlink"):set_generated()
+    t:add(pf.callsign, buf(1, 10))
+    info = string.format("%s %s", rt == 0xF0 and "poll" or "unlink", trim(buf(1, 10):string()))
+  elseif rt == 0x80 and len == 17 then
+    t:add(pf.kind, "terminator"):set_generated()
+    info = "terminator"
+  elseif rt >= 0x62 and rt <= 0x73 then
+    local ldu = (rt <= 0x6A) and 1 or 2
+    local slot = rt - ((ldu == 1) and 0x62 or 0x6B)
+    local size, off = P25_SLOT[slot + 1][1], P25_SLOT[slot + 1][2]
+    t:add(pf.kind, "voice"):set_generated()
+    t:add(pf.ldu, ldu):set_generated(); t:add(pf.slot, slot):set_generated()
+    if len ~= size then
+      t:add_proto_expert_info(pe, string.format("record 0x%02x is %d bytes, got %d", rt, size, len))
+      info = string.format("LDU%d.%d (bad length)", ldu, slot)
+    else
+      local extra = ""
+      if rt == 0x64 then
+        t:add(pf.lcf, buf(1, 1)); t:add(pf.mfid, buf(2, 1)); t:add(pf.svc, buf(3, 1))
+      elseif rt == 0x65 then
+        t:add(pf.dst, buf(1, 3)); extra = " dst=" .. buf(1, 3):uint()
+      elseif rt == 0x66 then
+        t:add(pf.src, buf(1, 3)); extra = " src=" .. buf(1, 3):uint()
+      elseif rt == 0x70 then
+        t:add(pf.algid, buf(1, 1)); t:add(pf.keyid, buf(2, 2))
+      end
+      t:add(pf.imbe, buf(off, 11))
+      info = string.format("LDU%d.%d%s", ldu, slot, extra)
+    end
+  else
+    t:add_proto_expert_info(pe, string.format("unknown P25 record 0x%02x of %d bytes", rt, len))
+    info = "unknown"
+  end
+  pinfo.cols.info = info
+  t:append_text(", " .. info)
+  return len
+end
+
+----------------------------------------------------------------------------
 -- registration
 ----------------------------------------------------------------------------
 
@@ -717,7 +862,9 @@ udp_table:add("32001-32003,34001-34003", p_usrp)
 udp_table:add(30001, p_dextra)
 udp_table:add(62030, p_mmdvm)
 udp_table:add(17000, p_m17)
-for _, p in ipairs({ p_ambed, p_usrp, p_dextra, p_mmdvm, p_m17 }) do
+udp_table:add(41400, p_nxdn)
+udp_table:add(41000, p_p25)
+for _, p in ipairs({ p_ambed, p_usrp, p_dextra, p_mmdvm, p_m17, p_nxdn, p_p25 }) do
   udp_table:add_for_decode_as(p)
 end
 p_ambed:register_heuristic("udp", ambed_heur)

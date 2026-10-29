@@ -32,6 +32,7 @@ namespace, so pick the file by the endpoint you care about:
 | DExtra / DMR / M17 clients | `xlxd-sut.pcapng`, `xlxd-ref.pcapng` |
 | USRP C (tester) | `xlxd-sut.pcapng` |
 | USRP A/B, IAX2 | `allstar.pcapng` |
+| NXDN / P25 reflector links | `nxdn-sut.pcapng` / `p25-sut.pcapng` (profiles nxdn / p25) |
 
 Rules: the run lock serializes rig users, never bypass it or start compose
 yourself; only project `dvt`; no host tshark/wireshark install (none is
@@ -81,6 +82,8 @@ Per-protocol display filters:
 | DExtra | `dextra.kind == 1` (header), `dextra.last == 1`, `dextra.my == "N0CALL  "` |
 | MMDVM | `mmdvm.tag == "DMRD"`, `mmdvm.frame_type == 2`, `mmdvm.dst == 4002` |
 | M17 | `m17ref.tag == "M17 "`, `m17ref.eot == 1` |
+| NXDN | `nxdnref.tag == "NXDND"`, `nxdnref.flags.header == 1`, `nxdnref.facch1.src` |
+| P25 | `p25ref.kind == "terminator"`, `p25ref.ldu == 1`, `p25ref.src == 1023007` |
 | IAX2 (built in) | `iax2`, `iax2.iax.subclass`, `iax2.voice.codec` |
 
 Field extraction for counting (`-T fields`, one row per packet):

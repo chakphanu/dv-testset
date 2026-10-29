@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Wireshark dissectors
 
-`dvtest.lua` is one Lua file with five dissectors for the protocols the rig
+`dvtest.lua` is one Lua file with seven dissectors for the protocols the rig
 speaks that Wireshark 4.4 does not decode itself:
 
 | Protocol (filter) | Ports | Notes |
@@ -11,8 +11,10 @@ speaks that Wireshark 4.4 does not decode itself:
 | `dextra` DExtra (D-STAR) | UDP 30001 | DSVT header/voice/last, link, ACK/NAK, unlink, keepalive |
 | `mmdvm` MMDVM/Homebrew DMR | UDP 62030 | login tags and DMRD fields (minimal) |
 | `m17ref` M17 reflector link | UDP 17000 | CONN/ACKN/NACK/PING/PONG/DISC and 54 B voice (minimal) |
+| `nxdnref` NXDNReflector link | UDP 41400 | NXDNP/NXDNU, NXDND flags, LICH, FACCH1 message/ids (minimal) |
+| `p25ref` P25Reflector link | UDP 41000 | poll/unlink, LDU1/LDU2 records with LCF, TG, source id, ALGID, IMBE; terminator (minimal) |
 
-IAX2 is built into Wireshark and is not duplicated. All five are also in
+IAX2 is built into Wireshark and is not duplicated. All seven are also in
 Analyze > Decode As (UDP port).
 
 ## Use
@@ -48,6 +50,8 @@ filter selects one message type:
 | `dextra.kind == 1` / `2` / `3` | DSVT header / voice / last frame |
 | `mmdvm.tag == "DMRD"` | DMR voice and data bursts |
 | `m17ref.eot == 1` | last M17 voice packet |
+| `nxdnref.flags.header == 1` / `nxdnref.tag == "NXDNP"` | NXDN header / poll |
+| `p25ref.kind == "terminator"` / `p25ref.src` | P25 call end / records carrying the source id |
 
 Generated helpers: `ambed.setup_frame` (frame of the STD that set the data
 port up), `ambed.entry.pcm_peak` and `usrp.pcm_peak` (largest absolute
@@ -66,4 +70,5 @@ errors or warnings: `scripts/tshark.sh -r <pcapng> -q -z expert`.
   in the same capture. Without it (capture started mid-stream) a packet is
   shown as `data` and parsed as a reply.
 - Stream id and port are decoded little endian, like every known ambed build.
-- MMDVM and M17 are minimal: no embedded LC, LSF or CRC checks.
+- MMDVM, M17, NXDN and P25 are minimal: no embedded LC, LSF, CRC, Golay or
+  Reed-Solomon checks, and voice frames are shown as bytes.

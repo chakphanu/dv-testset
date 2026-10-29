@@ -271,7 +271,8 @@ TRANSCODER_IMAGE=vambed-neo:local DVT_INSTANCE=5 \
 ```
 
 - Transcoder (both transcoder-ref and transcoder-sut): vambed-neo, the
-  public reference transcoder, commit `90e5ab1a6a7924a03444403000d9b33f48c72ed3`,
+  public reference transcoder (https://github.com/chakphanu/vambed-neo),
+  commit `90e5ab1a6a7924a03444403000d9b33f48c72ed3`,
   built with mbelib-neo `c94180bd925ea43771df09d1e9273e8fe620f928` and codec2
   `06d4c11e699b0351765f10398abb4f663a984f36`; default limit 16 streams.
 - xlxd-sut: the PR #272 tree with USRP endpoints; xlxd-ref: upstream master

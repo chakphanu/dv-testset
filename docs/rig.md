@@ -42,7 +42,11 @@ internet, and every address is fixed.
 | transcoder-sut | 172.30.0.21 | core | `TRANSCODER_SUT_IMAGE` or `TRANSCODER_IMAGE`, peers .11 and .30 |
 | tester | 172.30.0.30 | core | runs pytest; repository mounted at `/dvt` |
 | allstar | 172.30.0.40 | allstar | AllStarLink 3 node, chan_usrp to xlxd-sut A/B, IAX2 4569 |
-| capture-* | (shares the netns) | capture | dumpcap on xlxd-ref, xlxd-sut, transcoder-sut, allstar |
+| nxdn-ref / nxdn-sut | 172.30.0.50 / .51 | nxdn | NXDNReflector peered with xlxd-ref / xlxd-sut (module `DVT_NXDN_MODULE`, TG `DVT_NXDN_TG`) |
+| p25-ref / p25-sut | 172.30.0.60 / .61 | p25 | P25Reflector peered with xlxd-ref / xlxd-sut (module `DVT_P25_MODULE`) |
+| xlxd-peer-sut / xlxd-peer-ref | 172.30.0.12 / .13 | interlink | XLX998, interlinked with xlxd-sut / xlxd-ref on `DVT_INTERLINK_MODULES` |
+| load nodes | 172.30.0.128/25 | load | `DVT_LOAD_MODULES` tester replicas running `DVT_LOAD_CMD` against xlxd-sut |
+| capture-* | (shares the netns) | capture | dumpcap on xlxd-ref, xlxd-sut, transcoder-sut, allstar, nxdn-*, p25-* |
 
 | Port | Protocol | Where |
 |------|----------|-------|
@@ -54,6 +58,9 @@ internet, and every address is fixed.
 | UDP 34001-34003 | USRP, xlxd-sut side | xlxd-sut |
 | UDP 32001-32002 / 32003 | USRP, peer side | allstar / tester |
 | UDP 4569 | IAX2 | allstar |
+| UDP 41400 | NXDNReflector network (xlxd connects out) | nxdn-ref, nxdn-sut |
+| UDP 41000 | P25Reflector network (xlxd connects out) | p25-ref, p25-sut |
+| UDP 10002 | XLX interlink | xlxd-*, xlxd-peer-* |
 
 `DVT_SUBNET` (a /24) or `DVT_NET` (the prefix) moves the whole rig, and
 `DVT_INSTANCE=<n>` moves it to `172.30.<n>.0/24`; the host offsets stay the
@@ -106,6 +113,38 @@ in `out/<utc>-i<n>/`. Instance 0 (the default) is project `dvt` on
 `pytest.log`, `junit.xml`, `compose-ps.txt`, `compose-images.txt`,
 `logs/<service>.log`, `run.txt` (markers, profile, xlxd commits), and with
 `--capture` `capture/<service>.pcapng`.
+
+## Prebuilt reflector image
+
+`XLXD_SUT_IMAGE` / `XLXD_REF_IMAGE` (empty by default) run a reflector
+image as is instead of building that service from `.cache/xlxd/<dir>`; the
+`.cache` tree is then not needed for it, and `run.txt` records the image
+(`xlxd_sut=<image>`). `run.sh` writes `out/<run>/xlxd-image.override.yml`
+(added with `-f`) and renders the configuration on the host into
+`out/<run>/xlxd-config/<service>/` with `rig/xlxd-entry.sh` in render-only
+mode.
+
+Contract for such an image:
+
+1. Arguments `CALLSIGN OWN_IP TRANSCODER_IP` (e.g. `XLX999 <net>.11
+   <net>.21`). The rig sets no entrypoint, so the image's own entrypoint
+   takes these three words.
+2. Configuration mounted read-only in `/xlxd/` (the image must not write
+   there): `xlxd.usrp` (`module bind_ip bind_port peer_ip peer_port
+   callsign`, empty unless `DVT_SUT_USRP=on`), `xlxd.interlink` (XLX rows
+   `<callsign> <ip> <modules>`, `NX<tg> <ip>:41400 <module>`,
+   `P25<id> <ip>:41000 <module>`, each only with its profile on),
+   `xlxd.whitelist`, `xlxd.blacklist`, `xlxd.terminal` (empty = everyone),
+   `dmrid.dat` (`id;callsign;x`), `nxdn.csv` (`id,callsign,x`), `ysfnode.dat`
+   (empty). Env `DVT_CONFIG_MOUNTED=1` is set and may be ignored.
+3. Listens on OWN_IP: DExtra 30001, MMDVM 62030, M17 17000, XLX interlink
+   10002, the USRP bind ports of `xlxd.usrp`; talks AMBEd to
+   TRANSCODER_IP:10100 and the stream ports. NXDN and P25 peers are reached
+   from an ephemeral port. DPlus 20001, DCS 30051, YSF 42000 and DMR+ 8880
+   are not used by the cases yet.
+4. Logs on stdout/stderr (`out/<run>/logs/<service>.log`).
+5. No internet: the rig network is internal, so ID databases come from the
+   mounted files.
 
 ## Control channel
 
