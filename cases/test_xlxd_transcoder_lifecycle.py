@@ -1,0 +1,403 @@
+# SPDX-License-Identifier: MIT
+"""xlxd with USRP endpoints when its transcoder goes away and comes back.
+
+B13 (lost and back): xlxd declares the transcoder lost when nothing came
+back for TRANSCODER_KEEPALIVE_TIMEOUT (30 s, checked on the 5 s ping
+cadence). When the transcoder answers again it is a new connection: xlxd
+must probe CAPS once more and PCM (USRP) streams must be transcoded again
+through extended opens.
+
+B14 (fast swap): the transcoder is replaced within the keepalive window by
+one with other capabilities (here: extended -> legacy, which ignores 24 B
+opens and never answers CAPS). xlxd never sees a disconnect, so it keeps
+the CAPS of the old transcoder. Current behaviour of the build under test:
+the next PCM stream sends an extended open that times out, and every later
+stream on a USRP module keeps sending extended opens; no CAPS probe is sent
+again, so even D-STAR on that module is no longer transcoded. Desired:
+after an open that times out or gets BUSY, probe CAPS again and fall back
+to legacy opens for digital input. That case is xfail(strict) until fixed.
+
+netns cases (marker netns): xlxd XLX999 on 127.0.0.1, FakeAmbed on
+127.0.0.2 (stopped and started again by the scenario), DExtra talker on
+127.0.0.3, USRP peer on 127.0.0.4, module B bridged to the peer. Needs
+DVT_XLXD_BIN (scripts/build-xlxd-netns.sh).
+
+rig case (marker rig, profile allstar for the USRP endpoint): the tester
+is the USRP peer of module C; transcoder-sut is stopped for longer than the
+keepalive timeout through the control channel and started again. With
+--capture, xlxd-sut.pcapng holds the CAPS requests of both connections.
+"""
+import json
+import socket
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import pytest
+
+XLXD_IP, AMBED_IP, DEXTRA_IP, USRP_IP = "127.0.0.1", "127.0.0.2", "127.0.0.3", "127.0.0.4"
+USRP_LINE = "B %s 34001 %s 32001 N0CALL" % (XLXD_IP, USRP_IP)
+VOICE_FRAME = bytes(range(9))
+USRP_PCM = (b"\xe8\x03\x18\xfc") * 80          # +1000, -1000 S16LE
+LOST_SECONDS = 40                               # > 30 s keepalive timeout + 5 s ping period
+SWAP_SECONDS = 2                                # well inside the keepalive window
+
+# steps: talk on module B ("usrpB", "dstarB"), "down:<s>" stops the fake,
+# "up:<mode>" starts a new one and waits for its first PING,
+# "swap:<mode>:<s>" stops the fake and starts another after s seconds
+SCENARIOS = {
+    "lost_and_back": dict(mode="extended",
+                          steps=["usrpB", "down:%d" % LOST_SECONDS, "up:extended", "usrpB", "dstarB"]),
+    "fast_swap": dict(mode="extended",
+                      steps=["usrpB", "swap:legacy:%d" % SWAP_SECONDS, "usrpB", "dstarB"]),
+}
+TIMEOUT = 150
+
+
+# ---------------------------------------------------------------- inside
+
+def _inside(spec, run_dir):
+    """Runs in the namespace: xlxd + fakes, writes run_dir/result.json."""
+    import ctypes
+    import signal
+    import threading
+
+    from dvtest.net import pace
+    from dvtest.proto import ambed, dextra, usrp
+
+    subprocess.run(["ip", "link", "set", "lo", "up"], check=True)
+    run_dir = Path(run_dir)
+    (run_dir / "xlxd.usrp").write_text(USRP_LINE + "\n")
+    libc = ctypes.CDLL(None, use_errno=True)
+    t0 = time.monotonic()
+
+    def now():
+        return time.monotonic() - t0
+
+    def die_with_parent():
+        libc.prctl(1, signal.SIGKILL)       # PR_SET_PDEATHSIG
+
+    fakes = []                              # [(FakeAmbed, mode, started, stopped)]
+
+    def start_fake(mode):
+        # stream ports 41000, 41100, ...: xlxd binds the same port on its
+        # own address, and 42000 is its YSF port
+        fake = ambed.FakeAmbed(AMBED_IP, mode=mode, data_port_base=41000 + 100 * len(fakes))
+        fakes.append([fake, mode, now(), None])
+        return fake
+
+    def stop_fake():
+        entry = fakes[-1]
+        entry[0].stop()
+        entry[3] = now()
+
+    fake = start_fake(spec["mode"])
+    log = open(run_dir / "xlxd.log", "wb")
+    xlxd = subprocess.Popen([spec["bin"], "XLX999", XLXD_IP, AMBED_IP], cwd=run_dir,
+                            stdout=log, stderr=subprocess.STDOUT, preexec_fn=die_with_parent)
+    result = {"phases": [], "usrp_rx": [], "dextra_ack": [], "up_pinged": []}
+    lock = threading.Lock()
+    stop = threading.Event()
+    peer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    peer.bind((USRP_IP, 32001))
+    peer.settimeout(0.2)
+
+    def usrp_rx():
+        while not stop.is_set():
+            try:
+                data = peer.recv(2048)
+            except socket.timeout:
+                continue
+            f = usrp.parse(data)
+            with lock:
+                result["usrp_rx"].append([now(), len(data), f.seq if f else -1,
+                                          f.keyup if f else -1,
+                                          bool(f) and f.payload == ambed.fake_payload(ambed.PCM)])
+
+    def dstar(module, stream_id):
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.bind((DEXTRA_IP, 0))
+        s.settimeout(3)
+        dest = (XLXD_IP, dextra.PORT)
+        s.sendto(dextra.link_packet("N0TEST", module, own_module="C"), dest)
+        try:
+            result["dextra_ack"].append(s.recv(100).hex())
+        except socket.timeout:
+            result["dextra_ack"].append(None)
+            return
+        time.sleep(0.5)
+        s.sendto(dextra.header(stream_id, "N0TEST", module), dest)
+        start = time.monotonic()
+        for index in range(50):
+            pace(start, index)
+            s.sendto(dextra.voice(stream_id, index, VOICE_FRAME, index == 49,
+                                  slow=dextra.SYNC_DATA), dest)
+        s.close()
+
+    def usrp_talk(count):
+        start = time.monotonic()
+        for seq in range(count):
+            pace(start, seq)
+            peer.sendto(usrp.voice(seq, USRP_PCM), (XLXD_IP, 34001))
+        peer.sendto(usrp.unkey(count), (XLXD_IP, 34001))
+
+    threading.Thread(target=usrp_rx, daemon=True).start()
+    try:
+        result["pinged"] = fake.connected.wait(15)
+        time.sleep(1.5)                     # CAPS probe window
+        for index, step in enumerate(spec["steps"]):
+            start = now()
+            kind, _, arg = step.partition(":")
+            if kind == "dstarB":
+                dstar("B", 0x2345 + index)
+                time.sleep(2.5)
+            elif kind == "usrpB":
+                usrp_talk(50)
+                time.sleep(2.5)
+            elif kind == "down":
+                stop_fake()
+                time.sleep(float(arg))
+            elif kind == "up":
+                fake = start_fake(arg)
+                result["up_pinged"].append(fake.connected.wait(15))
+                time.sleep(1.5)             # CAPS probe window of the new connection
+            elif kind == "swap":
+                mode, _, gap = arg.partition(":")
+                stop_fake()
+                time.sleep(float(gap))
+                fake = start_fake(mode)
+                result["up_pinged"].append(fake.connected.wait(10))
+                time.sleep(1.5)
+            result["phases"].append([step, start, now()])
+        result["xlxd_alive"] = xlxd.poll() is None
+    finally:
+        xlxd.terminate()
+        try:
+            xlxd.wait(5)
+        except subprocess.TimeoutExpired:
+            xlxd.kill()
+        stop.set()
+        if fakes and fakes[-1][3] is None:
+            stop_fake()
+        log.close()
+    result["fakes"] = []
+    for fake, mode, started, stopped in fakes:
+        shift = fake.t0 - t0                # fake clock -> scenario clock
+        with fake.lock:
+            result["fakes"].append({
+                "mode": mode, "started": started, "stopped": stopped,
+                "ctrl": [[t + shift, b.hex()] for t, b in fake.ctrl],
+                "opens": [[t + shift, o.size, o.codec_in, list(o.outs), o.transaction, port]
+                          for t, o, port in fake.opens],
+                "closes": [[t + shift, i] for t, i in fake.closes],
+                "data_in": {str(p): [[t + shift, b.hex()] for t, b in v] for p, v in fake.data_in.items()},
+                "events": [[t + shift, e] for t, e in fake.events],
+            })
+    (run_dir / "result.json").write_text(json.dumps(result, indent=1))
+
+
+# ---------------------------------------------------------------- outside
+
+def _launch(binary, name, spec, out_root):
+    run_dir = out_root / "netns-lifecycle" / name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    spec = dict(spec, bin=str(Path(binary).resolve()))
+    cmd = ["unshare", "-rn", sys.executable, "-I", str(Path(__file__).resolve()),
+           "--inside", json.dumps(spec), str(run_dir)]
+    stderr = open(run_dir / "harness.err", "wb")
+    return run_dir, subprocess.Popen(cmd, stdout=stderr, stderr=subprocess.STDOUT), stderr
+
+
+@pytest.fixture(scope="module")
+def runs(xlxd_bin, out_root):
+    launched = {name: _launch(xlxd_bin, name, spec, out_root) for name, spec in SCENARIOS.items()}
+    results = {}
+    deadline = time.monotonic() + TIMEOUT
+    for name, (run_dir, proc, stderr) in launched.items():
+        try:
+            proc.wait(max(1, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        stderr.close()
+        path = run_dir / "result.json"
+        results[name] = json.loads(path.read_text()) if path.exists() else \
+            {"error": (run_dir / "harness.err").read_text()[-2000:]}
+    return results
+
+
+def get(runs, name):
+    run = runs[name]
+    assert "error" not in run, run.get("error")
+    assert run["pinged"], "xlxd never sent AMBEDPING to the transcoder"
+    assert run["xlxd_alive"], "xlxd exited"
+    return run
+
+
+def caps_times(fake):
+    return [t for t, h in fake["ctrl"] if bytes.fromhex(h) == b"AMBEDCAPS"]
+
+
+def requests(fake, port):
+    return [bytes.fromhex(h) for _t, h in fake["data_in"].get(str(port), [])]
+
+
+def phase(run, step_index):
+    return run["phases"][step_index][1], run["phases"][step_index][2]
+
+
+def opens_in(fake, start, end):
+    return [o for o in fake["opens"] if start <= o[0] < end]
+
+
+def check_pcm_requests(fake, port):
+    reqs = requests(fake, port)
+    assert len(reqs) >= 50, "PCM data requests %d" % len(reqs)
+    assert all(len(r) == 322 and r[0] == 5 for r in reqs), sorted({len(r) for r in reqs})
+    assert reqs[0][2:] == USRP_PCM, "PCM must reach the transcoder unchanged"
+
+
+def check_dstar_requests(fake, port):
+    reqs = requests(fake, port)
+    assert len(reqs) >= 45, "only %d data requests for 50 frames" % len(reqs)
+    assert all(len(r) == 11 and r[0] == 1 and r[2:] == VOICE_FRAME for r in reqs), reqs[:1]
+
+
+# B13: lost > 30 s and back
+
+@pytest.mark.netns
+def test_lost_transcoder_caps_probed_again(runs):
+    run = get(runs, "lost_and_back")
+    first, second = run["fakes"]
+    assert run["up_pinged"] == [True], "xlxd did not ping the restarted transcoder"
+    assert len(caps_times(first)) == 1, "first connection: CAPS %d times" % len(caps_times(first))
+    assert len(caps_times(second)) == 1, "second connection: CAPS %d times" % len(caps_times(second))
+    start, end = phase(run, 2)
+    assert start <= caps_times(second)[0] < end, "CAPS not probed right after the reconnect"
+
+
+@pytest.mark.netns
+def test_lost_transcoder_pcm_resumes(runs):
+    run = get(runs, "lost_and_back")
+    first, second = run["fakes"]
+    before = opens_in(first, *phase(run, 0))
+    assert [o[1:4] for o in before] == [[24, 5, [1, 2]]], before
+    check_pcm_requests(first, before[0][5])
+    after = opens_in(second, *phase(run, 3))
+    assert [o[1:4] for o in after] == [[24, 5, [1, 2]]], "PCM open after the reconnect: %s" % after
+    check_pcm_requests(second, after[0][5])
+    txs = [o[4] for o in before + after]
+    assert all(txs) and len(set(txs)) == 2, "transactions %s" % txs
+
+
+@pytest.mark.netns
+def test_lost_transcoder_dstar_to_usrp_resumes(runs):
+    run = get(runs, "lost_and_back")
+    second = run["fakes"][1]
+    start, end = phase(run, 4)
+    opens = opens_in(second, start, end)
+    assert [o[1:4] for o in opens] == [[24, 1, [2, 5]]], opens
+    check_dstar_requests(second, opens[0][5])
+    keyed = [r for r in run["usrp_rx"] if start <= r[0] < end and r[1] == 352]
+    assert len(keyed) >= 45, "USRP voice frames %d after the reconnect" % len(keyed)
+    assert all(r[3] == 1 and r[4] for r in keyed), "keyed frames must carry the transcoder PCM"
+
+
+# B14: replaced within the keepalive window by a legacy transcoder
+
+@pytest.mark.netns
+def test_fast_swap_no_disconnect(runs):
+    """The swap is inside the keepalive window: the new transcoder is
+    pinged within seconds, the old one served the PCM stream before."""
+    run = get(runs, "fast_swap")
+    first, second = run["fakes"]
+    assert (first["mode"], second["mode"]) == ("extended", "legacy")
+    assert run["up_pinged"] == [True], "xlxd did not ping the new transcoder within 10 s"
+    before = opens_in(first, *phase(run, 0))
+    assert [o[1:4] for o in before] == [[24, 5, [1, 2]]], before
+    check_pcm_requests(first, before[0][5])
+
+
+@pytest.mark.netns
+@pytest.mark.xfail(strict=True, reason="xlxd PR #272 edge case: stale CAPS after fast transcoder swap")
+def test_fast_swap_caps_probed_after_failed_open(runs):
+    run = get(runs, "fast_swap")
+    second = run["fakes"][1]
+    swapped = run["phases"][1][2]
+    failed = [t for t, e in second["events"] if e == "ignored extended open"]
+    assert failed, "no extended open reached the new transcoder: %s" % second["opens"]
+    probes = [t for t in caps_times(second) if t >= failed[0]]
+    assert probes, "no CAPS probe after the open to the new transcoder timed out (swap at %.1f s)" % swapped
+    start, end = phase(run, 3)
+    digital = [o for o in opens_in(second, start, end) if o[2] == 1]
+    assert [o[1:4] for o in digital] == [[19, 1, [2, 3, 4]]], \
+        "D-STAR after the swap must use a legacy open: %s" % digital
+    check_dstar_requests(second, digital[0][5])
+
+
+# ---------------------------------------------------------------- rig
+
+USRP_MODULE = "C"       # tester is the USRP peer (rig/config/xlxd.usrp.in)
+USRP_PEER_PORT, USRP_XLXD_PORT = 32003, 34003
+RIG_LOST_SECONDS = 40
+
+
+def usrp_to_dstar(rig, seconds=1.0):
+    """USRP tone from the tester into module C; returns (voiced, total)
+    D-STAR frames a listener on C received."""
+    from dvtest import clients
+    from dvtest.audio import signals
+    from dvtest.net import pace
+    from dvtest.proto import usrp
+
+    listener = clients.make("dstar", USRP_MODULE, 1)
+    peer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    peer.bind(("0.0.0.0", USRP_PEER_PORT))
+    try:
+        assert listener.link(rig.xlxd_sut), "D-STAR link to %s failed" % rig.xlxd_sut
+        listener.client.drain()
+        listener.client.inbox.clear()
+        dest = (rig.xlxd_sut, USRP_XLXD_PORT)
+        start = time.monotonic()
+        seq = 0
+        for seq, frame in enumerate(signals.frames(signals.tone(700, int(seconds * 1000)))):
+            pace(start, seq)
+            peer.sendto(usrp.voice(seq, frame), dest)
+            listener.client.drain()
+        peer.sendto(usrp.unkey(seq + 1), dest)
+        received = listener.collect(settle=1.0)
+    finally:
+        peer.close()
+        clients.close(listener)
+    return sum(1 for f in received if any(f)), len(received)
+
+
+@pytest.mark.rig
+def test_rig_transcoder_lost_and_back_usrp_resumes(rig_usrp, rig_control):
+    """B13 on the rig: transcoder-sut down > 30 s, then up; USRP PCM is
+    transcoded to D-STAR again. CAPS count: see xlxd-sut.pcapng."""
+    voiced, total = usrp_to_dstar(rig_usrp)
+    assert voiced >= 40, "USRP->D-STAR before the fault: %d of %d frames voiced" % (voiced, total)
+    rig_control("stop", "transcoder-sut")
+    try:
+        time.sleep(RIG_LOST_SECONDS)
+        down_voiced, down_total = usrp_to_dstar(rig_usrp)
+    finally:
+        rig_control("start", "transcoder-sut")
+    assert not down_voiced, "%d of %d frames voiced with the transcoder down" % (down_voiced, down_total)
+    restarted = time.monotonic()
+    deadline = restarted + 60
+    while True:
+        voiced, total = usrp_to_dstar(rig_usrp)
+        if voiced >= 40:
+            break
+        if time.monotonic() > deadline:
+            pytest.fail("USRP->D-STAR did not recover within 60 s of the restart (%d of %d voiced)"
+                        % (voiced, total))
+        time.sleep(3)
+
+
+if __name__ == "__main__" and len(sys.argv) == 4 and sys.argv[1] == "--inside":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    _inside(json.loads(sys.argv[2]), sys.argv[3])
