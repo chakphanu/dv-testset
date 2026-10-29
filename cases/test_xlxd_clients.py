@@ -220,7 +220,7 @@ FRAME_S = 0.020
 
 def leave_mid_stream(ip, kind, module):
     """A D-STAR talker streams 150 frames on module; a listener of kind
-    (dstar: DExtra unlink, dmr: 13 B RPTCL close) leaves after LEAVE_AT
+    (dstar: DExtra unlink, dmr: TG 4000 unlink) leaves after LEAVE_AT
     frames. Returns (frames before the leave, frames after it, tail in s
     from the leave packet to the last frame received)."""
     listener = listen(ip, kind, module, 1)
@@ -241,7 +241,10 @@ def leave_mid_stream(ip, kind, module):
                 if kind == "dstar":
                     listener.client.send(listener.dest, dextra.unlink_packet(listener.callsign, module))
                 else:
-                    listener.close_link()
+                    # TG 4000 unlink; a 13 B RPTCL close is not honoured by
+                    # xlxd (it reads the repeater id from bytes 4-7, "L" + 3 id
+                    # bytes), so the listener would simply stay linked
+                    listener._empty_stream(4000, 0.0)
                 left = time.monotonic()
             listener.client.drain()
         listener.client.pump(1.5)
@@ -249,7 +252,9 @@ def leave_mid_stream(ip, kind, module):
             stamps = [t for p, t in zip(listener.client.inbox, listener.client.inbox_times)
                       if dextra.parse_voice(p)]
         else:
-            stamps = [t for p, t in zip(listener.client.inbox, listener.client.inbox_times) if dmr.is_voice(p)]
+            # one DMRD burst carries three frames
+            stamps = [t for p, t in zip(listener.client.inbox, listener.client.inbox_times)
+                      if dmr.is_voice(p) for _ in range(3)]
     finally:
         listener.dest = None                    # it left
         clients.close(talker, listener)
