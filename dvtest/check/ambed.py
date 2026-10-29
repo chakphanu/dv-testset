@@ -2,9 +2,13 @@
 """AMBEd transcoder protocol: control pairing on port 10100 and data
 streams on the ports announced by STD."""
 from ..proto import ambed as A
-from .common import REPLY_TIMEOUT, Stream, finish_stream, seq_finding
+from .common import ERROR, REPLY_TIMEOUT, WARN, Stream, finish_stream, seq_finding
 
 NAME = "ambed"
+# OPEN callsign of a test stream that breaks the protocol on purpose (data
+# after CS, idle until the transcoder times it out, data from another
+# port): findings on its frames are warnings tagged as intentional
+FAULT_CALLSIGN = b"N0FAULT "
 
 
 def _open_problem(op):
@@ -45,6 +49,7 @@ class Checker:
         self.answers = {}     # (client, server, tx, in, outs) -> Std
         self.streams = {}     # (server ip, port) -> dict
         self.by_id = {}       # (client, server, stream id) -> (server ip, port)
+        self.fault_frames = set()     # frames of FAULT_CALLSIGN streams
 
     def claims(self, d):
         return A.PORT in (d.sport, d.dport) or (d.src, d.sport) in self.streams \
@@ -157,7 +162,10 @@ class Checker:
         self.streams[server] = {
             "id": std.stream_id, "client": d.dst, "codec_in": op.codec_in, "outs": op.outs,
             "open": True, "closed_at": None, "pending": [], "stream": None, "name": name,
-            "flow": "%s<>%s:%d" % (d.dst, d.src, std.port), "replies": 0}
+            "flow": "%s<>%s:%d" % (d.dst, d.src, std.port), "replies": 0,
+            "fault": op.callsign == FAULT_CALLSIGN}
+        if op.callsign == FAULT_CALLSIGN:
+            self.fault_frames.update((req.frame, d.frame))
         self.by_id[(key[0][0], d.src, std.stream_id)] = server
 
     def _close(self, d, stream_id):
@@ -171,6 +179,8 @@ class Checker:
             return
         st["open"] = False
         st["closed_at"] = d.ts
+        if st["fault"]:
+            self.fault_frames.add(d.frame)
 
     # data ports
 
@@ -178,6 +188,8 @@ class Checker:
         r = self.report
         req = A.parse_data_request(d.payload)
         r.count(NAME, d, "data_request")
+        if st["fault"]:
+            self.fault_frames.add(d.frame)
         if d.src != st["client"]:
             r.error(NAME, d, "unknown_peer", "data request on %s from %s, the stream was opened by %s" % (
                 st["name"], d.src, st["client"]))
@@ -198,6 +210,8 @@ class Checker:
         r = self.report
         r.count(NAME, d, "data_reply")
         st["replies"] += 1
+        if st["fault"]:
+            self.fault_frames.add(d.frame)
         try:
             pid, _entries = A.parse_data_reply(d.payload, st["outs"])
         except ValueError as exc:
@@ -241,6 +255,10 @@ class Checker:
         self._expire(end_ts)
         for st in self.streams.values():
             self._end_stream(st, "capture end (open)" if st["open"] else "closed")
+        for index, f in enumerate(self.report.findings):
+            if f.protocol == NAME and f.frame in self.fault_frames and f.severity == ERROR:
+                self.report.findings[index] = f._replace(severity=WARN, message=f.message + (
+                    " (intentional: fault-injection stream, OPEN callsign %s)" % FAULT_CALLSIGN.decode().strip()))
 
 
 def _is_reply(p):

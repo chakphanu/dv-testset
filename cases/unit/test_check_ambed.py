@@ -91,3 +91,19 @@ def test_invalid_open_accepted_and_unanswered_ping(tmp_path):
     assert frames_of(result, "ambed.open_invalid_accepted") == [2]
     assert frames_of(result, "ambed.no_reply") == [3]
     assert frames_of(result, "ambed.unparseable") == [4]
+
+
+def test_fault_injection_stream_is_warned(tmp_path):
+    """Streams opened with callsign N0FAULT break the protocol on purpose:
+    their findings are warnings tagged intentional; others stay errors."""
+    for callsign, severity in (("N0FAULT", "warn"), ("N0TEST", "error")):
+        w = Wire()
+        ctl(w, A.open_ext(callsign, A.PCM, (A.AMBEPLUS,), 1), A.std(1, PORT, A.PCM, A.AMBEPLUS, 1))
+        stream(w, outs=(A.AMBEPLUS,), frames=3)
+        ctl(w, A.close(1), None)
+        stream(w, outs=(A.AMBEPLUS,), pids=[3, 4], skip_reply=(0, 1))
+        ctl(w, A.ping("XLX999"), A.PONG, 2.0)
+        result = w.check(tmp_path)
+        found = [f for f in result["findings"] if f["code"] in ("ambed.data_after_close", "ambed.reply_missing")]
+        assert found and {f["severity"] for f in found} == {severity}
+        assert all(("intentional" in f["message"]) == (severity == "warn") for f in found)

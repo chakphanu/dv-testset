@@ -10,6 +10,8 @@ allstar .40.
   DVT_SUBNET         rig subnet
   DVT_XLXD_REF       reference xlxd address
   DVT_XLXD_SUT       xlxd under test
+  DVT_XLXD_PEER_SUT  XLX998 interlink peer of xlxd-sut (.12, profile interlink)
+  DVT_XLXD_PEER_REF  XLX998 interlink peer of xlxd-ref (.13, profile interlink)
   DVT_AMBED_REF      reference transcoder
   DVT_AMBED_SUT      transcoder under test
   DVT_TESTER         tester container address
@@ -33,10 +35,12 @@ import tomllib
 from dataclasses import dataclass, field
 
 DEFAULT_SUBNET = "172.30.0.0/24"
-HOST_OFFSETS = {"xlxd_ref": 10, "xlxd_sut": 11, "ambed_ref": 20, "ambed_sut": 21,
+HOST_OFFSETS = {"xlxd_ref": 10, "xlxd_sut": 11, "xlxd_peer_sut": 12, "xlxd_peer_ref": 13,
+                "ambed_ref": 20, "ambed_sut": 21,
                 "tester": 30, "allstar": 40, "nxdn_ref": 50, "nxdn_sut": 51,
                 "p25_ref": 60, "p25_sut": 61}
-KEYS = ("subnet", "xlxd_ref", "xlxd_sut", "ambed_ref", "ambed_sut", "tester", "allstar",
+KEYS = ("subnet", "xlxd_ref", "xlxd_sut", "xlxd_peer_sut", "xlxd_peer_ref",
+        "ambed_ref", "ambed_sut", "tester", "allstar",
         "nxdn_ref", "nxdn_sut", "p25_ref", "p25_sut",
         "ambed_addr", "ambed_port", "ambed_stream_cap", "xlxd_bin", "xlxd_ref_bin", "reflector", "iax_secret", "out")
 
@@ -46,6 +50,8 @@ class Target:
     subnet: str = DEFAULT_SUBNET
     xlxd_ref: str = ""
     xlxd_sut: str = ""
+    xlxd_peer_sut: str = ""
+    xlxd_peer_ref: str = ""
     ambed_ref: str = ""
     ambed_sut: str = ""
     tester: str = ""

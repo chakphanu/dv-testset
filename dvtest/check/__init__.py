@@ -20,14 +20,15 @@ from datetime import datetime
 
 from .. import pcap
 from ..target import DEFAULT_SUBNET, HOST_OFFSETS
-from . import ambed, dextra, dmr, iax2, m17, nxdn, p25, usrp
+from . import ambed, dextra, dmr, iax2, m17, nxdn, p25, usrp, xlx
 from .common import ERROR, WARN, Report, flow_of
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # capture file stem -> rig host key (dvtest.target.HOST_OFFSETS)
 RIG_FILES = {"xlxd-ref": "xlxd_ref", "xlxd-sut": "xlxd_sut", "transcoder-ref": "ambed_ref",
              "transcoder-sut": "ambed_sut", "tester": "tester", "allstar": "allstar",
-             "nxdn-ref": "nxdn_ref", "nxdn-sut": "nxdn_sut", "p25-ref": "p25_ref", "p25-sut": "p25_sut"}
+             "nxdn-ref": "nxdn_ref", "nxdn-sut": "nxdn_sut", "p25-ref": "p25_ref", "p25-sut": "p25_sut",
+             "xlxd-peer-ref": "xlxd_peer_ref", "xlxd-peer-sut": "xlxd_peer_sut"}
 
 
 def rig_config(subnet=None):
@@ -40,27 +41,36 @@ def rig_config(subnet=None):
     return {"hosts": hosts, "usrp": links, "subnet": str(net)}
 
 
+LEAD = 2.0
+
+
 def outages(run_dir, hosts):
     """[(ip, t0, t1, label)] from <run>/control/control.log (scripts/run.sh
-    control channel): a stopped or killed service is down from its
-    "request stop|kill" line (without one: 12 s / 2 s before the completed
-    line, compose stop waits up to 10 s) until 10 s after its "start" line."""
+    control channel): a stopped, killed or restarted service is down from
+    its "request stop|kill|restart" line (without one: 12 s / 2 s before the completed
+    line, compose stop waits up to 10 s) until 10 s after its "start" line
+    (a restart: until 10 s after its own completed line)."""
     path = os.path.join(run_dir, "control", "control.log")
     if not os.path.isfile(path):
         return []
     requested, down, out = {}, {}, []
     with open(path) as fh:
         for line in fh:
-            m = re.match(r"^(\S+Z) (?:(request) )?(stop|kill|start) (\S+)(?: -> (\S+))?$", line.strip())
+            m = re.match(r"^(\S+Z) (?:(request) )?(stop|kill|start|restart) (\S+)(?: -> (\S+))?$", line.strip())
             ip = hosts.get(RIG_FILES.get(m.group(4), "")) if m else None
             if ip is None or (m.group(2) is None) == (m.group(5) is None):
                 continue
             ts = datetime.fromisoformat(m.group(1).replace("Z", "+00:00")).timestamp()
             action, svc = m.group(3), m.group(4)
             if m.group(2):
-                requested[(action, svc)] = ts
+                # a stream cut by the action may have sent its last packet
+                # just before the request
+                requested[(action, svc)] = ts - LEAD
             elif m.group(5) != "0":
                 continue
+            elif action == "restart":
+                t0 = requested.pop((action, svc), ts - 12.0)
+                out.append((ip, t0, ts + 10.0, svc + " restart"))
             elif action != "start":
                 t0 = requested.pop((action, svc), ts - (12.0 if action == "stop" else 2.0))
                 down.setdefault(svc, (ip, t0))
@@ -125,9 +135,9 @@ def check_file(path, rig=None, jitter_ms=None, windows=()):
     rig_hosts = set(rig["hosts"].values()) if rig else None
     m17_checker = m17.Checker(report)
     checkers = [ambed.Checker(report), dextra.Checker(report, m17_checker), dmr.Checker(report),
-                m17_checker, iax2.Checker(report), nxdn.Checker(report), p25.Checker(report),
+                m17_checker, iax2.Checker(report), nxdn.Checker(report), p25.Checker(report), xlx.Checker(report),
                 usrp.Checker(report, rig["usrp"] if rig else ())]
-    names = [ambed.NAME, dextra.NAME, dmr.NAME, m17.NAME, iax2.NAME, nxdn.NAME, p25.NAME, usrp.NAME]
+    names = [ambed.NAME, dextra.NAME, dmr.NAME, m17.NAME, iax2.NAME, nxdn.NAME, p25.NAME, xlx.NAME, usrp.NAME]
     foreign = multicast = 0
     other = Counter()
     other_flows = {}

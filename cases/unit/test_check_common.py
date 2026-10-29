@@ -124,13 +124,17 @@ def test_outages_from_control_log_and_split_captures(tmp_path):
         "2026-10-29T13:34:48.364Z stop transcoder-sut -> 0\n"
         "2026-10-29T13:35:01.000Z start transcoder-sut -> 0\n"
         "2026-10-29T13:36:00.300Z kill allstar -> 0\n"
-        "2026-10-29T13:37:00.010Z stop xlxd-sut -> refused\n")
+        "2026-10-29T13:37:00.010Z stop xlxd-sut -> refused\n"
+        "2026-10-29T13:38:00.000Z request restart xlxd-sut\n"
+        "2026-10-29T13:38:01.000Z restart xlxd-sut -> 0\n")
     hosts = check.rig_config("172.30.0.0/24")["hosts"]
     got = check.outages(str(tmp_path), hosts)
     assert [(ip, svc) for ip, _t0, _t1, svc in got] == [("172.30.0.21", "transcoder-sut"),
+                                                       ("172.30.0.11", "xlxd-sut restart"),
                                                        ("172.30.0.40", "allstar")]
-    (ip, t0, t1, _), (_, k0, k1, _) = got
-    assert (t1 - t0, k1) == (pytest.approx(32.85), float("inf")) and t0 % 60 == pytest.approx(38.15)
+    assert got[1][2] - got[1][1] == pytest.approx(13.0)
+    (ip, t0, t1, _), _, (_, k0, k1, _) = got
+    assert (t1 - t0, k1) == (pytest.approx(34.85), float("inf")) and t0 % 60 == pytest.approx(36.15)
     assert k0 % 60 == pytest.approx(58.3)                     # 2 s before an unrequested kill
     cap = tmp_path / "capture"
     cap.mkdir()
