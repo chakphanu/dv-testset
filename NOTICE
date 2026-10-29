@@ -8,6 +8,19 @@ scripts/pre-fetch-*.sh scripts, into the gitignored .cache/ directory:
 - codec2 (LGPL-2.1), https://github.com/drowe67/codec2
 - AllStarLink 3 / app_rpt (GPL-2.0), installed from repo.allstarlink.org
   inside rig/Dockerfile.allstar
+- NXDNReflector from NXDNClients (GPL-2.0), https://github.com/g4klx/NXDNClients
+- P25Reflector from P25Clients (GPL-2.0), https://github.com/g4klx/P25Clients
+
+scripts/pre-fetch-speech.sh fetches speech input (not shipped) into
+.cache/speech/ and keeps 8 kHz resampled copies of 20 utterances per voice
+there (a modification, marked by the 8k file names and SHA256SUMS):
+
+- CMU ARCTIC voices cmu_us_bdl_arctic and cmu_us_slt_arctic,
+  http://www.festvox.org/cmu_arctic/ , Copyright (c) 2003 Carnegie Mellon
+  University: "free for use for any purpose (commercial or otherwise)";
+  permission to use, copy, modify and licence, provided the copyright
+  notice, conditions and disclaimer are retained, modifications are
+  clearly marked and the original authors' names are not deleted.
 
 Those components remain under their own licences. Transcoder images are
 supplied by the user through TRANSCODER_IMAGE and are not part of this
