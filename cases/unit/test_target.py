@@ -12,9 +12,9 @@ def test_defaults_from_subnet():
 
 
 def test_env_overrides(tmp_path):
-    t = target.load(env={"DVT_SUBNET": "192.168.77.0/24", "DVT_AMBED_SUT": "192.0.2.5",
+    t = target.load(env={"DVT_SUBNET": "172.30.7.0/24", "DVT_AMBED_SUT": "192.0.2.5",
                          "DVT_AMBED_PORT": "10200", "DVT_AMBED_ADDR": "127.0.0.9"})
-    assert t.xlxd_sut == "192.168.77.11" and t.ambed_sut == "192.0.2.5"
+    assert t.xlxd_sut == "172.30.7.11" and t.ambed_sut == "192.0.2.5"
     assert t.ambed_port == 10200 and t.is_given("ambed_addr") and not t.is_given("xlxd_sut")
 
 

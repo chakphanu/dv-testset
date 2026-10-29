@@ -52,3 +52,6 @@ cases start the image themselves, `DVT_TRANSCODER_ENV` and
 `DVT_TRANSCODER_ARGS` pass extra environment and arguments to it.
 
 Before committing, run `scripts/pii-check.sh`.
+
+`AGENTS.md`, `CLAUDE.md` and `.agents/skills/` are working notes for AI coding
+agents; they repeat the rules above in a form those tools load automatically.
