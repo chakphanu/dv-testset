@@ -479,3 +479,216 @@ def test_sid_patch_second_leg_rewritten(rig):
 def test_b14_placeholder(behaviour_spec):
     """B14: reserved by the DV-Router profile, not specified yet."""
     pytest.skip("B14 not specified yet")
+
+
+# ---------------------------------------------------------------- B15
+
+def rptcl_close(ip, size):
+    """DMR talker A holds the floor on W and sends RPTCL mid-stream; a
+    D-STAR talker B keys up right after. Returns frames A still receives
+    later than one frame time after its RPTCL, and frames of B heard by a
+    D-STAR listener."""
+    a = clients.make("dmr", "W", 0)
+    b = clients.make("dstar", "W", 0)
+    listener = clients.make("dstar", "W", 1)
+    try:
+        linked(ip, listener, a, b)
+        sid_a, sid_b = clients.fresh_stream_id("dmr"), clients.fresh_stream_id("dstar")
+        bursts, _seq = dmr.voice_packets(signals.prng_frames("dmr", 60, seed="b15a"), a.id, a.tg, sid_a)
+        sync = dmr.data_sync_payload()
+        a.client.send(a.dest, dmr.packet(0, a.id, a.tg, a.id, 0xA1, sid_a, sync))
+        start = time.monotonic() + 0.1
+        for tick in range(10):
+            pace(start, tick, 0.060)
+            a.client.send(a.dest, bursts[tick])
+            listener.client.drain()
+        a.client.drain()
+        a.close_link(size)
+        closed = time.monotonic()
+        a.client.inbox.clear()
+        a.client.inbox_times.clear()
+        frames_b = signals.prng_frames("dstar", 50, seed="b15b")
+        b.client.send(b.dest, b.header(sid_b))
+        b.client.paced(b.dest, dstar_stream_packets(sid_b, frames_b), 0.020, listener.client, a.client)
+        listener.client.pump(1.0)
+        a.client.pump(0.2)
+        heard_b = dstar_streams(listener.client.inbox).get(sid_b, [])
+        late = [t for p, t in zip(a.client.inbox, a.client.inbox_times)
+                if dmr.is_voice(p) and t > closed + 0.020]
+        return {"a_after_close": len(late), "b_heard": len(heard_b)}
+    finally:
+        a.dest = None                       # closed (or ignored); no unlink
+        clients.close(a, b, listener)
+
+
+@pytest.mark.parametrize("size", [13, 9])
+def test_dmr_rptcl_closes_session(rig, size, behaviour_spec):
+    """B15: RPTCL from a DMR client that holds the floor. DV-Router closes
+    the session: the client gets nothing later than one frame time after
+    the close, and its floor is free for the next talker at once. xlxd
+    ignores both forms (it reads the 13 B form's id from the wrong offset
+    and only logs the 9 B form): under the xlxd profile sut == ref."""
+    got = both(rig, rptcl_close, size)
+    print("RPTCL %d B:" % size, got)
+    if (behaviour_spec or {}).get("rptcl") == "close":
+        assert got["sut"]["a_after_close"] == 0, "sut sent %d frames after RPTCL" % got["sut"]["a_after_close"]
+        assert got["sut"]["b_heard"] >= 40, "next talker heard %d frames: floor not released" % got["sut"]["b_heard"]
+    else:
+        for key in ("a_after_close", "b_heard"):
+            assert (got["sut"][key] > 0) == (got["ref"][key] > 0), "%s: sut %s, ref %s" % (key, got["sut"], got["ref"])
+
+
+# ---------------------------------------------------------------- B16
+
+def header_order_violations(kind, packets):
+    """Voice packets whose stream id had no header before it on this
+    receiver (D-STAR and DMR; M17 carries its LSF in every packet)."""
+    seen, bad = set(), 0
+    for p in packets:
+        if kind == "dstar":
+            h = dextra.parse_header(p)
+            if h:
+                seen.add(h["stream_id"])
+                continue
+            v = dextra.parse_voice(p)
+            if v and v[0] not in seen:
+                bad += 1
+        elif kind == "dmr":
+            d = dmr.parse(p)
+            if not d:
+                continue
+            if d["bitfield"] & 0x3F == 0x21:
+                seen.add(d["stream"])
+            elif dmr.is_voice(p) and d["stream"] not in seen:
+                bad += 1
+    return bad
+
+
+def voice_payloads(kind, packets):
+    out = []
+    for p in packets:
+        if kind == "dstar":
+            v = dextra.parse_voice(p)
+            if v:
+                out.append(v[3])
+        elif kind == "dmr":
+            if dmr.is_voice(p):
+                out.extend(dmr.extract(p[20:53]))
+        else:
+            m = m17.parse(p)
+            if m:
+                out.extend(m["frames"])
+    return out
+
+
+def late_entry_scenario(ip):
+    """DMR talker A busy on X for 2 s; at 0.6 s a D-STAR talker B and an
+    M17 talker C key up and run 1.4 s past A's end. Listeners of every
+    kind on X. Returns violation counts."""
+    a = clients.make("dmr", "X", 0)
+    b = clients.make("dstar", "X", 0)
+    c = clients.make("m17", "X", 0)
+    listeners = {k: clients.make(k, "X", 1) for k in clients.KINDS}
+    try:
+        linked(ip, *listeners.values(), a, b, c)
+        frames = {"a": signals.prng_frames("dmr", FRAMES, seed="b16a"),
+                  "b": signals.prng_frames("dstar", 150, seed="b16b"),
+                  "c": signals.prng_frames("m17", 150, seed="b16c")}
+        sid_a, sid_b, sid_c = (clients.fresh_stream_id(k) for k in ("dmr", "dstar", "m17"))
+        bursts, seq = dmr.voice_packets(frames["a"], a.id, a.tg, sid_a)
+        voice_b = dstar_stream_packets(sid_b, frames["b"])
+        packets_c = m17.voice_packets(frames["c"], sid_c, c.callsign)
+        sync = dmr.data_sync_payload()
+        a.client.send(a.dest, dmr.packet(0, a.id, a.tg, a.id, 0xA1, sid_a, sync))
+        start = time.monotonic() + 0.1
+        everyone = [a, b, c, *listeners.values()]
+        for tick in range(30 + len(voice_b)):
+            pace(start, tick)
+            if tick % 3 == 0 and tick // 3 < len(bursts):
+                a.client.send(a.dest, bursts[tick // 3])
+            if tick // 3 == len(bursts) and tick % 3 == 0:
+                a.client.send(a.dest, dmr.packet(seq, a.id, a.tg, a.id, 0xA2, sid_a, sync))
+            if tick == 30:
+                b.client.send(b.dest, b.header(sid_b))
+            if tick > 30:
+                b.client.send(b.dest, voice_b[tick - 31])
+            if tick >= 30 and (tick - 30) % 2 == 0 and (tick - 30) // 2 < len(packets_c):
+                c.client.send(c.dest, packets_c[(tick - 30) // 2])
+            for client in everyone:
+                client.client.drain()
+        for client in everyone:
+            client.client.pump(0.3)
+        order = {k: header_order_violations(k, lst.client.inbox) for k, lst in listeners.items() if k != "m17"}
+        echo = {}
+        for name, talker, kind in (("a", a, "dmr"), ("b", b, "dstar"), ("c", c, "m17")):
+            own = set(frames[name])
+            echo[name] = sum(1 for f in voice_payloads(kind, talker.client.inbox) if f in own and any(f))
+        return {"voice_before_header": order, "self_echo": echo}
+    finally:
+        clients.close(a, b, c, *listeners.values())
+
+
+@pytest.fixture(scope="module")
+def late_scenario(rig):
+    return both(rig, late_entry_scenario)
+
+
+def test_no_voice_before_header(rig, late_scenario, behaviour_spec):
+    """B16: on every egress (D-STAR, DMR) a voice packet never comes for a
+    stream id whose header that receiver has not had first. DV-Router:
+    strict; xlxd profile: sut == ref (upstream promotes late entrants
+    mid-stream)."""
+    got = {n: r["voice_before_header"] for n, r in late_scenario.items()}
+    print("voice before header:", got)
+    if (behaviour_spec or {}).get("strict"):
+        assert not any(got["sut"].values()), "sut: voice before header %s" % got["sut"]
+    else:
+        assert {k: v > 0 for k, v in got["sut"].items()} == {k: v > 0 for k, v in got["ref"].items()}, got
+
+
+def test_no_self_echo_other_sid(rig, late_scenario, behaviour_spec):
+    """B16: no talker ever receives its own voice (matched by payload)
+    under any stream id. DV-Router: strict. xlxd profile: recorded only -
+    upstream echoes a promoted late D-STAR entrant back to itself depending
+    on timing (0 or ~70 frames on the same build in consecutive runs), so a
+    differential assert would be flaky."""
+    got = {n: r["self_echo"] for n, r in late_scenario.items()}
+    print("self echo frames:", got)
+    if (behaviour_spec or {}).get("strict"):
+        assert not any(got["sut"].values()), "sut echoed talkers' own voice %s" % got["sut"]
+
+
+def test_pending_entrant_starts_with_header(rig, behaviour_spec):
+    """B16 with late_entry "pending": the promoted entrant starts with a
+    header under its own sid. Placeholder until the knob is configured."""
+    if (behaviour_spec or {}).get("late_entry") != "pending":
+        pytest.skip("late_entry knob 'pending' not configured for this profile")
+    pytest.skip("pending entrant case not written yet")
+
+
+# ---------------------------------------------------------------- B17
+
+def m17_fn0(ip):
+    talker = clients.make("m17", "Y", 0)
+    listener = clients.make("m17", "Y", 1)
+    try:
+        linked(ip, listener, talker)
+        frames = signals.prng_frames("m17", 40, seed="b17")
+        clients.talk(talker, "m17", frames, tail=1.0)
+        got = listener.collect(settle=0.5)
+        sent = [f for p in m17.voice_packets(frames, 1, "N0CALL") for f in m17.parse(p)["frames"]]
+        return {"all_sent": got == sent, "received": len(got), "sent": len(sent)}
+    finally:
+        clients.close(talker, listener)
+
+
+def test_m17_frame0_relayed(rig, behaviour_spec):
+    """B17: M17 -> M17 relays every packet's Codec2 payload including frame
+    number 0. DV-Router: required; xlxd drops packet 0 (it opens the
+    stream): under the xlxd profile sut == ref."""
+    got = both(rig, m17_fn0)
+    print("M17 fn0:", got)
+    if (behaviour_spec or {}).get("fn0") == "relay":
+        assert got["sut"]["all_sent"], "sut: %d of %d frames incl. fn 0" % (got["sut"]["received"], got["sut"]["sent"])
+    else:
+        assert got["sut"]["all_sent"] == got["ref"]["all_sent"], got

@@ -131,9 +131,12 @@ class DmrClient:
         self.client.pump(gap)
         self.client.send(self.dest, packet(1, self.id, tg, self.id, 0xA2, sid, data_sync_payload()))
 
-    def close_link(self):
-        """Repeater close as xlxd parses it: RPTCL + id + 4 bytes (13 B)."""
-        self.client.send(self.dest, b"RPTCL" + self.id.to_bytes(4, "big") + bytes(4))
+    def close_link(self, size=13):
+        """Repeater close: RPTCL + id (9 B, the MMDVMHost form) or RPTCL +
+        id + 4 zero bytes (13 B, the size xlxd accepts)."""
+        if size not in (9, 13):
+            raise ValueError("RPTCL is 9 or 13 bytes")
+        self.client.send(self.dest, b"RPTCL" + self.id.to_bytes(4, "big") + bytes(size - 9))
 
     def keepalive(self):
         """Repeater keepalive; xlxd drops a silent DMR client after ~100 s."""

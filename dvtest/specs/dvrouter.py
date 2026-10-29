@@ -40,6 +40,14 @@ SPEC = {
     "test_admission_remote_sid_open_elsewhere": {"remote_sid_open_elsewhere": "deny"},
     # B6 XLX revision 3 egress: missing transcoded output leaves its slot zeroed
     "test_interlink_missing_output_slot_zeroed": {"xlx_missing_output": "zero_slot"},
+    # B15 RPTCL (13 B and 9 B) closes the session and releases the floor
+    "test_dmr_rptcl_closes_session": {"rptcl": "close"},
+    # B16 no voice before its header on any egress; no self echo under any sid
+    "test_no_voice_before_header": {"strict": True},
+    "test_no_self_echo_other_sid": {"strict": True},
+    "test_pending_entrant_starts_with_header": {"late_entry": "deny"},
+    # B17 M17 frame number 0 payload is relayed
+    "test_m17_frame0_relayed": {"fn0": "relay"},
     # B13 no frame loss under load (C9 path)
     "test_no_load_loss_passthrough": {"loss": 0},
     "test_no_load_loss_cross": {"loss": 0},

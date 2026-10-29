@@ -254,6 +254,11 @@ BEHAVIOUR = {
     "test_floor.py::test_admission_one_floor_per_client",            # B8
     "test_floor.py::test_admission_same_sid_two_rooms",              # B8
     "test_floor.py::test_b14_placeholder",                           # B14
+    "test_floor.py::test_dmr_rptcl_closes_session",                  # B15
+    "test_floor.py::test_no_voice_before_header",                    # B16
+    "test_floor.py::test_no_self_echo_other_sid",                    # B16
+    "test_floor.py::test_pending_entrant_starts_with_header",        # B16 knob
+    "test_floor.py::test_m17_frame0_relayed",                        # B17
     "test_xlxd_interlink.py::test_admission_remote_sid_open_elsewhere",  # B8c
     "test_xlxd_interlink.py::test_interlink_missing_output_slot_zeroed",  # B6b
 }

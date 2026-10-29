@@ -65,6 +65,7 @@ def test_profile_implies_divergences():
     t = target.load(env={"DVT_SUT_PROFILE": "dvrouter", "DVT_SUT_DIVERGENCES": "tot_180s"})
     assert t.divergences == {"tot_180s", *divergences.PROFILES["dvrouter"]}
     assert divergences.effective({"DVT_SUT_PROFILE": "dvrouter"}) == set(divergences.PROFILES["dvrouter"])
+    assert "no_load_loss" in divergences.PROFILES["dvrouter"]
     assert divergences.effective({}) == set()
     with pytest.raises(ValueError, match="unknown DVT_SUT_PROFILE"):
         target.load(env={"DVT_SUT_PROFILE": "nosuch"})

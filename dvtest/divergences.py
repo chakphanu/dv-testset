@@ -45,7 +45,8 @@ TABLE = {
 # unknown profile is an error
 PROFILES = {
     "xlxd": (),
-    "dvrouter": ("ambed_extended_open_always", "immediate_revoke", "no_zero_fill", "synthesized_terminator"),
+    "dvrouter": ("ambed_extended_open_always", "immediate_revoke", "no_zero_fill", "synthesized_terminator",
+                 "no_load_loss"),
 }
 
 
