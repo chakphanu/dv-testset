@@ -8,10 +8,9 @@ N0TEST, DMR ids 1023007 and 1023008 (both in `rig/config/dmrid.dat`),
 reflector XLX999.
 
 Dissectors for the captures: `tools/wireshark/dvtest.lua` (`ambed`, `usrp`,
-`dextra`, `mmdvm`, `m17ref`, `nxdnref`, `p25ref`); IAX2 uses the Wireshark
-built-in `iax2`. Wireshark 4.4 has no built-in dissector for DExtra,
-MMDVM/Homebrew or the M17, NXDN and P25 reflector links, so minimal ones are
-in the Lua file.
+`dextra`, `dplus`, `dcs`, `mmdvm`, `m17ref`, `ysfref`, `nxdnref`,
+`p25ref`); IAX2 uses the Wireshark built-in `iax2`. Wireshark 4.4 has no
+built-in dissector for the others, so minimal ones are in the Lua file.
 
 ## Summary
 
@@ -25,6 +24,9 @@ in the Lua file.
 | `proto/iax2.py` | IAX2 (RFC 5456) | 4569 | NEW (CALLTOKEN when asked), MD5 auth, ACCEPT of SLIN, ANSWER, `!NEWKEY!` text link-up, radio key/unkey (control 12/13), SLIN full and mini voice frames, PING/LAGRQ answers, HANGUP | other codecs, trunking, encryption, transfers |
 | `proto/nxdn.py` | NXDNReflector network | 41400 | NXDNP poll/link, NXDNU unlink, NXDND header (FACCH1 VCALL), voice (4 x 49-bit AMBE+2, SACCH VCALL in 4 parts), trailer (FACCH1 TX_REL), CRC-6/CRC-12, 49-bit <-> DMR 72-bit frame conversion | data calls, private calls, RAN, Icom/Kenwood links |
 | `proto/p25.py` | P25Reflector network | 41000 | poll/unlink, LDU1/LDU2 voice records with one IMBE each, LCF, TG, source id, ALGID clear, terminator, silence padding to whole LDUs | HDU/TDU with LC, LC/ES parity, low-speed data, encryption |
+| `proto/dplus.py` | DPlus (REF, D-STAR) | 20001 | connect/login/keepalive/disconnect, 58 B header, 29 B voice, 32 B last, module join by an empty stream | real login auth, slow data content, header CRC |
+| `proto/dcs.py` | DCS (D-STAR) | 30051 | 519 B link, ACK/NAK, unlink, keepalive answer, 100 B voice (header in every packet, u24 counter) | text area content, header CRC |
+| `proto/ysf.py` | YSF | 42000 | YSFP poll, YSFS status, 155 B YSFD V/D mode 2 header/voice/terminator with FICH, VCH, DCH, CSD coding, DG-ID module select, WiresX disconnect | V/D mode 1, voice FR, data FR other than WiresX DISC, GPS |
 | `clients.py` | - | - | one make/talk/collect API over dstar, dmr and m17 | - |
 
 ## AMBEd (`proto/ambed.py`)
@@ -95,6 +97,53 @@ terminator (0xA2) to TG 4001 + (X - 'A'); TG 4000 unlinks. Voice: three
 
 Packet 0 opens the stream and is not forwarded by xlxd; the EOT packet
 repeats the last payload.
+
+## DPlus (`proto/dplus.py`)
+
+| Packet | Size | Layout |
+|--------|------|--------|
+| connect / echo | 5 B | 05 00 18 00 01; xlxd echoes it |
+| login | 28 B | 1C C0 04 00 + callsign (16, zero padded) + `DV019999` |
+| login reply | 8 B | 08 C0 04 00 + `OKRW` / `BUSY` |
+| keepalive | 3 B | 03 60 00, both ways (xlxd every second) |
+| disconnect / echo | 5 B | 05 00 18 00 00 |
+| header | 58 B | 3A 80 + DExtra DSVT header (56) |
+| voice | 29 B | 1D 80 + DExtra DSVT voice (27) |
+| last voice | 32 B | 20 80 + DSVT prefix (12) + stream id + seq or 0x40 + end pattern 55 C8 7A 55 x 9 25 1A C6 |
+
+The first byte is the packet length, the second the type (0x80 DV, 0xC0
+login, 0x00 control, 0x60 keepalive). A DPlus client has no module after
+login: xlxd forwards a module to it only after it transmitted there once,
+so the client joins with an empty stream (header + last frame).
+
+## DCS (`proto/dcs.py`)
+
+| Packet | Size | Layout |
+|--------|------|--------|
+| link | 519 B | callsign (7) + own module + own module + reflector module + 0x00 + text, zero padded |
+| link ACK / NAK | 14 B | callsign (7) + ' ' + own module + reflector module + `ACK\0` / `NAK\0` |
+| unlink | 11 B | callsign (7) + own module + own module + ' ' + 0x00; xlxd answers NAK |
+| keepalive (client) | 17 B | callsign (7) + own module + 0x00 + reflector (7) + reflector module |
+| keepalive (xlxd) | 9 B + 22 B | `DCS999` + 2 spaces + 0x00; reflector (7) + module + ' ' + callsign (7) + module + module + 0A 00 20 20 |
+| voice | 100 B | `0001`, D-STAR header without CRC (39: flags 3, RPT2, RPT1, UR, MY, suffix 4), stream id u16 LE, seq (0x40 = last), AMBE (9), slow data (3), packet counter u24 LE, 0x01, text area (38) |
+
+xlxd takes the module from the link, not from RPT2.
+
+## YSF (`proto/ysf.py`)
+
+| Packet | Size | Layout |
+|--------|------|--------|
+| YSFP poll | 14 B | `YSFP` + callsign (10, space padded) |
+| poll ack | 14 B | `YSFPREFLECTOR ` |
+| YSFU | 14 B | `YSFU` + callsign; ignored by this xlxd |
+| YSFS / status | 4 B / 42 B | `YSFS`; reply `YSFS` + hash (5) + name (16) + description (14) + client count (3) |
+| YSFD | 155 B | `YSFD` + gateway (10) + source (10) + destination (10) + net frame counter << 1 / EOT bit + YSF frame (120: sync D4 71 C9 63 4D, FICH 25, payload 90) |
+
+xlxd accepts only V/D mode 2 (DN) frames whose FICH decodes; a FICH DG-ID
+of 10..35 selects module A..Z, new clients start on B; the unlink that
+works is a WiresX disconnect request. The full FICH / VCH / DCH / CSD
+coding is in the module docstring. The dissector shows the FICH coded
+(decoding it needs Viterbi and Golay).
 
 ## NXDN (`proto/nxdn.py`)
 
@@ -221,6 +270,30 @@ Not observed: DExtra NAK and DISCONNECTED (every link was accepted), M17
 NACK, IAX2 CALLTOKEN (the rig node does not ask for it), PING/PONG (IAX)
 and LAGRP: the node's LAGRQ arrive after the tester has hung up and get
 ICMP port unreachable.
+
+DPlus, DCS, YSF: run `out/20261029T161607Z-i5` (`TRANSCODER_IMAGE=vambed-neo:local
+DVT_INSTANCE=5 scripts/run.sh --capture -m rig -- cases/test_clients2.py`;
+24 passed), file `xlxd-sut.pcapng` (`ip.addr == 172.30.5.11 && !icmp`):
+
+| Packet | client -> xlxd | xlxd -> client |
+|--------|----------------|----------------|
+| DPlus connect / disconnect 5 B | 9 / 9 | 9 / 9 (echo) |
+| DPlus login 28 B / reply 8 B `OKRW` | 9 | 9 |
+| DPlus keepalive 3 B | 54 | 54 |
+| DPlus header 58 / voice 29 / last 32 B | 9 / 240 / 9 | 16 / 301 / 6 |
+| DCS link 519 B / ACK 14 B | 9 | 9 |
+| DCS unlink 11 B / NAK 14 B | 9 | 9 |
+| DCS keepalive 17 B / 9 + 22 B | 6 | 6 + 6 |
+| DCS voice 100 B / last voice | 240 / 4 | 301 / 6 |
+| YSF poll 14 B / ack 14 B | 13 | 13 |
+| YSF YSFU 14 B | 9 | - |
+| YSFD 155 B (EOT bit set) | 110 (22) | 132 (17) |
+
+Fields: DPlus/DCS headers sent by the client carry MY = its callsign, UR `CQCQCQ`, RPT2
+`XLX999` + module; DCS packet counters start at 0 per stream; YSFD
+destination `ALL`. The xlxd DCS keepalive is 9 B (8 B callsign + 0x00),
+not 8 B. YSFS status was not exercised in this run. Expert info: no
+`dplus`, `dcs` or `ysfref` errors or warnings.
 
 NXDN: run `out/20261029T155701Z-i5` (`TRANSCODER_IMAGE=vambed-neo:local
 DVT_INSTANCE=5 scripts/run.sh --capture --profile nxdn -m nxdn`; 7 passed,

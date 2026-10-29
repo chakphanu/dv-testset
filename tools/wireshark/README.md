@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Wireshark dissectors
 
-`dvtest.lua` is one Lua file with seven dissectors for the protocols the rig
+`dvtest.lua` is one Lua file with ten dissectors for the protocols the rig
 speaks that Wireshark 4.4 does not decode itself:
 
 | Protocol (filter) | Ports | Notes |
@@ -9,12 +9,15 @@ speaks that Wireshark 4.4 does not decode itself:
 | `ambed` AMBEd transcoder | UDP 10100 control, 10101-10199 data | follows the data port of every STD reply, also outside the range; heuristic on the `AMBED` tag on any UDP port |
 | `usrp` USRP (chan_usrp) | UDP 32001-32003, 34001-34003 | heuristic on the `USRP` eye on any UDP port |
 | `dextra` DExtra (D-STAR) | UDP 30001 | DSVT header/voice/last, link, ACK/NAK, unlink, keepalive |
+| `dplus` DPlus (REF) | UDP 20001 | connect, login, keepalive, DSVT header/voice/last behind the 2-byte prefix (minimal) |
+| `dcs` DCS | UDP 30051 | link, ACK/NAK, unlink, keepalives, 100 B voice with header and counter (minimal) |
+| `ysfref` YSF reflector link | UDP 42000 | YSFP/ack/YSFU/YSFS/status, YSFD header fields; FICH shown coded (minimal) |
 | `mmdvm` MMDVM/Homebrew DMR | UDP 62030 | login tags and DMRD fields (minimal) |
 | `m17ref` M17 reflector link | UDP 17000 | CONN/ACKN/NACK/PING/PONG/DISC and 54 B voice (minimal) |
 | `nxdnref` NXDNReflector link | UDP 41400 | NXDNP/NXDNU, NXDND flags, LICH, FACCH1 message/ids (minimal) |
 | `p25ref` P25Reflector link | UDP 41000 | poll/unlink, LDU1/LDU2 records with LCF, TG, source id, ALGID, IMBE; terminator (minimal) |
 
-IAX2 is built into Wireshark and is not duplicated. All seven are also in
+IAX2 is built into Wireshark and is not duplicated. All ten are also in
 Analyze > Decode As (UDP port).
 
 ## Use

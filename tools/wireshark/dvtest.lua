@@ -16,8 +16,12 @@
 --         DISC, 54 B voice).
 -- NXDN    minimal NXDNReflector network link on UDP 41400 (NXDNP/NXDNU/NXDND).
 -- P25     minimal P25Reflector network link on UDP 41000 (poll, LDU records,
---         terminator). Wireshark 4.4 has no built-in dissector for DExtra,
---         MMDVM, M17, NXDN or P25 network links; IAX2 is built in.
+--         terminator).
+-- DPlus   minimal REF link on UDP 20001 (connect, login, keepalive, DSVT).
+-- DCS     minimal DCS link on UDP 30051 (link, ACK/NAK, keepalives, voice).
+-- YSF     minimal YSF reflector link on UDP 42000 (YSFP/YSFU/YSFS, YSFD;
+--         the FICH is shown coded). Wireshark 4.4 has no built-in dissector
+--         for any of these; IAX2 is built in and not duplicated.
 --
 -- All three are also available in "Decode As" (UDP port).
 -- Multi-byte AMBEd stream id and port are little endian (memcpy of a host
@@ -853,6 +857,229 @@ function p_p25.dissector(buf, pinfo, tree)
 end
 
 ----------------------------------------------------------------------------
+-- DPlus (REF, UDP 20001), minimal: 2-byte length/type prefix + DSVT
+----------------------------------------------------------------------------
+
+local p_dplus = Proto("dplus", "DPlus (D-STAR REF link)")
+local DP_TYPES = { [0x00] = "control", [0x60] = "keepalive", [0x80] = "DV", [0xC0] = "login" }
+local dpf = {
+  len      = ProtoField.uint8("dplus.length", "Length", base.DEC),
+  ptype    = ProtoField.uint8("dplus.type", "Type", base.HEX, DP_TYPES),
+  kind     = ProtoField.string("dplus.kind", "Packet"),
+  callsign = ProtoField.string("dplus.callsign", "Callsign"),
+  serial   = ProtoField.string("dplus.serial", "Client id"),
+  reply    = ProtoField.string("dplus.reply", "Login reply"),
+  connect  = ProtoField.uint8("dplus.connect", "Connect (1) / disconnect (0)", base.DEC),
+  endpat   = ProtoField.bytes("dplus.end_pattern", "End pattern"),
+}
+p_dplus.fields = dpf
+local dpe = ProtoExpert.new("dplus.malformed", "Malformed DPlus packet",
+                            expert.group.MALFORMED, expert.severity.ERROR)
+p_dplus.experts = { dpe }
+
+function p_dplus.dissector(buf, pinfo, tree)
+  local len = buf:len()
+  if len < 3 then return 0 end
+  pinfo.cols.protocol = "DPlus"
+  local t = tree:add(p_dplus, buf())
+  t:add(dpf.len, buf(0, 1)); t:add(dpf.ptype, buf(1, 1))
+  local plen, ptype = buf(0, 1):uint(), buf(1, 1):uint()
+  local info
+  if plen ~= len then
+    t:add_proto_expert_info(dpe, string.format("length byte %d, packet %d bytes", plen, len))
+  end
+  if ptype == 0x80 and len >= 16 and buf:raw(2, 4) == "DSVT" then
+    if len == 58 or len == 29 then
+      t:add(dpf.kind, len == 58 and "header" or "voice"):set_generated()
+      info = dissect_dsvt(buf(2):tvb(), t)
+    elseif len == 32 then
+      t:add(dpf.kind, "last voice"):set_generated()
+      t:add(df.dsvt, buf(2, 4)); t:add(df.ftype, buf(6, 1)); t:add(df.band, buf(7, 7))
+      t:add_le(df.stream_id, buf(14, 2)); t:add(df.seq, buf(16, 1)); t:add(df.last, buf(16, 1))
+      t:add(dpf.endpat, buf(17, 15))
+      info = string.format("DSVT last sid=0x%04x seq=%d", buf(14, 2):le_uint(), bit.band(buf(16, 1):uint(), 0x1F))
+    else
+      t:add_proto_expert_info(dpe, "DV is 58, 29 or 32 bytes")
+      info = "DV (bad length)"
+    end
+  elseif ptype == 0x00 and len == 5 and buf(2, 2):uint() == 0x1800 then
+    local c = buf(4, 1):uint()
+    t:add(dpf.kind, c == 1 and "connect" or "disconnect"):set_generated()
+    t:add(dpf.connect, buf(4, 1))
+    info = c == 1 and "connect" or "disconnect"
+  elseif ptype == 0x60 and len == 3 then
+    t:add(dpf.kind, "keepalive"):set_generated()
+    info = "keepalive"
+  elseif ptype == 0xC0 and len == 28 then
+    t:add(dpf.kind, "login"):set_generated()
+    t:add(dpf.callsign, buf(4, 16)); t:add(dpf.serial, buf(20, 8))
+    info = "login " .. trim(buf(4, 16):string())
+  elseif ptype == 0xC0 and len == 8 then
+    t:add(dpf.kind, "login reply"):set_generated()
+    t:add(dpf.reply, buf(4, 4))
+    info = "login " .. buf(4, 4):string()
+  else
+    t:add_proto_expert_info(dpe, string.format("unknown DPlus packet type 0x%02x, %d bytes", ptype, len))
+    info = "unknown"
+  end
+  pinfo.cols.info = info
+  t:append_text(", " .. info)
+  return len
+end
+
+----------------------------------------------------------------------------
+-- DCS (UDP 30051), minimal
+----------------------------------------------------------------------------
+
+local p_dcs = Proto("dcs", "DCS (D-STAR reflector link)")
+local dcf = {
+  kind     = ProtoField.string("dcs.kind", "Packet"),
+  callsign = ProtoField.string("dcs.callsign", "Callsign"),
+  own      = ProtoField.string("dcs.own_module", "Own module"),
+  rmodule  = ProtoField.string("dcs.reflector_module", "Reflector module"),
+  reply    = ProtoField.string("dcs.reply", "Reply"),
+  refl     = ProtoField.string("dcs.reflector", "Reflector"),
+  tag      = ProtoField.string("dcs.tag", "Tag"),
+  flags    = ProtoField.bytes("dcs.flags", "Header flags 1-3"),
+  rpt2     = ProtoField.string("dcs.rpt2", "RPT2"),
+  rpt1     = ProtoField.string("dcs.rpt1", "RPT1"),
+  ur       = ProtoField.string("dcs.ur", "UR"),
+  my       = ProtoField.string("dcs.my", "MY"),
+  suffix   = ProtoField.string("dcs.suffix", "MY suffix"),
+  sid      = ProtoField.uint16("dcs.stream_id", "Stream id", base.HEX),
+  seq      = ProtoField.uint8("dcs.seq", "Frame counter", base.DEC, nil, 0x1F),
+  last     = ProtoField.bool("dcs.last", "Last frame", 8, nil, 0x40),
+  ambe     = ProtoField.bytes("dcs.ambe", "AMBE frame"),
+  slow     = ProtoField.bytes("dcs.slow_data", "Slow data"),
+  counter  = ProtoField.uint24("dcs.counter", "Packet counter", base.DEC),
+  text     = ProtoField.bytes("dcs.text_area", "Text area"),
+}
+p_dcs.fields = dcf
+local dce = ProtoExpert.new("dcs.malformed", "Malformed DCS packet",
+                            expert.group.MALFORMED, expert.severity.ERROR)
+p_dcs.experts = { dce }
+
+function p_dcs.dissector(buf, pinfo, tree)
+  local len = buf:len()
+  if len == 0 then return 0 end
+  pinfo.cols.protocol = "DCS"
+  local t = tree:add(p_dcs, buf())
+  local info
+  if len == 100 and buf:raw(0, 4) == "0001" then
+    t:add(dcf.kind, "voice"):set_generated()
+    t:add(dcf.tag, buf(0, 4)); t:add(dcf.flags, buf(4, 3))
+    t:add(dcf.rpt2, buf(7, 8)); t:add(dcf.rpt1, buf(15, 8)); t:add(dcf.ur, buf(23, 8)); t:add(dcf.my, buf(31, 8))
+    t:add(dcf.suffix, buf(39, 4)); t:add_le(dcf.sid, buf(43, 2))
+    t:add(dcf.seq, buf(45, 1)); t:add(dcf.last, buf(45, 1))
+    t:add(dcf.ambe, buf(46, 9)); t:add(dcf.slow, buf(55, 3))
+    t:add_le(dcf.counter, buf(58, 3)); t:add(dcf.text, buf(61, 39))
+    local last = bit.band(buf(45, 1):uint(), 0x40) ~= 0
+    info = string.format("voice%s sid=0x%04x seq=%d n=%d my=%s", last and " last" or "", buf(43, 2):le_uint(),
+      bit.band(buf(45, 1):uint(), 0x1F), buf(58, 3):le_uint(), trim(buf(31, 8):string()))
+  elseif len == 519 then
+    t:add(dcf.kind, "link"):set_generated()
+    t:add(dcf.callsign, buf(0, 7)); t:add(dcf.own, buf(7, 1)); t:add(dcf.rmodule, buf(9, 1))
+    info = string.format("link %s %s->%s", trim(buf(0, 7):string()), buf(7, 1):string(), buf(9, 1):string())
+  elseif len == 14 and (buf:raw(10, 3) == "ACK" or buf:raw(10, 3) == "NAK") then
+    t:add(dcf.kind, "link " .. buf:raw(10, 3)):set_generated()
+    t:add(dcf.callsign, buf(0, 7)); t:add(dcf.own, buf(8, 1)); t:add(dcf.rmodule, buf(9, 1)); t:add(dcf.reply, buf(10, 4))
+    info = string.format("%s %s", buf:raw(10, 3), trim(buf(0, 7):string()))
+  elseif len == 11 and buf:raw(9, 1) == " " then
+    t:add(dcf.kind, "unlink"):set_generated()
+    t:add(dcf.callsign, buf(0, 7)); t:add(dcf.own, buf(7, 1))
+    info = "unlink " .. trim(buf(0, 7):string())
+  elseif len == 17 then
+    t:add(dcf.kind, "keepalive (client)"):set_generated()
+    t:add(dcf.callsign, buf(0, 7)); t:add(dcf.own, buf(7, 1)); t:add(dcf.refl, buf(9, 7)); t:add(dcf.rmodule, buf(16, 1))
+    info = "keepalive " .. trim(buf(0, 7):string())
+  elseif len == 8 or (len == 9 and buf(8, 1):uint() == 0) then
+    -- reflector callsign (8), xlxd adds a 0x00
+    t:add(dcf.kind, "keepalive (reflector)"):set_generated()
+    t:add(dcf.refl, buf(0, 8))
+    info = "keepalive " .. trim(buf(0, 8):string())
+  elseif len == 22 then
+    t:add(dcf.kind, "keepalive (reflector, per client)"):set_generated()
+    t:add(dcf.refl, buf(0, 7)); t:add(dcf.rmodule, buf(7, 1)); t:add(dcf.callsign, buf(9, 7)); t:add(dcf.own, buf(16, 1))
+    info = string.format("keepalive %s -> %s", trim(buf(0, 7):string()), trim(buf(9, 7):string()))
+  else
+    t:add_proto_expert_info(dce, string.format("unknown DCS packet of %d bytes", len))
+    info = "unknown"
+  end
+  pinfo.cols.info = info
+  t:append_text(", " .. info)
+  return len
+end
+
+----------------------------------------------------------------------------
+-- YSF reflector network (UDP 42000), minimal (FICH not decoded)
+----------------------------------------------------------------------------
+
+local p_ysf = Proto("ysfref", "YSF reflector link")
+local yf = {
+  tag      = ProtoField.string("ysfref.tag", "Tag"),
+  kind     = ProtoField.string("ysfref.kind", "Packet"),
+  callsign = ProtoField.string("ysfref.callsign", "Callsign"),
+  gateway  = ProtoField.string("ysfref.gateway", "Gateway"),
+  src      = ProtoField.string("ysfref.src", "Source"),
+  dst      = ProtoField.string("ysfref.dst", "Destination"),
+  counter  = ProtoField.uint8("ysfref.counter", "Net frame counter", base.DEC, nil, 0xFE),
+  eot      = ProtoField.bool("ysfref.eot", "End of transmission", 8, nil, 0x01),
+  sync     = ProtoField.bytes("ysfref.sync", "Frame sync"),
+  fich     = ProtoField.bytes("ysfref.fich", "FICH (coded)"),
+  payload  = ProtoField.bytes("ysfref.payload", "Payload (5 x 18 B)"),
+  hash     = ProtoField.string("ysfref.status.hash", "Hash"),
+  name     = ProtoField.string("ysfref.status.name", "Name"),
+  desc     = ProtoField.string("ysfref.status.description", "Description"),
+  count    = ProtoField.string("ysfref.status.count", "Clients"),
+}
+p_ysf.fields = yf
+local ye = ProtoExpert.new("ysfref.malformed", "Malformed YSF packet",
+                           expert.group.MALFORMED, expert.severity.ERROR)
+p_ysf.experts = { ye }
+
+function p_ysf.dissector(buf, pinfo, tree)
+  local len = buf:len()
+  if len < 4 then return 0 end
+  pinfo.cols.protocol = "YSF"
+  local t = tree:add(p_ysf, buf())
+  local tag = buf:raw(0, 4)
+  t:add(yf.tag, buf(0, 4))
+  local info
+  if tag == "YSFD" and len == 155 then
+    t:add(yf.kind, "data"):set_generated()
+    t:add(yf.gateway, buf(4, 10)); t:add(yf.src, buf(14, 10)); t:add(yf.dst, buf(24, 10))
+    t:add(yf.counter, buf(34, 1)); t:add(yf.eot, buf(34, 1))
+    t:add(yf.sync, buf(35, 5)); t:add(yf.fich, buf(40, 25)); t:add(yf.payload, buf(65, 90))
+    if buf(35, 5):bytes():tohex() ~= "D471C9634D" then
+      t:add_proto_expert_info(ye, "frame sync is not D4 71 C9 63 4D")
+    end
+    local b = buf(34, 1):uint()
+    info = string.format("data n=%d%s src=%s gw=%s", bit.rshift(b, 1), bit.band(b, 1) == 1 and " EOT" or "",
+      trim(buf(14, 10):string()), trim(buf(4, 10):string()))
+  elseif len == 14 and buf:raw(0, 14) == "YSFPREFLECTOR " then
+    t:add(yf.kind, "poll ack"):set_generated()
+    info = "poll ack"
+  elseif (tag == "YSFP" or tag == "YSFU") and len == 14 then
+    t:add(yf.kind, tag == "YSFP" and "poll" or "unlink"):set_generated()
+    t:add(yf.callsign, buf(4, 10))
+    info = string.format("%s %s", tag == "YSFP" and "poll" or "unlink", trim(buf(4, 10):string()))
+  elseif tag == "YSFS" and len == 4 then
+    t:add(yf.kind, "status request"):set_generated()
+    info = "status request"
+  elseif tag == "YSFS" and len == 42 then
+    t:add(yf.kind, "status"):set_generated()
+    t:add(yf.hash, buf(4, 5)); t:add(yf.name, buf(9, 16)); t:add(yf.desc, buf(25, 14)); t:add(yf.count, buf(39, 3))
+    info = string.format("status %s clients=%s", trim(buf(9, 16):string()), buf(39, 3):string())
+  else
+    t:add_proto_expert_info(ye, string.format("unknown YSF packet %q of %d bytes", tag, len))
+    info = "unknown"
+  end
+  pinfo.cols.info = info
+  t:append_text(", " .. info)
+  return len
+end
+
+----------------------------------------------------------------------------
 -- registration
 ----------------------------------------------------------------------------
 
@@ -864,7 +1091,10 @@ udp_table:add(62030, p_mmdvm)
 udp_table:add(17000, p_m17)
 udp_table:add(41400, p_nxdn)
 udp_table:add(41000, p_p25)
-for _, p in ipairs({ p_ambed, p_usrp, p_dextra, p_mmdvm, p_m17, p_nxdn, p_p25 }) do
+udp_table:add(20001, p_dplus)
+udp_table:add(30051, p_dcs)
+udp_table:add(42000, p_ysf)
+for _, p in ipairs({ p_ambed, p_usrp, p_dextra, p_mmdvm, p_m17, p_nxdn, p_p25, p_dplus, p_dcs, p_ysf }) do
   udp_table:add_for_decode_as(p)
 end
 p_ambed:register_heuristic("udp", ambed_heur)
