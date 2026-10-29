@@ -20,6 +20,7 @@ allstar .40.
   DVT_XLXD_BIN       local xlxd binary for the netns case (no default)
   DVT_XLXD_REF_BIN   optional reference xlxd binary for the netns case
   DVT_REFLECTOR      reflector callsign (XLX999)
+  DVT_IAX_SECRET     IAX2 secret of the AllStar node (rig: .local/rig.env)
   DVT_OUT            results directory (out)
 """
 import ipaddress
@@ -31,7 +32,7 @@ DEFAULT_SUBNET = "172.30.0.0/24"
 HOST_OFFSETS = {"xlxd_ref": 10, "xlxd_sut": 11, "ambed_ref": 20, "ambed_sut": 21,
                 "tester": 30, "allstar": 40}
 KEYS = ("subnet", "xlxd_ref", "xlxd_sut", "ambed_ref", "ambed_sut", "tester", "allstar",
-        "ambed_addr", "ambed_port", "ambed_stream_cap", "xlxd_bin", "xlxd_ref_bin", "reflector", "out")
+        "ambed_addr", "ambed_port", "ambed_stream_cap", "xlxd_bin", "xlxd_ref_bin", "reflector", "iax_secret", "out")
 
 
 @dataclass
@@ -49,6 +50,7 @@ class Target:
     xlxd_bin: str = ""
     xlxd_ref_bin: str = ""
     reflector: str = "XLX999"
+    iax_secret: str = field(default="", repr=False)
     out: str = "out"
     # keys set explicitly by env or TOML (rig host defaults are not)
     given: set = field(default_factory=set)
