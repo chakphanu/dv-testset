@@ -72,47 +72,82 @@ def test_module_change_follows_talker(xlxd, kind):
     assert second[0] == 0 and second[1] >= least, "talk on G heard F/G = %s" % second
 
 
-def test_stream_timeout_frees_module(xlxd, rig):
-    """C8: header + voice without a last frame, then silence: within the
-    stream timeout the module takes the next talker. Declared divergence
-    synthesized_terminator: the sut's listener must also get a last frame
-    within the timeout."""
-    listener = listen(xlxd, "dstar", "H", 1)
+def timeout_side(ip):
+    """D-STAR header + voice on H without a last frame, then silence;
+    listeners of every kind on H. Returns ({kind: end marker seen within
+    the timeout window}, first stream frames heard, next talker frames)."""
+    listeners = {k: listen(ip, k, "H", 1) for k in clients.KINDS}
     talker = clients.make("dstar", "H", 0)
     second = dmr.DmrClient("0.0.0.0", dmrid=clients.DMR_IDS[0], module="H")
     try:
-        assert talker.link(xlxd) and second.link(xlxd), "talker links failed"
-        listener.client.drain()
-        listener.client.inbox.clear()
+        assert talker.link(ip) and second.link(ip), "talker links failed"
+        for c in listeners.values():
+            c.client.drain()
+            c.client.inbox.clear()
         sid = clients.fresh_stream_id("dstar")
         talker.client.send(talker.dest, dextra.header(sid, talker.callsign, "H"))
         start = time.monotonic()
         for index, frame in enumerate(signals.prng_frames("dstar", FRAMES, seed="c8")):
             pace(start, index)
             talker.client.send(talker.dest, dextra.voice(sid, index, frame, False))
-            listener.client.drain()         # arrival times are drain times
-        stopped = time.monotonic()
-        listener.client.pump(STREAM_TIMEOUT_S + 0.4)
-        voice = [(t, dextra.parse_voice(p)) for p, t in zip(listener.client.inbox, listener.client.inbox_times)]
-        first = [v for _t, v in voice if v]
-        ended = [t - stopped for t, v in voice if v and v[2]]
-        listener.client.inbox.clear()
-        listener.client.inbox_times.clear()
+            for c in listeners.values():
+                c.client.drain()
+        deadline = time.monotonic() + STREAM_TIMEOUT_S + 0.4
+        while time.monotonic() < deadline:
+            for c in listeners.values():
+                c.client.drain()
+            time.sleep(0.01)
+        inbox = {k: list(c.client.inbox) for k, c in listeners.items()}
+        first = [v for v in map(dextra.parse_voice, inbox["dstar"]) if v]
+        ended = {"dstar": any(v[2] for v in first),
+                 "dmr": any(p.startswith(b"DMRD") and len(p) == dmr.PACKET_SIZE and p[15] & 0x3F == 0x22
+                            for p in inbox["dmr"]),
+                 "m17": any(m["eot"] for m in map(m17.parse, inbox["m17"]) if m)}
+        for c in listeners.values():
+            c.client.inbox.clear()
         clients.talk(second, "dmr", signals.prng_frames("dmr", FRAMES, seed="c8b"), tail=1.0)
-        listener.client.pump(0.5)
-        after = [v for v in (dextra.parse_voice(p) for p in listener.client.inbox) if v]
+        listeners["dstar"].client.pump(0.5)
+        after = [v for v in map(dextra.parse_voice, listeners["dstar"].client.inbox) if v]
     finally:
-        clients.close(talker, second, listener)
-    assert len(first) >= FRAMES * 0.8, "first stream heard %d of %d frames" % (len(first), FRAMES)
+        clients.close(talker, second, *listeners.values())
     assert not {v[0] for v in after} & {v[0] for v in first}, "the timed-out stream continued after the timeout"
-    assert len(after) >= FRAMES * 0.8, \
-        "next talker on H %.1f s after the stop: %d frames heard (module still held?)" % (
-            STREAM_TIMEOUT_S + 0.4, len(after))
-    print("timed-out stream end marker: %s" % ("last frame %.2f s after the stop" % ended[0]
-                                                if ended else "none (upstream behaviour)"))
-    if xlxd == rig.xlxd_sut and "synthesized_terminator" in rig.divergences:
-        assert ended and ended[0] <= STREAM_TIMEOUT_S + 0.4, \
-            "sut declares synthesized_terminator: no last frame within %.1f s" % (STREAM_TIMEOUT_S + 0.4)
+    return ended, len(first), len(after)
+
+
+def test_stream_timeout_frees_module(rig, behaviour_spec):
+    """C8 / B3: a D-STAR talker stops without a last frame. Within the
+    1.6 s stream timeout (+0.4 s) the module takes the next talker on both
+    reflectors. End markers (D-STAR last frame, DMR terminator, M17 EOT) on
+    each egress: under the xlxd profile the sut shows what xlxd-ref shows;
+    under a spec with terminator "all_egress" (dvrouter) or the legacy
+    synthesized_terminator divergence every egress gets one."""
+    got = {}
+
+    def side(name):
+        try:
+            got[name] = timeout_side(getattr(rig, "xlxd_" + name))
+        except Exception as exc:                    # reported below
+            got[name] = exc
+
+    threads = [threading.Thread(target=side, args=(n,)) for n in ("ref", "sut")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    for name in ("ref", "sut"):
+        assert not isinstance(got[name], Exception), "%s: %r" % (name, got[name])
+    print("stream timeout (end markers, first frames, next talker frames):", got)
+    for name, (_ended, first, after) in got.items():
+        assert first >= FRAMES * 0.8, "%s: first stream heard %d of %d frames" % (name, first, FRAMES)
+        assert after >= FRAMES * 0.8, "%s: next talker %.1f s after the stop: %d frames (module held?)" % (
+            name, STREAM_TIMEOUT_S + 0.4, after)
+    all_egress = (behaviour_spec or {}).get("terminator") == "all_egress" or \
+        "synthesized_terminator" in rig.divergences
+    if all_egress:
+        assert all(got["sut"][0].values()), "sut: end marker missing on %s" % [
+            k for k, v in got["sut"][0].items() if not v]
+    else:
+        assert got["sut"][0] == got["ref"][0], "end markers: sut %s, ref %s" % (got["sut"][0], got["ref"][0])
 
 
 LATE_MS = 30            # inside the close window (~170 ms after the last frame)
@@ -163,7 +198,7 @@ def late_entry(ip, gap_ms, frames):
         clients.close(first, second, native, cross)
 
 
-def test_late_entry_is_native_only(rig):
+def test_late_entry_is_native_only(rig, behaviour_spec):
     """C11: a header that arrives while the previous stream on the module
     is still closing (upstream CReflector stashes it and promotes it
     native-only after the close, creflector.cpp ~556-580 and ~660-745;
@@ -175,7 +210,10 @@ def test_late_entry_is_native_only(rig):
     Declared divergences: late_entry_transcoded (dvtest/divergences.py) -
     the sut transcodes the late entrant: its cross-mode listener must hear
     it (frames and the 700 Hz tone) while same-mode behaviour stays as on
-    ref. Undeclared, the sut must match ref."""
+    ref. Undeclared, the sut must match ref. Profile spec after_terminator
+    "granted" (dvrouter: the DMR terminator releases the floor at once, so
+    a header 30 ms later is a normal grant) expects the same as
+    late_entry_transcoded."""
     tone = ambed.transcode(rig.ambed_ref, ambed.PCM, [ambed.AMBEPLUS],
                            signals.frames(signals.tone(700, 1000)), port=rig.ambed_port)[ambed.AMBEPLUS]
     got = {}
@@ -202,7 +240,8 @@ def test_late_entry_is_native_only(rig):
     assert len(ref["after"][2]) >= least, "ref: entry after the close not transcoded %s" % summary["ref"]
     assert (sut["late"][0], sut["after"][0]) == (True, True), "sut: native relay %s" % summary["sut"]
     assert len(sut["after"][2]) >= least, "sut: entry after the close not transcoded %s" % summary["sut"]
-    if "late_entry_transcoded" in rig.divergences:
+    granted = (behaviour_spec or {}).get("after_terminator") == "granted"
+    if granted or "late_entry_transcoded" in rig.divergences:
         assert len(sut["late"][2]) >= least, "sut declares late_entry_transcoded: %d cross frames" % (
             len(sut["late"][2]))
         pcm = b"".join(ambed.transcode(rig.ambed_ref, ambed.CODEC2_3200, [ambed.PCM], sut["late"][2],
@@ -263,7 +302,7 @@ def leave_mid_stream(ip, kind, module):
 
 
 @pytest.mark.parametrize("kind", ["dstar", "dmr"])
-def test_leave_mid_stream_tail(rig, kind):
+def test_leave_mid_stream_tail(rig, kind, behaviour_spec):
     """C7b: a listener that leaves while a stream is running. xlxd
     refreshes its per-module client list once a second (client cache,
     cdextraprotocol.h:43, cdmrmmdvmprotocol.h:52), so the reference keeps
@@ -290,7 +329,7 @@ def test_leave_mid_stream_tail(rig, kind):
         assert before >= LEAVE_AT * 0.6, "%s: %d frames before the leave" % (name, before)
     ref, sut = got["ref"], got["sut"]
     assert ref[1] > 0 and ref[2] <= 1.0 + FRAME_S * 3, "ref tail after the leave: %d frames, %.2f s" % ref[1:]
-    if "immediate_revoke" in rig.divergences:
+    if (behaviour_spec or {}).get("revoke") == "immediate" or "immediate_revoke" in rig.divergences:
         assert sut[2] <= FRAME_S * 2, "sut declares immediate_revoke: frames %.2f s after the leave" % sut[2]
     else:
         assert sut[1] > 0 and sut[2] <= 1.0 + FRAME_S * 3, \
@@ -301,11 +340,13 @@ TOT_S = 180.0
 
 
 @pytest.mark.slow
-def test_tot_180s(rig):
-    """tot_180s (declared divergence only): a continuous transmission on
-    the sut is closed at 180 s +- 1 s; xlxd-ref has no time-out timer."""
-    if "tot_180s" not in rig.divergences:
-        pytest.skip("sut does not declare tot_180s (xlxd-ref has no TOT)")
+def test_tot_180s(rig, behaviour_spec):
+    """B4 TOT: a continuous transmission on the sut is closed at 180 s +- 1
+    s and the listener gets the protocol terminator (last frame). Runs
+    under a profile spec with tot_s or the legacy tot_180s divergence;
+    xlxd-ref has no time-out timer."""
+    if not ((behaviour_spec or {}).get("tot_s") or "tot_180s" in rig.divergences):
+        pytest.skip("sut has no TOT under this profile (xlxd-ref has no TOT)")
     listener = listen(rig.xlxd_sut, "dstar", "K", 1)
     talker = clients.make("dstar", "K", 0)
     try:
@@ -324,10 +365,13 @@ def test_tot_180s(rig):
             listener.client.drain()
             index += 1
         listener.client.pump(0.5)
-        times = [t - start for p, t in zip(listener.client.inbox, listener.client.inbox_times)
-                 if dextra.parse_voice(p)]
+        voice = [(t - start, dextra.parse_voice(p))
+                 for p, t in zip(listener.client.inbox, listener.client.inbox_times)]
+        times = [t for t, v in voice if v]
+        last = [t for t, v in voice if v and v[2]]
     finally:
         clients.close(talker, listener)
     assert times, "listener heard nothing"
     assert abs(times[-1] - TOT_S) <= 1.0, "last frame %.1f s after the start, expected %.0f +- 1 s" % (
         times[-1], TOT_S)
+    assert last and abs(last[0] - TOT_S) <= 1.0, "no terminator (last frame) at the TOT"

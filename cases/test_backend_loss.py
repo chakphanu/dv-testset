@@ -55,7 +55,7 @@ def transcoder_down(rig, rig_control):
         rig_control("start", "transcoder-sut")
 
 
-def test_native_passthrough_while_down(rig, transcoder_down):
+def test_native_passthrough_while_down(rig, transcoder_down, behaviour_spec):
     frames = signals.prng_frames("dstar", FRAMES, seed="loss-native")
     talker = clients.make("dstar", MODULE, 0)
     listener = clients.make("dstar", MODULE, 1)
@@ -74,11 +74,11 @@ def test_native_passthrough_while_down(rig, transcoder_down):
     assert received == frames, "native D-STAR changed while the transcoder is down (%d frames)" % len(received)
     voiced = [f for f in converted if any(f)]
     assert not voiced, "%d of %d DMR frames carry content without a transcoder" % (len(voiced), len(converted))
-    if "no_zero_fill" in rig.divergences:
+    if (behaviour_spec or {}).get("zero_fill") is False or "no_zero_fill" in rig.divergences:
         assert not converted, "sut declares no_zero_fill: %d zero DMR frames" % len(converted)
 
 
-def test_usrp_pcm_not_fabricated(rig_usrp, transcoder_down):
+def test_usrp_pcm_not_fabricated(rig_usrp, transcoder_down, behaviour_spec):
     listener = clients.make("dstar", USRP_MODULE, 1)
     peer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     peer.bind(("0.0.0.0", USRP_PEER_PORT))
@@ -100,7 +100,7 @@ def test_usrp_pcm_not_fabricated(rig_usrp, transcoder_down):
     voiced = [f for f in received if any(f)]
     assert not voiced, "%d of %d D-STAR frames carry content from USRP PCM without a transcoder" % (
         len(voiced), len(received))
-    if "no_zero_fill" in rig_usrp.divergences:
+    if (behaviour_spec or {}).get("zero_fill") is False or "no_zero_fill" in rig_usrp.divergences:
         assert not received, "sut declares no_zero_fill: %d zero D-STAR frames" % len(received)
 
 

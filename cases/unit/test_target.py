@@ -52,8 +52,21 @@ def test_sut_profile_and_specs():
     assert target.load(env={}).sut_profile == "xlxd"
     assert target.load(env={"DVT_SUT_PROFILE": "dvrouter"}).sut_profile == "dvrouter"
     assert specs.load("xlxd") is None and specs.expectation("xlxd", "test_x") is None
-    assert specs.load("dvrouter").SPEC == {} and specs.expectation("dvrouter", "test_x") is None
+    assert "test_first_talker_wins" in specs.load("dvrouter").SPEC and specs.expectation("dvrouter", "test_x") is None
     with pytest.raises(ValueError, match="no spec module"):
         specs.load("nosuch")
     with pytest.raises(ValueError, match="invalid"):
         specs.load("../x")
+
+
+def test_profile_implies_divergences():
+    import pytest
+    from dvtest import divergences
+    t = target.load(env={"DVT_SUT_PROFILE": "dvrouter", "DVT_SUT_DIVERGENCES": "tot_180s"})
+    assert t.divergences == {"tot_180s", *divergences.PROFILES["dvrouter"]}
+    assert divergences.effective({"DVT_SUT_PROFILE": "dvrouter"}) == set(divergences.PROFILES["dvrouter"])
+    assert divergences.effective({}) == set()
+    with pytest.raises(ValueError, match="unknown DVT_SUT_PROFILE"):
+        target.load(env={"DVT_SUT_PROFILE": "nosuch"})
+    t = target.load(env={})
+    assert (t.xlxd_peer2_sut, t.xlxd_peer2_ref) == ("172.30.0.14", "172.30.0.15")

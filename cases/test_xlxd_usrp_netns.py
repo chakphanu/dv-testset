@@ -229,10 +229,13 @@ def check_dstar_requests(run, port):
 # no xlxd.usrp: nothing new on the transcoder link
 
 def extended_always(target):
-    """Declared divergence ambed_extended_open_always: once CAPS is
-    answered the sut uses the 24 B extended OPEN for every stream, so
-    it probes CAPS without USRP endpoints too."""
-    return "ambed_extended_open_always" in target.divergences
+    """B7: the profile spec "ambed_open" == "extended_always" (dvrouter) or
+    the legacy ambed_extended_open_always divergence: once CAPS is answered
+    the sut uses the 24 B extended OPEN for every stream, so it probes CAPS
+    without USRP endpoints too."""
+    from dvtest import specs
+    return specs.rule(target, "ambed_open") == "extended_always" or \
+        "ambed_extended_open_always" in target.divergences
 
 
 def test_no_usrp_sends_no_caps(runs, target):

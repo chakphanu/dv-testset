@@ -245,6 +245,17 @@ BEHAVIOUR = {
     "test_load.py::test_no_load_loss_latency",
     "test_load.py::test_loss_not_worse_than_ref",
     "test_load.py::test_loss_not_systematically_worse",
+    "test_floor.py::test_first_talker_wins",                         # B1
+    "test_floor.py::test_late_entry_denied",                         # B2
+    "test_floor.py::test_late_entry_pending",                        # B2 knob
+    "test_floor.py::test_usrp_unkey_after_silence",                  # B3
+    "test_floor.py::test_usrp_over_suppressed_when_busy",            # B3
+    "test_floor.py::test_admission_sid_zero",                        # B8
+    "test_floor.py::test_admission_one_floor_per_client",            # B8
+    "test_floor.py::test_admission_same_sid_two_rooms",              # B8
+    "test_floor.py::test_b14_placeholder",                           # B14
+    "test_xlxd_interlink.py::test_admission_remote_sid_open_elsewhere",  # B8c
+    "test_xlxd_interlink.py::test_interlink_missing_output_slot_zeroed",  # B6b
 }
 SYSTEM_MARKERS = {"rig", "netns", "allstar", "nxdn", "p25", "load", "interlink"}
 
@@ -255,6 +266,15 @@ def pytest_collection_modifyitems(items):
             continue
         key = "%s::%s" % (Path(str(item.fspath)).name, getattr(item, "originalname", item.name))
         item.add_marker(pytest.mark.behaviour if key in BEHAVIOUR else pytest.mark.interop)
+
+
+@pytest.fixture
+def behaviour_spec(request, target):
+    """The profile's expectation for this behaviour case: None under the
+    xlxd profile (the case is differential), else the dvtest/specs entry
+    (pytest_runtest_setup already skipped a pending one)."""
+    from dvtest import specs
+    return specs.rule(target, getattr(request.node, "originalname", request.node.name))
 
 
 def pytest_runtest_setup(item):

@@ -32,3 +32,10 @@ def expectation(name, case):
     """The profile's expectation for a behaviour case, or None (pending)."""
     module = load(name)
     return None if module is None else getattr(module, "SPEC", {}).get(case)
+
+
+def rule(target, case):
+    """Expectation of the target's profile for a behaviour case: None under
+    the xlxd profile (differential against xlxd-ref), else the spec entry
+    (None while pending)."""
+    return expectation(target.sut_profile, case)
