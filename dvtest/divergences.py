@@ -1,5 +1,9 @@
 # SPDX-License-Identifier: MIT
-"""Declared divergences of the system under test from xlxd-ref.
+"""Declared divergences of the system under test from xlxd-ref (legacy).
+
+Legacy: superseded by DVT_SUT_PROFILE and dvtest/specs/ (a sut that is not
+an xlxd clone gets its own behaviour spec). Kept working for existing runs;
+no new names are added here.
 
 A reflector under test may differ from the reference on purpose. It
 declares that with DVT_SUT_DIVERGENCES (comma separated names, spaces

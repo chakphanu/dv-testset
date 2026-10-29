@@ -220,6 +220,8 @@ services:
       DVT_SUT_DIVERGENCES: ${DVT_SUT_DIVERGENCES:-}
       # short name of the system under test (baselines/<name>/ for per-sut numbers)
       DVT_SUT_NAME: ${DVT_SUT_NAME:-}
+      # behaviour spec the system under test is held to (dvtest/specs/)
+      DVT_SUT_PROFILE: ${DVT_SUT_PROFILE:-xlxd}
       # wire cases: transcoder under test when run inside the rig
       DVT_AMBED_ADDR: ${DVT_AMBED_ADDR:-${DVT_NET:-172.30.0}.21}
       # on when xlxd-sut has USRP endpoints (A/B -> allstar, C -> tester)

@@ -28,7 +28,9 @@ allstar .40.
   DVT_REFLECTOR      reflector callsign (XLX999)
   DVT_IAX_SECRET     IAX2 secret of the AllStar node (rig: .local/rig.env)
   DVT_OUT            results directory (out)
-  DVT_SUT_DIVERGENCES  declared divergences of the sut, comma list (dvtest/divergences.py)
+  DVT_SUT_PROFILE    behaviour rule for the sut: xlxd (default, sut == ref) or a
+                     dvtest/specs/<name>.py spec
+  DVT_SUT_DIVERGENCES  legacy: declared divergences of the sut (dvtest/divergences.py)
 """
 import ipaddress
 import os
@@ -45,7 +47,8 @@ HOST_OFFSETS = {"xlxd_ref": 10, "xlxd_sut": 11, "xlxd_peer_sut": 12, "xlxd_peer_
 KEYS = ("subnet", "xlxd_ref", "xlxd_sut", "xlxd_peer_sut", "xlxd_peer_ref",
         "ambed_ref", "ambed_sut", "tester", "allstar",
         "nxdn_ref", "nxdn_sut", "p25_ref", "p25_sut",
-        "ambed_addr", "ambed_port", "ambed_stream_cap", "xlxd_bin", "xlxd_ref_bin", "reflector", "iax_secret", "out")
+        "ambed_addr", "ambed_port", "ambed_stream_cap", "xlxd_bin", "xlxd_ref_bin", "reflector", "iax_secret",
+        "sut_profile", "out")
 
 
 @dataclass
@@ -69,6 +72,7 @@ class Target:
     xlxd_bin: str = ""
     xlxd_ref_bin: str = ""
     reflector: str = "XLX999"
+    sut_profile: str = "xlxd"
     iax_secret: str = field(default="", repr=False)
     out: str = "out"
     # keys set explicitly by env or TOML (rig host defaults are not)

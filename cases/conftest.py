@@ -221,3 +221,47 @@ def allstar(rig_usrp, target):
     if not (target.is_given("allstar") and target.iax_secret):
         pytest.skip("no AllStar node: run.sh --profile allstar (DVT_ALLSTAR and DVT_IAX_SECRET)")
     return target
+
+
+# ---------------------------------------------------------------- interop / behaviour
+
+# Cases that judge reflector behaviour (floor, late entry, stream timeout
+# and terminators, revoke tail, zero fill, TOT, load loss) as
+# "file::function". Every other rig/netns/allstar/... case is interop
+# (wire format, handshakes, keepalives, framing, codec routing and bytes,
+# stream ids, no re-forwarding, no echo) and is always judged against
+# xlxd-ref. Behaviour cases follow DVT_SUT_PROFILE (dvtest/specs).
+BEHAVIOUR = {
+    "test_xlxd_clients.py::test_late_entry_is_native_only",          # C11
+    "test_xlxd_clients.py::test_stream_timeout_frees_module",        # C8
+    "test_xlxd_clients.py::test_leave_mid_stream_tail",              # C7b
+    "test_xlxd_clients.py::test_tot_180s",
+    "test_backend_loss.py::test_native_passthrough_while_down",      # D2 zero fill
+    "test_backend_loss.py::test_usrp_pcm_not_fabricated",            # D2 zero fill
+    "test_allstar.py::test_node_crash_releases_module",              # floor after peer loss
+    "test_xlxd_restart.py::test_restart_no_stale_stream",            # stream timing
+    "test_load.py::test_no_load_loss_passthrough",                   # C9 load loss
+    "test_load.py::test_no_load_loss_cross",
+    "test_load.py::test_no_load_loss_latency",
+    "test_load.py::test_loss_not_worse_than_ref",
+    "test_load.py::test_loss_not_systematically_worse",
+}
+SYSTEM_MARKERS = {"rig", "netns", "allstar", "nxdn", "p25", "load", "interlink"}
+
+
+def pytest_collection_modifyitems(items):
+    for item in items:
+        if not SYSTEM_MARKERS & {m.name for m in item.iter_markers()}:
+            continue
+        key = "%s::%s" % (Path(str(item.fspath)).name, getattr(item, "originalname", item.name))
+        item.add_marker(pytest.mark.behaviour if key in BEHAVIOUR else pytest.mark.interop)
+
+
+def pytest_runtest_setup(item):
+    if item.get_closest_marker("behaviour") is None:
+        return
+    from dvtest import specs
+    profile = target_mod.load().sut_profile
+    if profile != specs.DEFAULT and specs.expectation(profile, getattr(item, "originalname", item.name)) is None:
+        pytest.skip("spec pending: no %s entry in dvtest/specs/%s.py for this behaviour case"
+                    % (getattr(item, "originalname", item.name), profile))

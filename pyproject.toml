@@ -30,4 +30,6 @@ markers = [
     "interlink: needs the docker rig with profile interlink",
     "speech: needs the fetched speech corpus (scripts/pre-fetch-speech.sh)",
     "slow: long-running cases (minutes), e.g. tot_180s",
+    "interop: protocol interop, always judged against xlxd-ref",
+    "behaviour: reflector behaviour, follows DVT_SUT_PROFILE (dvtest/specs)",
 ]

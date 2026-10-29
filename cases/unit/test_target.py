@@ -44,3 +44,16 @@ def test_divergences(tmp_path):
         target.load(env={"DVT_SUT_DIVERGENCES": "bogus"})
     assert divergences.load({"DVT_SUT_DIVERGENCES": "no_load_loss"}) == {"no_load_loss"}
     assert len(divergences.TABLE) == 7 and all(len(v) == 2 for v in divergences.TABLE.values())
+
+
+def test_sut_profile_and_specs():
+    import pytest
+    from dvtest import specs
+    assert target.load(env={}).sut_profile == "xlxd"
+    assert target.load(env={"DVT_SUT_PROFILE": "dvrouter"}).sut_profile == "dvrouter"
+    assert specs.load("xlxd") is None and specs.expectation("xlxd", "test_x") is None
+    assert specs.load("dvrouter").SPEC == {} and specs.expectation("dvrouter", "test_x") is None
+    with pytest.raises(ValueError, match="no spec module"):
+        specs.load("nosuch")
+    with pytest.raises(ValueError, match="invalid"):
+        specs.load("../x")
