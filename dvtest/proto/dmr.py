@@ -81,8 +81,10 @@ def voice_packets(frames, src, dst, stream_id):
         for _ in range(3):
             trio.append(frames[index] if index < len(frames) else b"\x00" * 9)
             index += 1
-        kind = 1 if (seq % 6) == 0 else 0
-        bitfield = 0x80 | (kind << 4) | (seq % 6)
+        # bursts A..F (vseq 0..5) from the first packet; A carries voice sync
+        vseq = (seq - 1) % 6
+        kind = 1 if vseq == 0 else 0
+        bitfield = 0x80 | (kind << 4) | vseq
         packets.append(packet(seq, src, dst, src, bitfield, stream_id, voice_payload(*trio)))
         seq = (seq + 1) & 0xFF
     return packets, seq

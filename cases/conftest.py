@@ -19,6 +19,16 @@ from dvtest import target as target_mod  # noqa: E402
 from dvtest.proto import ambed  # noqa: E402
 
 
+def pytest_addoption(parser):
+    parser.addoption("--update-baseline", action="store_true",
+                     help="write baselines/ instead of comparing (same as DVT_UPDATE_BASELINE=1)")
+
+
+@pytest.fixture(scope="session")
+def update_baseline(request):
+    return request.config.getoption("--update-baseline") or os.environ.get("DVT_UPDATE_BASELINE") == "1"
+
+
 @pytest.fixture(scope="session")
 def target():
     return target_mod.load()
@@ -98,24 +108,22 @@ def ambed_ref_addr(target):
     return target.ambed_ref, target.ambed_port
 
 
-NETNS_PATCH = ("sed -i 's|^#define RUN_AS_DAEMON|//#define RUN_AS_DAEMON|; "
-               "s|\"/xlxd/|\"./|g; s|\"/var/log/|\"./|g; "
-               "s|_USE_RLX_SERVER\\( *\\)1|_USE_RLX_SERVER\\10|' src/main.h")
+NETNS_BUILD = "scripts/build-xlxd-netns.sh"
 
 
 def _check_xlxd_bin(path, env_name):
-    """Skip unless path is an xlxd built for the netns case: foreground,
-    config/XML paths relative to the working directory (NETNS_PATCH)."""
+    """Skip unless path is an xlxd built for the netns case by NETNS_BUILD:
+    foreground, config/XML paths relative to the working directory."""
     if not path:
-        pytest.skip("no xlxd binary: set %s to an xlxd built for netns (cases/conftest.py NETNS_PATCH)"
-                    % env_name)
+        pytest.skip("no xlxd binary: run %s and set %s=.cache/netns/<dir>/src/xlxd"
+                    % (NETNS_BUILD, env_name))
     binary = Path(path)
     if not (binary.is_file() and os.access(binary, os.X_OK)):
         pytest.skip("%s=%s is not an executable file" % (env_name, path))
     data = binary.read_bytes()
     if b"/xlxd/xlxd." in data or b"/var/log/xlxd" in data:
-        pytest.skip("%s has absolute /xlxd paths (daemon build); rebuild after `%s`"
-                    % (env_name, NETNS_PATCH))
+        pytest.skip("%s has absolute /xlxd paths (daemon build); build it with %s"
+                    % (env_name, NETNS_BUILD))
     return binary
 
 
@@ -136,3 +144,80 @@ def xlxd_bin(target, netns_ok):
 @pytest.fixture(scope="session")
 def xlxd_ref_bin(target, netns_ok):
     return _check_xlxd_bin(target.xlxd_ref_bin, "DVT_XLXD_REF_BIN")
+
+
+# ---------------------------------------------------------------- docker rig
+
+def _dextra_ack(ip, seconds=3.0):
+    from dvtest.proto import dextra
+    client = dextra.DstarClient("0.0.0.0", callsign="N0TEST", module="A")
+    try:
+        return client.link(ip, timeout=seconds)
+    finally:
+        if client.dest:
+            client.unlink()
+        client.close()
+
+
+@pytest.fixture(scope="session")
+def rig(target):
+    """xlxd-ref and xlxd-sut of the docker rig (scripts/run.sh sets the
+    DVT_XLXD_* addresses in the tester), both answering a DExtra link."""
+    if not (target.is_given("xlxd_ref") and target.is_given("xlxd_sut")):
+        pytest.skip("no rig: run inside the tester via scripts/run.sh (DVT_XLXD_REF/DVT_XLXD_SUT unset)")
+    for name in ("xlxd_ref", "xlxd_sut"):
+        ip = getattr(target, name)
+        deadline = time.monotonic() + 30
+        while not _dextra_ack(ip):
+            if time.monotonic() > deadline:
+                pytest.fail("%s %s does not ACK a DExtra link" % (name, ip))
+    return target
+
+
+@pytest.fixture(scope="session")
+def rig_usrp(rig):
+    """xlxd-sut loaded rig/config/xlxd.usrp.in (DVT_SUT_USRP=on)."""
+    if os.environ.get("DVT_SUT_USRP") != "on":
+        pytest.skip("xlxd-sut has no USRP endpoints (DVT_SUT_USRP=on, e.g. run.sh --profile allstar)")
+    return rig
+
+
+class RigControl:
+    """stop/start/kill of a rig service through the run.sh watcher: a
+    request file in $DVT_OUT/control, answered by an .ack file."""
+
+    def __init__(self, directory):
+        self.dir = Path(directory)
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self.count = 0
+
+    def __call__(self, action, service, timeout=30.0):
+        self.count += 1
+        name = "%d-%d" % (os.getpid(), self.count)
+        tmp = self.dir / (name + ".tmp")
+        tmp.write_text("%s %s\n" % (action, service))
+        tmp.rename(self.dir / (name + ".req"))
+        ack = self.dir / (name + ".ack")
+        deadline = time.monotonic() + timeout
+        while not ack.exists():
+            if time.monotonic() > deadline:
+                raise TimeoutError("no ack for %s %s" % (action, service))
+            time.sleep(0.1)
+        reply = ack.read_text().strip()
+        if reply != "ok":
+            raise RuntimeError("%s %s: %s" % (action, service, reply))
+
+
+@pytest.fixture(scope="session")
+def rig_control(rig, target):
+    if os.environ.get("DVT_RIG_CONTROL") != "1":
+        pytest.skip("no rig control channel (DVT_RIG_CONTROL=1 is set by scripts/run.sh)")
+    return RigControl(Path(target.out) / "control")
+
+
+@pytest.fixture(scope="session")
+def allstar(rig_usrp, target):
+    """AllStar node of the rig (profile allstar) and the IAX2 secret."""
+    if not (target.is_given("allstar") and target.iax_secret):
+        pytest.skip("no AllStar node: run.sh --profile allstar (DVT_ALLSTAR and DVT_IAX_SECRET)")
+    return target

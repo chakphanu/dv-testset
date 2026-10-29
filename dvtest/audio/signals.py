@@ -17,7 +17,7 @@ FRAME_SAMPLES = 160
 FRAME_BYTES = 2 * FRAME_SAMPLES
 # payload bytes per 20 ms frame, by AMBEd codec number and by name
 FRAME_WIDTH = {1: 9, 2: 9, 3: 8, 4: 11, 5: 320,
-               "dstar": 9, "dmr": 9, "codec2_3200": 8, "imbe": 11, "pcm": 320}
+               "dstar": 9, "dmr": 9, "m17": 8, "codec2_3200": 8, "imbe": 11, "pcm": 320}
 DTMF = {"1": (697, 1209), "2": (697, 1336), "3": (697, 1477), "A": (697, 1633),
         "4": (770, 1209), "5": (770, 1336), "6": (770, 1477), "B": (770, 1633),
         "7": (852, 1209), "8": (852, 1336), "9": (852, 1477), "C": (852, 1633),

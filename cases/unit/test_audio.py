@@ -66,3 +66,10 @@ def test_lsd_stdlib_path(monkeypatch):
     monkeypatch.setattr(score, "_np", None)
     stdlib = score.lsd(ref, cand)
     assert stdlib[1] == first[1] and abs(stdlib[0] - first[0]) < 1e-6
+
+
+def test_spectrum_peak_and_bands():
+    spec = score.spectrum(signals.tone(690, 400) + signals.tone(700, 400))
+    assert abs(score.dominant(spec) - 700) <= 20
+    assert score.band_power(spec, 700) > 100 * score.band_power(spec, 1200)
+    assert score.spectrum(b"") == {} and score.dominant({}) is None

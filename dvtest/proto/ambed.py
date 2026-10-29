@@ -254,26 +254,39 @@ class AmbedClient:
 def run_stream(addr, port, codec_in, outs, frames, gap=0.02, wait=3.0, bind_ip="0.0.0.0"):
     """Send frames on an open stream and collect the replies. ambed sends
     replies to the client address at the stream port number, so the data
-    socket binds that same port locally. Returns the raw replies."""
+    socket binds that same port locally. Replies are drained after every
+    send so long streams do not overflow the socket buffer. Returns the
+    raw replies of this stream's shape, at most one per frame."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1 << 22)
     sock.bind((bind_ip, port))
-    sock.settimeout(1.0)
+    sock.setblocking(False)
     replies = []
+    size = reply_size(outs)
+
+    def drain():
+        # a late reply of an earlier stream on a reused port has another
+        # shape (or arrives once all replies are in) and is dropped
+        while True:
+            try:
+                data = sock.recvfrom(4096)[0]
+            except BlockingIOError:
+                return
+            if len(data) == size and data[0] == outs[0] and len(replies) < len(frames):
+                replies.append(data)
+
     try:
         for pid, frame in enumerate(frames):
             sock.sendto(data_request(codec_in, pid, frame), (addr, port))
+            drain()
             time.sleep(gap)
         deadline = time.monotonic() + wait
         while len(replies) < len(frames) and time.monotonic() < deadline:
-            try:
-                replies.append(sock.recvfrom(4096)[0])
-            except socket.timeout:
-                break
+            drain()
+            time.sleep(0.01)
     finally:
         sock.close()
     return replies
-
 
 class FakeAmbed:
     """Minimal AMBEd server for reflector tests.
@@ -393,3 +406,28 @@ class FakeAmbed:
                 with self.lock:
                     self.closes.append((self.now(), stream_id))
                 self.event("CLOSE id=%d" % stream_id)
+
+
+def transcode(addr, codec_in, outs, frames, port=PORT, transaction=0x44565400, callsign="N0TEST",
+              bind_ip="0.0.0.0"):
+    """Run frames through one extended stream of a transcoder; returns
+    {codec: [payload per frame]}. Raises RuntimeError when the open is
+    refused or replies are missing."""
+    client = AmbedClient(addr, port, bind_ip=bind_ip)
+    try:
+        std = parse_std(client.rpc(open_ext(callsign, codec_in, outs, transaction)) or b"")
+        if std is None:
+            raise RuntimeError("transcoder %s refused %d -> %s" % (addr, codec_in, list(outs)))
+        try:
+            replies = run_stream(addr, std.port, codec_in, outs, frames, bind_ip=bind_ip)
+        finally:
+            client.close_stream(std.stream_id)
+    finally:
+        client.close()
+    if len(replies) != len(frames):
+        raise RuntimeError("transcoder %s returned %d of %d frames" % (addr, len(replies), len(frames)))
+    out = {c: [] for c in outs}
+    for reply in replies:
+        for codec, payload in parse_data_reply(reply, outs)[1]:
+            out[codec].append(payload)
+    return out

@@ -123,7 +123,9 @@ class DstarClient:
         """Stream 9-byte AMBE frames; the receiver drains."""
         packets = [self.header(stream_id, reflector)]
         for index, frame in enumerate(frames):
-            packets.append(voice(stream_id, index, frame, False))
+            # frame 0 of each 21-frame superframe carries the sync pattern
+            packets.append(voice(stream_id, index, frame, False,
+                                 SYNC_DATA if index % 21 == 0 else SLOW_DATA))
         packets.append(voice(stream_id, len(frames), b"\x00" * 9, True))
         self.client.send(self.dest, packets[0])
         self.client.pump(settle)

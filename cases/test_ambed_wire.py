@@ -137,6 +137,29 @@ def test_ext_open_unserved_codec_busy(ctl, caps):
             assert reply == ambed.busy(tx), "%d->%s: %r" % (codec_in, outs, reply)
 
 
+
+def test_legacy_open_full_gets_busy9(ctl):
+    """Legacy 19 B opens until the transcoder is full: the refusal is the
+    9 B legacy BUSY (no transaction). Bounded at 200 opens."""
+    opened = []
+    refusal = None
+    try:
+        for _ in range(200):
+            reply = ctl.rpc(ambed.open_legacy(CALLSIGN, ambed.AMBEPLUS, ambed.AMBE2PLUS,
+                                              ambed.CODEC2_3200, ambed.IMBE)) or b""
+            std = ambed.parse_std(reply)
+            if std is None or len(reply) != 14:
+                refusal = reply
+                break
+            opened.append(std)
+    finally:
+        for std in opened:
+            ctl.close_stream(std.stream_id, settle=0)
+    if refusal is None:
+        pytest.skip("200 legacy opens all succeeded, no BUSY to check")
+    print("legacy BUSY after %d streams" % len(opened))
+    assert refusal == ambed.busy(), "refusal after %d streams: %r" % (len(opened), refusal)
+
 INVALID_OPENS = {
     "dup_outputs": (ambed.CODEC2_3200, [ambed.PCM, ambed.PCM], CALLSIGN),
     "gap": (ambed.CODEC2_3200, [ambed.PCM, 0, ambed.IMBE], CALLSIGN),
@@ -174,6 +197,36 @@ def test_ext_open_std18_and_retransmit(ctl, caps):
         if std is not None:
             ctl.close_stream(std.stream_id)
 
+
+
+def test_ext_open_same_tx_other_codecs(ctl, caps):
+    """Only peer + transaction + codec_in + out1..4 together identify a
+    retransmit: the same transaction with other codecs is a new open (new
+    stream or BUSY13), an exact resend gets the identical STD18."""
+    need(caps, ambed.CODEC2_3200, ambed.PCM)
+    tx = 0x5A5A0001
+    first_req = ambed.open_ext(CALLSIGN, ambed.CODEC2_3200, [ambed.PCM], tx)
+    other_req = ambed.open_ext(CALLSIGN, ambed.PCM, [ambed.CODEC2_3200], tx)
+    first = ctl.rpc(first_req) or b""
+    std1 = ambed.parse_std(first)
+    opened = [std1] if std1 else []
+    try:
+        assert std1 is not None and std1.transaction == tx, "first open: %r" % first
+        other = ctl.rpc(other_req) or b""
+        std2 = ambed.parse_std(other)
+        if std2 is not None:
+            opened.append(std2)
+            assert len(other) == 18 and std2.transaction == tx, other
+            assert std2.stream_id != std1.stream_id, "same transaction, other codecs got the first stream"
+            assert (std2.codec_in, std2.codec_out) == (ambed.PCM, ambed.CODEC2_3200), other
+        else:
+            assert other == ambed.busy(tx), "other codecs, same transaction: %r" % other
+        assert ctl.rpc(first_req) == first, "exact resend must return the identical STD18"
+        if std2 is not None:
+            assert ctl.rpc(other_req) == other, "resend of the second open must return its own STD18"
+    finally:
+        for std in opened:
+            ctl.close_stream(std.stream_id)
 
 def source_pcm():
     pcm = signals.bursts(700, 4, on_ms=200, off_ms=200)
@@ -222,6 +275,31 @@ def test_pcm_two_outputs_keep_order(ctl, caps, ambed_addr):
         pytest.skip("needs two non-PCM outputs (mask 0x%02x, max %d)" % (caps.mask, caps.max_outputs))
     stream(ctl, ambed_addr, ambed.PCM, outs, source_pcm(), 0x0BADF00F)
 
+
+def test_imbe_follows_caps(ctl, caps, ambed_addr):
+    """IMBE in the CAPS mask: an open mixing IMBE with another output gets
+    STD18 and real IMBE payloads. Not in the mask: an extended open asking
+    IMBE gets BUSY13, while a legacy 19 B open with IMBE as out3 still gets
+    STD14 (that path never checked outputs; payloads not asserted)."""
+    if served(caps, ambed.IMBE):
+        need(caps, ambed.PCM, ambed.CODEC2_3200)
+        parsed = stream(ctl, ambed_addr, ambed.PCM, [ambed.IMBE, ambed.CODEC2_3200], source_pcm(), 0x494D0001)
+        imbe = [p[ambed.IMBE] for p in parsed]
+        assert any(any(f) for f in imbe), "all IMBE payloads are zero"
+        return
+    tx = 0x494D0002
+    reply = ctl.rpc(ambed.open_ext(CALLSIGN, ambed.CODEC2_3200, [ambed.PCM, ambed.IMBE], tx)) or b""
+    std = ambed.parse_std(reply)
+    if std is not None:
+        ctl.close_stream(std.stream_id)
+    assert reply == ambed.busy(tx), "IMBE not announced, extended open: %r" % reply
+    need(caps, ambed.AMBEPLUS, ambed.AMBE2PLUS, ambed.CODEC2_3200)
+    reply = ctl.rpc(ambed.open_legacy(CALLSIGN, ambed.AMBEPLUS, ambed.AMBE2PLUS,
+                                      ambed.CODEC2_3200, ambed.IMBE)) or b""
+    std = ambed.parse_std(reply)
+    if std is not None:
+        ctl.close_stream(std.stream_id)
+    assert std is not None and len(reply) == 14, "legacy open with IMBE out3: %r" % reply
 
 def test_stream_cap(ctl, caps, target):
     """DVT_AMBED_STREAM_CAP opens succeed, the next one gets BUSY13."""

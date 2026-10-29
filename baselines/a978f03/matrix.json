@@ -1,0 +1,36 @@
+{
+ "cells": {
+  "dmr-dmr/B": {
+   "received": 60,
+   "sent": 60,
+   "sha256": "116ccc6c6a77fa4db3b36e674dc718ea4a495a300fe0d8927cab8aea7fbddbd7"
+  },
+  "dmr-dmr/D": {
+   "received": 60,
+   "sent": 60,
+   "sha256": "116ccc6c6a77fa4db3b36e674dc718ea4a495a300fe0d8927cab8aea7fbddbd7"
+  },
+  "dstar-dstar/B": {
+   "received": 60,
+   "sent": 60,
+   "sha256": "80e9d54121ead8d270573512e408e19d98f4616a8461da092f56692517b4aabf"
+  },
+  "dstar-dstar/D": {
+   "received": 60,
+   "sent": 60,
+   "sha256": "80e9d54121ead8d270573512e408e19d98f4616a8461da092f56692517b4aabf"
+  },
+  "m17-m17/B": {
+   "received": 62,
+   "sent": 60,
+   "sha256": "023be5c659c9d35487d58fd062852f83e41810095faba5b596780c3c93b97baa"
+  },
+  "m17-m17/D": {
+   "received": 62,
+   "sent": 60,
+   "sha256": "023be5c659c9d35487d58fd062852f83e41810095faba5b596780c3c93b97baa"
+  }
+ },
+ "frames": 60,
+ "seed": "matrix"
+}

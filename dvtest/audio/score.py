@@ -48,6 +48,23 @@ def tone_ratio(pcm, freq, rate=RATE):
     return min(1.0, 2 * goertzel(pcm, freq, rate) / total) if total else 0.0
 
 
+def spectrum(pcm, lo=200, hi=3800, step=10, size=320):
+    """{freq: mean Goertzel power over size-sample windows} for lo..hi;
+    short windows (25 Hz wide at 320) tolerate codec pitch offsets."""
+    windows = [pcm[i:i + 2 * size] for i in range(0, len(pcm) - 2 * size + 1, 2 * size)]
+    if not windows:
+        return {}
+    return {f: sum(goertzel(w, f) for w in windows) / len(windows) for f in range(lo, hi + 1, step)}
+
+
+def band_power(spec, freq, width=80):
+    return max((v for f, v in spec.items() if abs(f - freq) < width), default=0.0)
+
+
+def dominant(spec):
+    return max(spec, key=spec.get) if spec else None
+
+
 def frame_energy(pcm, size=320):
     return [math.log10(1 + rms(pcm[i:i + size]) ** 2) for i in range(0, len(pcm) - size + 1, size)]
 

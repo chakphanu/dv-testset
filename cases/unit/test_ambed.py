@@ -146,3 +146,14 @@ def test_fake_ambed_open_delay():
     finally:
         sock.close()
         fake.stop()
+
+
+def test_transcode_against_fake():
+    port = _free_port()
+    fake = ambed.FakeAmbed("127.0.0.1", port=port, data_port_base=_free_port())
+    try:
+        out = ambed.transcode("127.0.0.1", ambed.PCM, [ambed.AMBEPLUS, ambed.CODEC2_3200],
+                              [bytes(320)] * 3, port=port, bind_ip="127.0.0.2")
+        assert out == {1: [b"\x11" * 9] * 3, 3: [b"\x13" * 8] * 3}
+    finally:
+        fake.stop()

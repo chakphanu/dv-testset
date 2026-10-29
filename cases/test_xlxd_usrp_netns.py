@@ -8,7 +8,7 @@ talker on 127.0.0.3 and a USRP peer on 127.0.0.4. The recorded traffic is
 written as JSON and asserted here. Scenarios run in parallel.
 
 Needs DVT_XLXD_BIN: an xlxd built in the foreground with config paths
-relative to its working directory (see conftest.NETNS_PATCH). Optional
+relative to its working directory (scripts/build-xlxd-netns.sh). Optional
 DVT_XLXD_REF_BIN (e.g. upstream master, same patch) adds a byte-equality
 check of the transcoder link without xlxd.usrp.
 """
