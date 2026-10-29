@@ -40,6 +40,11 @@ loss only in rounds where the transcoder-sut capture shows BUSY or a reply
 deadline miss, first-packet latency p50/p99 <= baselines/<sut>/load.json
 + LAT_MARGIN (written with --update-baseline).
 
+Forwarding latency xlxd-sut adds is measured on the wire from its own
+capture (same-mode cells: egress minus matching ingress); under
+DVT_SUT_PROFILE=dvrouter its p99 must be <= DVROUTER_P99_MS per protocol
+(DV-Router core gate), under xlxd (jitter buffer) it is recorded only.
+
 Preconditions: each transcoder must take one stream per module (opened and
 closed once before the load; a BUSY skips the verdict tests with the cap).
 A saturated tester or host (send lateness, socket drops, host CPU steal or
@@ -111,6 +116,13 @@ SAT_STEAL = 0.05
 SAT_IDLE = 0.10
 SAT_TESTER_CPU = 90.0
 CAPTURE_FLUSH_S = 2.0
+# DV-Router core gate: forwarding latency the sut adds, p99, measured on the
+# wire in the xlxd-sut capture (same-mode cells only, see wire_latency)
+DVROUTER_P99_MS = 2.0
+# wire matching: an egress frame matches the first equal ingress frame
+# within this many packets after the previous match
+MATCH_WINDOW = 12
+XLXD_PORTS = {dextra.PORT: "dstar", dmr.PORT: "dmr", m17.PORT: "m17"}
 
 
 def module_count():
@@ -338,6 +350,7 @@ def run_round(rig, mods, rnd, encoded, usrp_on):
                        "linked": u.linked.get("talker") and u.linked.get("listen-" + k),
                        "sent": len(sent), "received": len(got), "sha256": sha(got),
                        "identities": sorted(seen),
+                       "talker_port": u.talker.client.local[1], "listener_port": c.client.local[1],
                        "foreign": sorted(i for i in seen if owner_of(i) not in (u.m,))}
                 if k == u.talker_kind:
                     want = clients.wire_frames(k, sent)
@@ -611,6 +624,69 @@ def sign_test(rows):
     return {"worse": worse, "better": better, "equal": len(diffs) - n, "p": round(p, 5)}
 
 
+def voice_unit(kind, payload):
+    """Comparable voice content of one packet, or None for non-voice."""
+    if kind == "dstar":
+        parsed = dextra.parse_voice(payload)
+        return parsed[3] if parsed and not parsed[2] else None
+    if kind == "dmr":
+        return tuple(dmr.extract(payload[20:53])) if dmr.is_voice(payload) else None
+    parsed = m17.parse(payload)
+    return tuple(parsed["frames"]) if parsed else None
+
+
+def wire_latency(out, rows, windows):
+    """Forwarding latency xlxd-sut adds, from its own capture (the sniffer
+    shares its network namespace, one clock): per relayed voice packet of a
+    same-mode cell, egress time minus the time of the matching ingress
+    packet of the talker's stream (same voice content, in stream order).
+    Cross-mode cells are left out: their egress waits for the transcoder
+    round trip, which is not the reflector's forwarding time.
+    {pair: {"packets", "unmatched", "p50", "p99", "max"} (ms)} or None."""
+    path = Path(out) / "capture" / "xlxd-sut.pcapng"
+    if not path.exists():
+        return None
+    hosts = check.rig_config()["hosts"]
+    tester, sut = hosts["tester"], hosts["xlxd_sut"]
+    ingress, egress = {}, {}
+    try:
+        for d in pcap.udp_datagrams(str(path), {}):
+            if d.src == tester and d.dst == sut and d.dport in XLXD_PORTS:
+                unit = voice_unit(XLXD_PORTS[d.dport], d.payload)
+                if unit is not None:
+                    ingress.setdefault(d.sport, []).append((d.ts, unit))
+            elif d.src == sut and d.dst == tester and d.sport in XLXD_PORTS:
+                unit = voice_unit(XLXD_PORTS[d.sport], d.payload)
+                if unit is not None:
+                    egress.setdefault(d.dport, []).append((d.ts, unit))
+    except (pcap.CaptureError, OSError, ValueError) as exc:
+        return {"unreadable": str(exc)}
+    pairs = {}
+    for row in rows:
+        if row["side"] != "sut" or row["kind"] != "passthrough":
+            continue
+        w0, w1 = windows[row["round"]]
+        inside = lambda items: [x for x in items if w0 - SETTLE_S <= x[0] <= w1]    # noqa: E731
+        ing, eg = inside(ingress.get(row["talker_port"], [])), inside(egress.get(row["listener_port"], []))
+        entry = pairs.setdefault("%s-%s" % (row["src"], row["dst"]), {"deltas": [], "unmatched": 0})
+        i = 0
+        for t_out, unit in eg:
+            for j in range(i, min(i + MATCH_WINDOW, len(ing))):
+                if ing[j][1] == unit:
+                    entry["deltas"].append(t_out - ing[j][0])
+                    i = j + 1
+                    break
+            else:
+                entry["unmatched"] += 1
+    out_rows = {}
+    for pair, entry in sorted(pairs.items()):
+        deltas = entry["deltas"]
+        out_rows[pair] = {"packets": len(deltas), "unmatched": entry["unmatched"],
+                          "p50": ms(pct(deltas, 50)), "p99": ms(pct(deltas, 99)),
+                          "max": ms(max(deltas)) if deltas else None}
+    return out_rows
+
+
 def sut_name():
     name = os.environ.get("DVT_SUT_NAME")
     if name:
@@ -690,6 +766,7 @@ def load(request, rig, mods, usrp_on, encoded, caps_ok):
     window = (min(w[0] for w in windows), max(w[1] for w in windows))
     res = resources(rig.out, window)
     captured = capture_report(rig.out, windows)
+    wire = wire_latency(rig.out, plain, windows)
     sat = saturation(plain, probes, res, captured)
     lost = {side: sum(r["lost"] for r in plain if r["side"] == side) for side in ("ref", "sut")}
     short = {side: sum(1 for r in plain if r["side"] == side and not r["complete"]) for side in ("ref", "sut")}
@@ -701,7 +778,8 @@ def load(request, rig, mods, usrp_on, encoded, caps_ok):
               "talk_window_s": round(window[1] - window[0], 1), "elapsed_s": round(time.time() - t0, 1),
               "errors": errors, "lost_frames": lost, "incomplete_streams": short,
               "latency_first_ms": latency(plain), "timing": summarize(plain), "resources": res,
-              "probes": probes, "capture": captured, "saturation": sat, "rows": plain}
+              "probes": probes, "capture": captured, "sut_profile": rig.sut_profile,
+              "wire_latency_ms": wire, "saturation": sat, "rows": plain}
     out = Path(rig.out)
     out.mkdir(parents=True, exist_ok=True)
     (out / "load.json").write_text(json.dumps(result, indent=1) + "\n")
@@ -716,6 +794,7 @@ def load(request, rig, mods, usrp_on, encoded, caps_ok):
                      "load: lost frames ref %(ref)d sut %(sut)d" % lost +
                      ", incomplete streams ref %(ref)d sut %(sut)d" % short,
                      "load: first-packet latency sut %s" % json.dumps(result["latency_first_ms"]),
+                     "load: xlxd-sut forwarding latency on the wire (same-mode) %s" % json.dumps(wire),
                      "load: sign test sut>ref %(worse)d, sut<ref %(better)d, equal %(equal)d, p=%(p)g"
                      % result["sign_test"],
                      "load: Morse exact on sut cross/USRP %d of %d" % (
@@ -836,3 +915,14 @@ def test_no_load_loss_latency(load, verdict, update_baseline):
                 bad.append("%s %s %.1f ms > baseline %.1f ms" % (kind, q, now[q], base[q]))
     assert not bad, "first-packet latency over baseline + max(%.0f ms, %d%%): %s" % (
         LAT_MARGIN[0], 100 * LAT_MARGIN[1], bad)
+
+
+def test_dvrouter_forwarding_latency(load, verdict):
+    if load["sut_profile"] != "dvrouter":
+        pytest.skip("forwarding latency gate is for DVT_SUT_PROFILE=dvrouter (xlxd: recorded only)")
+    wire = load["wire_latency_ms"]
+    if not wire or "unreadable" in wire:
+        pytest.skip("no readable xlxd-sut capture: run.sh --capture (%s)" % wire)
+    bad = ["%s p99 %.2f ms" % (pair, v["p99"]) for pair, v in wire.items()
+           if v["p99"] is None or v["p99"] > DVROUTER_P99_MS]
+    assert not bad, "sut-added forwarding latency over %.1f ms: %s" % (DVROUTER_P99_MS, bad)
