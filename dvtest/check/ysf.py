@@ -4,7 +4,7 @@ YSFU, and 155 B YSFD streams: sync, FICH CRC, V/D mode 2 header ->
 voice (FN cycling 0..FT, one packet per 100 ms) -> terminator with the
 EOT bit only on the terminator. WiresX (data FR) packets are counted."""
 from ..proto import ysf as Y
-from .common import ERROR, REPLY_TIMEOUT, WARN, Live, Stream, finish_stream, flow_of, seq_finding
+from .common import ERROR, REPLY_TIMEOUT, WARN, Live, Stream, finish_stream, flow_of, seq_finding, voice_frames
 
 NAME = "ysf"
 
@@ -88,6 +88,7 @@ class Checker:
             r.error(NAME, d, "bad_fn", "FN %d over FT %d" % (fich["fn"], fich["ft"]))
             return
         seq_finding(r, NAME, d, st, st.add(d, fich["fn"]), "fn")
+        voice_frames(st, info["frames"])
 
     def _new(self, key, d, info, header):
         st = Stream(NAME, key[0], "stream from %s" % info["src"], 7, Y.PACKET_GAP, d, 0 if header else None)

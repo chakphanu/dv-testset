@@ -90,14 +90,14 @@ def test_both_probe_both_exact_pass(rig):
 
 def test_failed_probe_side_not_required(rig):
     probed = run_probe(rig, True, False)
-    verdict, record = tandem.judge(TEXT, {"ref": morse.encode(TEXT), "sut": SILENCE}, probed)
+    verdict, record = tandem.judge(TEXT, {"ref": morse.encode(TEXT, wpm=tandem.WPM), "sut": SILENCE}, probed)
     assert verdict == "pass"
     assert record["sut"] == {"got": "", "exact": False} and record["probe"]["sut"] is False
 
 
 def test_probe_passing_side_must_decode_exactly(rig):
     probed = run_probe(rig, True, True)
-    verdict, record = tandem.judge(TEXT, {"ref": morse.encode(TEXT), "sut": "T 4"}, probed)
+    verdict, record = tandem.judge(TEXT, {"ref": morse.encode(TEXT, wpm=tandem.WPM), "sut": "T 4"}, probed)
     assert verdict.startswith("fail: sut decoded 'T 4'") and "ref" not in verdict.split(":", 1)[1]
     assert record["ref"]["exact"] and not record["sut"]["exact"]
 

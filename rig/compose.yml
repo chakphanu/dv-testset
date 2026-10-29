@@ -199,6 +199,9 @@ services:
       DVT_LOAD_MODULES: ${DVT_LOAD_MODULES:-26}
       DVT_LOAD_START_AT: ${DVT_LOAD_START_AT:-0}
       DVT_LOAD_DURATION: ${DVT_LOAD_DURATION:-60}
+      # names (comma separated, dvtest/divergences.py) of intended differences
+      # of the system under test from xlxd-ref
+      DVT_SUT_DIVERGENCES: ${DVT_SUT_DIVERGENCES:-}
       # wire cases: transcoder under test when run inside the rig
       DVT_AMBED_ADDR: ${DVT_AMBED_ADDR:-${DVT_NET:-172.30.0}.21}
       # on when xlxd-sut has USRP endpoints (A/B -> allstar, C -> tester)

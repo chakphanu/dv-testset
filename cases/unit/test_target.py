@@ -27,3 +27,20 @@ def test_toml_then_env(tmp_path):
     flat = tmp_path / "flat.toml"
     flat.write_text('xlxd_bin = "build/xlxd"\n')
     assert target.load(env={}, path=str(flat)).xlxd_bin == "build/xlxd"
+
+
+def test_divergences(tmp_path):
+    import pytest
+    from dvtest import divergences
+    assert target.load(env={}).divergences == frozenset()
+    t = target.load(env={"DVT_SUT_DIVERGENCES": " late_entry_transcoded , no_zero_fill,"})
+    assert t.divergences == {"late_entry_transcoded", "no_zero_fill"}
+    path = tmp_path / "t.toml"
+    path.write_text('sut_divergences = ["tot_180s"]\n')
+    assert target.load(env={}, path=str(path)).divergences == {"tot_180s"}
+    assert target.load(env={"DVT_SUT_DIVERGENCES": "immediate_revoke"}, path=str(path)).divergences == \
+        {"immediate_revoke"}
+    with pytest.raises(ValueError, match="known: ambed_extended_open_always"):
+        target.load(env={"DVT_SUT_DIVERGENCES": "bogus"})
+    assert divergences.load({"DVT_SUT_DIVERGENCES": "no_load_loss"}) == {"no_load_loss"}
+    assert len(divergences.TABLE) == 7 and all(len(v) == 2 for v in divergences.TABLE.values())

@@ -6,6 +6,8 @@ the cross path recovers after the transcoder restarts.
 "Fabricated" means a frame with content: like upstream xlxd, the reflector
 still relays the stream to other modes with all-zero codec frames (the
 source bytes are bypassed, see cpacketstream.cpp), which carry no voice.
+Declared divergence no_zero_fill: the sut sends no cross-mode frames at
+all instead.
 
 The transcoder is stopped/started through the run.sh control channel
 (rig_control), which only acts on this project's rig services.
@@ -72,6 +74,8 @@ def test_native_passthrough_while_down(rig, transcoder_down):
     assert received == frames, "native D-STAR changed while the transcoder is down (%d frames)" % len(received)
     voiced = [f for f in converted if any(f)]
     assert not voiced, "%d of %d DMR frames carry content without a transcoder" % (len(voiced), len(converted))
+    if "no_zero_fill" in rig.divergences:
+        assert not converted, "sut declares no_zero_fill: %d zero DMR frames" % len(converted)
 
 
 def test_usrp_pcm_not_fabricated(rig_usrp, transcoder_down):
@@ -96,6 +100,8 @@ def test_usrp_pcm_not_fabricated(rig_usrp, transcoder_down):
     voiced = [f for f in received if any(f)]
     assert not voiced, "%d of %d D-STAR frames carry content from USRP PCM without a transcoder" % (
         len(voiced), len(received))
+    if "no_zero_fill" in rig_usrp.divergences:
+        assert not received, "sut declares no_zero_fill: %d zero D-STAR frames" % len(received)
 
 
 def test_cross_path_recovers(rig, rig_control, transcoder_down):

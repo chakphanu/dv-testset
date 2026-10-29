@@ -228,21 +228,33 @@ def check_dstar_requests(run, port):
 
 # no xlxd.usrp: nothing new on the transcoder link
 
-def test_no_usrp_sends_no_caps(runs):
-    assert caps_count(get(runs, "no_usrp")) == 0
+def extended_always(target):
+    """Declared divergence ambed_extended_open_always: once CAPS is
+    answered the sut uses the 24 B extended OPEN for every stream, so
+    it probes CAPS without USRP endpoints too."""
+    return "ambed_extended_open_always" in target.divergences
 
 
-def test_no_usrp_legacy_open(runs):
+def test_no_usrp_sends_no_caps(runs, target):
+    assert caps_count(get(runs, "no_usrp")) == (1 if extended_always(target) else 0)
+
+
+def test_no_usrp_legacy_open(runs, target):
     run = get(runs, "no_usrp")
     assert len(run["opens"]) == 1
     _t, size, codec_in, outs, tx, callsign, port = run["opens"][0]
-    assert (size, codec_in, outs, tx) == (19, 1, [2, 3, 4], None)
+    if extended_always(target):
+        assert (size, codec_in) == (24, 1) and tx and outs, run["opens"][0]
+    else:
+        assert (size, codec_in, outs, tx) == (19, 1, [2, 3, 4], None)
     assert bytes.fromhex(callsign) == b"XLX999  "
     check_dstar_requests(run, port)
     assert [i for _t, i in run["closes"]] == [1]
 
 
-def test_no_usrp_link_bytes_equal_reference(runs, ref_run):
+def test_no_usrp_link_bytes_equal_reference(runs, ref_run, target):
+    if extended_always(target):
+        pytest.skip("sut declares ambed_extended_open_always: its link bytes differ from ref by design")
     run = get(runs, "no_usrp")
     assert "error" not in ref_run, ref_run.get("error")
     assert ctrl_bytes(run) == ctrl_bytes(ref_run)

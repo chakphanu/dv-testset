@@ -194,9 +194,21 @@ def flush_loss(report, stream, below=None):
                        "sequence jump, %d frame(s) missing in %s" % (len(indices), stream.name))
 
 
+def voice_frames(stream, frames):
+    """Count one voice packet of codec frames; all-zero packets are fill."""
+    stream.notes["voice_packets"] += 1
+    if any(any(f) for f in frames):
+        stream.notes["voice_nonzero"] += 1
+
+
 def finish_stream(report, stream):
-    """Record a stream summary and warn on jitter over the threshold."""
+    """Record a stream summary, warn on jitter over the threshold and on a
+    stream whose voice packets all carry all-zero codec frames."""
     flush_loss(report, stream)
+    if stream.notes["voice_packets"] and not stream.notes["voice_nonzero"]:
+        report.add(stream.protocol, stream.flow, stream.first_frame, WARN, "zero_fill",
+                   "%s: all %d voice packets carry all-zero codec frames (upstream: zero fill"
+                   " instead of transcoding)" % (stream.name, stream.notes["voice_packets"]))
     report.stream(stream.protocol, stream.summary())
     limit = report.jitter_warn_ms or stream.warn_ms
     if limit is None:

@@ -18,7 +18,7 @@ import sys
 from collections import Counter
 from datetime import datetime
 
-from .. import pcap
+from .. import divergences, pcap, target
 from ..target import DEFAULT_SUBNET, HOST_OFFSETS
 from . import ambed, dcs, dextra, dmr, dplus, iax2, m17, nxdn, p25, usrp, xlx, ysf
 from .common import ERROR, WARN, Report, flow_of
@@ -249,6 +249,66 @@ def differential(results):
             r["warnings"] = sum(1 for f in r["findings"] if f["severity"] == WARN)
 
 
+# Declared divergences of the system under test (DVT_SUT_DIVERGENCES, names
+# and meaning in dvtest.divergences.TABLE) that change a wire finding:
+# name -> (finding codes, message condition, severity when declared). They
+# apply to findings sent by a system-under-test host on -sut captures; the
+# other TABLE names change no wire finding.
+END_CODES = ("dextra.no_last", "dextra.header_only", "dplus.no_last", "dplus.header_only", "dcs.no_last",
+             "xlx.no_last", "xlx.header_only", "dmr.no_terminator", "dmr.header_only", "m17.no_eot",
+             "nxdn.no_trailer", "p25.no_terminator", "ysf.no_terminator", "usrp.missing_unkey")
+ZERO_FILL = tuple(p + ".zero_fill" for p in ("dextra", "dplus", "dcs", "xlx", "dmr", "m17", "nxdn", "p25", "ysf"))
+DIVERGENCES = {
+    # accepted: a 24 B extended OPEN without PCM from the sut is no error
+    "ambed_extended_open_always": (("ambed.ext_open_non_pcm",), None, WARN),
+    # the sut revokes a closed peer at once: no upstream client-cache excuse
+    "immediate_revoke": (("dmr.after_close", "dmr.after_close_cache"), None, ERROR),
+    # the sut never zero-fills cross-mode codec frames
+    "no_zero_fill": (ZERO_FILL, None, ERROR),
+    # the sut ends a stream that goes silent with a synthesized terminator
+    "synthesized_terminator": (END_CODES, "ended by timeout", ERROR),
+}
+# rig hosts that make up the system under test (the -sut peers such as
+# nxdn-sut or xlxd-peer-sut are upstream software next to it)
+SUT_HOSTS = ("xlxd_sut", "ambed_sut")
+# without the declaration a sut finding of these codes is an error
+UNDECLARED_ERROR = {"ambed_extended_open_always"}
+
+
+def declared(env=None):
+    """Declared names from DVT_SUT_DIVERGENCES or the target TOML key
+    sut_divergences (dvtest.target.load; ValueError on an unknown name)."""
+    return set(target.load(env).divergences)
+
+
+def _sender(flow):
+    return flow.split(":", 1)[0] if ">" in flow and "<>" not in flow else None
+
+
+def apply_divergences(results, names, sut_hosts=()):
+    """Severity of DIVERGENCES codes on -sut captures for findings whose
+    sender is a system-under-test host (sut_hosts, else the capture's own
+    address): a declared divergence sets the table severity and names it;
+    an undeclared one in UNDECLARED_ERROR is an error."""
+    for r in results:
+        stem = _stem(r)
+        if not stem.endswith("-sut") or "peer" in stem:
+            continue
+        hosts = set(sut_hosts) or {r["own"]}
+        for f in r["findings"]:
+            if _sender(f["flow"]) not in hosts:
+                continue
+            for name, (codes, condition, severity) in DIVERGENCES.items():
+                if f["code"] not in codes or (condition and condition not in f["message"]):
+                    continue
+                if name in names:
+                    _mark(r, f, severity, "(declared divergence %s)" % name)
+                elif name in UNDECLARED_ERROR:
+                    _mark(r, f, ERROR, "(not declared: %s)" % name)
+        r["errors"] = sum(1 for f in r["findings"] if f["severity"] == ERROR)
+        r["warnings"] = sum(1 for f in r["findings"] if f["severity"] == WARN)
+
+
 def captures(target):
     if os.path.isdir(target):
         sub = os.path.join(target, "capture")
@@ -296,6 +356,8 @@ def main(argv=None):
                         "USRP links from rig/config/xlxd.usrp.in, peers outside the rig hosts are errors")
     parser.add_argument("--jitter-ms", type=float, help="warn above this jitter p95 (default: one frame period)")
     parser.add_argument("--strict", action="store_true", help="warnings fail too")
+    parser.add_argument("--divergences", help="comma list of declared sut divergences "
+                        "(default: $DVT_SUT_DIVERGENCES)")
     parser.add_argument("--per-code", type=int, default=3, help="findings printed per code (default 3)")
     try:
         args = parser.parse_args(argv)
@@ -317,6 +379,13 @@ def main(argv=None):
             print("dvcheck: %s: %s" % (path, exc), file=sys.stderr)
             return 2
     differential(results)
+    try:
+        names = declared() if args.divergences is None else divergences.parse(args.divergences)
+    except ValueError as exc:
+        print("dvcheck: %s" % exc, file=sys.stderr)
+        return 2
+    sut_hosts = {rig["hosts"][key] for key in SUT_HOSTS if key in rig["hosts"]} if rig else ()
+    apply_divergences(results, names, sut_hosts)
     for result in results:
         print("\n".join(summary_lines(result, args.per_code)))
     errors = sum(r["errors"] for r in results)

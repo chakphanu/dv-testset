@@ -4,7 +4,7 @@ NXDNU unlink, and NXDND streams (header, voice every 80 ms, trailer) with
 LICH parity, SACCH CRC-6 and structure cycle 3,2,1,0, FACCH1 CRC-12 and
 message type, dst == the reflector TG, and no relay back to the sender."""
 from ..proto import nxdn as N
-from .common import ERROR, REPLY_TIMEOUT, WARN, Live, Stream, client_of, finish_stream, flow_of, seq_finding
+from .common import ERROR, REPLY_TIMEOUT, WARN, Live, Stream, client_of, finish_stream, flow_of, seq_finding, voice_frames
 
 NAME = "nxdn"
 CONTROL_LICH = (0x81, 0x83)          # FACCH1 in both blocks (header/trailer)
@@ -89,6 +89,7 @@ class Checker:
             return
         structure = N.parse_sacch(pkt["payload"][1:5])["structure"]
         seq_finding(r, NAME, d, st, st.add(d, 3 - structure), "voice")
+        voice_frames(st, N.voice_frames(pkt["payload"]))
 
     def _new(self, key, d, pkt, header):
         st = Stream(NAME, key[0], "src %d to %d" % (pkt["src"], pkt["dst"]), 4, N.PACKET_GAP, d,

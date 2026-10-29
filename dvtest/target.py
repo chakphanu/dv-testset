@@ -28,11 +28,14 @@ allstar .40.
   DVT_REFLECTOR      reflector callsign (XLX999)
   DVT_IAX_SECRET     IAX2 secret of the AllStar node (rig: .local/rig.env)
   DVT_OUT            results directory (out)
+  DVT_SUT_DIVERGENCES  declared divergences of the sut, comma list (dvtest/divergences.py)
 """
 import ipaddress
 import os
 import tomllib
 from dataclasses import dataclass, field
+
+from . import divergences
 
 DEFAULT_SUBNET = "172.30.0.0/24"
 HOST_OFFSETS = {"xlxd_ref": 10, "xlxd_sut": 11, "xlxd_peer_sut": 12, "xlxd_peer_ref": 13,
@@ -70,6 +73,8 @@ class Target:
     out: str = "out"
     # keys set explicitly by env or TOML (rig host defaults are not)
     given: set = field(default_factory=set)
+    # declared divergences of the system under test (dvtest.divergences)
+    divergences: frozenset = frozenset()
 
     def is_given(self, key):
         return key in self.given
@@ -90,16 +95,20 @@ def load(env=None, path=None):
     $DVT_TARGET_FILE)."""
     env = os.environ if env is None else env
     values = {}
+    declared = ""
     path = path or env.get("DVT_TARGET_FILE")
     if path:
         for key, value in _read_toml(path).items():
             if key in KEYS:
                 values[key] = value
+            elif key == "sut_divergences":
+                declared = value
     for key in KEYS:
         value = env.get("DVT_" + key.upper())
         if value:
             values[key] = value
-    target = Target(given=set(values))
+    target = Target(given=set(values),
+                    divergences=frozenset(divergences.parse(env.get("DVT_SUT_DIVERGENCES") or declared)))
     for key, value in values.items():
         setattr(target, key, int(value) if key in ("ambed_port", "ambed_stream_cap") else str(value))
     for key, offset in HOST_OFFSETS.items():

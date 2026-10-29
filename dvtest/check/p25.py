@@ -3,7 +3,7 @@
 pairing, unlink, and calls of LDU1 0x62..0x6A / LDU2 0x6B..0x73 records
 (one per 20 ms, sizes from dvtest.proto.p25) closed by a 17 B terminator."""
 from ..proto import p25 as P
-from .common import ERROR, REPLY_TIMEOUT, WARN, Live, Stream, client_of, finish_stream, flow_of, seq_finding
+from .common import ERROR, REPLY_TIMEOUT, WARN, Live, Stream, client_of, finish_stream, flow_of, seq_finding, voice_frames
 
 NAME = "p25"
 SUPERFRAME = 2 * P.FRAMES_PER_LDU
@@ -80,6 +80,7 @@ class Checker:
             if index != 0:
                 r.warn(NAME, d, "late_entry", "call opens with record 0x%02x, not 0x62" % rec["type"])
         seq_finding(r, NAME, d, st, st.add(d, index), "record")
+        voice_frames(st, [rec["imbe"]])
         for field in ("src", "dst", "lcf", "algid"):
             if field in rec:
                 if st.fields.setdefault(field, rec[field]) != rec[field]:

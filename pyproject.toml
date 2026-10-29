@@ -29,4 +29,5 @@ markers = [
     "load: needs the docker rig with profile load (many modules at once)",
     "interlink: needs the docker rig with profile interlink",
     "speech: needs the fetched speech corpus (scripts/pre-fetch-speech.sh)",
+    "slow: long-running cases (minutes), e.g. tot_180s",
 ]

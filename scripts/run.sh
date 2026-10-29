@@ -368,8 +368,9 @@ collect() {
 }
 trap collect EXIT
 
-printf 'markers=%s profile=%s xlxd_ref=%s xlxd_sut=%s transcoder=%s\n' \
+printf 'markers=%s profile=%s xlxd_ref=%s xlxd_sut=%s transcoder=%s sut_divergences=%s\n' \
   "$markers" "$profile" "${XLXD_REF_IMAGE:-${XLXD_REF_DIR:-ref}}" "${XLXD_SUT_IMAGE:-${XLXD_SUT_DIR:-sut}}" "$TRANSCODER_IMAGE" \
+  "${DVT_SUT_DIVERGENCES:-}" \
   > "$out/run.txt"
 cat ".cache/xlxd/${XLXD_REF_DIR:-ref}.fetched" ".cache/xlxd/${XLXD_SUT_DIR:-sut}.fetched" >> "$out/run.txt" 2>/dev/null || true
 

@@ -86,6 +86,11 @@ class Checker:
                     r.warn(NAME, d, "open_invalid", "OPEN %s: %s" % (_ops(op), problem))
                 if caps:
                     r.warn(NAME, d, "open_outside_caps", "OPEN %s: %s" % (_ops(op), caps))
+                if op.size == 24 and d.sport == A.PORT and A.PCM not in (op.codec_in,) + op.outs:
+                    # a reflector (source port 10100): upstream xlxd opens
+                    # non-PCM streams with the legacy form
+                    r.warn(NAME, d, "ext_open_non_pcm", "extended OPEN %s without PCM from a reflector"
+                           " (upstream xlxd uses the legacy OPEN)" % _ops(op))
                 self.pending.setdefault(key, []).append((d, "open", (op, problem, caps)))
             elif len(p) == 9 and p.startswith(A.CLOSE_TAG):
                 r.count(NAME, d, "close")

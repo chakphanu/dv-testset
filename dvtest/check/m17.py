@@ -2,7 +2,7 @@
 """M17 in xlxd reflector-client mode (UDP 17000): CONN/ACKN/PING/... and
 54 B voice packets (frame number, EOT bit, LICH constant per stream)."""
 from ..proto import m17 as M
-from .common import ERROR, WARN, Live, Stream, finish_stream, flow_of, seq_finding
+from .common import ERROR, WARN, Live, Stream, finish_stream, flow_of, seq_finding, voice_frames
 
 NAME = "m17"
 # control packets: tag -> allowed sizes
@@ -68,6 +68,7 @@ class Checker:
             r.error(NAME, d, "lich_changed", "LICH of stream %04x differs from frame %d" % (
                 stream_id, st.first_frame))
         seq_finding(r, NAME, d, st, st.add(d, fn), "fn")
+        voice_frames(st, [p[36:44], p[44:52]])
         if eot:
             self.streams.terminate(key, d)
 

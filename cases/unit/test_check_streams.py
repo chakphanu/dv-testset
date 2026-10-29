@@ -258,8 +258,8 @@ def m17_relay_wire(m17_first=True, start=2, drop=()):
     w.send(T, 40003, R, m17.PORT, m17.conn_packet("N0TEST", "B"))
     w.send(T, 40001, R, dextra.PORT, dextra.link_packet("N0TEST", "B"), 0.01)
     if m17_first:
-        w.send(T, 40003, R, m17.PORT, m17.packet(0x4343, 0, "N0TEST", bytes(16)), 0.01)
-        w.send(T, 40003, R, m17.PORT, m17.packet(0x4343, 1, "N0TEST", bytes(16), eot=True), 0.04)
+        w.send(T, 40003, R, m17.PORT, m17.packet(0x4343, 0, "N0TEST", FRAME[:8] * 2), 0.01)
+        w.send(T, 40003, R, m17.PORT, m17.packet(0x4343, 1, "N0TEST", FRAME[:8] * 2, eot=True), 0.04)
     w.send(R, dextra.PORT, T, 40001, dextra.header(0x3333, "N0TEST", "B"), 0.01)
     for seq in range(start, 30):
         if seq not in drop:

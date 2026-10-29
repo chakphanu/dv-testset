@@ -2,7 +2,7 @@
 """D-STAR over DExtra (UDP 30001): link/keepalive packets and DSVT
 streams (header, voice frames 0..20, last frame with bit 0x40)."""
 from ..proto import dextra as D
-from .common import ERROR, WARN, Live, Stream, finish_stream, flow_of, seq_finding
+from .common import ERROR, WARN, Live, Stream, finish_stream, flow_of, seq_finding, voice_frames
 
 NAME = "dextra"
 # xlxd (cm17protocol.cpp) accepts M17 voice only for frame number > 0, so a
@@ -97,8 +97,8 @@ class Checker:
             r.warn(self.name, d, "seq_loss", "sequence jump, 2 frame(s) missing in %s"
                    " (upstream: M17 frame 0 dropped)" % st.name)
         seq_finding(r, self.name, d, st, st.add(d, seq))
-        if not last and any(p[15:24]):
-            st.notes["voice_nonzero"] += 1
+        if not last:
+            voice_frames(st, [p[15:24]])
         sync = p[24:27] == D.SYNC_DATA
         if seq == 0 and not sync and not last:
             st.notes["sync_missing"] += 1
