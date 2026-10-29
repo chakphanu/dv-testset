@@ -154,3 +154,35 @@ dvcheck report it as a warning with a note:
 - A 9-byte RPTCL is ignored by xlxd.
 - With the transcoder down, cross-mode frames are all zero and D-STAR frame 0 has no sync.
 - Legacy opens always ask for IMBE as the third output.
+
+## DV-Router profile (`DVT_SUT_PROFILE=dvrouter`)
+
+Behaviour cases judge the system under test against `dvtest/specs/dvrouter.py`
+(source: the DV-Router floor-control design). Under the default `xlxd`
+profile the same cases stay differential (system under test == reference).
+Interop rows stay differential for every profile.
+
+| # | Requirement | Case | Kind | Status |
+|---|---|---|---|---|
+| B1 | Two clients key up on one module: exactly one winner, no mixing | test_floor::test_first_talker_wins | behaviour | covered |
+| B2 | Late entry denied: a second header on a busy module is never relayed | test_floor::test_late_entry_denied | behaviour | covered |
+| B2p | `pending` knob: relayed live from close, transcoded, no stale replay | test_floor::test_late_entry_pending | behaviour | placeholder |
+| B3 | Silence timeout 1.6 s: synthesized terminator on every egress; USRP unkey after 100 ms; busy module suppresses a USRP over | test_xlxd_clients::test_stream_timeout_frees_module, test_floor::test_usrp_unkey_after_silence, test_floor::test_usrp_over_suppressed_when_busy | behaviour | covered |
+| B4 | TOT 180 s: revoke plus terminator | test_xlxd_clients::test_tot_180s | behaviour (slow) | covered |
+| B5 | Immediate revoke after unlink/disconnect | test_xlxd_clients::test_leave_mid_stream_tail[..] | behaviour | covered |
+| B6 | No zero-fill on single-codec egress | test_backend_loss::test_native_passthrough_while_down, ::test_usrp_pcm_not_fabricated | behaviour | covered |
+| B6x | XLX rev 3 egress keeps the frame with the slot zeroed | - | behaviour | planned |
+| B7 | Extended 24-byte OPEN for every stream when CAPS answers | test_xlxd_usrp_netns::test_no_usrp_* (specs.rule("ambed_open")), dvcheck | behaviour | covered (dvcheck rule planned) |
+| B8 | Admission: reject sid 0, one floor per client; same sid in two rooms allowed | test_floor::test_admission_sid_zero, ::test_admission_one_floor_per_client, ::test_admission_same_sid_two_rooms | behaviour | covered |
+| B8r | Remote-origin sid already open in another room is rejected | test_xlxd_interlink::test_admission_remote_sid_open_elsewhere | behaviour | planned |
+| B9 | No echo to the origin IP:port, USRP included | test_allstar::test_usrp_no_echo, test_xlxd_usrp_netns::test_extended_no_echo_to_usrp_peer | interop | covered |
+| B10 | Stream id preserved on egress (D-STAR, DMR, M17, XLX, DExtra) | test_floor::test_sid_preserved[..] | interop | covered |
+| B11 | Cross-family transit allowed; XLX/BM never re-forwarded to XLX/BM | test_xlxd_interlink::test_interlink_no_loop, dvcheck xlx.transit | interop | in progress |
+| B12 | Header CRC/hash not verified (tester zeros/spaces accepted) | dvtest/specs/dvrouter.py NOT_CHECKED | - | recorded |
+| B13 | No frame loss under load | test_load::test_no_load_loss_* | behaviour | covered |
+| B14 | Per-room isolation: killing one room's controller loses nothing elsewhere | test_floor::test_b14_placeholder | behaviour | placeholder |
+
+Measured on xlxd (reference and PR build alike): a late talker on a busy
+module is relayed after the first stream ends (late-entry promotion), a USRP
+unkey arrives 99-101 ms after the last voice, a same-sid stream in a second
+room is dropped, and xlxd keeps the D-STAR stream id but not the DMR or M17 one.
