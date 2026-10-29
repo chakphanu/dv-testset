@@ -43,7 +43,7 @@ from pathlib import Path
 import pytest
 
 from dvtest import clients
-from dvtest.audio import morse, score, signals, tandem
+from dvtest.audio import score, signals, tandem
 from dvtest.proto import ambed, iax2, nxdn
 
 pytestmark = [pytest.mark.rig, pytest.mark.nxdn]
@@ -52,7 +52,6 @@ FRAMES = 60                                 # multiple of 3 (DMR) and 4 (NXDN)
 NXDN_IDS = (1001, 1002)                     # N0CALL, N0TEST in rig/config/nxdn.csv
 CROSS = [("nxdn", "dstar"), ("nxdn", "m17"), ("dstar", "nxdn"), ("m17", "nxdn")]
 ALLSTAR_NODES = {"A": "1901", "B": "1902"}  # USRP bridge of xlxd-sut (profile allstar)
-WPM = 20
 MORSE_TRANSACTION = 0x4E580000             # 'NX'; tandem adds 0x100/0x200/0x300
 RESULTS = {}
 
@@ -281,10 +280,11 @@ def as_codec(kind, frames):
 
 @pytest.fixture(scope="module")
 def morse_id(nxdn_rig):
-    """(text, {kind: frames}) of one Morse ID, encoded by transcoder-ref."""
+    """(text, {kind: frames}) of one Morse ID at the tandem rate, encoded by
+    transcoder-ref."""
     rig = nxdn_rig["rig"]
     text = "N0TEST NXDN %04d" % random.SystemRandom().randrange(10000)
-    pcm = signals.frames(morse.encode(text, wpm=WPM))
+    pcm = tandem.encode(text)                   # tandem default rate (two codec hops)
     pcm += [bytes(320)] * (-len(pcm) % 12)
     out = ambed.transcode(rig.ambed_ref, ambed.PCM, [clients.CODEC[k] for k in clients.KINDS], pcm,
                           port=rig.ambed_port, transaction=MORSE_TRANSACTION)
@@ -296,7 +296,8 @@ def morse_id(nxdn_rig):
 @pytest.mark.parametrize("cell", CROSS, ids=["%s-%s" % c for c in CROSS])
 def test_morse_round_trip(nxdn_rig, morse_id, cell):
     """Morse keyed by the talker decodes exactly at the listener, on every
-    side whose transcoder passes the tandem probe of this conversion.
+    side whose transcoder passes the tandem probe of this conversion with
+    the same text (so the cell judges transport, not codec content).
     While no side passes, the result is informational (xfail naming the
     probe); it becomes a real assert once a transcoder is fixed."""
     src, dst = cell
@@ -304,7 +305,9 @@ def test_morse_round_trip(nxdn_rig, morse_id, cell):
     text, frames = morse_id
     rig = nxdn_rig["rig"]
     decode = tandem.decoder(rig, transaction=MORSE_TRANSACTION)
-    probed = tandem.probe(rig, codec_of(src), codec_of(dst), decode, transaction=MORSE_TRANSACTION)
+    # probe with the case text: the conversion must carry this content
+    probed = tandem.probe(rig, codec_of(src), codec_of(dst), decode, text=text,
+                          transaction=MORSE_TRANSACTION)
     got = both(nxdn_rig, src, dst, frames[src])
     verdict, rec = tandem.judge(text, {n: decode(codec_of(dst), as_codec(dst, r["frames"]))
                                        for n, r in got.items()}, probed)
