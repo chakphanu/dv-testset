@@ -48,6 +48,10 @@ SPEC = {
     "test_pending_entrant_starts_with_header": {"late_entry": "deny"},
     # B17 M17 frame number 0 payload is relayed
     "test_m17_frame0_relayed": {"fn0": "relay"},
+    # D5 restart: all state in memory; no stale stream after a restart (voice
+    # under the old sid is dropped until a new header after the relink),
+    # and clients that did not relink get nothing
+    "test_restart_no_stale_stream": {"stale": "none", "old_links": "none"},
     # B13 no frame loss under load (C9 path)
     "test_no_load_loss_passthrough": {"loss": 0},
     "test_no_load_loss_cross": {"loss": 0},

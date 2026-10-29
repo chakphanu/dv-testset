@@ -177,10 +177,18 @@ def test_restart_old_links_same_as_reference(results):
 
 
 @pytest.mark.parametrize("setup", SETUPS)
-def test_restart_no_stale_stream(results, setup):
+def test_restart_no_stale_stream(results, setup, behaviour_spec):
+    """Steps 5 and 6: after the restart and the relink, voice under the old
+    stream id (no new header) reaches nobody, and the quiet window stays
+    quiet; asserted on both reflectors. Profile spec old_links "none"
+    (dvrouter: all state is in memory, clients must relink) also requires
+    that the sut's clients that did not relink get nothing (step 4)."""
     r = results[setup]
     stale = {k: r[k] for k in ("stale_dstar", "stale_dmr", "quiet_dstar", "quiet_dmr")}
     assert not any(stale.values()), "%s: frames from before the restart: %s" % (setup, stale)
+    if setup == "sut" and (behaviour_spec or {}).get("old_links") == "none":
+        old = {k: r[k] for k in ("old_dstar", "old_dmr")}
+        assert not any(old.values()), "sut: clients that did not relink still got frames: %s" % old
 
 
 @pytest.mark.parametrize("setup", SETUPS)
