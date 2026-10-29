@@ -7,6 +7,8 @@
 #   env DVT_TRANSCODER   transcoder address (required)
 #   env DVT_USRP         "on" renders /xlxd/xlxd.usrp from the template
 #   env DVT_NET          /24 prefix substituted for @NET@ in the template
+#   env DVT_START_DELAY  seconds to wait before xlxd starts (sniffers attach
+#                        to this network namespace first; default 0)
 set -eu
 
 : "${DVT_IP:?DVT_IP is required}"
@@ -21,4 +23,5 @@ else
   : > /xlxd/xlxd.usrp
 fi
 
+sleep "${DVT_START_DELAY:-0}"
 exec /xlxd/xlxd "${DVT_CALLSIGN:-XLX999}" "$DVT_IP" "$DVT_TRANSCODER"

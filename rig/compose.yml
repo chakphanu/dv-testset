@@ -9,12 +9,14 @@
 # Profiles
 #   core     xlxd-ref, xlxd-sut, transcoder-ref, transcoder-sut, tester
 #   allstar  AllStarLink 3 node (use together with core)
+#   capture  sniffers on xlxd-ref, xlxd-sut, transcoder-sut (capture-allstar: on allstar)
 #
 # Variables set at run time (not pins)
 #   DVT_SUT_USRP             on = xlxd-sut loads rig/config/xlxd.usrp.in (default off)
 #   DVT_RUN_ID               output directory name under out/ (default manual)
 #   DVT_UID, DVT_GID         tester user, owner of out/ files (default 1000)
 #   DVT_AMBED_ADDR           transcoder for the wire cases (default transcoder-sut)
+#   DVT_START_DELAY          seconds xlxd waits before starting (run.sh --capture: 3)
 #
 # The transcoder services pass the address variables of the reference image
 # (VOCODER_AMBED_BIND / VOCODER_AMBED_PEER, run-ambed.sh style). An image with
@@ -29,6 +31,30 @@ x-xlxd: &xlxd
   profiles: [core]
   init: true
   restart: "no"
+
+# One sniffer per watched service: shares its network namespace and writes
+# out/<run>/capture/<service>.pcapng (dumpcap stops at CAPTURE_FILESIZE_KB).
+x-capture: &capture
+  profiles: [capture]
+  init: true
+  image: dvt-capture:local
+  build:
+    context: .
+    dockerfile: Dockerfile.capture
+    args:
+      CAPTURE_BASE_IMAGE: ${CAPTURE_BASE_IMAGE:-error-set-capture-base-image-see-env-example}
+      TSHARK_VERSION: ${TSHARK_VERSION:-}
+  user: "${DVT_UID:-1000}:${DVT_GID:-1000}"
+  cap_drop: [ALL]
+  cap_add: [NET_RAW, NET_ADMIN]
+  volumes:
+    - ../out:/out
+  entrypoint:
+    - /bin/sh
+    - -c
+    - >-
+      exec dumpcap -q -i eth0 -a filesize:${CAPTURE_FILESIZE_KB:-65536}
+      -w "/out/${DVT_RUN_ID:-manual}/capture/$$0.pcapng"
 
 services:
   xlxd-ref:
@@ -45,6 +71,7 @@ services:
       DVT_IP: ${DVT_NET:-172.30.0}.10
       DVT_TRANSCODER: ${DVT_NET:-172.30.0}.20
       DVT_USRP: "off"
+      DVT_START_DELAY: ${DVT_START_DELAY:-0}
     networks:
       rig: {ipv4_address: "${DVT_NET:-172.30.0}.10"}
 
@@ -61,6 +88,7 @@ services:
       DVT_IP: ${DVT_NET:-172.30.0}.11
       DVT_TRANSCODER: ${DVT_NET:-172.30.0}.21
       DVT_USRP: ${DVT_SUT_USRP:-off}
+      DVT_START_DELAY: ${DVT_START_DELAY:-0}
       DVT_NET: ${DVT_NET:-172.30.0}
     networks:
       rig: {ipv4_address: "${DVT_NET:-172.30.0}.11"}
@@ -107,6 +135,8 @@ services:
       DVT_ALLSTAR: ${DVT_NET:-172.30.0}.40
       # wire cases: transcoder under test when run inside the rig
       DVT_AMBED_ADDR: ${DVT_AMBED_ADDR:-${DVT_NET:-172.30.0}.21}
+      # on when xlxd-sut has USRP endpoints (A/B -> allstar, C -> tester)
+      DVT_SUT_USRP: ${DVT_SUT_USRP:-off}
       DVT_OUT: /dvt/out/${DVT_RUN_ID:-manual}
       HOME: /tmp
     env_file:
@@ -135,6 +165,28 @@ services:
         required: false
     networks:
       rig: {ipv4_address: "${DVT_NET:-172.30.0}.40"}
+
+  # ---- sniffers (profile capture; capture-allstar also needs allstar) ----
+  capture-xlxd-ref:
+    <<: *capture
+    network_mode: "service:xlxd-ref"
+    command: ["xlxd-ref"]
+
+  capture-xlxd-sut:
+    <<: *capture
+    network_mode: "service:xlxd-sut"
+    command: ["xlxd-sut"]
+
+  capture-transcoder-sut:
+    <<: *capture
+    network_mode: "service:transcoder-sut"
+    command: ["transcoder-sut"]
+
+  capture-allstar:
+    <<: *capture
+    profiles: [capture-allstar]
+    network_mode: "service:allstar"
+    command: ["allstar"]
 
 networks:
   rig:

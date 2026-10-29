@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# Packet capture and decode: dumpcap for the rig sniffers (profile capture)
+# and tshark for scripts/tshark.sh. dumpcap gets cap_net_raw/cap_net_admin as
+# file capabilities, so the sniffers run as the host user; the compose service
+# grants only those two capabilities.
+# Build args from .env.example: CAPTURE_BASE_IMAGE, TSHARK_VERSION (exact
+# Debian version of tshark and wireshark-common; empty = latest).
+ARG CAPTURE_BASE_IMAGE
+FROM ${CAPTURE_BASE_IMAGE}
+ARG TSHARK_VERSION
+RUN apt-get update \
+    && v="${TSHARK_VERSION:+=$TSHARK_VERSION}" \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+         "tshark$v" "wireshark-common$v" libcap2-bin \
+    && rm -rf /var/lib/apt/lists/* \
+    && setcap cap_net_raw,cap_net_admin+eip /usr/bin/dumpcap \
+    && chmod 755 /usr/bin/dumpcap \
+    && tshark --version | head -1
+ENV HOME=/tmp
+WORKDIR /dvt
