@@ -28,4 +28,5 @@ markers = [
     "p25: needs the docker rig with profile p25",
     "load: needs the docker rig with profile load (many modules at once)",
     "interlink: needs the docker rig with profile interlink",
+    "speech: needs the fetched speech corpus (scripts/pre-fetch-speech.sh)",
 ]
