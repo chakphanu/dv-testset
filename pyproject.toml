@@ -26,4 +26,6 @@ markers = [
     "allstar: needs the docker rig with profile allstar",
     "nxdn: needs the docker rig with profile nxdn",
     "p25: needs the docker rig with profile p25",
+    "load: needs the docker rig with profile load (many modules at once)",
+    "interlink: needs the docker rig with profile interlink",
 ]
