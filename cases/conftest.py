@@ -265,12 +265,71 @@ BEHAVIOUR = {
 SYSTEM_MARKERS = {"rig", "netns", "allstar", "nxdn", "p25", "load", "interlink"}
 
 
+# Rig cases whose assertions need cross-mode audio through the system
+# under test's transcoding ("file::function": True for every param, or
+# the set of param ids that are cross-mode), so a sut without transcoding
+# can run -m "rig and not crossmode".
+CROSSMODE = {
+    "test_xlxd_matrix.py::test_cross_sut_equals_ref": True,
+    "test_xlxd_clients.py::test_module_change_follows_talker": True,
+    "test_xlxd_clients.py::test_stream_timeout_frees_module": True,
+    "test_xlxd_clients.py::test_late_entry_is_native_only": True,
+    "test_xlxd_clients.py::test_leave_mid_stream_tail": {"dmr"},
+    "test_floor.py::test_first_talker_wins": True,
+    "test_floor.py::test_usrp_unkey_after_silence": True,
+    "test_floor.py::test_admission_one_floor_per_client": True,
+    "test_floor.py::test_admission_same_sid_two_rooms": True,
+    "test_floor.py::test_sid_cross_mapping": True,
+    "test_floor.py::test_dmr_rptcl_closes_session": True,
+    "test_floor.py::test_no_voice_before_header": True,
+    "test_floor.py::test_no_self_echo_other_sid": True,
+    "test_backend_loss.py::test_native_passthrough_while_down": True,
+    "test_backend_loss.py::test_usrp_pcm_not_fabricated": True,
+    "test_backend_loss.py::test_cross_path_recovers": True,
+    "test_allstar.py::test_iax_to_all_digital_listeners": True,
+    "test_allstar.py::test_digital_to_iax": True,
+    "test_allstar.py::test_rooms_no_crosstalk": True,
+    "test_allstar.py::test_usrp_no_echo": True,
+    "test_allstar.py::test_node_crash_releases_module": True,
+    "test_morse_codecs.py::test_morse_dstar_to_iax": True,
+    "test_morse_codecs.py::test_morse_iax_to_m17": True,
+    "test_nxdn.py::test_cross_sut_equals_ref": True,
+    "test_nxdn.py::test_morse_round_trip": True,
+    "test_nxdn.py::test_nxdn_to_allstar": True,
+    "test_nxdn.py::test_allstar_to_nxdn": True,
+    "test_p25.py::test_p25_to_digital": True,
+    "test_p25.py::test_digital_to_p25": True,
+    "test_p25.py::test_morse_p25_to_m17": True,
+    "test_p25.py::test_morse_m17_to_p25": True,
+    "test_p25.py::test_p25_to_allstar": True,
+    "test_p25.py::test_allstar_to_p25": True,
+    "test_clients2.py::test_cross_sut_equals_ref": True,
+    "test_xlxd_interlink.py::test_interlink_dmr_sut_equals_ref": {"forward"},   # reverse: XLX998 has none
+    "test_xlxd_restart.py::test_restart_module_works_after_relink": True,
+    "test_xlxd_restart.py::test_restart_dmr_sut_equals_ref": True,
+    "test_xlxd_transcoder_lifecycle.py::test_rig_transcoder_lost_and_back_usrp_resumes": True,
+    "test_load.py::test_no_load_loss_cross": True,
+    "test_load.py::test_loss_not_worse_than_ref": {"cross"},
+    "test_load.py::test_loss_not_systematically_worse": {"cross"},
+}
+
+
+def _crossmode(key, item):
+    rule = CROSSMODE.get(key)
+    if rule is True:
+        return True
+    callspec = getattr(item, "callspec", None)
+    return bool(rule and callspec and set(callspec.id.split("-")) & rule)
+
+
 def pytest_collection_modifyitems(items):
     for item in items:
         if not SYSTEM_MARKERS & {m.name for m in item.iter_markers()}:
             continue
         key = "%s::%s" % (Path(str(item.fspath)).name, getattr(item, "originalname", item.name))
         item.add_marker(pytest.mark.behaviour if key in BEHAVIOUR else pytest.mark.interop)
+        if _crossmode(key, item):
+            item.add_marker(pytest.mark.crossmode)
 
 
 @pytest.fixture

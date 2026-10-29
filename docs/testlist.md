@@ -9,6 +9,11 @@ the case is parametrized.
 Levels: `unit` offline, `wire` against a transcoder, `netns` xlxd in user
 namespaces, `rig` docker rig, `allstar` / `nxdn` / `p25` rig profiles.
 Every `--capture` run is also checked passively by `dvcheck` (section H).
+Rig cases are also marked `interop` or `behaviour` (DV-Router profile below)
+and, when their assertions need cross-mode audio through the system under
+test's transcoding, `crossmode` (only the cross-mode params of a
+parametrized case); a system under test without transcoding runs
+`-m "rig and not crossmode"`. The table lives in `cases/conftest.py`.
 
 ## A. Transcoder link conformance (`wire`)
 

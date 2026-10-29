@@ -34,6 +34,13 @@ def expectation(name, case):
     return None if module is None else getattr(module, "SPEC", {}).get(case)
 
 
+def m17_fn0_relayed(target):
+    """Does the target's sut relay M17 packet 0 (frame number 0)? One
+    source for B17 and the M17 passthrough cells: the profile's
+    test_m17_frame0_relayed entry; False under the xlxd profile."""
+    return (rule(target, "test_m17_frame0_relayed") or {}).get("fn0") == "relay"
+
+
 def rule(target, case):
     """Expectation of the target's profile for a behaviour case: None under
     the xlxd profile (differential against xlxd-ref), else the spec entry

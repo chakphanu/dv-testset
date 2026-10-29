@@ -12,6 +12,20 @@ def test_wire_frames():
     assert clients.wire_frames("m17", c2) == c2 + [c2[4]] * 3
 
 
+def test_wire_frames_m17_fn0_by_profile():
+    from dvtest import specs, target
+    c2 = signals.prng_frames("m17", 6, seed=4)
+    xlxd = target.load(env={})
+    dvrouter = target.load(env={"DVT_SUT_PROFILE": "dvrouter"})
+    assert not specs.m17_fn0_relayed(xlxd) and specs.m17_fn0_relayed(dvrouter)
+    plain = clients.wire_frames("m17", c2, m17_fn0=specs.m17_fn0_relayed(xlxd))
+    with_fn0 = clients.wire_frames("m17", c2, m17_fn0=specs.m17_fn0_relayed(dvrouter))
+    assert plain == c2 + [c2[4], c2[5]]
+    assert with_fn0 == [c2[0], c2[0]] + plain
+    # other kinds ignore the flag
+    assert clients.wire_frames("dstar", c2, m17_fn0=True) == c2
+
+
 def test_fresh_stream_ids():
     ids = {clients.fresh_stream_id("dstar") for _ in range(50)}
     assert len(ids) > 40 and all(0 < i < 1 << 16 for i in ids)

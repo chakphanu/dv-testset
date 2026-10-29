@@ -55,16 +55,17 @@ def talk(client, kind, frames, reflector="XLX999", tail=2.0):
     return sid
 
 
-def wire_frames(kind, frames):
+def wire_frames(kind, frames, m17_fn0=False):
     """Frames a same-kind listener receives through xlxd for a talk of
-    frames: M17 packet 0 opens the stream and is not forwarded, the EOT
+    frames: M17 packet 0 opens the stream and is not forwarded (xlxd; a
+    reflector that relays it, m17_fn0=True, delivers it too), the EOT
     packet repeats the last pair; DMR pads to whole bursts of three. YSF is
     not byte exact (xlxd steps the b2 gain bits) and has no entry here."""
     if kind == "ysf":
         raise ValueError("ysf frames are not byte exact through xlxd")
     if kind == "m17":
         out = []
-        for packet in m17.voice_packets(frames, 1, CALLSIGNS[0])[1:]:
+        for packet in m17.voice_packets(frames, 1, CALLSIGNS[0])[0 if m17_fn0 else 1:]:
             out.extend(m17.parse(packet)["frames"])
         return out
     if kind == "dmr":

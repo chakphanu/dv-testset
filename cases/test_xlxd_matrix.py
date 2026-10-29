@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pytest
 
-from dvtest import clients
+from dvtest import clients, specs
 from dvtest.audio import signals
 from dvtest.proto import ambed
 
@@ -106,7 +106,9 @@ def matrix(rig, modules, encoded):
                 else:
                     row[name] = {"received": len(value), "sha256": sha(value)}
                     if src == dst:
-                        row[name]["exact"] = value == clients.wire_frames(src, frames)
+                        # the sut side follows its profile (M17 frame 0, B17)
+                        fn0 = name == "sut" and specs.m17_fn0_relayed(rig)
+                        row[name]["exact"] = value == clients.wire_frames(src, frames, m17_fn0=fn0)
             rows.append(row)
     out = Path(rig.out)
     out.mkdir(parents=True, exist_ok=True)

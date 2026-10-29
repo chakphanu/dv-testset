@@ -32,4 +32,5 @@ markers = [
     "slow: long-running cases (minutes), e.g. tot_180s",
     "interop: protocol interop, always judged against xlxd-ref",
     "behaviour: reflector behaviour, follows DVT_SUT_PROFILE (dvtest/specs)",
+    "crossmode: needs cross-mode audio through the system under test's transcoding",
 ]
