@@ -237,22 +237,30 @@ services:
   capture-xlxd-ref:
     <<: *capture
     network_mode: "service:xlxd-ref"
+    depends_on:
+      xlxd-ref: {condition: service_started, restart: false}
     command: ["xlxd-ref"]
 
   capture-xlxd-sut:
     <<: *capture
     network_mode: "service:xlxd-sut"
+    depends_on:
+      xlxd-sut: {condition: service_started, restart: false}
     command: ["xlxd-sut"]
 
   capture-transcoder-sut:
     <<: *capture
     network_mode: "service:transcoder-sut"
+    depends_on:
+      transcoder-sut: {condition: service_started, restart: false}
     command: ["transcoder-sut"]
 
   capture-allstar:
     <<: *capture
     profiles: [capture-allstar]
     network_mode: "service:allstar"
+    depends_on:
+      allstar: {condition: service_started, restart: false}
     command: ["allstar"]
 
   # ---- NXDNReflector (profile nxdn) ----
@@ -282,12 +290,16 @@ services:
     <<: *capture
     profiles: [capture-nxdn]
     network_mode: "service:nxdn-ref"
+    depends_on:
+      nxdn-ref: {condition: service_started, restart: false}
     command: ["nxdn-ref"]
 
   capture-nxdn-sut:
     <<: *capture
     profiles: [capture-nxdn]
     network_mode: "service:nxdn-sut"
+    depends_on:
+      nxdn-sut: {condition: service_started, restart: false}
     command: ["nxdn-sut"]
 
   # ---- P25Reflector (profile p25) ----
@@ -315,12 +327,16 @@ services:
     <<: *capture
     profiles: [capture-p25]
     network_mode: "service:p25-ref"
+    depends_on:
+      p25-ref: {condition: service_started, restart: false}
     command: ["p25-ref"]
 
   capture-p25-sut:
     <<: *capture
     profiles: [capture-p25]
     network_mode: "service:p25-sut"
+    depends_on:
+      p25-sut: {condition: service_started, restart: false}
     command: ["p25-sut"]
 
   # ---- XLX interlink peers (profile interlink) ----
@@ -368,6 +384,8 @@ services:
     <<: *capture
     profiles: [capture-interlink]
     network_mode: "service:xlxd-peer-sut"
+    depends_on:
+      xlxd-peer-sut: {condition: service_started, restart: false}
     command: ["xlxd-peer-sut"]
 
   # ---- load (profile load): one client node per module ----

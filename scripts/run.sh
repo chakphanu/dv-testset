@@ -301,7 +301,7 @@ for row in sys.stdin:
 control="$out/control"
 
 watch_control() {
-  local req id line action svc extra rc
+  local req id line action svc extra rc sniffer
   while :; do
     for req in "$control"/*.req; do
       [ -e "$req" ] || continue
@@ -314,6 +314,13 @@ watch_control() {
       if [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] && [ -z "$extra" ]; then
         case "$svc" in transcoder-ref|transcoder-sut|allstar|xlxd-ref|xlxd-sut) ;; *) action="" ;; esac
         rc=0
+        sniffer=""
+        [[ " ${capture_svcs[*]} " != *" capture-$svc "* ]] || sniffer="capture-$svc"
+        # a sniffer shares the namespace of its service: close its file before
+        # the service goes away (restart included)
+        if [ -n "$sniffer" ] && [ "$action" != start ]; then
+          "${compose[@]}" stop "$sniffer" >> "$control/control.log" 2>&1 || true
+        fi
         case "$action" in
           stop)  "${compose[@]}" stop "$svc" >> "$control/control.log" 2>&1 || rc=$? ;;
           start) "${compose[@]}" start "$svc" >> "$control/control.log" 2>&1 || rc=$? ;;
@@ -321,10 +328,9 @@ watch_control() {
           restart) "${compose[@]}" restart "$svc" >> "$control/control.log" 2>&1 || rc=$? ;;
           *)     rc=refused ;;
         esac
-        # a sniffer shares the namespace of its service and dies with it:
-        # restart it, it writes <service>.<n>.pcapng
-        if { [ "$action" = start ] || [ "$action" = restart ]; } && [ "$rc" = 0 ] && [[ " ${capture_svcs[*]} " == *" capture-$svc "* ]]; then
-          "${compose[@]}" up -d --no-deps "capture-$svc" >> "$control/control.log" 2>&1 || true
+        # back up: a new sniffer in the new namespace writes <service>.<n>.pcapng
+        if [ -n "$sniffer" ] && { [ "$action" = start ] || [ "$action" = restart ]; } && [ "$rc" = 0 ]; then
+          "${compose[@]}" up -d --no-deps --force-recreate "$sniffer" >> "$control/control.log" 2>&1 || true
         fi
       fi
       printf '%s %s\n' "$(date -u +%FT%T.%3NZ)" "$line -> $rc" >> "$control/control.log"
