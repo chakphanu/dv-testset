@@ -20,7 +20,7 @@ from datetime import datetime
 
 from .. import pcap
 from ..target import DEFAULT_SUBNET, HOST_OFFSETS
-from . import ambed, dextra, dmr, iax2, m17, nxdn, p25, usrp, xlx
+from . import ambed, dcs, dextra, dmr, dplus, iax2, m17, nxdn, p25, usrp, xlx, ysf
 from .common import ERROR, WARN, Report, flow_of
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -135,9 +135,11 @@ def check_file(path, rig=None, jitter_ms=None, windows=()):
     rig_hosts = set(rig["hosts"].values()) if rig else None
     m17_checker = m17.Checker(report)
     checkers = [ambed.Checker(report), dextra.Checker(report, m17_checker), dmr.Checker(report),
-                m17_checker, iax2.Checker(report), nxdn.Checker(report), p25.Checker(report), xlx.Checker(report),
+                m17_checker, iax2.Checker(report), nxdn.Checker(report), p25.Checker(report), xlx.Checker(report, m17_checker),
+                dplus.Checker(report, m17_checker), dcs.Checker(report, m17_checker), ysf.Checker(report),
                 usrp.Checker(report, rig["usrp"] if rig else ())]
-    names = [ambed.NAME, dextra.NAME, dmr.NAME, m17.NAME, iax2.NAME, nxdn.NAME, p25.NAME, xlx.NAME, usrp.NAME]
+    names = [ambed.NAME, dextra.NAME, dmr.NAME, m17.NAME, iax2.NAME, nxdn.NAME, p25.NAME, xlx.NAME, dplus.NAME, dcs.NAME,
+             ysf.NAME, usrp.NAME]
     foreign = multicast = 0
     other = Counter()
     other_flows = {}

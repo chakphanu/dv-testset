@@ -12,28 +12,33 @@ M17_LEAD = 1.0
 
 
 def kind_of(p):
-    """Packet kind name, or None when it is no DExtra packet."""
+    """(kind, DSVT bytes) of a DExtra packet; the DSVT bytes are p for a
+    header or voice packet, None otherwise; (None, None) when it is no
+    DExtra packet. Other D-STAR family checkers pass their own kind_of
+    that maps their header/voice packets onto this DSVT layout."""
     if len(p) == D.HEADER_SIZE and p.startswith(b"DSVT") and p[4] == 0x10:
-        return "header"
+        return "header", p
     if len(p) == D.VOICE_SIZE and p.startswith(b"DSVT") and p[4] == 0x20:
-        return "voice"
+        return "voice", p
     if len(p) == 9 and p[8] == 0:
-        return "keepalive"
+        return "keepalive", None
     if len(p) == 11 and p[10] == 0:
-        return "unlink" if p[9:10] == b" " else "link"
+        return ("unlink" if p[9:10] == b" " else "link"), None
     if len(p) == 14 and p[10:14] in (b"ACK\x00", b"NAK\x00"):
-        return p[10:13].decode().lower()
-    return None
+        return p[10:13].decode().lower(), None
+    return None, None
 
 
 class Checker:
-    def __init__(self, report, m17=None, name=NAME, port=D.PORT, kinds=None):
+    def __init__(self, report, m17=None, name=NAME, port=D.PORT, kinds=kind_of, implicit_header=False):
         """m17: the dvtest.check.m17 Checker of the same capture (its
-        fn 0 times mark M17-sourced streams). name/port/kinds let the XLX
-        interlink checker (dvtest.check.xlx) reuse the DSVT stream rules."""
+        fn 0 times mark M17-sourced streams). name/port/kinds let the XLX,
+        DPlus and DCS checkers reuse the DSVT stream rules; implicit_header:
+        every voice packet carries the header (DCS), none is sent alone."""
         self.report = report
         self.m17 = m17
-        self.name, self.port, self.kind_of = name, port, kinds or kind_of
+        self.name, self.port, self.kind_of = name, port, kinds
+        self.implicit_header = implicit_header
         self.streams = Live(self._ended)
         self.linked = set()       # client (ip, port) that sent a link
 
@@ -41,13 +46,13 @@ class Checker:
         return self.port in (d.sport, d.dport)
 
     def feed(self, d):
-        r, p = self.report, d.payload
+        r = self.report
         self.streams.expire(d.ts)
-        kind = self.kind_of(p)
+        kind, p = self.kind_of(d.payload)
         r.count(self.name, d, kind or "unparseable")
         if kind is None:
-            what = "DSVT" if p.startswith(b"DSVT") else "packet"
-            r.error(self.name, d, "unparseable", "%d B %s is no link/keepalive/header/voice" % (len(p), what))
+            r.error(self.name, d, "unparseable", "%d B datagram is no link/keepalive/header/voice"
+                    % len(d.payload))
             return
         client = (d.src, d.sport) if d.dport == self.port else (d.dst, d.dport)
         if kind == "link":
@@ -80,8 +85,9 @@ class Checker:
                 r.error(self.name, d, "after_last", "voice for stream %04x after its last frame (frame %d)" % (
                     stream_id, old.last_frame))
                 return
-            st = self._new(key, d, stream_id, False)
-            r.warn(self.name, d, "no_header", "voice for stream %04x without a header" % stream_id)
+            st = self._new(key, d, stream_id, self.implicit_header)
+            if not self.implicit_header:
+                r.warn(self.name, d, "no_header", "voice for stream %04x without a header" % stream_id)
         if p[14] & 0x80 or seq > 20:
             r.error(self.name, d, "bad_counter", "frame counter byte %02x" % p[14])
             return
