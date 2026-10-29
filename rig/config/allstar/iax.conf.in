@@ -1,0 +1,23 @@
+; SPDX-License-Identifier: MIT
+; @NET@ = rig /24 prefix; @IAX_SECRET@ comes from .local/rig.env at start.
+[general]
+bindaddr = 0.0.0.0
+bindport = 4569
+disallow = all
+allow = slin
+jitterbuffer = no
+requirecalltoken = no
+delayreject = yes
+
+[dvt]
+type = user
+context = dvt-iax
+auth = md5
+secret = @IAX_SECRET@
+deny = 0.0.0.0/0.0.0.0
+permit = @NET@.0/255.255.255.0
+permit = 127.0.0.1/255.255.255.255
+disallow = all
+allow = slin
+requirecalltoken = no
+transfer = no

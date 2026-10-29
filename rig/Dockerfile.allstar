@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MIT
+# AllStarLink 3 node (app_rpt + chan_usrp) without DAHDI: app_rpt after 3.8
+# times itself without the dahdi kernel module. Only asterisk and its modules
+# are installed (not the asl3 meta package, which pulls dahdi-dkms).
+# Build args from .env.example: ALLSTAR_BASE_IMAGE, ASL_REPO_DEB_URL,
+# ASL_REPO_DEB_SHA256 (checked before install), ASL3_ASTERISK_VERSION
+# (exact package version; empty = latest).
+ARG ALLSTAR_BASE_IMAGE
+FROM ${ALLSTAR_BASE_IMAGE}
+ARG ASL_REPO_DEB_URL
+ARG ASL_REPO_DEB_SHA256
+ARG ASL3_ASTERISK_VERSION
+RUN test -n "$ASL_REPO_DEB_URL" && test -n "$ASL_REPO_DEB_SHA256" \
+      || { echo "ASL_REPO_DEB_URL / ASL_REPO_DEB_SHA256 build args missing (see .env.example)" >&2; exit 1; } \
+    && apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && curl -fsSL -o /tmp/asl-apt-repos.deb "$ASL_REPO_DEB_URL" \
+    && echo "$ASL_REPO_DEB_SHA256  /tmp/asl-apt-repos.deb" | sha256sum -c - \
+    && dpkg -i /tmp/asl-apt-repos.deb \
+    && rm -f /tmp/asl-apt-repos.deb \
+    && apt-get update \
+    && v="${ASL3_ASTERISK_VERSION:+=$ASL3_ASTERISK_VERSION}" \
+    && apt-get install -y --no-install-recommends \
+         "asl3-asterisk$v" "asl3-asterisk-config$v" "asl3-asterisk-modules$v" iproute2 \
+    && rm -rf /var/lib/apt/lists/* \
+    && dpkg-query -W 'asl3-asterisk*' > /etc/asterisk/dvt-versions.txt
+COPY config/allstar/ /etc/asterisk/dvt/
+COPY allstar-entry.sh /usr/local/sbin/dvt-allstar-entry
+RUN chmod 755 /usr/local/sbin/dvt-allstar-entry
+ENTRYPOINT ["/usr/local/sbin/dvt-allstar-entry"]

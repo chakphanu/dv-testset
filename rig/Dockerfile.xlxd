@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: MIT
+# xlxd built from fetched source (scripts/pre-fetch-xlxd.sh). The named build
+# context "src" is .cache/xlxd/<name>; compose sets it per service.
+# Test-only build changes in src/main.h, nothing else:
+#   - RUN_AS_DAEMON off: xlxd stays in the foreground, log on stdout
+#   - DMR/YSF/NXDN id databases from local files, never from the network
+# XLXD_BASE_IMAGE comes from .env.example (compose build arg).
+ARG XLXD_BASE_IMAGE
+FROM ${XLXD_BASE_IMAGE} AS build
+RUN apt-get update && apt-get install -y --no-install-recommends g++ make libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=src src/ /src/
+RUN sed -i \
+      -e 's|^#define RUN_AS_DAEMON|// #define RUN_AS_DAEMON|' \
+      -e 's|^\(#define [A-Z]*_USE_RLX_SERVER[[:space:]]*\)1|\10|' \
+      /src/main.h \
+    && ! grep -qE '^#define (RUN_AS_DAEMON|[A-Z]+_USE_RLX_SERVER[[:space:]]+1)' /src/main.h \
+    && rm -f /src/xlxd /src/*.o \
+    && make -C /src -j"$(nproc)"
+
+FROM ${XLXD_BASE_IMAGE}
+COPY --from=build /src/xlxd /xlxd/xlxd
+COPY config/dmrid.dat /xlxd/dmrid.dat
+COPY config/xlxd.usrp.in /xlxd/xlxd.usrp.in
+COPY xlxd-entry.sh /xlxd/entry.sh
+# Empty lists: everybody authorised, no interlink, default terminal options
+RUN touch /xlxd/ysfnode.dat /xlxd/nxdn.csv /xlxd/xlxd.whitelist \
+      /xlxd/xlxd.blacklist /xlxd/xlxd.interlink /xlxd/xlxd.terminal \
+    && chmod 755 /xlxd/entry.sh
+ENTRYPOINT ["/xlxd/entry.sh"]

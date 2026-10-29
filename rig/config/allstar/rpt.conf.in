@@ -1,0 +1,42 @@
+; SPDX-License-Identifier: MIT
+; Private app_rpt nodes for the dv-testset rig (no registration, no DNS
+; lookups). @NET@ is the rig /24 prefix, xlxd-sut is @NET@.11.
+; rxchannel = USRP/<xlxd_ip>:<xlxd_usrp_port>:<asterisk_usrp_port>
+
+[general]
+node_lookup_method = file
+
+[nodes]
+1901 = radio@127.0.0.1/1901,NONE
+1902 = radio@127.0.0.1/1902,NONE
+
+[dvt-node](!)
+duplex = 0
+hangtime = 0
+althangtime = 0
+totime = 180000
+context = dvt-radio
+telemdefault = 0
+holdofftelem = 1
+idrecording =
+linktolink = no
+functions = functions
+link_functions = functions
+phone_functions = functions
+telemetry = telemetry
+morse = morse
+wait_times = wait-times
+
+[functions]
+
+[telemetry]
+
+[morse]
+
+[wait-times]
+
+[1901](dvt-node)
+rxchannel = USRP/@NET@.11:34001:32001
+
+[1902](dvt-node)
+rxchannel = USRP/@NET@.11:34002:32002

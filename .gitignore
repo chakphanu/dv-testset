@@ -6,6 +6,9 @@
 !.local/README.md
 out/*
 !out/README.md
+
+# local pins/overrides (copy of .env.example); .env.example is tracked
+.env
 *-ctx/
 **/bin/
 

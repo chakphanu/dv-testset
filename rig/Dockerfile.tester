@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# Tester: python + pytest, network tools and upstream codec2 c2enc/c2dec
+# (LGPL-2.1) built from .cache/codec2 (scripts/pre-fetch-codec2.sh), passed in
+# as the named build context "codec2". The repository is mounted at /dvt.
+# TESTER_BASE_IMAGE and PYTEST_VERSION come from .env.example (build args).
+ARG TESTER_BASE_IMAGE
+FROM ${TESTER_BASE_IMAGE} AS c2build
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev cmake make \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=codec2 . /codec2/
+RUN cmake -S /codec2 -B /build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DUNITTEST=OFF \
+    && make -C /build -j"$(nproc)" c2enc c2dec
+
+FROM ${TESTER_BASE_IMAGE}
+ARG PYTEST_VERSION
+RUN test -n "$PYTEST_VERSION" || { echo "PYTEST_VERSION build arg missing (see .env.example)" >&2; exit 1; } \
+    && apt-get update && apt-get install -y --no-install-recommends iproute2 tcpdump libcap2-bin \
+    && rm -rf /var/lib/apt/lists/* \
+    && setcap cap_net_raw+eip /usr/bin/tcpdump \
+    && pip install --no-cache-dir "pytest==${PYTEST_VERSION}"
+COPY --from=c2build /build/src/c2enc /build/src/c2dec /usr/local/bin/
+RUN ! ldd /usr/local/bin/c2enc /usr/local/bin/c2dec | grep 'not found'
+ENV PYTHONPATH=/dvt PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+WORKDIR /dvt
+CMD ["sleep", "infinity"]

@@ -34,9 +34,21 @@ Cases whose prerequisites are missing are skipped with the reason.
 ```sh
 python3 -m pip install -e '.[test]'
 python3 -m pytest -m unit
+cp .env.example .env                 # optional overrides
 scripts/pre-fetch-xlxd.sh            # fetch xlxd sources into .cache/xlxd/
 scripts/gen-local.sh                 # local secrets into .local/
 scripts/run.sh -m rig                # rig up, run cases, results in out/<utc>/
 ```
+
+## Settings
+
+All pinned sources, refs, hashes and versions live in `.env.example`; put
+local overrides (system under test, transcoder image) in `.env`. Secrets are
+generated into `.local/rig.env` and never committed.
+
+The transcoder is not part of this repository. Set `TRANSCODER_IMAGE` (rig)
+or `DVT_AMBED_ADDR` (wire cases against a running transcoder). When the wire
+cases start the image themselves, `DVT_TRANSCODER_ENV` and
+`DVT_TRANSCODER_ARGS` pass extra environment and arguments to it.
 
 Before committing, run `scripts/pii-check.sh`.

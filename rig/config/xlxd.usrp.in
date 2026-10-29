@@ -1,0 +1,7 @@
+# USRP endpoints of xlxd-sut (rendered when DVT_USRP=on, @NET@ = rig /24 prefix)
+# module bind_ip bind_port peer_ip peer_port source_callsign
+# A, B: AllStar nodes 1901, 1902 (profile allstar)
+A @NET@.11 34001 @NET@.40 32001 N0TEST
+B @NET@.11 34002 @NET@.40 32002 N0TEST
+# C: the tester itself acts as the USRP peer (no AllStar needed)
+C @NET@.11 34003 @NET@.30 32003 N0TEST

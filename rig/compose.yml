@@ -1,0 +1,145 @@
+# SPDX-License-Identifier: MIT
+# dv-testset rig. scripts/run.sh is the normal entry point: it loads the
+# settings and runs, from the repository root,
+#   docker compose -p dvt -f rig/compose.yml --env-file .env.example \
+#     [--env-file .env] [--env-file .local/rig.env] --profile core up -d --build
+# Pins and settings live in .env.example (tracked; .env overrides it). Without
+# the env files the builds fail on a placeholder base image name.
+#
+# Profiles
+#   core     xlxd-ref, xlxd-sut, transcoder-ref, transcoder-sut, tester
+#   allstar  AllStarLink 3 node (use together with core)
+#
+# Variables set at run time (not pins)
+#   DVT_SUT_USRP             on = xlxd-sut loads rig/config/xlxd.usrp.in (default off)
+#   DVT_RUN_ID               output directory name under out/ (default manual)
+#   DVT_UID, DVT_GID         tester user, owner of out/ files (default 1000)
+#   DVT_AMBED_ADDR           transcoder for the wire cases (default transcoder-sut)
+#
+# The transcoder services pass the address variables of the reference image
+# (VOCODER_AMBED_BIND / VOCODER_AMBED_PEER, run-ambed.sh style). An image with
+# another interface needs a compose override file (-f) for its command/env.
+#
+# Fixed addresses: xlxd-ref .10, xlxd-sut .11, transcoder-ref .20,
+# transcoder-sut .21, tester .30, allstar .40.
+
+name: dvt
+
+x-xlxd: &xlxd
+  profiles: [core]
+  init: true
+  restart: "no"
+
+services:
+  xlxd-ref:
+    <<: *xlxd
+    build:
+      context: .
+      dockerfile: Dockerfile.xlxd
+      args: &xlxd-args
+        XLXD_BASE_IMAGE: ${XLXD_BASE_IMAGE:-error-set-xlxd-base-image-see-env-example}
+      additional_contexts:
+        src: ../.cache/xlxd/${XLXD_REF_DIR:-ref}
+    environment:
+      DVT_CALLSIGN: XLX999
+      DVT_IP: ${DVT_NET:-172.30.0}.10
+      DVT_TRANSCODER: ${DVT_NET:-172.30.0}.20
+      DVT_USRP: "off"
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.10"}
+
+  xlxd-sut:
+    <<: *xlxd
+    build:
+      context: .
+      dockerfile: Dockerfile.xlxd
+      args: *xlxd-args
+      additional_contexts:
+        src: ../.cache/xlxd/${XLXD_SUT_DIR:-sut}
+    environment:
+      DVT_CALLSIGN: XLX999
+      DVT_IP: ${DVT_NET:-172.30.0}.11
+      DVT_TRANSCODER: ${DVT_NET:-172.30.0}.21
+      DVT_USRP: ${DVT_SUT_USRP:-off}
+      DVT_NET: ${DVT_NET:-172.30.0}
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.11"}
+
+  transcoder-ref:
+    profiles: [core]
+    init: true
+    image: ${TRANSCODER_REF_IMAGE:-${TRANSCODER_IMAGE:-error-set-transcoder-image-env}}
+    environment:
+      VOCODER_AMBED_BIND: ${DVT_NET:-172.30.0}.20
+      # xlxd plus the tester (wire cases talk to the transcoder directly)
+      VOCODER_AMBED_PEER: ${DVT_NET:-172.30.0}.10 ${DVT_NET:-172.30.0}.30
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.20"}
+
+  transcoder-sut:
+    profiles: [core]
+    init: true
+    image: ${TRANSCODER_SUT_IMAGE:-${TRANSCODER_IMAGE:-error-set-transcoder-image-env}}
+    environment:
+      VOCODER_AMBED_BIND: ${DVT_NET:-172.30.0}.21
+      # xlxd plus the tester (wire cases talk to the transcoder directly)
+      VOCODER_AMBED_PEER: ${DVT_NET:-172.30.0}.11 ${DVT_NET:-172.30.0}.30
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.21"}
+
+  tester:
+    profiles: [core]
+    init: true
+    build:
+      context: .
+      dockerfile: Dockerfile.tester
+      args:
+        TESTER_BASE_IMAGE: ${TESTER_BASE_IMAGE:-error-set-tester-base-image-see-env-example}
+        PYTEST_VERSION: ${PYTEST_VERSION:-}
+      additional_contexts:
+        codec2: ../.cache/codec2
+    user: "${DVT_UID:-1000}:${DVT_GID:-1000}"
+    environment:
+      DVT_XLXD_REF: ${DVT_NET:-172.30.0}.10
+      DVT_XLXD_SUT: ${DVT_NET:-172.30.0}.11
+      DVT_AMBED_REF: ${DVT_NET:-172.30.0}.20
+      DVT_AMBED_SUT: ${DVT_NET:-172.30.0}.21
+      DVT_ALLSTAR: ${DVT_NET:-172.30.0}.40
+      # wire cases: transcoder under test when run inside the rig
+      DVT_AMBED_ADDR: ${DVT_AMBED_ADDR:-${DVT_NET:-172.30.0}.21}
+      DVT_OUT: /dvt/out/${DVT_RUN_ID:-manual}
+      HOME: /tmp
+    env_file:
+      - path: ../.local/rig.env
+        required: false
+    volumes:
+      - ..:/dvt
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.30"}
+
+  allstar:
+    profiles: [allstar]
+    init: true
+    build:
+      context: .
+      dockerfile: Dockerfile.allstar
+      args:
+        ALLSTAR_BASE_IMAGE: ${ALLSTAR_BASE_IMAGE:-error-set-allstar-base-image-see-env-example}
+        ASL_REPO_DEB_URL: ${ASL_REPO_DEB_URL:-}
+        ASL_REPO_DEB_SHA256: ${ASL_REPO_DEB_SHA256:-}
+        ASL3_ASTERISK_VERSION: ${ASL3_ASTERISK_VERSION:-}
+    environment:
+      DVT_NET: ${DVT_NET:-172.30.0}
+    env_file:
+      - path: ../.local/rig.env
+        required: false
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.40"}
+
+networks:
+  rig:
+    # internal: no route out; nothing in the rig may reach the internet
+    internal: true
+    ipam:
+      config:
+        - subnet: ${DVT_NET:-172.30.0}.0/24
