@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# P25Reflector (g4klx/P25Clients, GPL-2.0) built from fetched source
+# (scripts/pre-fetch-p25.sh), passed in as the named build context "src"
+# (.cache/p25clients). Upstream DMRIds.dat is not used: the image gets the
+# synthetic rig/config/p25/DMRIds.dat. Build arg P25_BASE_IMAGE from .env.example.
+ARG P25_BASE_IMAGE
+FROM ${P25_BASE_IMAGE} AS build
+RUN apt-get update && apt-get install -y --no-install-recommends g++ make libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=src P25Reflector/ /src/
+RUN make -C /src -j"$(nproc)" P25Reflector
+
+FROM ${P25_BASE_IMAGE}
+COPY --from=build /src/P25Reflector /p25/P25Reflector
+COPY config/p25/DMRIds.dat /p25/DMRIds.dat
+COPY config/p25/P25Reflector.ini /p25/P25Reflector.ini
+USER nobody
+ENTRYPOINT ["/p25/P25Reflector", "/p25/P25Reflector.ini"]

@@ -14,6 +14,10 @@ allstar .40.
   DVT_AMBED_SUT      transcoder under test
   DVT_TESTER         tester container address
   DVT_ALLSTAR        AllStarLink node
+  DVT_NXDN_REF       reference NXDN reflector (.50)
+  DVT_NXDN_SUT       NXDN reflector under test (.51)
+  DVT_P25_REF        reference P25 reflector (.60)
+  DVT_P25_SUT        P25 reflector under test (.61)
   DVT_AMBED_ADDR     single transcoder for the wire case (no default)
   DVT_AMBED_PORT     transcoder control port (10100)
   DVT_AMBED_STREAM_CAP  optional stream limit the wire case checks
@@ -30,8 +34,10 @@ from dataclasses import dataclass, field
 
 DEFAULT_SUBNET = "172.30.0.0/24"
 HOST_OFFSETS = {"xlxd_ref": 10, "xlxd_sut": 11, "ambed_ref": 20, "ambed_sut": 21,
-                "tester": 30, "allstar": 40}
+                "tester": 30, "allstar": 40, "nxdn_ref": 50, "nxdn_sut": 51,
+                "p25_ref": 60, "p25_sut": 61}
 KEYS = ("subnet", "xlxd_ref", "xlxd_sut", "ambed_ref", "ambed_sut", "tester", "allstar",
+        "nxdn_ref", "nxdn_sut", "p25_ref", "p25_sut",
         "ambed_addr", "ambed_port", "ambed_stream_cap", "xlxd_bin", "xlxd_ref_bin", "reflector", "iax_secret", "out")
 
 
@@ -44,6 +50,10 @@ class Target:
     ambed_sut: str = ""
     tester: str = ""
     allstar: str = ""
+    nxdn_ref: str = ""
+    nxdn_sut: str = ""
+    p25_ref: str = ""
+    p25_sut: str = ""
     ambed_addr: str = ""
     ambed_port: int = 10100
     ambed_stream_cap: int = 0

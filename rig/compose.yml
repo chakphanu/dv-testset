@@ -12,8 +12,10 @@
 #   nxdn     NXDNReflector nxdn-ref (.50) peered with xlxd-ref and nxdn-sut (.51)
 #            peered with xlxd-sut, on module DVT_NXDN_MODULE / TG DVT_NXDN_TG
 #            (xlxd connects out to the reflector; set DVT_NXDN=on with it)
+#   p25      P25Reflector p25-ref (.60) peered with xlxd-ref and p25-sut (.61)
+#            peered with xlxd-sut, on module DVT_P25_MODULE (set DVT_P25=on with it)
 #   capture  sniffers on xlxd-ref, xlxd-sut, transcoder-sut (capture-allstar: on
-#            allstar, capture-nxdn: on nxdn-ref and nxdn-sut)
+#            allstar, capture-nxdn: on nxdn-*, capture-p25: on p25-*)
 #
 # Variables set at run time (not pins)
 #   DVT_SUT_USRP             on = xlxd-sut loads rig/config/xlxd.usrp.in (default off)
@@ -22,11 +24,11 @@
 #   DVT_AMBED_ADDR           transcoder for the wire cases (default transcoder-sut)
 #   DVT_START_DELAY          seconds xlxd waits before starting (run.sh --capture: 3)
 #
-# Transcoders: the services export DVT_TRANSCODER_BIND (own address) and
-# DVT_TRANSCODER_PEERS (xlxd + tester). An image that wants other variables or
-# arguments gets them from a local compose override, TRANSCODER_COMPOSE
-# (default .local/transcoder.yml, gitignored; run.sh adds it with -f when it
-# exists). See rig/transcoder.example.yml.
+# Transcoders: the services get only generic settings, DVT_TRANSCODER_BIND
+# (own address) and DVT_TRANSCODER_PEERS (xlxd + tester). Image-specific
+# environment or command goes into the optional local override
+# .local/compose.override.yml (gitignored), which run.sh adds with -f when it
+# exists. See rig/compose.override.example.yml.
 #
 # Fixed addresses: xlxd-ref .10, xlxd-sut .11, transcoder-ref .20,
 # transcoder-sut .21, tester .30, allstar .40.
@@ -85,6 +87,10 @@ services:
       DVT_NXDN_PEER: ${DVT_NET:-172.30.0}.50
       DVT_NXDN_TG: ${DVT_NXDN_TG:-31672}
       DVT_NXDN_MODULE: ${DVT_NXDN_MODULE:-F}
+      DVT_P25: ${DVT_P25:-off}
+      DVT_P25_PEER: ${DVT_NET:-172.30.0}.60
+      DVT_P25_TG: ${DVT_P25_TG:-31672}
+      DVT_P25_MODULE: ${DVT_P25_MODULE:-G}
       DVT_START_DELAY: ${DVT_START_DELAY:-0}
     networks:
       rig: {ipv4_address: "${DVT_NET:-172.30.0}.10"}
@@ -107,6 +113,10 @@ services:
       DVT_NXDN_PEER: ${DVT_NET:-172.30.0}.51
       DVT_NXDN_TG: ${DVT_NXDN_TG:-31672}
       DVT_NXDN_MODULE: ${DVT_NXDN_MODULE:-F}
+      DVT_P25: ${DVT_P25:-off}
+      DVT_P25_PEER: ${DVT_NET:-172.30.0}.61
+      DVT_P25_TG: ${DVT_P25_TG:-31672}
+      DVT_P25_MODULE: ${DVT_P25_MODULE:-G}
       DVT_START_DELAY: ${DVT_START_DELAY:-0}
       DVT_NET: ${DVT_NET:-172.30.0}
     networks:
@@ -159,6 +169,11 @@ services:
       DVT_NXDN_SUT: ${DVT_NET:-172.30.0}.51
       DVT_NXDN_TG: ${DVT_NXDN_TG:-31672}
       DVT_NXDN_MODULE: ${DVT_NXDN_MODULE:-F}
+      DVT_P25: ${DVT_P25:-off}
+      DVT_P25_REF: ${DVT_NET:-172.30.0}.60
+      DVT_P25_SUT: ${DVT_NET:-172.30.0}.61
+      DVT_P25_TG: ${DVT_P25_TG:-31672}
+      DVT_P25_MODULE: ${DVT_P25_MODULE:-G}
       # wire cases: transcoder under test when run inside the rig
       DVT_AMBED_ADDR: ${DVT_AMBED_ADDR:-${DVT_NET:-172.30.0}.21}
       # on when xlxd-sut has USRP endpoints (A/B -> allstar, C -> tester)
@@ -249,6 +264,39 @@ services:
     profiles: [capture-nxdn]
     network_mode: "service:nxdn-sut"
     command: ["nxdn-sut"]
+
+  # ---- P25Reflector (profile p25) ----
+  p25-ref:
+    <<: &p25
+      profiles: [p25]
+      init: true
+      image: dvt-p25reflector:local
+      build:
+        context: .
+        dockerfile: Dockerfile.p25reflector
+        args:
+          P25_BASE_IMAGE: ${P25_BASE_IMAGE:-error-set-p25-base-image-see-env-example}
+        additional_contexts:
+          src: ../.cache/p25clients
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.60"}
+
+  p25-sut:
+    <<: *p25
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.61"}
+
+  capture-p25-ref:
+    <<: *capture
+    profiles: [capture-p25]
+    network_mode: "service:p25-ref"
+    command: ["p25-ref"]
+
+  capture-p25-sut:
+    <<: *capture
+    profiles: [capture-p25]
+    network_mode: "service:p25-sut"
+    command: ["p25-sut"]
 
 networks:
   rig:

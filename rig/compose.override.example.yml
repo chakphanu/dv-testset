@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Optional local override for the transcoder image. Copy it to
+# .local/compose.override.yml (gitignored); run.sh adds it with -f when it
+# exists. rig/compose.yml already gives each transcoder DVT_TRANSCODER_BIND
+# (its own address) and DVT_TRANSCODER_PEERS (xlxd + tester). An image that
+# needs nothing more needs no override at all.
+services:
+  transcoder-ref:
+    environment:
+      # add your image's env here, e.g.
+      # <BIND_VARIABLE>: ${DVT_NET:-172.30.0}.20
+      # <PEER_VARIABLE>: ${DVT_NET:-172.30.0}.10 ${DVT_NET:-172.30.0}.30
+      DVT_EXAMPLE: "unused"
+    # or arguments: command: ["<arg>", "${DVT_NET:-172.30.0}.20"]
+  transcoder-sut:
+    environment:
+      # <BIND_VARIABLE>: ${DVT_NET:-172.30.0}.21
+      # <PEER_VARIABLE>: ${DVT_NET:-172.30.0}.11 ${DVT_NET:-172.30.0}.30
+      DVT_EXAMPLE: "unused"

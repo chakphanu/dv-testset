@@ -10,6 +10,9 @@
 #   env DVT_NXDN         "on" peers DVT_NXDN_MODULE with the NXDNReflector at
 #                        DVT_NXDN_PEER:41400 on talkgroup DVT_NXDN_TG
 #                        (xlxd.interlink row "NX<tg> <ip>:<port> <module>")
+#   env DVT_P25          "on" peers DVT_P25_MODULE with the P25Reflector at
+#                        DVT_P25_PEER:41000 (row "P25<id> <ip>:<port> <module>",
+#                        id = DVT_P25_TG)
 #   env DVT_START_DELAY  seconds to wait before xlxd starts (sniffers attach
 #                        to this network namespace first; default 0)
 set -eu
@@ -26,11 +29,17 @@ else
   : > /xlxd/xlxd.usrp
 fi
 
+# Reflector peers (NXDN, P25) are xlxd.interlink rows; xlxd connects out.
+: > /xlxd/xlxd.interlink
 if [ "${DVT_NXDN:-off}" = on ]; then
   : "${DVT_NXDN_PEER:?}" "${DVT_NXDN_TG:?}" "${DVT_NXDN_MODULE:?}"
-  printf 'NX%05d %s:41400 %s\n' "$DVT_NXDN_TG" "$DVT_NXDN_PEER" "$DVT_NXDN_MODULE" > /xlxd/xlxd.interlink
-  echo "dvt: interlink: $(cat /xlxd/xlxd.interlink)"
+  printf 'NX%05d %s:41400 %s\n' "$DVT_NXDN_TG" "$DVT_NXDN_PEER" "$DVT_NXDN_MODULE" >> /xlxd/xlxd.interlink
 fi
+if [ "${DVT_P25:-off}" = on ]; then
+  : "${DVT_P25_PEER:?}" "${DVT_P25_TG:?}" "${DVT_P25_MODULE:?}"
+  printf 'P25%05d %s:41000 %s\n' "$DVT_P25_TG" "$DVT_P25_PEER" "$DVT_P25_MODULE" >> /xlxd/xlxd.interlink
+fi
+[ ! -s /xlxd/xlxd.interlink ] || { echo "dvt: interlink:"; cat /xlxd/xlxd.interlink; }
 
 sleep "${DVT_START_DELAY:-0}"
 exec /xlxd/xlxd "${DVT_CALLSIGN:-XLX999}" "$DVT_IP" "$DVT_TRANSCODER"
