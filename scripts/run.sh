@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: MIT
 # Bring the rig up, run pytest inside the tester, collect logs, bring it down.
 #
-#   scripts/run.sh [-m MARKERS] [--profile core|allstar] [--capture] [--keep] [-- PYTEST_ARGS...]
+#   scripts/run.sh [-m MARKERS] [--profile core|allstar|nxdn|allstar,nxdn] [--capture] [--keep] [-- PYTEST_ARGS...]
 #   scripts/run.sh --down
 #
 #   -m MARKERS         pytest marker expression (default: rig)
 #   --profile allstar  core plus the AllStar node; sets DVT_SUT_USRP=on
-#   --capture          sniffers on xlxd-ref/xlxd-sut/transcoder-sut (+allstar): pcapng in
+#   --profile nxdn     core plus NXDNReflectors nxdn-ref/nxdn-sut peered with
+#                      xlxd-ref/xlxd-sut (DVT_NXDN=on); combine: allstar,nxdn
+#   --capture          sniffers on xlxd-ref/xlxd-sut/transcoder-sut (+allstar, +nxdn): pcapng in
 #                      out/<utc>/capture/<service>.pcapng (decode: scripts/tshark.sh)
 #   --keep             leave the rig running (default: compose down at the end)
 #   --down             take the lock, bring every profile down, exit (the only
@@ -23,7 +25,8 @@
 # run.sh refuses with exit 3; their owner cleans up with run.sh --down.
 #
 # Settings: .env.example, then .env, then .local/rig.env (scripts/lib/env.sh);
-# TRANSCODER_IMAGE must be set in .env or the shell.
+# TRANSCODER_IMAGE must be set in .env or the shell; TRANSCODER_COMPOSE (default
+# .local/transcoder.yml) adapts the transcoder services to that image.
 # Results: out/<utc>/ (pytest junit + log, compose ps/images, one log per service).
 #
 # Control channel for cases that stop a backend (tester has no docker socket):
@@ -58,7 +61,7 @@ while [ "$#" -gt 0 ]; do
     --capture) capture=1; shift ;;
     --down) down_only=1; shift ;;
     --) shift; break ;;
-    -h|--help) sed -n '3,41p' "$0"; exit 0 ;;
+    -h|--help) sed -n '3,44p' "$0"; exit 0 ;;
     *) echo "run.sh: unknown argument '$1' (see --help)" >&2; exit 2 ;;
   esac
 done
@@ -96,8 +99,13 @@ take_lock() {
 }
 # Every profile, so "down" also removes allstar/capture containers
 dvt_env_files
-compose_all=(docker compose -p "${COMPOSE_PROJECT_NAME:-dvt}" -f rig/compose.yml "${DVT_ENV_FILES[@]}"
-  --profile core --profile allstar --profile capture --profile capture-allstar)
+compose_files=(-f rig/compose.yml)
+if [ -n "${TRANSCODER_COMPOSE:-}" ] && [ -f "$TRANSCODER_COMPOSE" ]; then
+  compose_files+=(-f "$TRANSCODER_COMPOSE")
+fi
+compose_all=(docker compose -p "${COMPOSE_PROJECT_NAME:-dvt}" "${compose_files[@]}" "${DVT_ENV_FILES[@]}"
+  --profile core --profile allstar --profile nxdn --profile capture --profile capture-allstar
+  --profile capture-nxdn)
 
 if [ "$down_only" = 1 ]; then
   take_lock
@@ -106,24 +114,41 @@ if [ "$down_only" = 1 ]; then
 fi
 
 profiles=(--profile core)
-case "$profile" in
-  core) ;;
-  allstar)
-    profiles+=(--profile allstar)
-    export DVT_SUT_USRP="${DVT_SUT_USRP:-on}"
-    [ -f .local/rig.env ] || { echo "run.sh: .local/rig.env missing; run scripts/gen-local.sh" >&2; exit 2; }
-    ;;
-  *) echo "run.sh: --profile must be core or allstar" >&2; exit 2 ;;
-esac
+has_allstar=0
+has_nxdn=0
+IFS=, read -r -a wanted <<< "$profile"
+for p in "${wanted[@]}"; do
+  case "$p" in
+    core) ;;
+    allstar)
+      has_allstar=1
+      profiles+=(--profile allstar)
+      export DVT_SUT_USRP="${DVT_SUT_USRP:-on}"
+      [ -f .local/rig.env ] || { echo "run.sh: .local/rig.env missing; run scripts/gen-local.sh" >&2; exit 2; }
+      ;;
+    nxdn)
+      has_nxdn=1
+      profiles+=(--profile nxdn)
+      export DVT_NXDN=on
+      [ -f .cache/nxdnclients/NXDNReflector/Makefile ] \
+        || { echo "run.sh: .cache/nxdnclients missing; run scripts/pre-fetch-nxdn.sh" >&2; exit 2; }
+      ;;
+    *) echo "run.sh: --profile takes core, allstar, nxdn or a comma list (allstar,nxdn)" >&2; exit 2 ;;
+  esac
+done
 capture_svcs=()
 if [ "$capture" = 1 ]; then
   profiles+=(--profile capture)
   capture_svcs=(capture-xlxd-ref capture-xlxd-sut capture-transcoder-sut)
   # xlxd waits so the sniffers see its first transcoder handshake
   export DVT_START_DELAY="${DVT_START_DELAY:-3}"
-  if [ "$profile" = allstar ]; then
+  if [ "$has_allstar" = 1 ]; then
     profiles+=(--profile capture-allstar)
     capture_svcs+=(capture-allstar)
+  fi
+  if [ "$has_nxdn" = 1 ]; then
+    profiles+=(--profile capture-nxdn)
+    capture_svcs+=(capture-nxdn-ref capture-nxdn-sut)
   fi
 fi
 
@@ -157,7 +182,7 @@ out="out/$DVT_RUN_ID"
 mkdir -p "$out/logs"
 [ "$capture" = 0 ] || mkdir -p "$out/capture"
 
-compose=(docker compose -p "${COMPOSE_PROJECT_NAME:-dvt}" -f rig/compose.yml "${DVT_ENV_FILES[@]}" "${profiles[@]}")
+compose=(docker compose -p "${COMPOSE_PROJECT_NAME:-dvt}" "${compose_files[@]}" "${DVT_ENV_FILES[@]}" "${profiles[@]}")
 
 watcher_pid=""
 control="$out/control"

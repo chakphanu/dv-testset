@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# NXDNReflector (g4klx/NXDNClients, GPL-2.0) built from fetched source
+# (scripts/pre-fetch-nxdn.sh), passed in as the named build context "src"
+# (.cache/nxdnclients). Upstream NXDN.csv is not used: the image gets the
+# synthetic rig/config/nxdn.csv. Build arg NXDN_BASE_IMAGE from .env.example.
+ARG NXDN_BASE_IMAGE
+FROM ${NXDN_BASE_IMAGE} AS build
+RUN apt-get update && apt-get install -y --no-install-recommends g++ make libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=src NXDNReflector/ /src/
+RUN make -C /src -j"$(nproc)" NXDNReflector
+
+FROM ${NXDN_BASE_IMAGE}
+COPY --from=build /src/NXDNReflector /nxdn/NXDNReflector
+COPY config/nxdn.csv /nxdn/NXDN.csv
+COPY config/nxdn/NXDNReflector.ini.in /nxdn/NXDNReflector.ini.in
+COPY nxdn-entry.sh /nxdn/entry.sh
+RUN chmod 755 /nxdn/entry.sh
+USER nobody
+ENTRYPOINT ["/nxdn/entry.sh"]

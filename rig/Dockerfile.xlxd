@@ -21,10 +21,11 @@ RUN sed -i \
 FROM ${XLXD_BASE_IMAGE}
 COPY --from=build /src/xlxd /xlxd/xlxd
 COPY config/dmrid.dat /xlxd/dmrid.dat
+COPY config/nxdn.csv /xlxd/nxdn.csv
 COPY config/xlxd.usrp.in /xlxd/xlxd.usrp.in
 COPY xlxd-entry.sh /xlxd/entry.sh
 # Empty lists: everybody authorised, no interlink, default terminal options
-RUN touch /xlxd/ysfnode.dat /xlxd/nxdn.csv /xlxd/xlxd.whitelist \
+RUN touch /xlxd/ysfnode.dat /xlxd/xlxd.whitelist \
       /xlxd/xlxd.blacklist /xlxd/xlxd.interlink /xlxd/xlxd.terminal \
     && chmod 755 /xlxd/entry.sh
 ENTRYPOINT ["/xlxd/entry.sh"]

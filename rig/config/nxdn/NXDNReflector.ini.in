@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: MIT
+# NXDNReflector config for the dv-testset rig; @TG@ is DVT_NXDN_TG.
+# Foreground, log on stdout only, synthetic ID file, no Icom/Kenwood links.
+[General]
+TG=@TG@
+Daemon=0
+
+[Id Lookup]
+Name=/nxdn/NXDN.csv
+Time=24
+
+[Log]
+DisplayLevel=1
+FileLevel=0
+FilePath=/tmp
+FileRoot=NXDNReflector
+FileRotate=0
+
+[Network]
+Port=41400
+Debug=0
+
+[Icom Network]
+Enabled=0
+Address=127.0.0.1
+Debug=0
+
+[Kenwood Network]
+Enabled=0
+Address=127.0.0.1
+Debug=0

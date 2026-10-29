@@ -7,6 +7,9 @@
 #   env DVT_TRANSCODER   transcoder address (required)
 #   env DVT_USRP         "on" renders /xlxd/xlxd.usrp from the template
 #   env DVT_NET          /24 prefix substituted for @NET@ in the template
+#   env DVT_NXDN         "on" peers DVT_NXDN_MODULE with the NXDNReflector at
+#                        DVT_NXDN_PEER:41400 on talkgroup DVT_NXDN_TG
+#                        (xlxd.interlink row "NX<tg> <ip>:<port> <module>")
 #   env DVT_START_DELAY  seconds to wait before xlxd starts (sniffers attach
 #                        to this network namespace first; default 0)
 set -eu
@@ -21,6 +24,12 @@ if [ "${DVT_USRP:-off}" = on ]; then
   grep -v '^#' /xlxd/xlxd.usrp
 else
   : > /xlxd/xlxd.usrp
+fi
+
+if [ "${DVT_NXDN:-off}" = on ]; then
+  : "${DVT_NXDN_PEER:?}" "${DVT_NXDN_TG:?}" "${DVT_NXDN_MODULE:?}"
+  printf 'NX%05d %s:41400 %s\n' "$DVT_NXDN_TG" "$DVT_NXDN_PEER" "$DVT_NXDN_MODULE" > /xlxd/xlxd.interlink
+  echo "dvt: interlink: $(cat /xlxd/xlxd.interlink)"
 fi
 
 sleep "${DVT_START_DELAY:-0}"

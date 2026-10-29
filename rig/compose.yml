@@ -9,7 +9,11 @@
 # Profiles
 #   core     xlxd-ref, xlxd-sut, transcoder-ref, transcoder-sut, tester
 #   allstar  AllStarLink 3 node (use together with core)
-#   capture  sniffers on xlxd-ref, xlxd-sut, transcoder-sut (capture-allstar: on allstar)
+#   nxdn     NXDNReflector nxdn-ref (.50) peered with xlxd-ref and nxdn-sut (.51)
+#            peered with xlxd-sut, on module DVT_NXDN_MODULE / TG DVT_NXDN_TG
+#            (xlxd connects out to the reflector; set DVT_NXDN=on with it)
+#   capture  sniffers on xlxd-ref, xlxd-sut, transcoder-sut (capture-allstar: on
+#            allstar, capture-nxdn: on nxdn-ref and nxdn-sut)
 #
 # Variables set at run time (not pins)
 #   DVT_SUT_USRP             on = xlxd-sut loads rig/config/xlxd.usrp.in (default off)
@@ -18,9 +22,11 @@
 #   DVT_AMBED_ADDR           transcoder for the wire cases (default transcoder-sut)
 #   DVT_START_DELAY          seconds xlxd waits before starting (run.sh --capture: 3)
 #
-# The transcoder services pass the address variables of the reference image
-# (VOCODER_AMBED_BIND / VOCODER_AMBED_PEER, run-ambed.sh style). An image with
-# another interface needs a compose override file (-f) for its command/env.
+# Transcoders: the services export DVT_TRANSCODER_BIND (own address) and
+# DVT_TRANSCODER_PEERS (xlxd + tester). An image that wants other variables or
+# arguments gets them from a local compose override, TRANSCODER_COMPOSE
+# (default .local/transcoder.yml, gitignored; run.sh adds it with -f when it
+# exists). See rig/transcoder.example.yml.
 #
 # Fixed addresses: xlxd-ref .10, xlxd-sut .11, transcoder-ref .20,
 # transcoder-sut .21, tester .30, allstar .40.
@@ -75,6 +81,10 @@ services:
       DVT_IP: ${DVT_NET:-172.30.0}.10
       DVT_TRANSCODER: ${DVT_NET:-172.30.0}.20
       DVT_USRP: "off"
+      DVT_NXDN: ${DVT_NXDN:-off}
+      DVT_NXDN_PEER: ${DVT_NET:-172.30.0}.50
+      DVT_NXDN_TG: ${DVT_NXDN_TG:-31672}
+      DVT_NXDN_MODULE: ${DVT_NXDN_MODULE:-F}
       DVT_START_DELAY: ${DVT_START_DELAY:-0}
     networks:
       rig: {ipv4_address: "${DVT_NET:-172.30.0}.10"}
@@ -93,6 +103,10 @@ services:
       DVT_IP: ${DVT_NET:-172.30.0}.11
       DVT_TRANSCODER: ${DVT_NET:-172.30.0}.21
       DVT_USRP: ${DVT_SUT_USRP:-off}
+      DVT_NXDN: ${DVT_NXDN:-off}
+      DVT_NXDN_PEER: ${DVT_NET:-172.30.0}.51
+      DVT_NXDN_TG: ${DVT_NXDN_TG:-31672}
+      DVT_NXDN_MODULE: ${DVT_NXDN_MODULE:-F}
       DVT_START_DELAY: ${DVT_START_DELAY:-0}
       DVT_NET: ${DVT_NET:-172.30.0}
     networks:
@@ -103,9 +117,9 @@ services:
     init: true
     image: ${TRANSCODER_REF_IMAGE:-${TRANSCODER_IMAGE:-error-set-transcoder-image-env}}
     environment:
-      VOCODER_AMBED_BIND: ${DVT_NET:-172.30.0}.20
+      DVT_TRANSCODER_BIND: ${DVT_NET:-172.30.0}.20
       # xlxd plus the tester (wire cases talk to the transcoder directly)
-      VOCODER_AMBED_PEER: ${DVT_NET:-172.30.0}.10 ${DVT_NET:-172.30.0}.30
+      DVT_TRANSCODER_PEERS: ${DVT_NET:-172.30.0}.10 ${DVT_NET:-172.30.0}.30
     networks:
       rig: {ipv4_address: "${DVT_NET:-172.30.0}.20"}
 
@@ -114,9 +128,9 @@ services:
     init: true
     image: ${TRANSCODER_SUT_IMAGE:-${TRANSCODER_IMAGE:-error-set-transcoder-image-env}}
     environment:
-      VOCODER_AMBED_BIND: ${DVT_NET:-172.30.0}.21
+      DVT_TRANSCODER_BIND: ${DVT_NET:-172.30.0}.21
       # xlxd plus the tester (wire cases talk to the transcoder directly)
-      VOCODER_AMBED_PEER: ${DVT_NET:-172.30.0}.11 ${DVT_NET:-172.30.0}.30
+      DVT_TRANSCODER_PEERS: ${DVT_NET:-172.30.0}.11 ${DVT_NET:-172.30.0}.30
     networks:
       rig: {ipv4_address: "${DVT_NET:-172.30.0}.21"}
 
@@ -140,6 +154,11 @@ services:
       DVT_AMBED_SUT: ${DVT_NET:-172.30.0}.21
       DVT_ALLSTAR: ${DVT_NET:-172.30.0}.40
       DVT_SUBNET: ${DVT_NET:-172.30.0}.0/24
+      DVT_NXDN: ${DVT_NXDN:-off}
+      DVT_NXDN_REF: ${DVT_NET:-172.30.0}.50
+      DVT_NXDN_SUT: ${DVT_NET:-172.30.0}.51
+      DVT_NXDN_TG: ${DVT_NXDN_TG:-31672}
+      DVT_NXDN_MODULE: ${DVT_NXDN_MODULE:-F}
       # wire cases: transcoder under test when run inside the rig
       DVT_AMBED_ADDR: ${DVT_AMBED_ADDR:-${DVT_NET:-172.30.0}.21}
       # on when xlxd-sut has USRP endpoints (A/B -> allstar, C -> tester)
@@ -195,6 +214,41 @@ services:
     profiles: [capture-allstar]
     network_mode: "service:allstar"
     command: ["allstar"]
+
+  # ---- NXDNReflector (profile nxdn) ----
+  nxdn-ref:
+    <<: &nxdn
+      profiles: [nxdn]
+      init: true
+      image: dvt-nxdnreflector:local
+      build:
+        context: .
+        dockerfile: Dockerfile.nxdnreflector
+        args:
+          NXDN_BASE_IMAGE: ${NXDN_BASE_IMAGE:-error-set-nxdn-base-image-see-env-example}
+        additional_contexts:
+          src: ../.cache/nxdnclients
+      environment:
+        DVT_NXDN_TG: ${DVT_NXDN_TG:-31672}
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.50"}
+
+  nxdn-sut:
+    <<: *nxdn
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.51"}
+
+  capture-nxdn-ref:
+    <<: *capture
+    profiles: [capture-nxdn]
+    network_mode: "service:nxdn-ref"
+    command: ["nxdn-ref"]
+
+  capture-nxdn-sut:
+    <<: *capture
+    profiles: [capture-nxdn]
+    network_mode: "service:nxdn-sut"
+    command: ["nxdn-sut"]
 
 networks:
   rig:

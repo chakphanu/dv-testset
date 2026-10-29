@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# Example TRANSCODER_COMPOSE override: copy to .local/transcoder.yml and adapt
+# it to your transcoder image. rig/compose.yml already sets
+# DVT_TRANSCODER_BIND and DVT_TRANSCODER_PEERS; map them to what your image
+# reads. This example passes the bind address as the first argument, the way
+# a stock ambed is started ("ambed <ip>").
+services:
+  transcoder-ref:
+    command: ["${DVT_NET:-172.30.0}.20"]
+  transcoder-sut:
+    command: ["${DVT_NET:-172.30.0}.21"]
+  # An image configured by environment instead:
+  # transcoder-ref:
+  #   environment:
+  #     <YOUR_BIND_VAR>: ${DVT_NET:-172.30.0}.20
+  #     <YOUR_PEER_VAR>: ${DVT_NET:-172.30.0}.10 ${DVT_NET:-172.30.0}.30
