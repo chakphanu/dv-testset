@@ -196,3 +196,32 @@ def test_dextra_zero_frames_sync_note(tmp_path):
     w.send(R, dextra.PORT, T, 40001, dextra.voice(0x2222, 25, bytes(9), True), 0.020)
     msg = [f for f in w.check(tmp_path)["findings"] if f["code"] == "dextra.sync_missing"][0]["message"]
     assert msg.endswith("(all AMBE frames zero: transcoder bypass, upstream)")
+
+
+def m17_relay_wire(m17_first=True, start=2, drop=()):
+    """M17 fn 0 into the reflector, then the D-STAR stream it relays."""
+    w = Wire()
+    w.send(T, 40003, R, m17.PORT, m17.conn_packet("N0TEST", "B"))
+    w.send(T, 40001, R, dextra.PORT, dextra.link_packet("N0TEST", "B"), 0.01)
+    if m17_first:
+        w.send(T, 40003, R, m17.PORT, m17.packet(0x4343, 0, "N0TEST", bytes(16)), 0.01)
+        w.send(T, 40003, R, m17.PORT, m17.packet(0x4343, 1, "N0TEST", bytes(16), eot=True), 0.04)
+    w.send(R, dextra.PORT, T, 40001, dextra.header(0x3333, "N0TEST", "B"), 0.01)
+    for seq in range(start, 30):
+        if seq not in drop:
+            slow = dextra.SYNC_DATA if seq % 21 == 0 else dextra.SLOW_DATA
+            w.send(R, dextra.PORT, T, 40001, dextra.voice(0x3333, seq, FRAME, False, slow), 0.020)
+    w.send(R, dextra.PORT, T, 40001, dextra.voice(0x3333, 30, FRAME, True), 0.020)
+    return w
+
+
+def test_dextra_m17_frame0_drop_is_upstream(tmp_path):
+    result = m17_relay_wire().check(tmp_path)
+    assert codes(result, "error") == [] and codes(result) == ["dextra.seq_loss"]
+    assert result["findings"][0]["message"].endswith("(upstream: M17 frame 0 dropped)")
+    assert result["protocols"]["dextra"]["streams"][0]["loss"] == 2
+    # without an M17 source, or with any other gap, a seq_loss stays an error
+    assert codes(m17_relay_wire(m17_first=False).check(tmp_path), "error") == ["dextra.seq_loss"]
+    assert codes(m17_relay_wire(start=3).check(tmp_path), "error") == ["dextra.seq_loss"]
+    result = m17_relay_wire(drop=(12,)).check(tmp_path)
+    assert [f["severity"] for f in result["findings"] if f["code"] == "dextra.seq_loss"] == ["warn", "error"]

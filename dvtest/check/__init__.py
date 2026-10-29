@@ -112,8 +112,9 @@ def check_file(path, rig=None, jitter_ms=None, windows=()):
                 seen[d.dst] += 1
         own = seen.most_common(1)[0][0] if seen else None
     rig_hosts = set(rig["hosts"].values()) if rig else None
-    checkers = [ambed.Checker(report), dextra.Checker(report), dmr.Checker(report),
-                m17.Checker(report), iax2.Checker(report),
+    m17_checker = m17.Checker(report)
+    checkers = [ambed.Checker(report), dextra.Checker(report, m17_checker), dmr.Checker(report),
+                m17_checker, iax2.Checker(report),
                 usrp.Checker(report, rig["usrp"] if rig else ())]
     names = [ambed.NAME, dextra.NAME, dmr.NAME, m17.NAME, iax2.NAME, usrp.NAME]
     foreign = multicast = 0

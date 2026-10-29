@@ -15,6 +15,7 @@ class Checker:
         self.report = report
         self.streams = Live(self._ended)
         self.linked = set()
+        self.starts = []          # ts of fn 0 voice packets sent to the reflector
 
     def claims(self, d):
         return M.PORT in (d.sport, d.dport)
@@ -48,6 +49,8 @@ class Checker:
         stream_id = int.from_bytes(p[4:6], "big")
         value = int.from_bytes(p[34:36], "big")
         fn, eot = value & 0x7FFF, bool(value & 0x8000)
+        if fn == 0 and d.dport == M.PORT and d.ts is not None:
+            self.starts.append(d.ts)
         key = (flow_of(d), stream_id)
         st = self.streams.live.get(key)
         if st is None:

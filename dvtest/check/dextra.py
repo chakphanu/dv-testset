@@ -5,6 +5,10 @@ from ..proto import dextra as D
 from .common import ERROR, WARN, Live, Stream, finish_stream, flow_of, seq_finding
 
 NAME = "dextra"
+# xlxd (cm17protocol.cpp) accepts M17 voice only for frame number > 0, so a
+# D-STAR stream relayed from M17 starts at frame 2; the M17 fn 0 packet
+# reaches the reflector this close before the D-STAR header
+M17_LEAD = 1.0
 
 
 def kind_of(p):
@@ -23,8 +27,11 @@ def kind_of(p):
 
 
 class Checker:
-    def __init__(self, report):
+    def __init__(self, report, m17=None):
+        """m17: the dvtest.check.m17 Checker of the same capture (its
+        fn 0 times mark M17-sourced streams)."""
         self.report = report
+        self.m17 = m17
         self.streams = Live(self._ended)
         self.linked = set()       # client (ip, port) that sent a link
 
@@ -76,6 +83,11 @@ class Checker:
         if p[14] & 0x80 or seq > 20:
             r.error(NAME, d, "bad_counter", "frame counter byte %02x" % p[14])
             return
+        if st.frames == 0 and st.expect == 0 and seq == 2 and self._from_m17(st.t0):
+            st.expect = None
+            st.loss = 2
+            r.warn(NAME, d, "seq_loss", "sequence jump, 2 frame(s) missing in %s"
+                   " (upstream: M17 frame 0 dropped)" % st.name)
         seq_finding(r, NAME, d, st, st.add(d, seq))
         if not last and any(p[15:24]):
             st.notes["voice_nonzero"] += 1
@@ -86,6 +98,10 @@ class Checker:
             st.notes["sync_misplaced"] += 1
         if last:
             self.streams.terminate(key, d)
+
+    def _from_m17(self, header_ts):
+        return self.m17 is not None and header_ts is not None and any(
+            0 <= header_ts - ts <= M17_LEAD for ts in self.m17.starts)
 
     def _new(self, key, d, stream_id, header):
         st = Stream(NAME, key[0], "stream %04x" % stream_id, 21, 0.020, d, 0 if header else None)
