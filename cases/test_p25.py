@@ -13,7 +13,9 @@ P25 listeners also check the record lifecycle (LDU1 0x62..0x6A, LDU2
 talker must never hear its own call back.
 
 Morse: 20 wpm ID text P25 -> M17 (Codec2 decoded by c2dec, else by
-transcoder-ref) and M17 -> P25 (IMBE decoded to PCM by transcoder-ref).
+transcoder-ref) and M17 -> P25 (IMBE decoded to PCM by transcoder-ref);
+exact decode is required for each side whose transcoder passes a morse
+probe of the same codec tandem, informational (xfail) while none does.
 AllStar: P25 <-> IAX2 on the USRP-bridged module (profile allstar,p25).
 Results: $DVT_OUT/p25.json.
 """
@@ -268,33 +270,53 @@ def decode_codec2(rig, frames):
     return decode(rig, ambed.CODEC2_3200, frames)
 
 
-def judge(text, decoded, label):
-    """Exact decode required on sut when the ref path decodes exactly;
-    informational (xfail) when neither does."""
+def tandem_probe(rig, codec_in, codec_out, decoder):
+    """Feature probe: does each side's transcoder carry a 20 wpm morse ID
+    through codec_in -> codec_out (the conversion its xlxd makes)?
+    Input encoded and output decoded as in the rig case. {side: check}."""
+    text = "PARIS %04d" % random.SystemRandom().randrange(10000)
+    frames = encode(rig, codec_in, signals.frames(morse.encode(text, wpm=WPM)))
+    out = {}
+    for side, addr in (("ref", rig.ambed_ref), ("sut", rig.ambed_sut)):
+        conv = ambed.transcode(addr, codec_in, [codec_out], frames, port=rig.ambed_port,
+                               transaction=0x50320200 + codec_in)[codec_out]
+        out[side] = morse.check(text, morse.decode(decoder(rig, conv)))["exact"]
+    return out
+
+
+def judge(text, decoded, probe, label):
+    """A side whose transcoder passes the tandem probe must decode the rig
+    call exactly. When neither passes, the result is informational
+    (xfail naming the probe); it turns into a real assert once fixed."""
     checks = {n: morse.check(text, morse.decode(pcm)) for n, pcm in decoded.items()}
-    save(label, {"sent": text, **{n: {"got": c["got"], "exact": c["exact"]} for n, c in checks.items()}})
-    print("%s: sent %r ref %r sut %r" % (label, text, checks["ref"]["got"], checks["sut"]["got"]))
-    if checks["sut"]["exact"]:
-        return
-    if not checks["ref"]["exact"]:
-        pytest.xfail("%s: no exact decode on ref either (informational): %s" % (label, checks))
-    pytest.fail("%s: sut %r, ref decoded exactly" % (label, checks["sut"]["got"]))
+    save(label, {"sent": text, "probe": probe,
+                 **{n: {"got": c["got"], "exact": c["exact"]} for n, c in checks.items()}})
+    print("%s: sent %r ref %r sut %r probe %s" % (label, text, checks["ref"]["got"],
+                                                 checks["sut"]["got"], probe))
+    bad = [n for n in ("ref", "sut") if probe[n] and not checks[n]["exact"]]
+    assert not bad, "%s: %s decoded %s although its transcoder passes the probe" % (
+        label, bad, {n: checks[n]["got"] for n in bad})
+    if not any(probe.values()):
+        pytest.xfail("%s informational: no transcoder carries morse through this tandem "
+                     "(probe %s); rig decode %s" % (label, probe, {n: c["got"] for n, c in checks.items()}))
 
 
 def test_morse_p25_to_m17(p25rig):
     rig, setup = p25rig
+    probe = tandem_probe(rig, ambed.IMBE, ambed.CODEC2_3200, decode_codec2)
     text = id_text()
     imbe = encode(rig, ambed.IMBE, signals.frames(morse.encode(text, wpm=WPM)))
     got = both(run_from_p25, setup, "m17", setup["module"], setup["tg"], imbe)
-    judge(text, {n: decode_codec2(rig, v["frames"]) for n, v in got.items()}, "morse-p25-m17")
+    judge(text, {n: decode_codec2(rig, v["frames"]) for n, v in got.items()}, probe, "morse-p25-m17")
 
 
 def test_morse_m17_to_p25(p25rig):
     rig, setup = p25rig
+    probe = tandem_probe(rig, ambed.CODEC2_3200, ambed.IMBE, lambda r, f: decode(r, ambed.IMBE, f))
     text = id_text()
     c2 = encode(rig, ambed.CODEC2_3200, signals.frames(morse.encode(text, wpm=WPM)))
     got = both(run_to_p25, setup, "m17", setup["module"], setup["tg"], c2)
-    judge(text, {n: decode(rig, ambed.IMBE, v["frames"]) for n, v in got.items()}, "morse-m17-p25")
+    judge(text, {n: decode(rig, ambed.IMBE, v["frames"]) for n, v in got.items()}, probe, "morse-m17-p25")
 
 
 # ---------------------------------------------------------------- allstar

@@ -18,7 +18,7 @@ LCF/MFID/service options (0x64), destination TG (0x65), source id
 parity, low-speed data and status bytes are sent as zero."""
 import time
 
-from ..net import UdpClient
+from ..net import UdpClient, pace
 
 PORT = 41000
 POLL = 0xF0
@@ -220,7 +220,11 @@ class P25Client:
         if time.monotonic() - self.last_poll >= POLL_PERIOD:
             self.keepalive()
         self.pump(settle)
-        self.client.paced(self.dest, voice_records(frames, self.src_id, self.tg), gap)
+        start = time.monotonic()
+        for index, data in enumerate(voice_records(frames, self.src_id, self.tg)):
+            pace(start, index, gap)
+            self.client.send(self.dest, data)
+            self.client.drain()
         self.pump(tail)
 
     def records(self):
