@@ -2,12 +2,15 @@
 """DMR over the MMDVM/Homebrew repeater protocol (UDP 62030) to xlxd.
 The DMR id must exist in the reflector's dmrid.dat; TG 4001..4026 map to
 modules A..Z, TG 4000 unlinks."""
+import random
+
 from ..net import UdpClient
 
 PORT = 62030
 DMR_ID = 1023007
 PACKET_SIZE = 55
 DATA_SYNC = (0xFF, 0x57, 0xD7, 0x5D, 0xF5)
+_rng = random.SystemRandom()
 
 
 def data_sync_payload():
@@ -108,24 +111,33 @@ class DmrClient:
         self.client.pump(timeout)
         self.client.send(self.dest, b"RPTPING" + ident)
         self.client.pump(0.2)
-        # Join the module: a header, then a terminator, both to the
-        # module's talkgroup. The terminator follows well inside xlxd's
-        # 1.6 s stream timeout so the join is a complete (empty) stream.
-        self.client.send(self.dest, packet(0, self.id, self.tg, self.id, 0xA1, 0x01020304,
-                                           data_sync_payload()))
-        self.client.pump(join_gap)
-        self.client.send(self.dest, packet(1, self.id, self.tg, self.id, 0xA2, 0x01020304,
-                                           data_sync_payload()))
-        self.client.pump(1.0)
+        self.join(None, join_gap)
         return True
+
+    def join(self, module=None, gap=0.3):
+        """Join a module (default: the current one): a header, then a
+        terminator, both to the module's talkgroup. The terminator follows
+        well inside xlxd's 1.6 s stream timeout, so the join is a complete
+        (empty) stream."""
+        if module is not None:
+            self.tg = module_tg(module)
+        self._empty_stream(self.tg, gap)
+        self.client.pump(1.0)
+
+    def _empty_stream(self, tg, gap):
+        # xlxd acts on link/unlink only in the header of a new stream id
+        sid = _rng.randrange(1, 1 << 32)
+        self.client.send(self.dest, packet(0, self.id, tg, self.id, 0xA1, sid, data_sync_payload()))
+        self.client.pump(gap)
+        self.client.send(self.dest, packet(1, self.id, tg, self.id, 0xA2, sid, data_sync_payload()))
 
     def keepalive(self):
         """Repeater keepalive; xlxd drops a silent DMR client after ~100 s."""
         self.client.send(self.dest, b"RPTPING" + self.id.to_bytes(4, "big"))
 
     def unlink(self):
-        self.client.send(self.dest, packet(0, self.id, 4000, self.id, 0xA2, 0x33333333,
-                                           data_sync_payload()))
+        """TG 4000 unlinks: a header and a terminator on a new stream id."""
+        self._empty_stream(4000, 0.3)
         self.client.pump(0.4)
 
     def talk(self, frames, stream_id=0x22222222, settle=1.2, tail=2.0):
@@ -133,7 +145,8 @@ class DmrClient:
                                            data_sync_payload()))
         self.client.pump(settle)
         packets, seq = voice_packets(frames, self.id, self.tg, stream_id)
-        self.client.paced(self.dest, packets, 0.060)
+        # send times of the voice bursts (header/terminator excluded)
+        self.last_stamps = self.client.paced(self.dest, packets, 0.060)
         self.client.send(self.dest, packet(seq, self.id, self.tg, self.id, 0xA2, stream_id,
                                            data_sync_payload()))
         self.client.pump(tail)

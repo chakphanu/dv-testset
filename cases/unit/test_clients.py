@@ -25,3 +25,35 @@ def test_make_kinds():
             assert client.dest is None
         finally:
             clients.close(client)
+
+
+def test_extra_kinds_make_and_codec():
+    for kind in clients.EXTRA_KINDS:
+        assert clients.CODEC[kind] in (1, 2)
+        client = clients.make(kind, "D", 0)
+        try:
+            assert client.dest is None
+        finally:
+            clients.close(client)
+    frames = signals.prng_frames("dstar", 4, seed=2)
+    assert clients.wire_frames("dplus", frames) == frames == clients.wire_frames("dcs", frames)
+
+
+def test_talk_records_send_stamps():
+    import socket
+    sink = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sink.bind(("127.0.0.1", 0))
+    try:
+        for kind, count in (("dstar", 5), ("dmr", 6), ("m17", 6)):
+            client = clients.make(kind, "D", 0)
+            client.dest = sink.getsockname()
+            try:
+                clients.talk(client, kind, signals.prng_frames(kind, count, seed=3), tail=0)
+                voice = {"dstar": count + 1, "dmr": count // 3, "m17": count // 2 + 1}[kind]
+                assert len(client.last_stamps) == voice
+                assert client.last_stamps == sorted(client.last_stamps)
+            finally:
+                client.dest = None
+                client.close()
+    finally:
+        sink.close()

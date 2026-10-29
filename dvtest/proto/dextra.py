@@ -129,7 +129,8 @@ class DstarClient:
         packets.append(voice(stream_id, len(frames), b"\x00" * 9, True))
         self.client.send(self.dest, packets[0])
         self.client.pump(settle)
-        self.client.paced(self.dest, packets[1:], 0.020)
+        # send times of the voice packets (header excluded), for latency
+        self.last_stamps = self.client.paced(self.dest, packets[1:], 0.020)
         self.client.pump(tail)
 
     def collect(self, settle=1.5):

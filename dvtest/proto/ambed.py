@@ -412,17 +412,18 @@ class FakeAmbed:
 
 
 def transcode(addr, codec_in, outs, frames, port=PORT, transaction=0x44565400, callsign="N0TEST",
-              bind_ip="0.0.0.0"):
+              bind_ip="0.0.0.0", gap=0.02):
     """Run frames through one extended stream of a transcoder; returns
-    {codec: [payload per frame]}. Raises RuntimeError when the open is
-    refused or replies are missing."""
+    {codec: [payload per frame]}. gap < 0.02 pushes recorded frames faster
+    than real time (software transcoders keep up). Raises RuntimeError when
+    the open is refused or replies are missing."""
     client = AmbedClient(addr, port, bind_ip=bind_ip)
     try:
         std = parse_std(client.rpc(open_ext(callsign, codec_in, outs, transaction)) or b"")
         if std is None:
             raise RuntimeError("transcoder %s refused %d -> %s" % (addr, codec_in, list(outs)))
         try:
-            replies = run_stream(addr, std.port, codec_in, outs, frames, bind_ip=bind_ip)
+            replies = run_stream(addr, std.port, codec_in, outs, frames, gap=gap, bind_ip=bind_ip)
         finally:
             client.close_stream(std.stream_id)
     finally:

@@ -118,7 +118,8 @@ class M17Client:
         packets = voice_packets(frames8, stream_id, self.callsign)
         self.client.send(self.dest, packets[0])
         self.client.pump(settle)
-        self.client.paced(self.dest, packets[1:], gap)
+        # send times of the voice packets (packet 0 excluded), for latency
+        self.last_stamps = self.client.paced(self.dest, packets[1:], gap)
         self.client.pump(tail)
 
     def collect(self, settle=1.5):

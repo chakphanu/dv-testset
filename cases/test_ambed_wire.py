@@ -6,14 +6,21 @@ Implementation neutral: which codecs are expected to work comes from the
 transcoder's own CAPS reply. Inputs are generated (tone bursts), never
 shipped audio. Needs DVT_AMBED_ADDR (or TRANSCODER_IMAGE).
 """
+import socket
+import time
+
 import pytest
 
 from dvtest.audio import score, signals
+from dvtest.net import pace
 from dvtest.proto import ambed
 
 pytestmark = pytest.mark.wire
 
 CALLSIGN = "N0TEST"
+# streams that break the protocol on purpose (A18-A20): dvcheck turns their
+# findings into tagged warnings
+FAULT_CALLSIGN = "N0FAULT"
 FRAMES = 50
 
 
@@ -42,8 +49,8 @@ def need(caps, *codecs):
         pytest.skip("transcoder does not announce codecs %s (mask 0x%02x)" % (codecs, caps.mask))
 
 
-def open_std(ctl, codec_in, outs, transaction):
-    reply = ctl.rpc(ambed.open_ext(CALLSIGN, codec_in, outs, transaction))
+def open_std(ctl, codec_in, outs, transaction, callsign=CALLSIGN):
+    reply = ctl.rpc(ambed.open_ext(callsign, codec_in, outs, transaction))
     std = ambed.parse_std(reply or b"")
     assert std is not None and std.transaction is not None, \
         "extended open %d->%s: expected STD18, got %r" % (codec_in, list(outs), reply)
@@ -320,3 +327,145 @@ def test_stream_cap(ctl, caps, target):
     assert all(len(r) == 18 for r in replies[:cap]), [len(r) for r in replies]
     assert replies[cap] == ambed.busy(0x5000 + cap), replies[cap]
 
+
+
+# ---------------------------------------------------------------- stream life
+
+class DataPort:
+    """One local socket on a stream port, kept across open/close so late
+    replies are seen. ambed answers the opener address at the stream port."""
+
+    def __init__(self, addr, port, local_port=None):
+        self.dest = (addr, port)
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.bind(("0.0.0.0", port if local_port is None else local_port))
+        self.sock.setblocking(False)
+
+    def send(self, codec, pid, payload):
+        self.sock.sendto(ambed.data_request(codec, pid, payload), self.dest)
+
+    def recv_all(self, seconds):
+        out = []
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            try:
+                out.append(self.sock.recvfrom(4096)[0])
+            except BlockingIOError:
+                time.sleep(0.01)
+        return out
+
+    def close(self):
+        self.sock.close()
+
+
+def send_paced(port, codec, frames, first_pid=0):
+    start = time.monotonic()
+    for index, frame in enumerate(frames):
+        pace(start, index)
+        port.send(codec, first_pid + index, frame)
+
+
+def test_close_stops_replies(ctl, caps, ambed_addr):
+    """A18: after AMBEDCS the stream answers no more data."""
+    need(caps, ambed.CODEC2_3200, ambed.PCM)
+    std = open_std(ctl, ambed.PCM, [ambed.CODEC2_3200], 0x41180001, callsign=FAULT_CALLSIGN)
+    port = DataPort(ambed_addr[0], std.port)
+    try:
+        send_paced(port, ambed.PCM, source_pcm()[:10])
+        before = port.recv_all(1.0)
+        ctl.close_stream(std.stream_id, settle=0.3)
+        port.recv_all(0.2)
+        send_paced(port, ambed.PCM, source_pcm()[10:20], first_pid=10)
+        after = port.recv_all(1.5)
+    finally:
+        port.close()
+    assert len(before) == 10, "open stream answered %d of 10 frames" % len(before)
+    assert not after, "%d replies after AMBEDCS" % len(after)
+
+
+IDLE_TIMEOUT_S = 3.0        # reference ambed stream activity timeout
+
+
+def test_idle_stream_times_out(ctl, caps, ambed_addr):
+    """A19: a stream that gets no data is closed by the transcoder after
+    its idle timeout (reference 3 s): data sent later gets no reply. The
+    timeout is not advertised; the reference value plus 2 s is used."""
+    need(caps, ambed.CODEC2_3200, ambed.PCM)
+    std = open_std(ctl, ambed.PCM, [ambed.CODEC2_3200], 0x41190001, callsign=FAULT_CALLSIGN)
+    port = DataPort(ambed_addr[0], std.port)
+    try:
+        time.sleep(IDLE_TIMEOUT_S + 2.0)
+        send_paced(port, ambed.PCM, source_pcm()[:5])
+        late = port.recv_all(1.5)
+    finally:
+        port.close()
+        ctl.close_stream(std.stream_id)
+    assert not late, "idle stream still answered %d of 5 frames %.0f s after the open" % (
+        len(late), IDLE_TIMEOUT_S + 2.0)
+    # the slot is usable again: a fresh open succeeds
+    again = open_std(ctl, ambed.PCM, [ambed.CODEC2_3200], 0x41190002)
+    ctl.close_stream(again.stream_id)
+
+
+@pytest.mark.xfail(reason="reference ambed takes stream data from any source: cstream.cpp reads the "
+                          "sender address and never compares it with the opener (PR #272 tree)",
+                   strict=False)
+def test_data_from_other_port_ignored(ctl, caps, ambed_addr):
+    """A20: data for a stream from another source port of the opener's
+    address is ignored (no reply to either socket). A different source
+    IP is not tested: the tester has one address. Expected to fail on
+    transcoders that follow the reference (xfail, reported, not hidden)."""
+    need(caps, ambed.CODEC2_3200, ambed.PCM)
+    std = open_std(ctl, ambed.PCM, [ambed.CODEC2_3200], 0x41200001, callsign=FAULT_CALLSIGN)
+    owner = DataPort(ambed_addr[0], std.port)
+    stranger = DataPort(ambed_addr[0], std.port, local_port=0)
+    try:
+        send_paced(stranger, ambed.PCM, source_pcm()[:10], first_pid=100)
+        to_owner = owner.recv_all(1.0)
+        to_stranger = stranger.recv_all(0.2)
+        send_paced(owner, ambed.PCM, source_pcm()[:5])
+        own = owner.recv_all(1.0)
+    finally:
+        owner.close()
+        stranger.close()
+        ctl.close_stream(std.stream_id)
+    assert not to_stranger, "%d replies to the foreign source port" % len(to_stranger)
+    assert not to_owner, "data from a foreign port was transcoded (%d replies, pids %s)" % (
+        len(to_owner), sorted({r[1] for r in to_owner}))
+    assert len(own) == 5, "the opener still gets answers (%d of 5)" % len(own)
+
+
+CONCURRENT = 8
+
+
+def test_concurrent_streams_do_not_mix(ctl, caps, ambed_addr):
+    """A21: eight streams, each fed its own tone, interleaved frame by
+    frame: every stream returns exactly what the same input gives alone."""
+    need(caps, ambed.CODEC2_3200, ambed.PCM)
+    inputs = [signals.frames(signals.tone(400 + 150 * k, 600)) for k in range(CONCURRENT)]
+    solo = [stream(ctl, ambed_addr, ambed.PCM, [ambed.CODEC2_3200], frames, 0x41210100 + k)
+            for k, frames in enumerate(inputs)]
+    stds = [open_std(ctl, ambed.PCM, [ambed.CODEC2_3200], 0x41210200 + k) for k in range(CONCURRENT)]
+    ports = [DataPort(ambed_addr[0], std.port) for std in stds]
+    got = [[] for _ in range(CONCURRENT)]
+    try:
+        start = time.monotonic()
+        for index in range(len(inputs[0])):
+            pace(start, index)
+            for k, port in enumerate(ports):
+                port.send(ambed.PCM, index, inputs[k][index])
+            for k, port in enumerate(ports):
+                got[k] += port.recv_all(0)
+        for k, port in enumerate(ports):
+            got[k] += port.recv_all(1.0 if k == 0 else 0.1)
+    finally:
+        for port in ports:
+            port.close()
+        for std in stds:
+            ctl.close_stream(std.stream_id)
+    for k in range(CONCURRENT):
+        payloads = [dict(ambed.parse_data_reply(r, [ambed.CODEC2_3200])[1])[ambed.CODEC2_3200]
+                    for r in got[k]]
+        expected = [p[ambed.CODEC2_3200] for p in solo[k]]
+        assert payloads == expected, "stream %d (%d Hz): %d replies, differs from its solo run" % (
+            k, 400 + 150 * k, len(payloads))
