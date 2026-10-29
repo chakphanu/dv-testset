@@ -12,7 +12,7 @@ judged against xlxd-ref and need no entry here.
 SPEC = {
     # B1 first talker: exactly one winner, no mixing (which one is open)
     "test_first_talker_wins": {"winners": 1},
-    # B2 late entry default deny, never promoted after the first stream
+    # B2 late entry default deny, silent (no NACK), never promoted later
     "test_late_entry_denied": {"late_entry": "deny"},
     # B2 knob "pending" (not configured by default: the case skips)
     "test_late_entry_pending": {"late_entry": "deny"},
@@ -46,8 +46,13 @@ SPEC = {
     "test_no_load_loss_latency": {"loss": 0},
     # B7 AMBEd open policy, read by the netns link cases through specs.rule
     "ambed_open": "extended_always",
-    # B10 interop obligation: egress keeps the ingress sid (test_sid_preserved)
-    "sid_kept": ("dstar", "dmr", "m17"),
+    # B10 stream ids: same-protocol egress carries the exact ingress sid on
+    # every protocol (test_sid_preserved); cross-protocol egress carries the
+    # canonical id in the target width: low 16 bits for D-STAR/M17, zero
+    # extended for DMR (test_sid_cross_mapping). A patch to two modules of
+    # one peer rewrites the second leg (placeholder case).
+    "sid_kept": ("dstar", "dmr", "m17", "xlx", "dextra"),
+    "sid_cross": "canonical",
 }
 
 # B12: header fields DV-Router does not verify, because the tester (like

@@ -160,9 +160,8 @@ def test_late_entry_denied(rig, behaviour_spec):
     """B2: a header that finds the module busy. DV-Router late_entry
     "deny": the late talker is never relayed, also not after the first
     stream ends (no promotion). xlxd profile: the sut relays the late
-    talker iff xlxd-ref does. The protocol NACK of the deny is not checked:
-    none of the tester's protocols (DExtra, MMDVM, M17) has a per-stream
-    NACK."""
+    talker iff xlxd-ref does. The deny is silent by the DV-Router spec (no
+    NACK)."""
     got = both(rig, late_on_busy, "N")
     print("late entry on a busy module:", got)
     for name, r in got.items():
@@ -426,6 +425,53 @@ def test_sid_preserved(rig, kind):
             kind, got["sut"])
     if kind in (specs.rule(rig, "sid_kept") or ()):
         assert got["sut"]["kept"], "%s stream id not kept, the profile requires it: %s" % (kind, got["sut"])
+
+
+CROSS_SID = [("dmr", "dstar"), ("dmr", "m17"), ("dstar", "dmr"), ("dstar", "m17"), ("m17", "dstar")]
+
+
+def sid_cross(ip, src, dst):
+    """Does a dst listener see the talker's stream id in its own width
+    (low 16 bits for D-STAR/M17, zero extended for DMR)?"""
+    talker = clients.make(src, "V", 0)
+    listener = clients.make(dst, "V", 1)
+    try:
+        linked(ip, listener, talker)
+        sid = clients.talk(talker, src, signals.prng_frames(src, 30, seed="b10x"), tail=1.0)
+        listener.client.pump(0.5)
+        if dst == "dstar":
+            seen = {v[0] for v in map(dextra.parse_voice, listener.client.inbox) if v}
+        elif dst == "dmr":
+            seen = {p["stream"] for p in map(dmr.parse, listener.client.inbox) if p}
+        else:
+            seen = {p["stream_id"] for p in map(m17.parse, listener.client.inbox) if p}
+        want = sid if dst == "dmr" else sid & 0xFFFF
+        return {"mapped": seen == {want}, "seen": sorted(seen)[:3], "want": want}
+    finally:
+        clients.close(talker, listener)
+
+
+@pytest.mark.parametrize("pair", CROSS_SID, ids=["%s-%s" % p for p in CROSS_SID])
+def test_sid_cross_mapping(rig, pair):
+    """B10 (interop): cross-protocol egress carries the stream's canonical
+    id in the target width. Required when the profile spec says "sid_cross":
+    "canonical" (DV-Router); under the xlxd profile the sut must map where
+    xlxd-ref does."""
+    from dvtest import specs
+    got = both(rig, sid_cross, *pair)
+    print("%s -> %s sid:" % pair, got)
+    if specs.rule(rig, "sid_cross") == "canonical":
+        assert got["sut"]["mapped"], "%s -> %s: sut egress sid %s, want %s" % (
+            pair + (got["sut"]["seen"], got["sut"]["want"]))
+    elif got["ref"]["mapped"]:
+        assert got["sut"]["mapped"], "%s -> %s: ref maps the sid, sut does not: %s" % (pair + (got["sut"],))
+
+
+def test_sid_patch_second_leg_rewritten(rig):
+    """B10 exception: a patch that sends one stream to two modules of the
+    same peer rewrites the second leg's sid. Placeholder: the rig has no
+    patch configuration yet."""
+    pytest.skip("patch to two modules of one peer: no rig configuration yet")
 
 
 # ---------------------------------------------------------------- B14
