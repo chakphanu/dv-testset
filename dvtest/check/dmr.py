@@ -16,6 +16,7 @@ HEADER, TERMINATOR = 1, 2
 RPTCL_SIZE = 13
 # xlxd refreshes its client cache every 1.0 s (RefreshClientCache), so
 # DMRD to a removed client inside that window is a known upstream effect
+# (a warning; dvtest.check.differential() raises it on sut-only captures)
 CACHE_WINDOW = 1.0
 
 
@@ -64,15 +65,19 @@ class Checker:
                 len(p), RPTCL_SIZE))
         elif kind in ("mstcl", "rptcl"):
             self.closed[peer] = (d.frame, d.ts, kind.upper())
-            for key in [k for k in self.streams.live if _of_peer(k[0], peer)]:
+            cut = [k for k in self.streams.live if _of_peer(k[0], peer)]
+            for key in cut:
                 self.streams.end(key, "peer closed")
+            if cut:     # precondition of after_close for the ref/sut comparison
+                p_ = r.proto(NAME)
+                p_["closes_mid_stream"] = p_.get("closes_mid_stream", 0) + 1
         if kind not in ("voice", "voice_sync", "header", "terminator", "data", "bad_type"):
             return
         if peer in self.closed:
             frame, ts, tag = self.closed[peer]
             text = "DMRD after the %s at frame %d closed this peer" % (tag, frame)
             if tag == "MSTCL" and d.ts is not None and ts is not None and d.ts - ts <= CACHE_WINDOW:
-                r.error(NAME, d, "after_close_cache", text + " (upstream: client cache not invalidated"
+                r.warn(NAME, d, "after_close_cache", text + " (upstream: client cache not invalidated"
                         " on remove, within %.1f s)" % CACHE_WINDOW)
             else:
                 r.error(NAME, d, "after_close", text)

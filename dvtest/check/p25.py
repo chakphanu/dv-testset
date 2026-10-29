@@ -64,11 +64,12 @@ class Checker:
         st = self.calls.live.get(key)
         if rec["terminator"]:
             if st is None:
-                r.warn(NAME, d, "stray_terminator", "terminator without a call")
+                r.warn(NAME, d, "stray_terminator", "terminator without a call"
+                       " (upstream: xlxd relays an empty stream, e.g. a DMR join, as a lone terminator)")
             else:
                 if (st.ext + 1) % P.FRAMES_PER_LDU:
-                    r.error(NAME, d, "terminator_in_ldu", "terminator after record 0x%02x, inside an LDU" % (
-                        P.VOICE_TYPES[st.ext % SUPERFRAME]))
+                    r.warn(NAME, d, "terminator_in_ldu", "terminator after record 0x%02x, inside an LDU"
+                           " (upstream: xlxd ends a call without LDU padding)" % P.VOICE_TYPES[st.ext % SUPERFRAME])
                 self.calls.terminate(key, d)
             return
         index = P.VOICE_TYPES.index(rec["type"])

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 """dvtest.check.p25 on synthetic P25Reflector traffic built with
 dvtest.proto.p25: a clean call gives no finding, each fault its code."""
+from dvtest import check
 from dvtest.proto import p25
 from test_check_common import Wire, codes, frames_of
 
@@ -52,9 +53,24 @@ def test_faults(tmp_path):
     assert codes(result) == ["p25.record_loss"] and frames_of(result, "p25.record_loss") == [14]
     result = p25_wire("short").check(tmp_path)
     assert codes(result, "error") == ["p25.bad_length", "p25.record_loss"]
-    assert codes(p25_wire("early_end").check(tmp_path)) == ["p25.terminator_in_ldu"]
+    result = p25_wire("early_end").check(tmp_path)
+    assert codes(result, "warn") == ["p25.terminator_in_ldu"] and codes(result, "error") == []
     assert codes(p25_wire("no_terminator").check(tmp_path)) == ["p25.no_terminator"]
     assert codes(p25_wire("src").check(tmp_path)) == ["p25.field_changed"]
     assert codes(p25_wire("unlink").check(tmp_path)) == ["p25.after_unlink"]
     result = p25_wire("no_echo").check(tmp_path)
     assert codes(result) == ["p25.no_echo"]
+
+
+def test_terminator_in_ldu_differential(tmp_path):
+    """Upstream warn on p25-sut stays a warn when p25-ref shows it too,
+    and becomes an error when only the sut shows it next to a P25 call."""
+    early = p25_wire("early_end")
+    sut = check.check_file(early.save(tmp_path / "p25-sut.pcapng"))
+    ref = check.check_file(p25_wire().save(tmp_path / "p25-ref.pcapng"))
+    check.differential([ref, sut])
+    assert codes(sut, "error") == ["p25.terminator_in_ldu"] and sut["errors"] == 1
+    sut = check.check_file(str(tmp_path / "p25-sut.pcapng"))
+    ref = check.check_file(early.save(tmp_path / "p25-ref.pcapng"))
+    check.differential([ref, sut])
+    assert sut["errors"] == 0 and codes(sut, "warn") == ["p25.terminator_in_ldu"]

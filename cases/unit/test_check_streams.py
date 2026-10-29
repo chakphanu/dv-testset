@@ -2,6 +2,7 @@
 """dvtest.check on synthetic DExtra, DMR, M17 and USRP streams built with
 the dvtest.proto encoders: clean streams give no finding, each injected
 fault its code."""
+from dvtest import check
 from dvtest.proto import dextra, dmr, m17, usrp
 from test_check_common import Wire, codes, frames_of
 
@@ -180,12 +181,65 @@ def test_dmr_close_forms(tmp_path):
     # the 13 B form closes the peer
     result = dmr_wire(close=(T, b"RPTCL" + ident + b"\x00" * 4)).check(tmp_path)
     assert codes(result) == ["dmr.after_close"]
-    # DMRD right after MSTCL: upstream client-cache window, still an error
+    # DMRD right after MSTCL: upstream client-cache window, a warning
     result = dmr_wire(close=(R, b"MSTCL"), close_gap=0.5, bursts=12).check(tmp_path)
-    assert codes(result, "error") == ["dmr.after_close", "dmr.after_close_cache"]
+    assert codes(result, "error") == ["dmr.after_close"]
+    assert codes(result, "warn") == ["dmr.after_close_cache"]
     assert "upstream: client cache" in [f for f in result["findings"]
                                         if f["code"] == "dmr.after_close_cache"][0]["message"]
 
+
+def mstcl_mid_stream(after=0):
+    """A DMR stream to a peer, cut by MSTCL; `after` more DMRD follow it."""
+    w = dmr_wire(bursts=6, terminator=False)
+    w.rows.pop()                                        # drop the trailing RPTPING
+    w.t = w.rows[-1][0]
+    w.send(R, dmr.PORT, T, 40002, b"MSTCL", 0.01)
+    src, dst = dmr.DMR_ID, dmr.module_tg("B")
+    for n in range(after):
+        w.send(R, dmr.PORT, T, 40002, dmr.packet(7 + n, src, dst, src, 0x80 | (n + 1), 0x01020304,
+                                                 dmr.voice_payload(FRAME, FRAME, FRAME)), 0.060)
+    w.wait(6.0)
+    return w
+
+
+def pair(tmp_path, ref_wire, sut_wire, name="xlxd"):
+    ref = check.check_file(ref_wire.save(tmp_path / ("%s-ref.pcapng" % name)))
+    sut = check.check_file(sut_wire.save(tmp_path / ("%s-sut.pcapng" % name)))
+    check.differential([ref, sut])
+    return ref, sut
+
+
+def severities(result, code):
+    return {f["severity"] for f in result["findings"] if f["code"] == code}
+
+
+def test_differential_rule(tmp_path):
+    # the same code on both sides: upstream behaviour, a warning on both
+    ref, sut = pair(tmp_path, mstcl_mid_stream(3), mstcl_mid_stream(3))
+    assert severities(sut, "dmr.after_close_cache") == {"warn"} and sut["errors"] == 0
+    assert all("also on reference" in f["message"] for f in sut["findings"] if f["code"] == "dmr.after_close_cache")
+    # sut only, and the reference had a stream cut by MSTCL too: regression
+    ref, sut = pair(tmp_path, mstcl_mid_stream(0), mstcl_mid_stream(3))
+    assert severities(sut, "dmr.after_close_cache") == {"error"} and sut["errors"] == 3
+    # sut only, but the reference had no stream at its close: not comparable
+    idle_close = dmr_wire(close=(R, b"MSTCL"))
+    del idle_close.rows[5:]                              # login, then MSTCL with nothing flowing
+    ref, sut = pair(tmp_path, idle_close, mstcl_mid_stream(3))
+    assert severities(sut, "dmr.after_close_cache") == {"warn"}
+    assert all("not comparable on reference: no stream at close" in f["message"]
+               for f in sut["findings"] if f["code"] == "dmr.after_close_cache")
+    # any other code: both sides -> warn, sut only -> error, reference only -> warn
+    ref, sut = pair(tmp_path, dmr_wire(drop=(4,)), dmr_wire(drop=(4,)))
+    assert severities(sut, "dmr.seq_loss") == severities(ref, "dmr.seq_loss") == {"warn"}
+    ref, sut = pair(tmp_path, dmr_wire(), dmr_wire(drop=(4,)))
+    assert severities(sut, "dmr.seq_loss") == {"error"}
+    ref, sut = pair(tmp_path, dmr_wire(drop=(4,)), dmr_wire())
+    assert severities(ref, "dmr.seq_loss") == {"warn"} and ref["errors"] == 0
+    # a capture without a partner keeps its severities
+    alone = check.check_file(dmr_wire(drop=(4,)).save(tmp_path / "xlxd-sut.pcapng"))
+    check.differential([alone])
+    assert severities(alone, "dmr.seq_loss") == {"error"}
 
 def test_dextra_zero_frames_sync_note(tmp_path):
     w = Wire()

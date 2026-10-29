@@ -85,6 +85,13 @@ def _excuse(report, frame_ts, windows):
                 break
 
 
+def _in(ip, net):
+    try:
+        return ipaddress.ip_address(ip) in net
+    except ValueError:
+        return False
+
+
 def _is_group(ip):
     try:
         a = ipaddress.ip_address(ip)
@@ -102,9 +109,12 @@ def check_file(path, rig=None, jitter_ms=None, windows=()):
     own = None
     if rig and rig["hosts"].get(RIG_FILES.get(stem)):
         own = rig["hosts"][RIG_FILES[stem]]
-        if datagrams and not any(own in (d.src, d.dst) for d in datagrams):
-            raise pcap.CaptureError("rig host %s of %s is in no datagram; wrong DVT_SUBNET (%s)?" % (
-                own, stem, rig["subnet"]))
+        net = ipaddress.ip_network(rig["subnet"])
+        if datagrams and not any(_in(a, net) for d in datagrams for a in (d.src, d.dst)):
+            # an idle service only sees bridge noise, but some of it is
+            # from the rig subnet; none at all means the subnet is wrong
+            raise pcap.CaptureError("no datagram of %s touches the rig subnet %s; wrong DVT_SUBNET?" % (
+                stem, rig["subnet"]))
     if own is None:
         seen = Counter()
         for d in datagrams:
@@ -162,6 +172,69 @@ def check_file(path, rig=None, jitter_ms=None, windows=()):
             "errors": sum(1 for f in report.findings if f.severity == ERROR),
             "warnings": sum(1 for f in report.findings if f.severity == WARN),
             "findings": [f._asdict() for f in report.findings]}
+
+
+# Codes whose sut-only occurrence needs a precondition on the reference
+# side before it counts as a regression: code -> (test on a ref result,
+# what the reference lacked). Other codes compare as they are.
+def _dmr_closes(ref):
+    return ref["protocols"].get("dmr", {}).get("closes_mid_stream", 0) > 0
+
+
+def _p25_calls(ref):
+    return bool(ref["protocols"].get("p25", {}).get("streams"))
+
+
+COMPARABLE = {"dmr.after_close": (_dmr_closes, "no stream at close"),
+              "dmr.after_close_cache": (_dmr_closes, "no stream at close"),
+              "p25.terminator_in_ldu": (_p25_calls, "no P25 call"),
+              "p25.stray_terminator": (_p25_calls, "no P25 call")}
+# warnings by default (known upstream quirks) that become errors when only
+# the sut shows them on a comparable reference
+UPSTREAM_CODES = ("dmr.after_close_cache", "p25.terminator_in_ldu", "p25.stray_terminator")
+
+
+def _stem(result):
+    return os.path.basename(result["file"]).split(".")[0]
+
+
+def _mark(result, finding, severity, note):
+    finding["severity"] = severity
+    finding["message"] += " " + note
+
+
+def differential(results):
+    """Severity across a reference/system-under-test pair of captures
+    (<name>-ref vs <name>-sut, every .N part of each): a code seen on both
+    sides is upstream behaviour (warn); a code seen only on the sut is a
+    regression (error) when the reference had its precondition (COMPARABLE),
+    else a warning; errors only on the reference are warnings. Captures
+    without a partner keep their severities."""
+    sides = {}
+    for r in results:
+        name, _, side = _stem(r).rpartition("-")
+        if side in ("ref", "sut") and name:
+            sides.setdefault(name, {"ref": [], "sut": []})[side].append(r)
+    for name, pair in sides.items():
+        if not pair["ref"] or not pair["sut"]:
+            continue
+        codes = {side: {f["code"] for r in pair[side] for f in r["findings"]} for side in pair}
+        for r in pair["sut"]:
+            for f in r["findings"]:
+                if f["code"] in codes["ref"]:
+                    _mark(r, f, WARN, "(also on reference: upstream behaviour)")
+                elif f["code"] in COMPARABLE and not any(COMPARABLE[f["code"]][0](x) for x in pair["ref"]):
+                    _mark(r, f, WARN, "(not comparable on reference: %s)" % COMPARABLE[f["code"]][1])
+                elif f["code"] in UPSTREAM_CODES:
+                    _mark(r, f, ERROR, "[sut only: not seen on %s-ref, differential regression]" % name)
+        for r in pair["ref"]:
+            for f in r["findings"]:
+                if f["severity"] == ERROR:
+                    _mark(r, f, WARN, "(also on system under test)" if f["code"] in codes["sut"]
+                          else "(reference only)")
+        for r in pair["ref"] + pair["sut"]:
+            r["errors"] = sum(1 for f in r["findings"] if f["severity"] == ERROR)
+            r["warnings"] = sum(1 for f in r["findings"] if f["severity"] == WARN)
 
 
 def captures(target):
@@ -231,7 +304,9 @@ def main(argv=None):
         except (OSError, pcap.CaptureError) as exc:
             print("dvcheck: %s: %s" % (path, exc), file=sys.stderr)
             return 2
-        print("\n".join(summary_lines(results[-1], args.per_code)))
+    differential(results)
+    for result in results:
+        print("\n".join(summary_lines(result, args.per_code)))
     errors = sum(r["errors"] for r in results)
     warnings = sum(r["warnings"] for r in results)
     print("dvcheck: %d file(s), %d error(s), %d warning(s)" % (len(results), errors, warnings))
