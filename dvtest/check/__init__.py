@@ -36,7 +36,7 @@ def rig_config(subnet=None):
     hosts = {key: str(net.network_address + off) for key, off in HOST_OFFSETS.items()}
     prefix = str(net.network_address).rsplit(".", 1)[0]
     links = usrp.endpoints_from(os.path.join(ROOT, "rig", "config", "xlxd.usrp.in"), prefix)
-    return {"hosts": hosts, "usrp": links}
+    return {"hosts": hosts, "usrp": links, "subnet": str(net)}
 
 
 def outages(run_dir, hosts):
@@ -101,6 +101,9 @@ def check_file(path, rig=None, jitter_ms=None, windows=()):
     own = None
     if rig and stem in RIG_FILES:
         own = rig["hosts"][RIG_FILES[stem]]
+        if datagrams and not any(own in (d.src, d.dst) for d in datagrams):
+            raise pcap.CaptureError("rig host %s of %s is in no datagram; wrong DVT_SUBNET (%s)?" % (
+                own, stem, rig["subnet"]))
     if own is None:
         seen = Counter()
         for d in datagrams:

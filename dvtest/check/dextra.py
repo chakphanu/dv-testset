@@ -77,6 +77,8 @@ class Checker:
             r.error(NAME, d, "bad_counter", "frame counter byte %02x" % p[14])
             return
         seq_finding(r, NAME, d, st, st.add(d, seq))
+        if not last and any(p[15:24]):
+            st.notes["voice_nonzero"] += 1
         sync = p[24:27] == D.SYNC_DATA
         if seq == 0 and not sync and not last:
             st.notes["sync_missing"] += 1
@@ -103,6 +105,8 @@ class Checker:
         for note, text in (("sync_missing", "frame 0 without the sync pattern 55 2d 16"),
                            ("sync_misplaced", "sync pattern outside frame 0")):
             if st.notes[note]:
+                if not st.notes["voice_nonzero"]:
+                    text += " (all AMBE frames zero: transcoder bypass, upstream)"
                 r.add(NAME, st.flow, st.first_frame, WARN, note, "%s: %d x %s" % (st.name, st.notes[note], text))
         finish_stream(r, st)
 

@@ -6,11 +6,17 @@ from .common import ERROR, WARN, Live, Stream, finish_stream, flow_of, seq_findi
 
 NAME = "dmr"
 # control packets: tag -> allowed sizes (None = any size)
-CONTROL = ((b"RPTPING", (11,)), (b"RPTACK", (6, 10)), (b"RPTCL", (9,)), (b"RPTL", (8,)),
+CONTROL = ((b"RPTPING", (11,)), (b"RPTACK", (6, 10)), (b"RPTCL", (9, 13)), (b"RPTL", (8,)),
            (b"RPTK", (40,)), (b"RPTC", (302,)), (b"RPTO", None), (b"RPTSBKN", (11,)),
            (b"MSTPONG", (11,)), (b"MSTNAK", (6, 10)), (b"MSTCL", (5, 9)), (b"DMRA", None))
 DMRD_SIZES = (53, M.PACKET_SIZE)
 HEADER, TERMINATOR = 1, 2
+# xlxd only honours the 13 B RPTCL (IsValidDisconnectPacket); the 9 B
+# "RPTCL" + id form is ignored by the reflector
+RPTCL_SIZE = 13
+# xlxd refreshes its client cache every 1.0 s (RefreshClientCache), so
+# DMRD to a removed client inside that window is a known upstream effect
+CACHE_WINDOW = 1.0
 
 
 def kind_of(p):
@@ -28,7 +34,7 @@ class Checker:
         self.report = report
         self.streams = Live(self._ended)
         self.logged = set()       # repeater (ip, port) that sent RPTL
-        self.closed = {}          # peer -> frame of MSTCL/RPTCL
+        self.closed = {}          # peer -> (frame, ts, tag) of MSTCL/RPTCL
 
     def claims(self, d):
         return M.PORT in (d.sport, d.dport)
@@ -53,15 +59,23 @@ class Checker:
         if kind == "rptl":
             self.logged.add(peer)
             self.closed.pop(peer, None)
+        elif kind == "rptcl" and len(p) != RPTCL_SIZE:
+            r.warn(NAME, d, "close_ignored", "%d B RPTCL, the reflector only honours the %d B form" % (
+                len(p), RPTCL_SIZE))
         elif kind in ("mstcl", "rptcl"):
-            self.closed[peer] = d.frame
+            self.closed[peer] = (d.frame, d.ts, kind.upper())
             for key in [k for k in self.streams.live if _of_peer(k[0], peer)]:
                 self.streams.end(key, "peer closed")
         if kind not in ("voice", "voice_sync", "header", "terminator", "data", "bad_type"):
             return
         if peer in self.closed:
-            r.error(NAME, d, "after_close", "DMRD after the %s at frame %d closed this peer" % (
-                "MSTCL" if d.sport == M.PORT else "RPTCL", self.closed[peer]))
+            frame, ts, tag = self.closed[peer]
+            text = "DMRD after the %s at frame %d closed this peer" % (tag, frame)
+            if tag == "MSTCL" and d.ts is not None and ts is not None and d.ts - ts <= CACHE_WINDOW:
+                r.error(NAME, d, "after_close_cache", text + " (upstream: client cache not invalidated"
+                        " on remove, within %.1f s)" % CACHE_WINDOW)
+            else:
+                r.error(NAME, d, "after_close", text)
             return
         if peer not in self.logged:
             self.logged.add(peer)

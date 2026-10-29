@@ -73,13 +73,18 @@ def dmr_stream(w, sid=0x01020304, bursts=12, drop=(), order_fault=None, terminat
             w.send(R, dmr.PORT, T, port, p[:size] if i == 3 else p, 0.060)
 
 
-def dmr_wire(**kw):
+def dmr_wire(close=None, close_gap=0.0, **kw):
+    """close: (src, payload) of a close packet sent close_gap s before the stream."""
     w = Wire()
     ident = dmr.DMR_ID.to_bytes(4, "big")
     w.send(T, 40002, R, dmr.PORT, b"RPTL" + ident)
     w.send(R, dmr.PORT, T, 40002, b"RPTACK" + b"\x01\x02\x03\x04", 0.001)
     w.send(T, 40002, R, dmr.PORT, b"RPTK" + ident + b"\x00" * 32, 0.01)
     w.send(R, dmr.PORT, T, 40002, b"RPTACK", 0.001)
+    if close is not None:
+        src = (T, 40002, R, dmr.PORT) if close[0] == T else (R, dmr.PORT, T, 40002)
+        w.send(*src, close[1], 0.01)
+        w.wait(close_gap)
     dmr_stream(w, **kw)
     w.send(T, 40002, R, dmr.PORT, b"RPTPING" + ident, 6.0)
     return w
@@ -165,3 +170,29 @@ def test_usrp_clean_and_faults(tmp_path):
     assert codes(usrp_wire("no_unkey").check(tmp_path)) == ["usrp.missing_unkey"]
     result = usrp_wire("short").check(tmp_path)
     assert codes(result) == ["usrp.bad_length"] and frames_of(result, "usrp.bad_length") == [4]
+
+
+def test_dmr_close_forms(tmp_path):
+    ident = dmr.DMR_ID.to_bytes(4, "big")
+    # a 9 B RPTCL is ignored by xlxd: no close, later traffic is fine
+    result = dmr_wire(close=(T, b"RPTCL" + ident)).check(tmp_path)
+    assert codes(result) == ["dmr.close_ignored"] and frames_of(result, "dmr.close_ignored") == [5]
+    # the 13 B form closes the peer
+    result = dmr_wire(close=(T, b"RPTCL" + ident + b"\x00" * 4)).check(tmp_path)
+    assert codes(result) == ["dmr.after_close"]
+    # DMRD right after MSTCL: upstream client-cache window, still an error
+    result = dmr_wire(close=(R, b"MSTCL"), close_gap=0.5, bursts=12).check(tmp_path)
+    assert codes(result, "error") == ["dmr.after_close", "dmr.after_close_cache"]
+    assert "upstream: client cache" in [f for f in result["findings"]
+                                        if f["code"] == "dmr.after_close_cache"][0]["message"]
+
+
+def test_dextra_zero_frames_sync_note(tmp_path):
+    w = Wire()
+    w.send(T, 40001, R, dextra.PORT, dextra.link_packet("N0TEST", "B"))
+    w.send(R, dextra.PORT, T, 40001, dextra.header(0x2222, "N0TEST", "B"), 0.01)
+    for seq in range(25):
+        w.send(R, dextra.PORT, T, 40001, dextra.voice(0x2222, seq, bytes(9), False), 0.020)
+    w.send(R, dextra.PORT, T, 40001, dextra.voice(0x2222, 25, bytes(9), True), 0.020)
+    msg = [f for f in w.check(tmp_path)["findings"] if f["code"] == "dextra.sync_missing"][0]["message"]
+    assert msg.endswith("(all AMBE frames zero: transcoder bypass, upstream)")
