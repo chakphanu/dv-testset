@@ -38,14 +38,18 @@ class Checker:
             r.error(NAME, d, "unknown_peer", "USRP between endpoints that no configured link names")
         flow = flow_of(d)
         old = self.seq.get(flow)
-        if old is not None and f.seq == 0 and d.ts is not None and old.t1 is not None \
-                and d.ts - old.t1 > STREAM_TIMEOUT:
+        idle = old is not None and (old.unkeyed or (d.ts is not None and old.t1 is not None
+                                                    and d.ts - old.t1 > STREAM_TIMEOUT))
+        if f.seq == 0 and idle:
             old.notes["restarts"] += 1      # a new sender session starts at seq 0
             flush_loss(r, old)
             old.reset()
         if flow not in self.seq:
             self.seq[flow] = Stream(NAME, flow, "flow", 1 << 32, 0, d)
+            self.seq[flow].unkeyed = False
         seq_finding(r, NAME, d, self.seq[flow], self.seq[flow].add(d, f.seq))
+        # after an unkey (end of an over) a sender may restart at seq 0
+        self.seq[flow].unkeyed = f.type == U.TYPE_VOICE and not f.keyup
         if f.type not in TYPES:
             r.warn(NAME, d, "unknown_type", "frame type %d" % f.type)
             return

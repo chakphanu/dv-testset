@@ -279,3 +279,19 @@ def test_dextra_m17_frame0_drop_is_upstream(tmp_path):
     assert codes(m17_relay_wire(start=3).check(tmp_path), "error") == ["dextra.seq_loss"]
     result = m17_relay_wire(drop=(12,)).check(tmp_path)
     assert [f["severity"] for f in result["findings"] if f["code"] == "dextra.seq_loss"] == ["warn", "error"]
+
+
+def test_usrp_restart_after_unkey(tmp_path):
+    """A sender session may restart at seq 0 right after an unkey; without
+    the unkey a repeat of seq 0 is still a duplicate."""
+    pcm = b"\x01\x00" * 160
+    for unkey, want in ((True, []), (False, ["usrp.seq_dup"])):
+        w = Wire()
+        for session in range(2):
+            for seq in range(10):
+                w.send(R, 34003, T, 32003, usrp.voice(seq, pcm), 0.020)
+            if unkey or session:
+                w.send(R, 34003, T, 32003, usrp.unkey(10), 0.020)
+            w.wait(1.0)
+        w.wait(6.0)
+        assert codes(w.check(tmp_path), "error") == want
