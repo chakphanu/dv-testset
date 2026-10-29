@@ -24,4 +24,6 @@ markers = [
     "netns: needs a built xlxd (pre-fetch-xlxd.sh + make) and unshare -rn",
     "rig: needs the docker rig (rig/compose.yml, profile core)",
     "allstar: needs the docker rig with profile allstar",
+    "nxdn: needs the docker rig with profile nxdn",
+    "p25: needs the docker rig with profile p25",
 ]
