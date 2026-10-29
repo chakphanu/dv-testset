@@ -1,7 +1,11 @@
-# fetched sources, local secrets, run output
-.cache/
-.local/
-out/
+# fetched sources, local secrets, run output: the directories are kept
+# (each has a README.md placeholder), their contents are ignored
+.cache/*
+!.cache/README.md
+.local/*
+!.local/README.md
+out/*
+!out/README.md
 *-ctx/
 **/bin/
 
