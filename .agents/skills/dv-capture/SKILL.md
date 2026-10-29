@@ -15,6 +15,7 @@ PII check). Protocol layouts are in `docs/protocols/`, the rig in
 
 ```sh
 scripts/run.sh --capture -m wire                                  # transcoder only
+DVT_INSTANCE=5 scripts/run.sh --capture -m wire                   # parallel rig 5
 scripts/run.sh --capture -m rig                                   # reflectors + transcoders
 scripts/run.sh --capture --profile allstar -m "rig or allstar"    # + USRP A/B, IAX2
 ```
@@ -63,9 +64,13 @@ Traps:
   container restart, and a few bridge-flooded packets for other hosts early
   on. Filter by address (`ip.addr == 172.30.0.21`) when counting. Never
   quote that noise; mDNS can carry host names.
-- A sniffer shares its service's network namespace: when a case stops or
-  kills that service through the control channel, its capture ends there.
-  Take post-restart traffic from the peer's file.
+- A sniffer shares its service's network namespace: a control-channel
+  stop/kill ends that file, and after `start` the capture continues in
+  `<svc>.2.pcapng`, `<svc>.3.pcapng`, ... Decode each, or merge them with
+  `scripts/tshark.sh -r` per file and sum; the stop..start gap is only in
+  the xlxd-side file.
+- Parallel rigs: `DVT_INSTANCE=<n>` puts results in `out/<utc>-i<n>/` and
+  addresses in `172.30.<n>.0/24`; adjust address filters.
 
 Per-protocol display filters:
 

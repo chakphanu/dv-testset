@@ -55,8 +55,9 @@ internet, and every address is fixed.
 | UDP 32001-32002 / 32003 | USRP, peer side | allstar / tester |
 | UDP 4569 | IAX2 | allstar |
 
-`DVT_SUBNET` (a /24) or `DVT_NET` (the prefix) moves the whole rig; the
-host offsets stay the same.
+`DVT_SUBNET` (a /24) or `DVT_NET` (the prefix) moves the whole rig, and
+`DVT_INSTANCE=<n>` moves it to `172.30.<n>.0/24`; the host offsets stay the
+same, so captures of instance n show `172.30.<n>.x`.
 
 ## Settings
 
@@ -86,8 +87,15 @@ scripts/run.sh -m wire                                 # transcoder wire cases
 scripts/run.sh --capture -m wire                       # + pcapng per service
 ```
 
-One run at a time: `run.sh` holds an flock on `.cache/rig.lock` for the
-whole up..down span and a second caller waits. Results go to `out/<utc>/`:
+One run at a time per instance: `run.sh` holds an flock on the instance's
+lock for the whole up..down span and a second caller waits. If the project
+already has containers (someone's `--keep` rig) it exits 3;
+`scripts/run.sh --down` is the only cleanup.
+
+Parallel rigs: `DVT_INSTANCE=<n>` (1..99) runs project `dvt<n>` on
+`172.30.<n>.0/24` (same host offsets), lock `.cache/rig<n>.lock`, results
+in `out/<utc>-i<n>/`. Instance 0 (the default) is project `dvt` on
+`DVT_NET`. Images are shared; builds are serialized by `.cache/build.lock`. Results go to `out/<utc>/`:
 `pytest.log`, `junit.xml`, `compose-ps.txt`, `compose-images.txt`,
 `logs/<service>.log`, `run.txt` (markers, profile, xlxd commits), and with
 `--capture` `capture/<service>.pcapng`.
@@ -107,8 +115,9 @@ tester (DVT_RIG_CONTROL=1)                 run.sh watcher (host)
 ```
 
 Actions `stop`, `start`, `kill` (SIGKILL); services `transcoder-ref`,
-`transcoder-sut`, `allstar`. Anything else is refused and nothing runs. Every
-request is logged to `control/control.log`.
+`transcoder-sut`, `allstar`. Anything else is refused and nothing runs.
+`control/control.log` gets `<utc> request <line>` before and
+`<utc> <line> -> <rc>` after each action.
 
 ## Capture
 
@@ -126,19 +135,30 @@ are up before the first packet. dumpcap stops at `CAPTURE_FILESIZE_KB`.
 | `capture/allstar.pcapng` | USRP A/B from the node side, IAX2 from the tester (profile allstar) |
 
 The tester has no sniffer of its own; its traffic is seen at the other end.
+transcoder-ref has no sniffer either: xlxd-ref.pcapng holds both directions
+of xlxd-ref <-> transcoder-ref, and the only other traffic it gets (the wire
+cases that compare a reply with the reference transcoder) is not captured.
+The protocol docs take their evidence from the system under test.
 
-Caveats, seen in run `out/20261029T135314Z`:
+Backend restarts: a sniffer lives in its service's network namespace, so a
+control-channel `stop` or `kill` ends its file, and nothing is captured on
+that service until `start`. After a successful `start` the watcher brings
+`capture-<svc>` up again, writing the next free name: `<svc>.pcapng`, then
+`<svc>.2.pcapng`, `<svc>.3.pcapng`, ... (dumpcap never appends). The xlxd
+side of the gap is still in `xlxd-*.pcapng`; xlxd services are never stopped,
+so their files are the complete record. (Before this restart existed, run
+`out/20261029T135314Z` had transcoder-sut.pcapng end at 118 s and
+allstar.pcapng at 86 s of a 359 s run.)
 
-- A sniffer lives in its service's network namespace, so it stops when a
-  case stops or kills that service through the control channel and is not
-  restarted: transcoder-sut.pcapng covered 118 s and allstar.pcapng 86 s of
-  a 359 s run. xlxd-sut.pcapng, whose service is never stopped, is the
-  complete record.
-- Each file also holds traffic that is not the rig's: multicast from the
-  host side of the bridge (172.30.0.1: mDNS, SSDP, WS-Discovery), ARP
-  "duplicate IP" after a container restart, a few flooded unicast packets for
-  other hosts, and ICMP port unreachable for packets sent to a closed client
-  port. Count with an address filter and `!icmp`.
+Every file also holds traffic that is not the rig's: multicast from the host
+side of the bridge (`.1`: mDNS, SSDP, WS-Discovery), ARP "duplicate IP"
+after a container restart, a few flooded unicast packets for other hosts,
+and ICMP port unreachable for packets sent to a closed client port. Count
+with an address filter and `!icmp`.
+
+After the rig is down, `--capture` also runs `scripts/dvcheck.sh` on the run
+directory (`out/<utc>/check.txt`); a failing check fails a run whose pytest
+passed.
 
 Decode with `scripts/tshark.sh` (tshark in the capture image, no host
 install, dissectors from `tools/wireshark/dvtest.lua` loaded): see

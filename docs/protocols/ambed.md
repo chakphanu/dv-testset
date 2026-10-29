@@ -107,7 +107,8 @@ codec order, without the input codec and
 limited to the CAPS mask and max outputs. It starts the transaction at a
 random value per process and increments it per open. The reference ambed
 answers a retransmitted open (same peer, transaction and codecs) with the
-same stream instead of opening a second one. An extended open always gets a
+same stream instead of opening a second one; the same transaction with other
+codecs is a new open and gets its own stream. An extended open always gets a
 reply: invalid ones (unknown or duplicate codec, output equal to the input,
 no output, invalid callsign) get BUSY 13.
 
@@ -168,8 +169,16 @@ codec byte:
 | 3+w1 | w(out2) | bytes | frame 2 |
 | ... | | | further entries: codec byte + frame |
 
-Size = 1 + sum(1 + w(out)). Examples: Codec2 -> [PCM] is 322 B, AMBE+ ->
-[AMBE2+, Codec2, IMBE] (legacy 19 B open) is 32 B. xlxd checks every codec
+Size = 1 + sum(1 + w(out)); Codec2 -> [PCM] is 322 B. Replies to the
+19 B legacy opens xlxd sends (reference ambed `CStream`, same in the
+capture):
+
+| Input | Outputs | Reply |
+|-------|---------|-------|
+| AMBE+ (1) | AMBE2+, Codec2, IMBE | 1+1+9 + 1+8 + 1+11 = 32 B |
+| AMBE2+ (2) | AMBE+, Codec2, IMBE | 32 B |
+| Codec2 (3) | AMBE+, AMBE2+, IMBE | 1+1+9 + 1+9 + 1+11 = 33 B |
+| IMBE (4) | AMBE+, AMBE2+, Codec2 | 1+1+9 + 1+9 + 1+8 = 30 B | xlxd checks every codec
 byte against the open order; a legacy transcoder may return only the first n
 outputs, and the missing ones are zero filled.
 
@@ -250,63 +259,73 @@ frame and PING periods are confirmed in the Evidence section.
 
 ## Evidence
 
-Run `out/20261029T135314Z`: `scripts/run.sh --capture --profile allstar -m
+Run `out/20261029T145759Z-i5` (rig instance 5, so addresses are
+`172.30.5.x`): `DVT_INSTANCE=5 scripts/run.sh --capture --profile allstar -m
 "wire or rig or allstar"`, xlxd-sut = PR tree with USRP, xlxd-ref = upstream
-master, transcoder = the image under test (`TRANSCODER_IMAGE`); 33 passed,
-6 failed (see below), 2 skipped.
+master, transcoder = the image under test (`TRANSCODER_IMAGE`); 45 passed,
+2 skipped. The backend-loss case stops transcoder-sut once, so its capture
+is `transcoder-sut.pcapng` + `transcoder-sut.2.pcapng` (gap = the 21 s it
+was stopped; xlxd-sut.pcapng has the xlxd side of the gap).
 
-Message counts and UDP payload sizes (`udp.length` - 8):
+Message counts and UDP payload sizes (`udp.length` - 8), own traffic only
+(`ip.addr == 172.30.5.<host>`):
 
 ```sh
-scripts/tshark.sh -r out/20261029T135314Z/capture/<svc>.pcapng -Y "ambed && !icmp" \
-  -T fields -e ambed.msg -e udp.length | sort -n | uniq -c
+scripts/tshark.sh -r out/20261029T145759Z-i5/capture/<file>.pcapng \
+  -Y "ambed && !icmp && ip.addr == 172.30.5.21" -T fields -e ambed.msg -e udp.length \
+  | sort -n | uniq -c
 ```
 
-| Message | Size | transcoder-sut | xlxd-sut | xlxd-ref |
-|---------|------|----------------|----------|----------|
-| PING | 17 | 25 | 71 | 75 |
-| PONG | 9 | 25 | 67 | 71 |
-| CAPS request | 9 | 2 | 1 | 0 |
-| CAPS reply | 15 | 2 | 1 | 0 |
-| OPEN legacy | 17 / 18 / 19 | 2 / 2 / 4 | 0 / 0 / 21 | 0 / 0 / 32 |
-| OPEN extended | 24 | 26 | 28 | 1 (flooded from xlxd-sut) |
-| STD | 14 | 8 | 19 | 30 |
-| STD extended | 18 | 19 | 27 | 0 |
-| BUSY | 9 | not observed | 0 | 0 |
-| BUSY extended | 13 | 2 | 0 | 0 |
-| CS | 9 | 26 | 46 | 30 |
-| data request | 10 / 11 / 322 | 202 / 347 / 647 | 474 / 1140 / 547 | 372 / 732 / 0 |
-| data reply | 10..342 | 1196 | 1750 | 1104 |
-
-transcoder-sut.pcapng covers the first 118 s only: its sniffer stops when
-the backend-loss case stops transcoder-sut (see `docs/rig.md`). xlxd-ref
-PING/PONG include 4 flooded xlxd-sut packets.
+| Message | Size | transcoder-sut (both files) | xlxd-sut | xlxd-ref |
+|---------|------|-----------------------------|----------|----------|
+| PING | 17 | 86 | 88 | 88 |
+| PONG | 9 | 86 | 84 | 88 |
+| CAPS request | 9 | 3 | 1 | 0 |
+| CAPS reply | 15 | 3 | 1 | 0 |
+| OPEN legacy | 17 / 18 / 19 | 2 / 2 / 87 | 0 / 0 / 22 | 0 / 0 / 30 |
+| OPEN extended | 24 | 49 | 28 | 0 |
+| STD | 14 | 90 | 20 | 30 |
+| STD extended | 18 | 41 | 27 | 0 |
+| BUSY | 9 | 1 | 0 | 0 |
+| BUSY extended | 13 | 8 | 0 | 0 |
+| CS | 9 | 128 | 47 | 30 |
+| data request / reply | 10..342 | 5383 / 5383 | 2767 / 2767 | 1104 / 1104 |
 
 Field cross-checks (`-T fields` rows fed to a small script in `.cache/`):
 
 - PING callsign `XLX999` from both reflectors, `N0TEST` in every tester
-  open; PING period from xlxd-sut: median 5.01 s (min 5.00, max 5.02, n 71).
-- CAPS reply from the transcoder under test: version 1, max outputs 4, mask
-  `0x0000002e` (AMBE+, AMBE2+, Codec2, PCM; IMBE not announced). xlxd-sut
-  sent its single CAPS request 30 us after the first PONG, then
-  extended-opened only the USRP modules.
-- Extended opens: transaction echoed in every STD 18 / BUSY 13 reply (25
-  distinct transactions on transcoder-sut: 18 STD 18, 2 BUSY 13, 5 no reply;
-  xlxd-sut: 27 of 28 answered, the one unanswered falls in the backend-loss
-  window and matches the xlxd log line "ambed openstream timeout").
-  Open -> reply latency median 0.2 ms, max 0.4 ms. xlxd transactions are
-  consecutive (`0xae73911f` .. `0xae73913a`). The retransmitted open
-  (`tx 0xa1b2c3d4` twice) got the same stream (id 20, port 10120) both times.
-- STD: stream id n always came with port 10100 + n (ports 10101..10132
-  seen); codec in / out 1 equal the open's input and first output.
-- Data: every request pid got a reply on the same port and peer (1196 / 1196
-  on transcoder-sut, 1750 / 1750 on xlxd-sut, 1104 / 1104 on xlxd-ref).
-  Reply entries are in open order with the expected sizes, e.g. outs
-  [1,2,3] = 30 B (496), [2,3,4] = 32 B, [1,2,4] = 33 B, [1,2,5] = 342 B,
-  [3,2] = 20 B, [5] = 322 B; `ambed.order` warnings 0. PCM entries
-  carrying signal (`ambed.entry.pcm_peak` > 0): 988 of 1135.
-- xlxd fixed legacy outputs seen: in 1 -> [2,3,4], in 2 -> [1,3,4],
-  in 3 -> [1,2,4].
+  open; xlxd-sut PING period median 5.01 s (min 5.00, max 5.02, n 88).
+- CAPS reply (3 of 3): version 1, max outputs 4, mask `0x0000002e`
+  (AMBE+, AMBE2+, Codec2, PCM; IMBE not announced). xlxd-sut sends its CAPS
+  request right after the first PONG, then extended-opens only the USRP
+  modules; xlxd-ref (upstream) never sends CAPS.
+- Extended opens: every reply echoes the transaction; transcoder-sut first
+  file 26 distinct (peer, transaction) = 18 STD 18 + 8 BUSY 13, none
+  unanswered; second file 19 / 19 STD 18. Open -> reply latency median
+  0.1-0.2 ms, max 0.4 ms. xlxd transactions are consecutive. One xlxd-sut
+  open is unanswered: it falls in the window where transcoder-sut is stopped.
+- Invalid extended opens from the wire cases, each answered with BUSY 13
+  and the same transaction (`0x00007000`..`0x00007005`): duplicate output,
+  output after an empty slot, output equal to input, no output, codec 6,
+  blank callsign. Two valid opens for codecs outside the CAPS mask
+  (IMBE <-> PCM) also got BUSY 13.
+- Retransmit: `tx 0xa1b2c3d4` sent twice with the same codecs got stream 19
+  both times; `tx 0x5a5a0001` with in 3 -> [5] and with in 5 -> [3] got
+  streams 20 and 21, and resending either got the same stream again.
+- BUSY 9: the wire case `test_legacy_open_full_gets_busy9` sent 65 legacy
+  19 B opens in 5 ms; 64 got STD 14 (stream ids 19..64 then 1..18, ports
+  10100 + id, 10101..10164), the 65th got the 9 B BUSY, then 64 CS closed
+  them. The transcoder under test serves at most 64 streams.
+- STD: stream id n always comes with port 10100 + n; codec in / out 1 equal
+  the open's input and first output.
+- Data: requests and replies pair up by (port, peer, pid) with nothing left
+  over in every file. Reply layouts and sizes, e.g. legacy [2,3,4] = 32 B,
+  [1,3,4] = 32 B, [1,2,4] = 33 B (xlxd-ref 366 / 366 / 372 replies),
+  extended [1,2,3] = 30 B, [1,2,5] = 342 B, [3,2] = 20 B, [5] = 322 B;
+  `ambed.order` warnings 0. PCM entries with signal
+  (`ambed.entry.pcm_peak` > 0): 1348 of 1494 on xlxd-sut.
+- xlxd fixed legacy outputs: in 1 -> [2,3,4], in 2 -> [1,3,4], in 3 ->
+  [1,2,4].
 
 ```
 AMBEd transcoder protocol, CAPS reply v1 max=4 mask=0x2e
@@ -314,48 +333,36 @@ AMBEd transcoder protocol, CAPS reply v1 max=4 mask=0x2e
     CAPS version: 1
     Max outputs: 4
     Codec mask: 0x0000002e
-AMBEd transcoder protocol, OPEN ext XLX999 in=2 outs=[1,5] tx=0xae73911f
-    Tag: AMBEDOS
-    Callsign: XLX999
-    Codec in: AMBE2+ (DMR/YSF) (2)
-    [0] Codec out: AMBE+ (D-STAR) (1)
-    [1] Codec out: PCM S16LE 8 kHz (5)
-    [2] Codec out: none (0)
-    [3] Codec out: none (0)
-    Transaction: 0xae73911f
-AMBEd transcoder protocol, STD id=1 port=10101 in=2 out0=1 tx=0xae73911f
-    Stream id: 1
-    Stream data port: 10101
-AMBEd transcoder protocol, BUSY tx=0x11223344
+AMBEd transcoder protocol, OPEN ext N0TEST in=3 outs=[5,5] tx=0x00007000
+    [Expert Info (Note/Protocol): invalid open: duplicate output 5]
+AMBEd transcoder protocol, BUSY tx=0x00007000
+    Tag: AMBEDBUSY
+    [Message: BUSY extended (10)]
+    Transaction: 0x00007000
 AMBEd transcoder protocol, OPEN legacy(19) N0TEST in=1 outs=[2,3,4]
-AMBEd transcoder protocol, STD id=13 port=10113 in=1 out0=2
-AMBEd transcoder protocol, CS id=1
-AMBEd transcoder protocol, data request in=5 pid=0
+AMBEd transcoder protocol, BUSY
+    Tag: AMBEDBUSY
+    [Message: BUSY (9)]
+AMBEd transcoder protocol, STD id=19 port=10119 in=3 out0=5 tx=0xa1b2c3d4
+    Stream id: 19
+    Stream data port: 10119
+AMBEd transcoder protocol, CS id=19
 AMBEd transcoder protocol, data reply pid=0 outs=[1,2,3]
     Entry 0: AMBE+ (D-STAR), 9 bytes
     Entry 1: AMBE2+ (DMR/YSF), 9 bytes
     Entry 2: Codec2 3200 (M17), 8 bytes
 ```
 
-Expert info (`-q -z expert`): no AMBEd errors or warnings in any file; notes
-only: 2 `ambed.busy` and 6 `ambed.invalid_open` (the wire cases' invalid
-opens). The other warnings are mDNS/ARP from the host bridge and restarted
-containers.
+Expert info (`-q -z expert`): no AMBEd errors or warnings in any file;
+notes only on transcoder-sut.pcapng: 9 `ambed.busy` and 6
+`ambed.invalid_open`. Other warnings are mDNS/ARP from the host bridge and
+restarted containers.
 
-Not observed:
+Implementation vs this document: the CAPS mask of the transcoder under test
+leaves IMBE out, yet legacy opens with an IMBE output are served (904
+replies with outs [2,3,4]). Not a conformance error: CAPS describes the
+extended open.
 
-- BUSY 9: the transcoder under test accepted all 8 legacy opens the wire
-  cases sent (STD 14 each) and xlxd only sends valid 19 B opens; it needs a
-  transcoder that is out of channels.
-
-Implementation vs this document (the transcoder under test, reported, not
-changed):
-
-- Invalid extended opens (duplicate output, output after an empty slot,
-  output equal to input, no output, codec 6) got no reply at all, and an
-  extended open with a blank callsign got STD 18 (stream 19). The reference
-  ambed source answers all six with BUSY 13 (`IsValidExtOpenstreamPacket`
-  sets codec in to none and the reply carries the transaction). These are
-  the 6 failing `test_ext_open_invalid_busy` cases.
-- The CAPS mask leaves IMBE out, yet legacy opens with an IMBE output are
-  served (61 replies with outs [2,3,4] on transcoder-sut).
+An earlier run with a previous image (`out/20261029T135314Z`) got no reply
+to five invalid extended opens and STD 18 for the blank callsign; the image
+used above answers all six with BUSY 13.
