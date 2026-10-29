@@ -2,9 +2,10 @@
 """D-STAR over DExtra (UDP 30001): link/keepalive packets and DSVT
 streams (header, voice frames 0..20, last frame with bit 0x40)."""
 from ..proto import dextra as D
-from .common import ERROR, WARN, Live, Stream, finish_stream, flow_of, seq_finding, touches, voice_frames
+from .common import ERROR, WARN, Live, Stream, finish_stream, flow_of, seq_finding, touches, voice_frames, Departures
 
 NAME = "dextra"
+FRAME_TIME = 0.020
 # xlxd (cm17protocol.cpp) accepts M17 voice only for frame number > 0, so a
 # D-STAR stream relayed from M17 starts at frame 2; the M17 fn 0 packet
 # reaches the reflector this close before the D-STAR header
@@ -41,6 +42,7 @@ class Checker:
         self.implicit_header = implicit_header
         self.streams = Live(self._ended)
         self.linked = set()       # client (ip, port) that sent a link
+        self.left = Departures(report, name, FRAME_TIME)
 
     def claims(self, d):
         return self.port in (d.sport, d.dport)
@@ -57,11 +59,15 @@ class Checker:
         client = (d.src, d.sport) if d.dport == self.port else (d.dst, d.dport)
         if kind == "link":
             self.linked.add(client)
+            self.left.back(client)
         elif kind in ("unlink", "disconnect") and d.dport == self.port:
             # the client left: its live streams end here (no silence timeout)
             for key in [k for k in self.streams.live if touches(k[0], client)]:
                 self.streams.end(key, "peer unlinked")
+            self.left.leave(client, d)
         if kind not in ("header", "voice"):
+            return
+        if d.dport != self.port and self.left.sent(client, d, kind == "voice"):
             return
         if client not in self.linked:
             self.linked.add(client)

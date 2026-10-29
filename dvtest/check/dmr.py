@@ -2,7 +2,7 @@
 """DMR over MMDVM/Homebrew (UDP 62030): login/keepalive packets and DMRD
 streams (voice LC header, bursts A..F with sync on A, terminator)."""
 from ..proto import dmr as M
-from .common import ERROR, WARN, Live, Stream, finish_stream, flow_of, seq_finding, voice_frames
+from .common import ERROR, WARN, Departures, Live, Stream, finish_stream, flow_of, seq_finding, voice_frames
 
 NAME = "dmr"
 # control packets: tag -> allowed sizes (None = any size)
@@ -11,6 +11,8 @@ CONTROL = ((b"RPTPING", (11,)), (b"RPTACK", (6, 10)), (b"RPTCL", (9, 13)), (b"RP
            (b"MSTPONG", (11,)), (b"MSTNAK", (6, 10)), (b"MSTCL", (5, 9)), (b"DMRA", None))
 DMRD_SIZES = (53, M.PACKET_SIZE)
 HEADER, TERMINATOR = 1, 2
+UNLINK_TG = 4000
+BURST_TIME = 0.060
 # xlxd only honours the 13 B RPTCL (IsValidDisconnectPacket); the 9 B
 # "RPTCL" + id form is ignored by the reflector
 RPTCL_SIZE = 13
@@ -36,6 +38,7 @@ class Checker:
         self.streams = Live(self._ended)
         self.logged = set()       # repeater (ip, port) that sent RPTL
         self.closed = {}          # peer -> (frame, ts, tag) of MSTCL/RPTCL
+        self.left = Departures(report, NAME, BURST_TIME)
 
     def claims(self, d):
         return M.PORT in (d.sport, d.dport)
@@ -81,6 +84,17 @@ class Checker:
                         " on remove, within %.1f s)" % CACHE_WINDOW)
             else:
                 r.error(NAME, d, "after_close", text)
+            return
+        if d.dport == M.PORT:
+            if int.from_bytes(p[8:11], "big") == UNLINK_TG:
+                # TG 4000: the repeater leaves its module; its egress ends here
+                for key in [k for k in self.streams.live if _of_peer(k[0], peer) and not k[0].startswith(
+                        "%s:%d>" % peer)]:
+                    self.streams.end(key, "peer unlinked")
+                self.left.leave(peer, d)
+            else:
+                self.left.back(peer)
+        elif self.left.sent(peer, d, kind in ("voice", "voice_sync")):
             return
         if peer not in self.logged:
             self.logged.add(peer)
@@ -130,9 +144,9 @@ class Checker:
 
     def _ended(self, st):
         r = self.report
-        if st.end == "peer closed":
-            r.add(NAME, st.flow, st.last_frame, WARN, "no_terminator",
-                  "%s cut by the peer close (%d packets)" % (st.name, st.frames))
+        if st.end in ("peer closed", "peer unlinked"):
+            r.add(NAME, st.flow, st.last_frame, WARN, "no_terminator", "%s cut by the %s (%d packets)" % (
+                st.name, "peer close" if st.end == "peer closed" else "peer unlink (TG %d)" % UNLINK_TG, st.frames))
         elif st.end != "terminated" and st.notes["voice"] == 0:
             r.add(NAME, st.flow, st.last_frame, WARN, "header_only",
                   "%s: header(s) only, no voice and no terminator (ended by %s)" % (st.name, st.end))

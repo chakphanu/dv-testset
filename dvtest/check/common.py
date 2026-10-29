@@ -24,6 +24,43 @@ def touches(flow, endpoint):
     return flow.startswith(end + ">") or flow.endswith(">" + end)
 
 
+class Departures:
+    """Clients that left (unlink, DISC): traffic sent to them afterwards.
+    One voice packet within one frame time after the departure was in
+    flight (warning in_flight); anything else is an error `code`, reported
+    once per departure."""
+
+    def __init__(self, report, protocol, window, code="after_unlink"):
+        self.report, self.protocol, self.window, self.code = report, protocol, window, code
+        self.left = {}            # client (ip, port) -> [ts, frame, in flight seen, reported]
+
+    def leave(self, client, d):
+        self.left[client] = [d.ts, d.frame, False, False]
+
+    def back(self, client):
+        self.left.pop(client, None)
+
+    def sent(self, client, d, voice):
+        """True when d (to client) came after the client left: reported, and
+        the caller must not count it in a stream."""
+        e = self.left.get(client)
+        if e is None:
+            return False
+        dt = None if d.ts is None or e[0] is None else d.ts - e[0]
+        if voice and not e[2] and dt is not None and 0 <= dt <= self.window:
+            e[2] = True
+            self.report.warn(self.protocol, d, "in_flight", "voice in flight at the unlink of frame %d"
+                             " (%.1f ms after it)" % (e[1], dt * 1000.0))
+        elif not e[3]:
+            e[3] = True
+            self.report.error(self.protocol, d, self.code, "traffic to the client %s after its unlink at"
+                              " frame %d (later packets to it not reported again)" % (
+                                  "%.1f ms" % (dt * 1000.0) if dt is not None else "", e[1]))
+        self.report.proto(self.protocol)["after_unlink_packets"] = \
+            self.report.proto(self.protocol).get("after_unlink_packets", 0) + 1
+        return True
+
+
 def client_of(flow, port):
     """(ip, port) of the side of a flow_of() name that is not on `port`."""
     a, b = flow.split(">")

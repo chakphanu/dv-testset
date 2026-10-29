@@ -356,3 +356,56 @@ def test_m17_disc_mid_stream_ends_the_stream(tmp_path):
         assert codes(result, "error") == want_error
         cut = [f for f in result["findings"] if f["code"] == "m17.no_eot"]
         assert len(cut) == 1 and ("peer DISC" in cut[0]["message"]) == disc
+
+
+def test_dmr_tg4000_unlink_ends_egress(tmp_path):
+    """A repeater's TG 4000 unlink ends its live egress stream (warning);
+    DMRD to it afterwards: one burst within 60 ms in flight, else an error."""
+    src, tg = dmr.DMR_ID, dmr.module_tg("B")
+    for after, gap, want_error in ((0, 0.0, []), (1, 0.010, []), (2, 0.010, ["dmr.after_unlink"]),
+                                   (1, 0.100, ["dmr.after_unlink"])):
+        w = dmr_wire(bursts=6, terminator=False)
+        w.rows.pop()
+        w.t = w.rows[-1][0]
+        w.send(T, 40002, R, dmr.PORT, dmr.packet(0, src, 4000, src, 0xA2, 0x33333333, dmr.data_sync_payload()), 0.005)
+        for n in range(after):
+            w.send(R, dmr.PORT, T, 40002, dmr.packet(7 + n, src, tg, src, 0x80 | (n + 1), 0x01020304,
+                                                     dmr.voice_payload(FRAME, FRAME, FRAME)), gap if n == 0 else 0.06)
+        w.wait(6.0)
+        result = w.check(tmp_path)
+        assert codes(result, "error") == want_error, (after, gap)
+        cut = [f for f in result["findings"] if f["code"] == "dmr.no_terminator" and "peer unlink" in f["message"]]
+        assert len(cut) == 1
+        assert ("dmr.in_flight" in codes(result)) == (after >= 1 and gap <= 0.06)
+
+
+def test_dextra_frame_in_flight_at_unlink(tmp_path):
+    """One voice frame within 20 ms after the unlink is in flight (warning);
+    two frames, or one frame later than 20 ms, are an error."""
+    for after, gap, want_error in ((1, 0.007, []), (2, 0.007, ["dextra.after_unlink"]),
+                                   (1, 0.030, ["dextra.after_unlink"])):
+        w = Wire()
+        w.send(T, 40001, R, dextra.PORT, dextra.link_packet("N0TEST", "B"))
+        w.send(R, dextra.PORT, T, 40001, dextra.header(0xadd8, "N0TEST", "B"), 0.01)
+        for seq in range(10):
+            w.send(R, dextra.PORT, T, 40001, dextra.voice(0xadd8, seq, FRAME, False,
+                                                         dextra.SYNC_DATA if seq == 0 else dextra.SLOW_DATA), 0.02)
+        w.send(T, 40001, R, dextra.PORT, dextra.unlink_packet("N0TEST", "B"), 0.019)
+        for n in range(after):
+            w.send(R, dextra.PORT, T, 40001, dextra.voice(0xadd8, 10 + n, FRAME, False), gap if n == 0 else 0.02)
+        w.send(T, 40002, R, dextra.PORT, dextra.keepalive_packet("N0OTHER"), 6.0)
+        result = w.check(tmp_path)
+        assert codes(result, "error") == want_error, (after, gap)
+        assert "dextra.in_flight" in codes(result) or want_error
+
+
+def test_m17_frame_after_disc(tmp_path):
+    for gap, want_error in ((0.010, []), (0.100, ["m17.after_disc"])):
+        w = Wire()
+        w.send(T, 40003, R, m17.PORT, m17.conn_packet("N0TEST", "B"))
+        for fn in range(10):
+            w.send(R, m17.PORT, T, 40003, m17.packet(0x5252, fn, "N0OTHER", FRAME[:8] * 2), 0.04)
+        w.send(T, 40003, R, m17.PORT, m17.disc_packet("N0TEST"), 0.03)
+        w.send(R, m17.PORT, T, 40003, m17.packet(0x5252, 10, "N0OTHER", FRAME[:8] * 2), gap)
+        w.send(T, 40004, R, m17.PORT, m17.pong_packet("N0X"), 6.0)
+        assert codes(w.check(tmp_path), "error") == want_error, gap

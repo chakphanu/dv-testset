@@ -342,7 +342,8 @@ DIVERGENCES = {
     # accepted: a 24 B extended OPEN without PCM from the sut is no error
     "ambed_extended_open_always": (("ambed.ext_open_non_pcm",), None, WARN),
     # the sut revokes a closed peer at once: no upstream client-cache excuse
-    "immediate_revoke": (("dmr.after_close", "dmr.after_close_cache"), None, ERROR),
+    "immediate_revoke": (("dmr.after_close", "dmr.after_close_cache", "dmr.after_unlink", "m17.after_disc")
+                         + tuple(p + ".after_unlink" for p in ("dextra", "dplus", "dcs", "xlx")), None, ERROR),
     # the sut never zero-fills cross-mode codec frames
     "no_zero_fill": (ZERO_FILL, None, ERROR),
     # the sut ends a stream that goes silent with a synthesized terminator

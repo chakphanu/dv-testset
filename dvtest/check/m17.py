@@ -2,7 +2,7 @@
 """M17 in xlxd reflector-client mode (UDP 17000): CONN/ACKN/PING/... and
 54 B voice packets (frame number, EOT bit, LICH constant per stream)."""
 from ..proto import m17 as M
-from .common import ERROR, WARN, Live, Stream, finish_stream, flow_of, seq_finding, touches, voice_frames
+from .common import ERROR, WARN, Live, Stream, finish_stream, flow_of, seq_finding, touches, voice_frames, Departures
 
 NAME = "m17"
 # control packets: tag -> allowed sizes
@@ -15,6 +15,7 @@ class Checker:
         self.report = report
         self.streams = Live(self._ended)
         self.linked = set()
+        self.left = Departures(report, NAME, 0.040, "after_disc")
         self.starts = []          # ts of fn 0 voice packets sent to the reflector
 
     def claims(self, d):
@@ -41,11 +42,15 @@ class Checker:
         peer = (d.src, d.sport) if d.dport == M.PORT else (d.dst, d.dport)
         if kind in ("conn", "lstn"):
             self.linked.add(peer)
+            self.left.back(peer)
         elif kind == "disc" and d.dport == M.PORT:
             # the listener left: its live streams end here (no silence timeout)
             for key in [k for k in self.streams.live if touches(k[0], peer)]:
                 self.streams.end(key, "peer disconnected")
+            self.left.leave(peer, d)
         if kind != "voice":
+            return
+        if d.dport != M.PORT and self.left.sent(peer, d, True):
             return
         if peer not in self.linked:
             self.linked.add(peer)
