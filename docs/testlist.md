@@ -181,8 +181,12 @@ Interop rows stay differential for every profile.
 | B10p | Patch of one stream to two modules of the same peer rewrites the second leg's id | test_floor::test_sid_patch_second_leg_rewritten | behaviour | placeholder |
 | B11 | Cross-family transit allowed; XLX/BM never re-forwarded to XLX/BM | test_xlxd_interlink::test_interlink_no_loop, dvcheck xlx.transit | interop | in progress |
 | B12 | Header CRC/hash not verified (tester zeros/spaces accepted) | dvtest/specs/dvrouter.py NOT_CHECKED | - | recorded |
-| B13 | No frame loss under load | test_load::test_no_load_loss_* | behaviour | covered |
+| B13 | No frame loss under load; SUT forwarding latency p99 <= 2 ms (same-mode, wire-measured) | test_load::test_no_load_loss_*, test_load::test_dvrouter_forwarding_latency | behaviour | covered |
 | B14 | Per-room isolation: killing one room's controller loses nothing elsewhere | test_floor::test_b14_placeholder | behaviour | placeholder |
+| B15 | DMR RPTCL (13 B and 9 B) closes the session: stream ends, floor released | test_floor::test_dmr_rptcl_closes_session[13\|9] | behaviour | covered |
+| B16 | No voice before the header on any egress; no echo to the talker under any sid | test_floor::test_no_voice_before_header, ::test_no_self_echo_other_sid | behaviour | covered (self echo recorded only under xlxd) |
+| B16p | `pending` entrant starts with a header | test_floor::test_pending_entrant_starts_with_header | behaviour | placeholder |
+| B17 | M17 frame 0 is relayed | test_floor::test_m17_frame0_relayed | behaviour | covered |
 
 Measured on xlxd (reference and PR build alike): a late talker on a busy
 module is relayed after the first stream ends (late-entry promotion), a USRP
@@ -191,3 +195,10 @@ room is dropped, xlxd keeps the D-STAR stream id but not the DMR or M17 one, and
 across protocols it maps the id only for D-STAR -> DMR and M17 -> D-STAR.
 A late entrant on DV-Router is denied silently (these protocols have no
 stream-level NACK).
+
+Also measured on xlxd: after RPTCL (13 B or 9 B) the floor stays held by the
+closed stream (next talker hears 0 frames); a promoted late D-STAR entrant
+reaches D-STAR listeners with 80-81 voice packets and no header, and is echoed
+back to its sender (71 frames) in some runs only (timing-dependent); M17 egress
+carries 42 of 44 frames (both frames of packet 0 dropped); added forwarding
+latency p50 171-222 ms at 26 modules.
