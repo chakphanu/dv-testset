@@ -18,35 +18,52 @@
 #                        (row "<callsign> <ip> <modules>"; both sides list each other)
 #   env DVT_START_DELAY  seconds to wait before xlxd starts (sniffers attach
 #                        to this network namespace first; default 0)
+#
+# Other modes:
+#   DVT_RENDER_DIR=<dir> only write xlxd.usrp and xlxd.interlink into <dir>
+#                        (template DVT_USRP_TEMPLATE) and exit; run.sh uses it
+#                        on the host for a prebuilt XLXD_*_IMAGE
+#   DVT_CONFIG_MOUNTED=1 the config files are mounted read-only: render
+#                        nothing, run xlxd with the arguments given
+#                        ("CALLSIGN OWN_IP TRANSCODER_IP")
 set -eu
 
-: "${DVT_IP:?DVT_IP is required}"
-: "${DVT_TRANSCODER:?DVT_TRANSCODER is required}"
+if [ "${DVT_CONFIG_MOUNTED:-0}" = 1 ]; then
+  sleep "${DVT_START_DELAY:-0}"
+  exec /xlxd/xlxd "$@"
+fi
+
+dir="${DVT_RENDER_DIR:-/xlxd}"
+if [ -z "${DVT_RENDER_DIR:-}" ]; then
+  : "${DVT_IP:?DVT_IP is required}"
+  : "${DVT_TRANSCODER:?DVT_TRANSCODER is required}"
+fi
 
 if [ "${DVT_USRP:-off}" = on ]; then
   : "${DVT_NET:?DVT_NET is required with DVT_USRP=on}"
-  sed "s/@NET@/${DVT_NET}/g" /xlxd/xlxd.usrp.in > /xlxd/xlxd.usrp
+  sed "s/@NET@/${DVT_NET}/g" "${DVT_USRP_TEMPLATE:-/xlxd/xlxd.usrp.in}" > "$dir/xlxd.usrp"
   echo "dvt: USRP endpoints:"
-  grep -v '^#' /xlxd/xlxd.usrp
+  grep -v '^#' "$dir/xlxd.usrp"
 else
-  : > /xlxd/xlxd.usrp
+  : > "$dir/xlxd.usrp"
 fi
 
 # Reflector peers (NXDN, P25) are xlxd.interlink rows; xlxd connects out.
-: > /xlxd/xlxd.interlink
+: > "$dir/xlxd.interlink"
 if [ "${DVT_NXDN:-off}" = on ]; then
   : "${DVT_NXDN_PEER:?}" "${DVT_NXDN_TG:?}" "${DVT_NXDN_MODULE:?}"
-  printf 'NX%05d %s:41400 %s\n' "$DVT_NXDN_TG" "$DVT_NXDN_PEER" "$DVT_NXDN_MODULE" >> /xlxd/xlxd.interlink
+  printf 'NX%05d %s:41400 %s\n' "$DVT_NXDN_TG" "$DVT_NXDN_PEER" "$DVT_NXDN_MODULE" >> "$dir/xlxd.interlink"
 fi
 if [ "${DVT_P25:-off}" = on ]; then
   : "${DVT_P25_PEER:?}" "${DVT_P25_TG:?}" "${DVT_P25_MODULE:?}"
-  printf 'P25%05d %s:41000 %s\n' "$DVT_P25_TG" "$DVT_P25_PEER" "$DVT_P25_MODULE" >> /xlxd/xlxd.interlink
+  printf 'P25%05d %s:41000 %s\n' "$DVT_P25_TG" "$DVT_P25_PEER" "$DVT_P25_MODULE" >> "$dir/xlxd.interlink"
 fi
 if [ "${DVT_INTERLINK:-off}" = on ]; then
   : "${DVT_INTERLINK_PEER:?}" "${DVT_INTERLINK_CALLSIGN:?}" "${DVT_INTERLINK_MODULES:?}"
-  printf '%s %s %s\n' "$DVT_INTERLINK_CALLSIGN" "$DVT_INTERLINK_PEER" "$DVT_INTERLINK_MODULES" >> /xlxd/xlxd.interlink
+  printf '%s %s %s\n' "$DVT_INTERLINK_CALLSIGN" "$DVT_INTERLINK_PEER" "$DVT_INTERLINK_MODULES" >> "$dir/xlxd.interlink"
 fi
-[ ! -s /xlxd/xlxd.interlink ] || { echo "dvt: interlink:"; cat /xlxd/xlxd.interlink; }
+[ ! -s "$dir/xlxd.interlink" ] || { echo "dvt: interlink:"; cat "$dir/xlxd.interlink"; }
+[ -z "${DVT_RENDER_DIR:-}" ] || exit 0
 
 sleep "${DVT_START_DELAY:-0}"
 exec /xlxd/xlxd "${DVT_CALLSIGN:-XLX999}" "$DVT_IP" "$DVT_TRANSCODER"

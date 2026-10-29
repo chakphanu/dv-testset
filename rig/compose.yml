@@ -35,6 +35,10 @@
 # .local/compose.override.yml (gitignored), which run.sh adds with -f when it
 # exists. See rig/compose.override.example.yml.
 #
+# XLXD_REF_IMAGE / XLXD_SUT_IMAGE (scripts/run.sh): a prebuilt reflector image
+# replaces the build; run.sh adds an override with its argv and the config
+# files mounted read-only under /xlxd/.
+#
 # Fixed addresses: xlxd-ref .10, xlxd-sut .11, transcoder-ref .20,
 # transcoder-sut .21, tester .30, allstar .40.
 
@@ -373,7 +377,7 @@ services:
     profiles: [load]
     init: true
     image: dvt-tester:local
-    scale: ${DVT_LOAD_MODULES:-26}
+    scale: ${DVT_LOAD_NODES:-${DVT_LOAD_MODULES:-26}}
     user: "${DVT_UID:-1000}:${DVT_GID:-1000}"
     environment:
       DVT_LOAD_TARGET: ${DVT_NET:-172.30.0}.11

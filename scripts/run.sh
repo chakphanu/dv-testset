@@ -13,8 +13,11 @@
 #                      xlxd-ref/xlxd-sut (DVT_P25=on); e.g. allstar,nxdn,p25
 #   --profile interlink  XLX998 peers xlxd-peer-sut/-ref interlinked with
 #                      xlxd-sut/-ref on DVT_INTERLINK_MODULES (default DE)
-#   --profile load     DVT_LOAD_MODULES (1..26) load-node replicas against
-#                      xlxd-sut, first round at DVT_LOAD_START_AT (now + 30 s)
+#   --profile load     DVT_LOAD_MODULES (1..26) modules, DVT_LOAD_NODES (0..26,
+#                      default = modules) load-node replicas against xlxd-sut,
+#                      first round at DVT_LOAD_START_AT (now + 30 s);
+#                      DVT_SUT_USRP=on; host samples docker stats every ~1-2 s
+#                      into out/<utc>/stats.jsonl while pytest runs
 #   --capture          sniffers on xlxd-ref/xlxd-sut/transcoder-sut (+allstar/nxdn/p25): pcapng in
 #                      out/<utc>/capture/<service>.pcapng (decode: scripts/tshark.sh)
 #   --keep             leave the rig running (default: compose down at the end)
@@ -67,7 +70,7 @@ while [ "$#" -gt 0 ]; do
     --capture) capture=1; shift ;;
     --down) down_only=1; shift ;;
     --) shift; break ;;
-    -h|--help) sed -n '3,50p' "$0"; exit 0 ;;
+    -h|--help) sed -n '3,53p' "$0"; exit 0 ;;
     *) echo "run.sh: unknown argument '$1' (see --help)" >&2; exit 2 ;;
   esac
 done
@@ -125,6 +128,7 @@ has_allstar=0
 has_nxdn=0
 has_p25=0
 has_interlink=0
+has_load=0
 IFS=, read -r -a wanted <<< "$profile"
 for p in "${wanted[@]}"; do
   case "$p" in
@@ -160,6 +164,11 @@ for p in "${wanted[@]}"; do
     load)
       profiles+=(--profile load)
       export DVT_LOAD=on
+      has_load=1
+      # module C of xlxd-sut is a USRP endpoint towards the tester
+      export DVT_SUT_USRP="${DVT_SUT_USRP:-on}"
+      [[ "${DVT_LOAD_NODES:-${DVT_LOAD_MODULES:-26}}" =~ ^([0-9]|1[0-9]|2[0-6])$ ]] \
+        || { echo "run.sh: DVT_LOAD_NODES must be 0..26" >&2; exit 2; }
       [[ "${DVT_LOAD_MODULES:-26}" =~ ^([1-9]|1[0-9]|2[0-6])$ ]] \
         || { echo "run.sh: DVT_LOAD_MODULES must be 1..26" >&2; exit 2; }
       # every node starts its first round at the same time, after the rig is up
@@ -197,7 +206,10 @@ if [ -z "${TRANSCODER_IMAGE:-}" ]; then
   exit 2
 fi
 
-for name in "${XLXD_REF_DIR:-ref}" "${XLXD_SUT_DIR:-sut}"; do
+xlxd_dirs=()
+[ -n "${XLXD_REF_IMAGE:-}" ] || xlxd_dirs+=("${XLXD_REF_DIR:-ref}")
+[ -n "${XLXD_SUT_IMAGE:-}" ] || xlxd_dirs+=("${XLXD_SUT_DIR:-sut}")
+for name in "${xlxd_dirs[@]}"; do
   [ -f ".cache/xlxd/$name/src/main.h" ] || { echo "run.sh: .cache/xlxd/$name missing; run scripts/pre-fetch-xlxd.sh" >&2; exit 2; }
 done
 [ -f .cache/codec2/CMakeLists.txt ] || { echo "run.sh: .cache/codec2 missing; run scripts/pre-fetch-codec2.sh" >&2; exit 2; }
@@ -222,9 +234,70 @@ out="out/$DVT_RUN_ID"
 mkdir -p "$out/logs"
 [ "$capture" = 0 ] || mkdir -p "$out/capture"
 
+# Prebuilt reflector images (XLXD_REF_IMAGE / XLXD_SUT_IMAGE): another
+# implementation can be the system under test. Its contract: argv
+# "CALLSIGN OWN_IP TRANSCODER_IP"; config files mounted read-only under /xlxd/
+# (rendered here on the host by rig/xlxd-entry.sh); log on stdout.
+prebuilt=()
+override="$out/xlxd-image.override.yml"
+render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxdn, $7 p25, $8 xlxd peer
+  local svc="$1" img="$2" net="${DVT_NET:-172.30.0}" cfg="$DVT_ROOT/$out/xlxd-config/$1" f
+  mkdir -p "$cfg"
+  DVT_RENDER_DIR="$cfg" DVT_USRP_TEMPLATE=rig/config/xlxd.usrp.in DVT_USRP="$5" DVT_NET="$net" \
+    DVT_NXDN_PEER="$net.$6" DVT_P25_PEER="$net.$7" DVT_INTERLINK_PEER="$net.$8" \
+    DVT_INTERLINK_CALLSIGN=XLX998 DVT_INTERLINK_MODULES="${DVT_INTERLINK_MODULES:-DE}" \
+    DVT_NXDN_TG="${DVT_NXDN_TG:-31672}" DVT_NXDN_MODULE="${DVT_NXDN_MODULE:-F}" \
+    DVT_P25_TG="${DVT_P25_TG:-31672}" DVT_P25_MODULE="${DVT_P25_MODULE:-G}" \
+    sh rig/xlxd-entry.sh > "$cfg/render.log"
+  cp rig/config/dmrid.dat rig/config/nxdn.csv "$cfg/"
+  for f in xlxd.whitelist xlxd.blacklist xlxd.terminal ysfnode.dat; do : > "$cfg/$f"; done
+  {
+    printf '  %s:\n    image: "%s"\n    command: ["XLX999", "%s.%s", "%s.%s"]\n' "$svc" "$img" "$net" "$3" "$net" "$4"
+    printf '    environment:\n      DVT_CONFIG_MOUNTED: "1"\n    volumes:\n'
+    for f in xlxd.usrp xlxd.interlink xlxd.whitelist xlxd.blacklist xlxd.terminal dmrid.dat nxdn.csv ysfnode.dat; do
+      printf '      - "%s/%s:/xlxd/%s:ro"\n' "$cfg" "$f" "$f"
+    done
+  } >> "$override"
+  prebuilt+=("$svc")
+}
+if [ -n "${XLXD_REF_IMAGE:-}${XLXD_SUT_IMAGE:-}" ]; then
+  echo "services:" > "$override"
+  [ -z "${XLXD_REF_IMAGE:-}" ] || render_xlxd xlxd-ref "$XLXD_REF_IMAGE" 10 20 off 50 60 13
+  [ -z "${XLXD_SUT_IMAGE:-}" ] || render_xlxd xlxd-sut "$XLXD_SUT_IMAGE" 11 21 "${DVT_SUT_USRP:-off}" 51 61 12
+  compose_files+=(-f "$DVT_ROOT/$override")
+fi
+
 compose=(docker compose -p "${COMPOSE_PROJECT_NAME:-dvt}" "${compose_files[@]}" "${DVT_ENV_FILES[@]}" "${profiles[@]}")
 
 watcher_pid=""
+stats_pid=""
+
+# Profile load: host-side resource samples for the rig containers (the tester
+# has no docker socket): $out/stats.jsonl, one line per service and sample,
+# {"t": unix, "service": name, "cpu_pct": float, "mem_bytes": int}.
+sample_stats() {
+  local project="${COMPOSE_PROJECT_NAME:-dvt}" ids
+  while :; do
+    ids="$("${compose[@]}" ps -q 2>/dev/null | tr '\n' ' ')"
+    if [ -n "${ids// /}" ]; then
+      # shellcheck disable=SC2086
+      docker stats --no-stream --format '{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}' $ids 2>/dev/null \
+        | python3 -c '
+import json, re, sys, time
+units = {"B": 1, "KiB": 1024, "MiB": 1024**2, "GiB": 1024**3, "kB": 1000, "MB": 1000**2, "GB": 1000**3}
+project, now = sys.argv[1], time.time()
+for row in sys.stdin:
+    name, cpu, mem = row.rstrip("\n").split("\t")
+    service = re.sub(r"-[0-9]+$", "", name[len(project) + 1:] if name.startswith(project + "-") else name)
+    m = re.match(r"([0-9.]+)([A-Za-z]+)", mem.split("/")[0].strip())
+    mem_bytes = int(float(m.group(1)) * units.get(m.group(2), 1)) if m else 0
+    print(json.dumps({"t": round(now, 3), "service": service, "cpu_pct": float(cpu.rstrip("%") or 0), "mem_bytes": mem_bytes}))
+' "$project" >> "$out/stats.jsonl" || true
+    fi
+    # docker stats --no-stream itself takes about 2 s
+    sleep 0.2
+  done
+}
 control="$out/control"
 
 watch_control() {
@@ -264,10 +337,12 @@ watch_control() {
 }
 
 collect() {
-  if [ -n "$watcher_pid" ]; then
-    kill "$watcher_pid" 2>/dev/null || true
-    wait "$watcher_pid" 2>/dev/null || true
-  fi
+  local pid
+  for pid in "$watcher_pid" "$stats_pid"; do
+    [ -n "$pid" ] || continue
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  done
   # sniffers first, so every pcapng is closed before the rig goes down
   if [ "${#capture_svcs[@]}" -gt 0 ]; then
     "${compose[@]}" stop "${capture_svcs[@]}" > /dev/null 2>&1 || true
@@ -288,7 +363,7 @@ collect() {
 trap collect EXIT
 
 printf 'markers=%s profile=%s xlxd_ref=%s xlxd_sut=%s transcoder=%s\n' \
-  "$markers" "$profile" "${XLXD_REF_DIR:-ref}" "${XLXD_SUT_DIR:-sut}" "$TRANSCODER_IMAGE" \
+  "$markers" "$profile" "${XLXD_REF_IMAGE:-${XLXD_REF_DIR:-ref}}" "${XLXD_SUT_IMAGE:-${XLXD_SUT_DIR:-sut}}" "$TRANSCODER_IMAGE" \
   > "$out/run.txt"
 cat ".cache/xlxd/${XLXD_REF_DIR:-ref}.fetched" ".cache/xlxd/${XLXD_SUT_DIR:-sut}.fetched" >> "$out/run.txt" 2>/dev/null || true
 
@@ -296,7 +371,9 @@ cat ".cache/xlxd/${XLXD_REF_DIR:-ref}.fetched" ".cache/xlxd/${XLXD_SUT_DIR:-sut}
 (
   exec 8>> .cache/build.lock
   flock 8
-  "${compose[@]}" build
+  # prebuilt reflector images are used as they are, never built over
+  mapfile -t to_build < <("${compose[@]}" config --services | grep -vxF -f <(printf '%s\n' "${prebuilt[@]}" "-"))
+  "${compose[@]}" build "${to_build[@]}"
 )
 "${compose[@]}" up -d
 
@@ -309,6 +386,10 @@ done
 mkdir -p "$control"
 watch_control 9>&- &
 watcher_pid=$!
+if [ "$has_load" = 1 ]; then
+  sample_stats 9>&- &
+  stats_pid=$!
+fi
 
 rc=0
 "${compose[@]}" exec -T -e DVT_OUT="/dvt/$out" -e DVT_RIG_CONTROL=1 tester \
