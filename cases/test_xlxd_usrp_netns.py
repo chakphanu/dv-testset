@@ -52,6 +52,7 @@ def _inside(spec, run_dir):
     import socket
     import threading
 
+    from dvtest.net import pace
     from dvtest.proto import ambed, dextra, usrp
 
     subprocess.run(["ip", "link", "set", "lo", "up"], check=True)
@@ -100,16 +101,18 @@ def _inside(spec, run_dir):
             return
         time.sleep(0.5)
         s.sendto(dextra.header(stream_id, "N0TEST", module), dest)
+        start = time.monotonic()
         for index in range(50):
+            pace(start, index)
             s.sendto(dextra.voice(stream_id, index, VOICE_FRAME, index == 49,
                                   slow=dextra.SYNC_DATA), dest)
-            time.sleep(0.02)
         s.close()
 
     def usrp_talk(count):
+        start = time.monotonic()
         for seq in range(count):
+            pace(start, seq)
             peer.sendto(usrp.voice(seq, USRP_PCM), (XLXD_IP, 34001))
-            time.sleep(0.02)
         peer.sendto(usrp.unkey(count), (XLXD_IP, 34001))
 
     threading.Thread(target=usrp_rx, daemon=True).start()

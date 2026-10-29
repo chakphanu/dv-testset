@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from dvtest import clients
+from dvtest.net import pace
 from dvtest.audio import score, signals
 from dvtest.proto import ambed, iax2, m17, usrp
 
@@ -203,10 +204,11 @@ def test_usrp_no_echo(rig_usrp):
         listener.client.drain()
         listener.client.inbox.clear()
         echo = []
+        start = time.monotonic()
         for seq, frame in enumerate(signals.frames(signals.tone(700, 1000))):
+            pace(start, seq)
             peer.sendto(usrp.voice(seq, frame), dest)
             echo += drain()
-            time.sleep(0.02)
         peer.sendto(usrp.unkey(seq + 1), dest)
         heard = listener.collect(settle=1.0)
         echo += drain()

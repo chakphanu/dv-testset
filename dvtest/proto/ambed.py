@@ -276,10 +276,13 @@ def run_stream(addr, port, codec_in, outs, frames, gap=0.02, wait=3.0, bind_ip="
                 replies.append(data)
 
     try:
+        start = time.monotonic()
         for pid, frame in enumerate(frames):
+            delay = start + pid * gap - time.monotonic()
+            if delay > 0:
+                time.sleep(delay)
             sock.sendto(data_request(codec_in, pid, frame), (addr, port))
             drain()
-            time.sleep(gap)
         deadline = time.monotonic() + wait
         while len(replies) < len(frames) and time.monotonic() < deadline:
             drain()

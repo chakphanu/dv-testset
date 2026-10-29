@@ -97,7 +97,7 @@ class DmrClient:
         self.tg = module_tg(module)
         self.dest = None
 
-    def link(self, node_ip, timeout=1.0, port=PORT):
+    def link(self, node_ip, timeout=1.0, port=PORT, join_gap=0.3):
         self.dest = (node_ip, port)
         ident = self.id.to_bytes(4, "big")
         self.client.send(self.dest, b"RPTL" + ident)
@@ -109,10 +109,11 @@ class DmrClient:
         self.client.send(self.dest, b"RPTPING" + ident)
         self.client.pump(0.2)
         # Join the module: a header, then a terminator, both to the
-        # module's talkgroup.
+        # module's talkgroup. The terminator follows well inside xlxd's
+        # 1.6 s stream timeout so the join is a complete (empty) stream.
         self.client.send(self.dest, packet(0, self.id, self.tg, self.id, 0xA1, 0x01020304,
                                            data_sync_payload()))
-        self.client.pump(2.0)
+        self.client.pump(join_gap)
         self.client.send(self.dest, packet(1, self.id, self.tg, self.id, 0xA2, 0x01020304,
                                            data_sync_payload()))
         self.client.pump(1.0)

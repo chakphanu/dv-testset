@@ -16,6 +16,7 @@ import time
 import pytest
 
 from dvtest import clients
+from dvtest.net import pace
 from dvtest.audio import signals
 from dvtest.proto import usrp
 
@@ -82,10 +83,11 @@ def test_usrp_pcm_not_fabricated(rig_usrp, transcoder_down):
         listener.client.drain()
         listener.client.inbox.clear()
         dest = (rig_usrp.xlxd_sut, USRP_XLXD_PORT)
+        start = time.monotonic()
         for seq, frame in enumerate(signals.frames(signals.tone(700, 1000))):
+            pace(start, seq)
             peer.sendto(usrp.voice(seq, frame), dest)
             listener.client.drain()
-            time.sleep(0.02)
         peer.sendto(usrp.unkey(seq + 1), dest)
         received = listener.collect(settle=1.0)
     finally:

@@ -4,6 +4,13 @@ import socket
 import time
 
 
+def pace(start, index, gap=0.020):
+    """Sleep until start + index * gap (monotonic schedule, no drift)."""
+    delay = start + index * gap - time.monotonic()
+    if delay > 0:
+        time.sleep(delay)
+
+
 class UdpClient:
     def __init__(self, bind_ip, responder=None, port=0):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
