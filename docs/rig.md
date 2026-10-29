@@ -73,6 +73,13 @@ compose as `--env-file`):
 
 A variable already set in the calling shell wins over all three files.
 
+Transcoder interface: `rig/compose.yml` gives each transcoder
+`DVT_TRANSCODER_BIND` (its own address) and `DVT_TRANSCODER_PEERS` (its
+xlxd and the tester). An image that needs other variables or arguments gets
+them from `.local/compose.override.yml` (gitignored; template
+`rig/compose.override.example.yml`), which `run.sh` adds with `-f` when it
+exists.
+
 Run-time variables (not pins): `DVT_SUT_USRP`, `DVT_RUN_ID`,
 `DVT_UID`/`DVT_GID`, `DVT_AMBED_ADDR`, `DVT_START_DELAY`; see the header of
 `rig/compose.yml`. `dvtest/target.py` documents every `DVT_*` variable the
@@ -146,9 +153,7 @@ that service until `start`. After a successful `start` the watcher brings
 `capture-<svc>` up again, writing the next free name: `<svc>.pcapng`, then
 `<svc>.2.pcapng`, `<svc>.3.pcapng`, ... (dumpcap never appends). The xlxd
 side of the gap is still in `xlxd-*.pcapng`; xlxd services are never stopped,
-so their files are the complete record. (Before this restart existed, run
-`out/20261029T135314Z` had transcoder-sut.pcapng end at 118 s and
-allstar.pcapng at 86 s of a 359 s run.)
+so their files are the complete record.
 
 Every file also holds traffic that is not the rig's: multicast from the host
 side of the bridge (`.1`: mDNS, SSDP, WS-Discovery), ARP "duplicate IP"

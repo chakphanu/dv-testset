@@ -120,24 +120,27 @@ everywhere else.
 
 ## Evidence
 
-Run `out/20261029T135314Z` (`scripts/run.sh --capture --profile allstar -m
-"wire or rig or allstar"`), file `xlxd-sut.pcapng` (DExtra, MMDVM, M17) and
-`allstar.pcapng` (IAX2, first 86 s: the sniffer stops at the crash case's
-`kill allstar`). Counts are `-T fields -e <proto>.kind|tag -e udp.length -e
-ip.src | sort | uniq -c`, sizes are UDP payload bytes; "client" = tester.
+Run `out/20261029T153832Z-i5` (`TRANSCODER_IMAGE=vambed-neo:local
+DVT_INSTANCE=5 scripts/run.sh --capture --profile allstar -m "wire or rig or
+allstar"`; transcoder, xlxd trees and result as in
+[ambed.md](ambed.md#evidence); rig instance 5, so addresses are `172.30.5.x`).
+DExtra, MMDVM and M17 come from `xlxd-sut.pcapng` (`ip.addr ==
+172.30.5.11 && !icmp`), IAX2 from `allstar.pcapng` + `allstar.2.pcapng`.
+Counts are `-T fields -e <proto>.kind|tag -e udp.length -e ip.src | sort |
+uniq -c`, sizes are UDP payload bytes; "client" = tester.
 
-DExtra (`-Y "dextra && !icmp"`, 1752 packets):
+DExtra (3020 packets):
 
 | Packet | Size | client -> xlxd | xlxd -> client |
 |--------|------|----------------|----------------|
-| link / ACK | 11 / 14 | 23 | 23 |
-| unlink | 11 | 23 | - |
-| keepalive | 9 | 17 | 17 (`XRF999`) |
-| DSVT header | 56 | 12 | 85 |
-| DSVT voice | 27 | 720 | 807 |
-| DSVT last voice | 27 | 12 | 13 |
+| link / ACK | 11 / 14 | 25 | 25 |
+| unlink | 11 | 25 | - |
+| keepalive | 9 | 20 | 20 (`XRF999`) |
+| DSVT header | 56 | 13 | 90 |
+| DSVT voice | 27 | 1330 | 1441 |
+| DSVT last voice | 27 | 13 | 18 |
 
-MMDVM (`-Y "mmdvm && !icmp"`, 2638 packets):
+MMDVM (2238 packets):
 
 | Packet | Size | client -> xlxd | xlxd -> client |
 |--------|------|----------------|----------------|
@@ -145,29 +148,28 @@ MMDVM (`-Y "mmdvm && !icmp"`, 2638 packets):
 | RPTK / RPTACK | 40 / 6 | 17 | 17 |
 | RPTPING / MSTPONG | 11 | 17 | 17 |
 | MSTCL | 5 | - | 11 |
-| DMRD voice / voice sync / data sync | 55 | 131 / 23 / 65 | 1691 / 374 / 241 |
+| DMRD voice / voice sync / data sync | 55 | 124 / 30 / 65 | 1358 / 326 / 222 |
 
-M17 (`-Y "m17ref && !icmp"`, 805 packets):
+M17 (796 packets):
 
 | Packet | Size | client -> xlxd | xlxd -> client |
 |--------|------|----------------|----------------|
 | CONN / ACKN | 11 / 4 | 17 | 17 |
-| PING / PONG | 10 | 21 (PONG) | 21 (PING) |
+| PING / PONG | 10 | 22 (PONG) | 22 (PING) |
 | DISC | 10 / 4 | 17 | 17 |
-| voice / voice EOT | 54 | 237 / 7 | 440 / 11 |
+| voice / voice EOT | 54 | 237 / 7 | 427 / 13 |
 
-IAX2 (built-in dissector, `-Y "iax2 && !icmp"`, 2619 packets): 8 calls.
-Per call NEW, AUTHREQ, AUTHREP, ACCEPT, ANSWER and control -1, one TEXT
-from the tester and three from the node; key (control 12) 7 / 6 and unkey
-(13) 18 / 17 tester / node; HANGUP 7 (the crash case's call ends with the
-node killed); ACK 88 / 60. Voice (tester / node): full frames 332 B (12 + 320) 4 / 8,
-mini frames 324 B (4 + 320) 474 / 1839; 3 CNG frames from the
-node.
+IAX2 (built-in dissector): 8 calls. Per call NEW, AUTHREQ, AUTHREP, ACCEPT,
+ANSWER and control -1, one TEXT from the tester and three from the node;
+key (control 12) 7 / 6 and unkey (13) 18 / 17 tester / node; HANGUP 7 (the
+crash case's call ends with the node killed); ACK 88 / 60. Voice (tester /
+node): full frames 332 B (12 + 320) 4 / 8, mini frames 324 B (4 + 320)
+476 / 1844; 3 CNG frames from the node.
 
 Expert info: no errors or warnings from `dextra`, `mmdvm`, `m17ref` or
-`iax2` in either file.
+`iax2` in these files.
 
 Not observed: DExtra NAK and DISCONNECTED (every link was accepted), M17
 NACK, IAX2 CALLTOKEN (the rig node does not ask for it), PING/PONG (IAX)
-and LAGRP: the node's 8 LAGRQ arrived after the tester had hung up and got
+and LAGRP: the node's LAGRQ arrive after the tester has hung up and get
 ICMP port unreachable.

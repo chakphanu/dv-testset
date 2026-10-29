@@ -90,11 +90,13 @@ frame and PING periods are confirmed in the Evidence section.
 
 ## Evidence
 
-Run `out/20261029T135314Z` (`scripts/run.sh --capture --profile allstar -m
-"wire or rig or allstar"`, xlxd-sut = PR tree with USRP endpoints A/B/C).
+Run `out/20261029T153832Z-i5` (`TRANSCODER_IMAGE=vambed-neo:local
+DVT_INSTANCE=5 scripts/run.sh --capture --profile allstar -m "wire or rig or
+allstar"`; transcoder, xlxd trees and result as in
+[ambed.md](ambed.md#evidence); rig instance 5, so addresses are `172.30.5.x`).
 
 ```sh
-scripts/tshark.sh -r out/20261029T135314Z/capture/xlxd-sut.pcapng -Y "usrp && !icmp" \
+scripts/tshark.sh -r out/20261029T153832Z-i5/capture/xlxd-sut.pcapng -Y "usrp && !icmp" \
   -T fields -e ip.src -e udp.srcport -e ip.dst -e udp.dstport -e udp.length \
   -e usrp.seq -e usrp.memory -e usrp.keyup -e usrp.talkgroup -e usrp.type \
   -e usrp.mpxid -e usrp.reserved -e usrp.pcm_peak
@@ -104,23 +106,23 @@ xlxd-sut.pcapng (whole run), per direction:
 
 | Direction | Voice 352 B | Unkey 32 B | Seq | Voice period (median) |
 |-----------|-------------|------------|-----|-----------------------|
-| xlxd .11:34001 -> node .40:32001 | 333 | 4 | 0..336, always +1 | 20.1 ms |
-| xlxd .11:34002 -> node .40:32002 | 543 | 9 | 0..551, always +1 | 20.1 ms |
+| xlxd .11:34001 -> node .40:32001 | 303 | 3 | 0..305, always +1 | 20.1 ms |
+| xlxd .11:34002 -> node .40:32002 | 483 | 8 | 0..490, always +1 | 20.1 ms |
 | xlxd .11:34003 -> tester .30:32003 | 50 | 1 | 0..50, always +1 | 20.1 ms |
-| node .40:32001 -> xlxd .11:34001 | 337 | 2 | 0..338, always +1 | 20.0 ms |
+| node .40:32001 -> xlxd .11:34001 | 341 | 2 | 0..342, always +1 | 20.0 ms |
 | node .40:32002 -> xlxd .11:34002 | 155 | 1 | 0..155, always +1 | 20.0 ms |
-| tester .30:32003 -> xlxd .11:34003 | 100 | 2 | two talks, 0..50 each | 25.2 ms |
+| tester .30:32003 -> xlxd .11:34003 | 100 | 2 | two talks, 0..50 each | 20.0 ms |
 
-- All 1537 frames are type 0 (voice); memory, talkgroup, mpxid and reserved
-  are 0 in every frame from xlxd, AllStar and the tester; keyup is 1 exactly
-  in the 352 B frames and 0 in the 32 B frames. No other size was seen.
+- All 1449 frames are type 0 (voice): 1432 of 352 B with keyup 1 and 17 of
+  32 B with keyup 0, no other size. Memory, talkgroup, mpxid and reserved
+  are 0 in every frame from xlxd, AllStar and the tester.
 - The sequence runs on per endpoint and direction across key/unkey cycles
   (xlxd: one counter per endpoint for its whole life; AllStar likewise); the
   tester starts at 0 per talk.
-- 1386 of 1518 voice frames carry signal (`usrp.pcm_peak` > 0).
-- allstar.pcapng (its sniffer stops at the crash case's `kill allstar`, 86 s)
-  shows the same frames from the node side: 303 + 3 from xlxd on 32001, 331
-  + 2 and 155 + 1 from the node, same seq rules.
+- 1302 of 1432 voice frames carry signal (`usrp.pcm_peak` > 0).
+- allstar.pcapng + allstar.2.pcapng (the crash case kills and restarts the
+  node) show the same frames from the node side, same seq rules; the node's
+  32001 stream there has 335 + 2 frames because the kill cuts the first file.
 
 ```
 USRP (app_rpt chan_usrp), voice seq=0 keyup=1 peak=0
@@ -136,7 +138,6 @@ USRP (app_rpt chan_usrp), unkey seq=100
     Keyup: 0
 ```
 
-Expert info: no USRP errors or warnings in xlxd-sut.pcapng or
-allstar.pcapng. Not observed: DTMF, text, TLV, ping, ADPCM and ulaw frames
-(neither xlxd nor the rig AllStar node sends them; xlxd drops them on
-receive).
+Expert info: no USRP errors or warnings in xlxd-sut.pcapng or the allstar
+files. Not observed: DTMF, text, TLV, ping, ADPCM and ulaw frames (neither
+xlxd nor the rig AllStar node sends them; xlxd drops them on receive).
