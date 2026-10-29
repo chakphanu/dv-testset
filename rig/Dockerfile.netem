@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+# netem sidecar: shares the network namespace of one rig service and shapes
+# its egress with "tc qdisc ... netem" (the kernel loads sch_netem on demand).
+# Build args from .env.example: NETEM_BASE_IMAGE, IPROUTE2_VERSION (exact
+# Debian version; empty = latest).
+ARG NETEM_BASE_IMAGE
+FROM ${NETEM_BASE_IMAGE}
+ARG IPROUTE2_VERSION
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends "iproute2${IPROUTE2_VERSION:+=$IPROUTE2_VERSION}" \
+    && rm -rf /var/lib/apt/lists/*
+COPY netem-entry.sh /usr/local/bin/dvt-netem
+RUN chmod 755 /usr/local/bin/dvt-netem
+ENTRYPOINT ["/usr/local/bin/dvt-netem"]

@@ -19,6 +19,7 @@
 #            (set DVT_INTERLINK=on with it); built from XLXD_PEER_DIR (default ref)
 #   load     DVT_LOAD_MODULES load-node replicas (dvt-tester image, addresses
 #            from <net>.128/25) each running DVT_LOAD_CMD against xlxd-sut
+#   netem    tc netem sidecars on tester, xlxd-ref and xlxd-sut (egress)
 #   capture  sniffers on xlxd-ref, xlxd-sut, transcoder-sut (capture-allstar: on
 #            allstar, capture-nxdn: on nxdn-*, capture-p25: on p25-*)
 #
@@ -48,6 +49,21 @@ x-xlxd: &xlxd
   profiles: [core]
   init: true
   restart: "no"
+
+# netem sidecars (profile netem): each shares the namespace of its target and
+# shapes its eth0 egress; DVT_NETEM_ARGS_* are resolved by run.sh from presets.
+x-netem: &netem
+  profiles: [netem]
+  init: true
+  image: dvt-netem:local
+  build:
+    context: .
+    dockerfile: Dockerfile.netem
+    args:
+      NETEM_BASE_IMAGE: ${NETEM_BASE_IMAGE:-error-set-netem-base-image-see-env-example}
+      IPROUTE2_VERSION: ${IPROUTE2_VERSION:-}
+  cap_drop: [ALL]
+  cap_add: [NET_ADMIN]
 
 # One sniffer per watched service: shares its network namespace and writes
 # out/<run>/capture/<service>.pcapng (dumpcap stops at CAPTURE_FILESIZE_KB).
@@ -202,6 +218,8 @@ services:
       # names (comma separated, dvtest/divergences.py) of intended differences
       # of the system under test from xlxd-ref
       DVT_SUT_DIVERGENCES: ${DVT_SUT_DIVERGENCES:-}
+      # short name of the system under test (baselines/<name>/ for per-sut numbers)
+      DVT_SUT_NAME: ${DVT_SUT_NAME:-}
       # wire cases: transcoder under test when run inside the rig
       DVT_AMBED_ADDR: ${DVT_AMBED_ADDR:-${DVT_NET:-172.30.0}.21}
       # on when xlxd-sut has USRP endpoints (A/B -> allstar, C -> tester)
@@ -390,6 +408,31 @@ services:
     depends_on:
       xlxd-peer-sut: {condition: service_started, restart: false}
     command: ["xlxd-peer-sut"]
+
+  # ---- netem sidecars (profile netem) ----
+  netem-tester:
+    <<: *netem
+    network_mode: "service:tester"
+    depends_on:
+      tester: {condition: service_started, restart: false}
+    environment:
+      DVT_NETEM_ARGS: ${DVT_NETEM_ARGS_TESTER:-}
+
+  netem-xlxd-ref:
+    <<: *netem
+    network_mode: "service:xlxd-ref"
+    depends_on:
+      xlxd-ref: {condition: service_started, restart: false}
+    environment:
+      DVT_NETEM_ARGS: ${DVT_NETEM_ARGS_XLXD:-}
+
+  netem-xlxd-sut:
+    <<: *netem
+    network_mode: "service:xlxd-sut"
+    depends_on:
+      xlxd-sut: {condition: service_started, restart: false}
+    environment:
+      DVT_NETEM_ARGS: ${DVT_NETEM_ARGS_XLXD:-}
 
   # ---- load (profile load): one client node per module ----
   # Each replica gets a dynamic address from <net>.128/25; DVT_LOAD_CMD (run

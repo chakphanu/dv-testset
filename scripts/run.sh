@@ -20,6 +20,10 @@
 #                      into out/<utc>/stats.jsonl while pytest runs
 #   --capture          sniffers on xlxd-ref/xlxd-sut/transcoder-sut (+allstar/nxdn/p25): pcapng in
 #                      out/<utc>/capture/<service>.pcapng (decode: scripts/tshark.sh)
+#   --netem SPEC       impair the tester's egress: a preset (lan, good_internet,
+#                      mobile_3g, bad_wifi; .env.example), "off" or netem
+#                      arguments ("delay 100ms loss 1%"); DVT_NETEM_XLXD does the
+#                      same for xlxd-ref and xlxd-sut alike; counters in netem.txt
 #   --keep             leave the rig running (default: compose down at the end)
 #   --down             take the lock, bring every profile down, exit (the only
 #                      cleanup for a --keep rig)
@@ -44,6 +48,7 @@
 # then rename) with one line "<action> <service>":
 #   action  stop | start | restart | kill (SIGKILL)
 #   service transcoder-ref | transcoder-sut | allstar | xlxd-ref | xlxd-sut
+# or, with netem on: "netem tester|xlxd <preset|off|netem arguments>".
 # The answer is <id>.ack: "ok", "error <rc>" or "error refused" (anything else
 # is refused and nothing runs); the request is renamed to <id>.done.
 # control/control.log gets "<utc> request <line>" before the action and
@@ -61,6 +66,8 @@ markers="rig"
 profile="core"
 keep=0
 capture=0
+netem_set=0
+netem_cli=""
 down_only=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -68,9 +75,10 @@ while [ "$#" -gt 0 ]; do
     --profile) [ "$#" -ge 2 ] || { echo "run.sh: --profile needs a value" >&2; exit 2; }; profile="$2"; shift 2 ;;
     --keep) keep=1; shift ;;
     --capture) capture=1; shift ;;
+    --netem) [ "$#" -ge 2 ] || { echo "run.sh: --netem needs a preset or netem arguments" >&2; exit 2; }; netem_cli="$2"; netem_set=1; shift 2 ;;
     --down) down_only=1; shift ;;
     --) shift; break ;;
-    -h|--help) sed -n '3,53p' "$0"; exit 0 ;;
+    -h|--help) sed -n '3,58p' "$0"; exit 0 ;;
     *) echo "run.sh: unknown argument '$1' (see --help)" >&2; exit 2 ;;
   esac
 done
@@ -115,7 +123,7 @@ fi
 compose_all=(docker compose -p "${COMPOSE_PROJECT_NAME:-dvt}" "${compose_files[@]}" "${DVT_ENV_FILES[@]}"
   --profile core --profile allstar --profile nxdn --profile capture --profile capture-allstar
   --profile capture-nxdn --profile p25 --profile capture-p25 --profile interlink
-  --profile capture-interlink --profile load)
+  --profile capture-interlink --profile load --profile netem)
 
 if [ "$down_only" = 1 ]; then
   take_lock
@@ -177,6 +185,25 @@ for p in "${wanted[@]}"; do
     *) echo "run.sh: --profile takes core, allstar, nxdn, p25, interlink, load or a comma list" >&2; exit 2 ;;
   esac
 done
+# netem: a preset name (NETEM_PRESET_<NAME>), "off", or netem arguments
+netem_args() {
+  local spec="$1" var
+  case "$spec" in ''|off|none) return 0 ;; esac
+  var="NETEM_PRESET_$(printf '%s' "$spec" | tr '[:lower:]' '[:upper:]')"
+  if [[ "$spec" =~ ^[a-z0-9_]+$ ]] && [ -n "${!var:-}" ]; then spec="${!var}"; fi
+  [[ "$spec" =~ ^[A-Za-z0-9\ .%_-]+$ ]] || { echo "run.sh: invalid netem arguments '$spec'" >&2; return 1; }
+  printf '%s' "$spec"
+}
+netem_svcs=()
+[ "$netem_set" = 0 ] || DVT_NETEM_TESTER="$netem_cli"
+if [ "$netem_set" = 1 ] || [ -n "${DVT_NETEM_TESTER:-}${DVT_NETEM_XLXD:-}" ]; then
+  profiles+=(--profile netem)
+  netem_svcs=(netem-tester netem-xlxd-ref netem-xlxd-sut)
+  DVT_NETEM_ARGS_TESTER="$(netem_args "${DVT_NETEM_TESTER:-}")" || exit 2
+  DVT_NETEM_ARGS_XLXD="$(netem_args "${DVT_NETEM_XLXD:-}")" || exit 2
+  export DVT_NETEM_ARGS_TESTER DVT_NETEM_ARGS_XLXD
+fi
+
 capture_svcs=()
 if [ "$capture" = 1 ]; then
   profiles+=(--profile capture)
@@ -301,7 +328,7 @@ for row in sys.stdin:
 control="$out/control"
 
 watch_control() {
-  local req id line action svc extra rc sniffer
+  local req id line action svc extra rc sniffer args target
   while :; do
     for req in "$control"/*.req; do
       [ -e "$req" ] || continue
@@ -311,7 +338,22 @@ watch_control() {
       read -r action svc extra <<< "$line" || true
       printf '%s request %s\n' "$(date -u +%FT%T.%3NZ)" "$line" >> "$control/control.log"
       rc=refused
-      if [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] && [ -z "$extra" ]; then
+      if [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$action" = netem ] && [ "${#netem_svcs[@]}" -gt 0 ]; then
+        # "netem tester|xlxd <preset|off|arguments>": xlxd = xlxd-ref and xlxd-sut alike
+        case "$svc" in tester) target=(netem-tester) ;; xlxd) target=(netem-xlxd-ref netem-xlxd-sut) ;; *) target=() ;; esac
+        if [ "${#target[@]}" -gt 0 ] && [ -n "$extra" ] && args="$(netem_args "$extra" 2>/dev/null)"; then
+          rc=0
+          # counters of the setting being replaced
+          netem_snapshot "before netem $svc $extra"
+          for t in "${target[@]}"; do
+            # shellcheck disable=SC2086
+            "${compose[@]}" exec -T "$t" dvt-netem set $args >> "$control/control.log" 2>&1 || rc=$?
+          done
+          # a restarted xlxd gets a new sidecar with the current setting
+          [ "$svc" != xlxd ] || export DVT_NETEM_ARGS_XLXD="$args"
+          netem_snapshot "netem $svc $extra"
+        fi
+      elif [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] && [ -z "$extra" ]; then
         case "$svc" in transcoder-ref|transcoder-sut|allstar|xlxd-ref|xlxd-sut) ;; *) action="" ;; esac
         rc=0
         sniffer=""
@@ -332,6 +374,10 @@ watch_control() {
         if [ -n "$sniffer" ] && { [ "$action" = start ] || [ "$action" = restart ]; } && [ "$rc" = 0 ]; then
           "${compose[@]}" up -d --no-deps --force-recreate "$sniffer" >> "$control/control.log" 2>&1 || true
         fi
+        # the qdisc lived in the old namespace: a new netem sidecar applies it again
+        if [[ " ${netem_svcs[*]} " == *" netem-$svc "* ]] && { [ "$action" = start ] || [ "$action" = restart ]; } && [ "$rc" = 0 ]; then
+          "${compose[@]}" up -d --no-deps --force-recreate "netem-$svc" >> "$control/control.log" 2>&1 || true
+        fi
       fi
       printf '%s %s\n' "$(date -u +%FT%T.%3NZ)" "$line -> $rc" >> "$control/control.log"
       if [ "$rc" = 0 ]; then printf 'ok\n'; else printf 'error %s\n' "$rc"; fi > "$control/$id.ack.tmp"
@@ -342,6 +388,17 @@ watch_control() {
   done
 }
 
+# netem.txt: the qdisc of every netem sidecar, with counters
+netem_snapshot() {
+  local t
+  [ "${#netem_svcs[@]}" -gt 0 ] || return 0
+  printf '==== %s %s\n' "$(date -u +%FT%T.%3NZ)" "$1" >> "$out/netem.txt"
+  for t in "${netem_svcs[@]}"; do
+    printf -- '-- %s\n' "$t" >> "$out/netem.txt"
+    "${compose[@]}" exec -T "$t" dvt-netem show >> "$out/netem.txt" 2>&1 || true
+  done
+}
+
 collect() {
   local pid
   for pid in "$watcher_pid" "$stats_pid"; do
@@ -349,6 +406,7 @@ collect() {
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
   done
+  netem_snapshot end
   # sniffers first, so every pcapng is closed before the rig goes down
   if [ "${#capture_svcs[@]}" -gt 0 ]; then
     "${compose[@]}" stop "${capture_svcs[@]}" > /dev/null 2>&1 || true
@@ -368,9 +426,9 @@ collect() {
 }
 trap collect EXIT
 
-printf 'markers=%s profile=%s xlxd_ref=%s xlxd_sut=%s transcoder=%s sut_divergences=%s\n' \
+printf 'markers=%s profile=%s xlxd_ref=%s xlxd_sut=%s transcoder=%s sut_divergences=%s sut_name=%s\n' \
   "$markers" "$profile" "${XLXD_REF_IMAGE:-${XLXD_REF_DIR:-ref}}" "${XLXD_SUT_IMAGE:-${XLXD_SUT_DIR:-sut}}" "$TRANSCODER_IMAGE" \
-  "${DVT_SUT_DIVERGENCES:-}" \
+  "${DVT_SUT_DIVERGENCES:-}" "${DVT_SUT_NAME:-}" \
   > "$out/run.txt"
 cat ".cache/xlxd/${XLXD_REF_DIR:-ref}.fetched" ".cache/xlxd/${XLXD_SUT_DIR:-sut}.fetched" >> "$out/run.txt" 2>/dev/null || true
 
@@ -389,6 +447,8 @@ for svc in "${capture_svcs[@]}"; do
   for _ in $(seq 50); do [ -s "$f" ] && break; sleep 0.2; done
   [ -s "$f" ] || echo "run.sh: warning: $f not started" >&2
 done
+
+netem_snapshot start
 
 mkdir -p "$control"
 watch_control 9>&- &
