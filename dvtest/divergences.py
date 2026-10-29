@@ -41,6 +41,21 @@ TABLE = {
 }
 
 
+# names a DVT_SUT_PROFILE implies (its behaviour spec covers them); an
+# unknown profile is an error
+PROFILES = {
+    "xlxd": (),
+    "dvrouter": ("ambed_extended_open_always", "immediate_revoke", "no_zero_fill", "synthesized_terminator"),
+}
+
+
+def implied(profile):
+    """Names a profile implies; ValueError for an unknown profile."""
+    if profile not in PROFILES:
+        raise ValueError("unknown DVT_SUT_PROFILE %r; known: %s" % (profile, ", ".join(sorted(PROFILES))))
+    return set(PROFILES[profile])
+
+
 def parse(value):
     """Set of names from a comma string or a list; ValueError on unknown."""
     if isinstance(value, str):
@@ -56,3 +71,9 @@ def load(env=None):
     """Declared names from DVT_SUT_DIVERGENCES (default os.environ)."""
     env = os.environ if env is None else env
     return parse(env.get("DVT_SUT_DIVERGENCES", ""))
+
+
+def effective(env=None):
+    """Declared names plus the names DVT_SUT_PROFILE implies."""
+    env = os.environ if env is None else env
+    return load(env) | implied(env.get("DVT_SUT_PROFILE") or "xlxd")

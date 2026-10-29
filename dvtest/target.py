@@ -12,6 +12,8 @@ allstar .40.
   DVT_XLXD_SUT       xlxd under test
   DVT_XLXD_PEER_SUT  XLX998 interlink peer of xlxd-sut (.12, profile interlink)
   DVT_XLXD_PEER_REF  XLX998 interlink peer of xlxd-ref (.13, profile interlink)
+  DVT_XLXD_PEER2_SUT XLX997 transit peer on the sut side (.14, profile interlink)
+  DVT_XLXD_PEER2_REF XLX997 transit peer on the ref side (.15, profile interlink)
   DVT_AMBED_REF      reference transcoder
   DVT_AMBED_SUT      transcoder under test
   DVT_TESTER         tester container address
@@ -41,10 +43,11 @@ from . import divergences
 
 DEFAULT_SUBNET = "172.30.0.0/24"
 HOST_OFFSETS = {"xlxd_ref": 10, "xlxd_sut": 11, "xlxd_peer_sut": 12, "xlxd_peer_ref": 13,
+                "xlxd_peer2_sut": 14, "xlxd_peer2_ref": 15,
                 "ambed_ref": 20, "ambed_sut": 21,
                 "tester": 30, "allstar": 40, "nxdn_ref": 50, "nxdn_sut": 51,
                 "p25_ref": 60, "p25_sut": 61}
-KEYS = ("subnet", "xlxd_ref", "xlxd_sut", "xlxd_peer_sut", "xlxd_peer_ref",
+KEYS = ("subnet", "xlxd_ref", "xlxd_sut", "xlxd_peer_sut", "xlxd_peer_ref", "xlxd_peer2_sut", "xlxd_peer2_ref",
         "ambed_ref", "ambed_sut", "tester", "allstar",
         "nxdn_ref", "nxdn_sut", "p25_ref", "p25_sut",
         "ambed_addr", "ambed_port", "ambed_stream_cap", "xlxd_bin", "xlxd_ref_bin", "reflector", "iax_secret",
@@ -58,6 +61,8 @@ class Target:
     xlxd_sut: str = ""
     xlxd_peer_sut: str = ""
     xlxd_peer_ref: str = ""
+    xlxd_peer2_sut: str = ""
+    xlxd_peer2_ref: str = ""
     ambed_ref: str = ""
     ambed_sut: str = ""
     tester: str = ""
@@ -111,8 +116,10 @@ def load(env=None, path=None):
         value = env.get("DVT_" + key.upper())
         if value:
             values[key] = value
+    # effective divergences: declared names plus what the profile implies
+    declared = divergences.parse(env.get("DVT_SUT_DIVERGENCES") or declared)
     target = Target(given=set(values),
-                    divergences=frozenset(divergences.parse(env.get("DVT_SUT_DIVERGENCES") or declared)))
+                    divergences=frozenset(declared | divergences.implied(values.get("sut_profile") or "xlxd")))
     for key, value in values.items():
         setattr(target, key, int(value) if key in ("ambed_port", "ambed_stream_cap") else str(value))
     for key, offset in HOST_OFFSETS.items():
