@@ -5,14 +5,12 @@ was keyed exactly (20 wpm, 800 Hz).
 unit: upstream Codec2 3200 and 1600 round trip (c2enc/c2dec on PATH).
 wire: PCM -> AMBE+ / AMBE2+ / Codec2 / IMBE -> PCM through a transcoder
 (DVT_AMBED_ADDR or TRANSCODER_IMAGE); codecs come from its CAPS reply.
-Tandems IMBE <-> AMBE+ / AMBE2+ / Codec2 are informational (xfail on a
-mismatch) unless DVT_EXPECT_TANDEM=1.
+Tandems IMBE <-> AMBE+ / AMBE2+ / Codec2 run at tandem.WPM (12 wpm).
 rig: dvtest.tools.live_id sends the ID to xlxd-sut, a D-STAR listener on
 the same module decodes it.
 allstar: D-STAR talker -> IAX2 caller, and IAX2 caller -> M17 listener
 (c2dec), both through node 1901 on module A.
 """
-import os
 import random
 import shutil
 import subprocess
@@ -22,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from dvtest.audio import morse, signals
+from dvtest.audio import morse, signals, tandem
 from dvtest import clients
 from dvtest.proto import ambed, dextra, iax2
 from dvtest.tools import live_id
@@ -91,23 +89,36 @@ def test_morse_through_transcoder(wire, name):
     assert_decodes(text, b"".join(pcm), "PCM -> %s -> PCM" % name)
 
 
+@pytest.fixture(scope="module")
+def tandem_wire(wire):
+    """(text, {codec: frames}): a tandem.WPM (12 wpm) ID encoded once into
+    every served codec; two MBE hops close 20 wpm gaps."""
+    (addr, port), caps, _text, encoded = wire
+    text = tandem.id_text()
+    frames = tandem.encode(text)
+    outs = list(encoded)
+    out = {}
+    for i in range(0, len(outs), caps.max_outputs):
+        out.update(ambed.transcode(addr, ambed.PCM, outs[i:i + caps.max_outputs], frames, port=port,
+                                   transaction=0x4D4F0400 + i))
+    return text, out
+
+
 @pytest.mark.wire
 @pytest.mark.parametrize("src,dst", TANDEM, ids=["%s-%s" % t for t in TANDEM])
-def test_morse_tandem(wire, src, dst):
-    """PCM -> src -> dst -> PCM: one codec-to-codec hop inside the
-    transcoder. A mismatch is xfail unless DVT_EXPECT_TANDEM=1."""
-    (addr, port), caps, text, encoded = wire
+def test_morse_tandem(wire, tandem_wire, src, dst):
+    """PCM -> src -> dst -> PCM at tandem.WPM: one codec-to-codec hop
+    inside the transcoder."""
+    (addr, port), caps, _text, _encoded = wire
+    text, encoded = tandem_wire
     a, b = WIRE_CODECS[src], WIRE_CODECS[dst]
     missing = [n for n in (src, dst) if WIRE_CODECS[n] not in encoded]
     if missing:
         pytest.skip("transcoder does not announce %s (mask 0x%02x)" % (" ".join(missing), caps.mask))
     hop = ambed.transcode(addr, a, [b], encoded[a], port=port, transaction=0x4D4F0200 + 8 * a + b)[b]
     pcm = ambed.transcode(addr, b, [ambed.PCM], hop, port=port, transaction=0x4D4F0300 + 8 * a + b)[ambed.PCM]
-    result = morse.check(text, morse.decode(b"".join(pcm)))
-    print("PCM -> %s -> %s -> PCM: sent %r got %r" % (src, dst, text, result["got"]))
-    if not result["exact"] and os.environ.get("DVT_EXPECT_TANDEM") != "1":
-        pytest.xfail("tandem %s -> %s decodes %r (informational; DVT_EXPECT_TANDEM=1 asserts)"
-                     % (src, dst, result["got"]))
+    result = morse.check(text, morse.decode(b"".join(pcm), wpm=tandem.WPM))
+    print("PCM -> %s -> %s -> PCM at %d wpm: sent %r got %r" % (src, dst, tandem.WPM, text, result["got"]))
     assert result["exact"], result
 
 
