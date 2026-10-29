@@ -3,25 +3,36 @@
 was keyed exactly (20 wpm, 800 Hz).
 
 unit: upstream Codec2 3200 and 1600 round trip (c2enc/c2dec on PATH).
-wire: PCM -> AMBE+ / AMBE2+ / Codec2 -> PCM through a transcoder
+wire: PCM -> AMBE+ / AMBE2+ / Codec2 / IMBE -> PCM through a transcoder
 (DVT_AMBED_ADDR or TRANSCODER_IMAGE); codecs come from its CAPS reply.
+Tandems IMBE <-> AMBE+ / AMBE2+ / Codec2 are informational (xfail on a
+mismatch) unless DVT_EXPECT_TANDEM=1.
 rig: dvtest.tools.live_id sends the ID to xlxd-sut, a D-STAR listener on
 the same module decodes it.
+allstar: D-STAR talker -> IAX2 caller, and IAX2 caller -> M17 listener
+(c2dec), both through node 1901 on module A.
 """
+import os
 import random
 import shutil
 import subprocess
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from dvtest.audio import morse, signals
-from dvtest.proto import ambed, dextra
+from dvtest import clients
+from dvtest.proto import ambed, dextra, iax2
 from dvtest.tools import live_id
 
 WPM = 20
 RIG_MODULE = "E"
-WIRE_CODECS = {"ambeplus": ambed.AMBEPLUS, "ambe2plus": ambed.AMBE2PLUS, "codec2_3200": ambed.CODEC2_3200}
+WIRE_CODECS = {"ambeplus": ambed.AMBEPLUS, "ambe2plus": ambed.AMBE2PLUS, "codec2_3200": ambed.CODEC2_3200,
+               "imbe": ambed.IMBE}
+TANDEM = [(src, dst) for other in ("ambeplus", "ambe2plus", "codec2_3200")
+          for src, dst in (("imbe", other), (other, "imbe"))]
 
 
 def id_text():
@@ -80,6 +91,26 @@ def test_morse_through_transcoder(wire, name):
     assert_decodes(text, b"".join(pcm), "PCM -> %s -> PCM" % name)
 
 
+@pytest.mark.wire
+@pytest.mark.parametrize("src,dst", TANDEM, ids=["%s-%s" % t for t in TANDEM])
+def test_morse_tandem(wire, src, dst):
+    """PCM -> src -> dst -> PCM: one codec-to-codec hop inside the
+    transcoder. A mismatch is xfail unless DVT_EXPECT_TANDEM=1."""
+    (addr, port), caps, text, encoded = wire
+    a, b = WIRE_CODECS[src], WIRE_CODECS[dst]
+    missing = [n for n in (src, dst) if WIRE_CODECS[n] not in encoded]
+    if missing:
+        pytest.skip("transcoder does not announce %s (mask 0x%02x)" % (" ".join(missing), caps.mask))
+    hop = ambed.transcode(addr, a, [b], encoded[a], port=port, transaction=0x4D4F0200 + 8 * a + b)[b]
+    pcm = ambed.transcode(addr, b, [ambed.PCM], hop, port=port, transaction=0x4D4F0300 + 8 * a + b)[ambed.PCM]
+    result = morse.check(text, morse.decode(b"".join(pcm)))
+    print("PCM -> %s -> %s -> PCM: sent %r got %r" % (src, dst, text, result["got"]))
+    if not result["exact"] and os.environ.get("DVT_EXPECT_TANDEM") != "1":
+        pytest.xfail("tandem %s -> %s decodes %r (informational; DVT_EXPECT_TANDEM=1 asserts)"
+                     % (src, dst, result["got"]))
+    assert result["exact"], result
+
+
 @pytest.mark.rig
 def test_live_id_through_reflector(rig):
     """live_id (as run against a real reflector) on xlxd-sut module E, a
@@ -111,3 +142,93 @@ def test_live_id_through_reflector(rig):
     assert len(frames) == sent["frames"], "listener got %d of %d frames" % (len(frames), sent["frames"])
     pcm = ambed.transcode(rig.ambed_ref, ambed.AMBEPLUS, [ambed.PCM], frames, port=rig.ambed_port)[ambed.PCM]
     assert_decodes(sent["text"], b"".join(pcm), "listener on %s module %s" % (rig.reflector, RIG_MODULE))
+
+
+# ------------------------------------------------------------- AllStar (E5)
+
+ALLSTAR_NODE, ALLSTAR_MODULE = "1901", "A"
+
+
+def dial(target, timeout=5):
+    caller = iax2.Client(target.allstar, target.iax_secret, username="dvt")
+    try:
+        caller.call(ALLSTAR_NODE, timeout=timeout)
+    except Exception:
+        caller.socket.close()
+        raise
+    caller.pump(0.3)
+    return caller
+
+
+@pytest.fixture(scope="module")
+def node(allstar):
+    """The node answers an IAX2 call (it may still be starting)."""
+    deadline = time.monotonic() + 90
+    while True:
+        try:
+            dial(allstar).close()
+            return allstar
+        except (TimeoutError, ConnectionError, OSError):
+            if time.monotonic() > deadline:
+                pytest.fail("AllStar node %s does not answer IAX2 calls" % allstar.allstar)
+            time.sleep(3)
+
+
+@pytest.mark.allstar
+def test_morse_dstar_to_iax(node):
+    """D-STAR talker on module A -> USRP -> node -> IAX2 caller decodes."""
+    text = id_text()
+    frames = ambed.transcode(node.ambed_ref, ambed.PCM, [ambed.AMBEPLUS], signals.frames(morse.encode(text)),
+                             port=node.ambed_port)[ambed.AMBEPLUS]
+    talker = clients.make("dstar", ALLSTAR_MODULE, 0)
+    caller = None
+    try:
+        assert talker.link(node.xlxd_sut), "D-STAR talker link failed"
+        caller = dial(node)
+        caller.media.clear()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            job = pool.submit(clients.talk, talker, "dstar", frames)
+            while not job.done():
+                caller.pump(0.05)
+            job.result()
+        caller.pump(1.0)
+        media = list(caller.media)
+    finally:
+        if caller:
+            caller.close()
+        clients.close(talker)
+    assert_decodes(text, b"".join(media), "D-STAR -> IAX2 node %s" % ALLSTAR_NODE)
+
+
+@pytest.mark.allstar
+def test_morse_iax_to_m17(node):
+    """IAX2 caller keys node 1901 -> USRP -> module A -> M17 listener;
+    its Codec2 3200 frames decode with c2dec."""
+    if not shutil.which("c2dec"):
+        pytest.skip("c2dec not installed (tester image builds it from .cache/codec2)")
+    text = id_text()
+    # keyed silence first lets the channel open, the encoder tail keeps the end
+    source = [bytes(320)] * 20 + signals.frames(morse.encode(text))
+    listener = clients.make("m17", ALLSTAR_MODULE, 1)
+    caller = None
+    try:
+        assert listener.link(node.xlxd_sut), "M17 listener link failed"
+        caller = dial(node)
+        caller.key()
+        start = time.monotonic()
+        for index, frame in enumerate(source):
+            while time.monotonic() < start + index * 0.02:
+                caller.pump(0.001)
+                listener.client.drain()
+            caller.voice(frame)
+        caller.pump(0.05)
+        caller.unkey()
+        caller.pump(1.0)
+        codec2 = listener.collect(settle=0.5)
+    finally:
+        if caller:
+            caller.close()
+        clients.close(listener)
+    pcm = subprocess.run(["c2dec", "3200", "-", "-"], input=b"".join(codec2), capture_output=True,
+                         check=True).stdout
+    assert_decodes(text, pcm, "IAX2 node %s -> M17 module %s" % (ALLSTAR_NODE, ALLSTAR_MODULE))
