@@ -4,6 +4,7 @@
 | Document | Contents |
 |----------|----------|
 | [rig.md](rig.md) | docker rig: topology, addresses, ports, settings load order, control channel, capture |
+| [testlist.md](testlist.md) | what has to be verified, the case that verifies it, and the gaps |
 | [protocols/ambed.md](protocols/ambed.md) | AMBEd transcoder link: legacy and extended open, CAPS, data packets, flows, timing |
 | [protocols/usrp.md](protocols/usrp.md) | USRP (app_rpt chan_usrp) voice framing between xlxd and AllStar |
 | [protocols/clients.md](protocols/clients.md) | what each `dvtest` client implements: DExtra, MMDVM DMR, M17, IAX2, AMBEd, USRP |
