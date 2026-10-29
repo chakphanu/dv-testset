@@ -28,5 +28,30 @@ def kind_of(p):
     return None, None
 
 
-def Checker(report, m17=None):
-    return dextra.Checker(report, m17, name=NAME, port=PORT, kinds=kind_of)
+# a stream a reflector received from an XLX peer must not go back out to an
+# XLX peer while it is open (no transit); open = a packet within this window
+TRANSIT_WINDOW = 2.0
+
+
+class Checker(dextra.Checker):
+    """DSVT stream rules plus the no-transit rule: a DSVT stream id that a
+    reflector received on 10002 is not sent by it to an XLX peer within
+    TRANSIT_WINDOW of the last received packet (xlx.transit, one finding
+    per reflector, stream id and destination)."""
+
+    def __init__(self, report, m17=None):
+        super().__init__(report, m17, name=NAME, port=PORT, kinds=kind_of)
+        self.received = {}        # (reflector ip, stream id) -> (ts, peer ip)
+        self.reported = set()
+
+    def feed(self, d):
+        kind, p = kind_of(d.payload)
+        if kind in ("header", "voice") and d.sport == PORT and d.dport == PORT and d.ts is not None:
+            sid = int.from_bytes(p[12:14], "little")
+            got = self.received.get((d.src, sid))
+            if got is not None and d.ts - got[0] <= TRANSIT_WINDOW and (d.src, sid, d.dst) not in self.reported:
+                self.reported.add((d.src, sid, d.dst))
+                self.report.error(NAME, d, "transit", "stream %04x received from XLX peer %s is sent on to XLX peer"
+                                  " %s (%.2f s after its last received packet)" % (sid, got[1], d.dst, d.ts - got[0]))
+            self.received[(d.dst, sid)] = (d.ts, d.src)
+        super().feed(d)

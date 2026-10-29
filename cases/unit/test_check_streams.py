@@ -295,3 +295,26 @@ def test_usrp_restart_after_unkey(tmp_path):
             w.wait(1.0)
         w.wait(6.0)
         assert codes(w.check(tmp_path), "error") == want
+
+
+def test_xlx_no_transit(tmp_path):
+    """A stream received from an XLX peer must not go back out to an XLX
+    peer while it is open; another stream id, or the same id later, may."""
+    X, P, Q = "192.0.2.11", "192.0.2.12", "192.0.2.14"
+
+    def wire(back_to, sid=0x7777, gap=0.02):
+        w = Wire()
+        w.send(X, 10002, P, 10002, b"L" + b"XLX999  " + bytes(29) + b"\x00")
+        w.send(P, 10002, X, 10002, b"L" + b"XLX998  " + bytes(29) + b"\x00", 0.01)
+        w.send(P, 10002, X, 10002, dextra.header(0x7777, "N0TEST", "B"), 0.01)
+        for seq in range(5):
+            w.send(P, 10002, X, 10002, dextra.voice(0x7777, seq, FRAME, seq == 4,
+                                                    dextra.SYNC_DATA if seq == 0 else dextra.SLOW_DATA), 0.02)
+        w.send(X, 10002, back_to, 10002, dextra.header(sid, "N0TEST", "B"), gap)
+        w.send(X, 10002, back_to, 10002, dextra.voice(sid, 0, FRAME, True, dextra.SYNC_DATA), 0.02)
+        return w
+    for back_to, sid, gap, want in ((P, 0x7777, 0.02, ["xlx.transit"]), (Q, 0x7777, 0.02, ["xlx.transit"]),
+                                    (P, 0x8888, 0.02, []), (P, 0x7777, 3.0, [])):
+        result = wire(back_to, sid, gap).check(tmp_path)
+        assert codes(result, "error") == want, (back_to, sid, gap)
+        assert frames_of(result, "xlx.transit") == ([9] if want else [])

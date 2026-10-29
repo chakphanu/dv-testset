@@ -70,3 +70,17 @@ def test_synthesized_terminator(tmp_path):
     result = sut_result(tmp_path, dextra_wire(last=False), ["synthesized_terminator"], ref=dextra_wire(last=False))
     assert severity(result, "dextra.no_last") == "error"
     assert "declared divergence synthesized_terminator" in result["findings"][-1]["message"]
+
+
+def test_dvrouter_profile_implies_the_four(tmp_path, monkeypatch):
+    """DVT_SUT_PROFILE=dvrouter declares the four wire divergences at once."""
+    assert check.declared({"DVT_SUT_PROFILE": "dvrouter"}) >= set(check.DIVERGENCES)
+    assert check.declared({"DVT_SUT_PROFILE": "xlxd"}) == set()
+    names = check.declared({"DVT_SUT_PROFILE": "dvrouter"})
+    result = sut_result(tmp_path, mstcl_mid_stream(3), names, ref=mstcl_mid_stream(3))
+    assert severity(result, "dmr.after_close_cache") == "error"
+    result = sut_result(tmp_path, dextra_wire(last=False), names, ref=dextra_wire(last=False))
+    assert severity(result, "dextra.no_last") == "error"
+    path = dextra_wire().save(tmp_path / "xlxd-sut.pcapng")
+    monkeypatch.setenv("DVT_SUT_PROFILE", "bogus")
+    assert check.main([path]) == 2

@@ -28,7 +28,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 RIG_FILES = {"xlxd-ref": "xlxd_ref", "xlxd-sut": "xlxd_sut", "transcoder-ref": "ambed_ref",
              "transcoder-sut": "ambed_sut", "tester": "tester", "allstar": "allstar",
              "nxdn-ref": "nxdn_ref", "nxdn-sut": "nxdn_sut", "p25-ref": "p25_ref", "p25-sut": "p25_sut",
-             "xlxd-peer-ref": "xlxd_peer_ref", "xlxd-peer-sut": "xlxd_peer_sut"}
+             "xlxd-peer-ref": "xlxd_peer_ref", "xlxd-peer-sut": "xlxd_peer_sut",
+             "xlxd-peer2-ref": "xlxd_peer2_ref", "xlxd-peer2-sut": "xlxd_peer2_sut"}
 
 
 def rig_config(subnet=None):
