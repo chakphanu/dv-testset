@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Bring the rig up, run pytest inside the tester, collect logs, bring it down.
 #
-#   scripts/run.sh [-m MARKERS] [--profile core|allstar|nxdn|p25|<comma list>] [--capture] [--keep] [-- PYTEST_ARGS...]
+#   scripts/run.sh [-m MARKERS] [--profile core|allstar|nxdn|p25|interlink|load|<comma list>] [--capture] [--keep] [-- PYTEST_ARGS...]
 #   scripts/run.sh --down
 #
 #   -m MARKERS         pytest marker expression (default: rig)
@@ -11,6 +11,10 @@
 #                      xlxd-ref/xlxd-sut (DVT_NXDN=on); combine: allstar,nxdn
 #   --profile p25      core plus P25Reflectors p25-ref/p25-sut peered with
 #                      xlxd-ref/xlxd-sut (DVT_P25=on); e.g. allstar,nxdn,p25
+#   --profile interlink  XLX998 peers xlxd-peer-sut/-ref interlinked with
+#                      xlxd-sut/-ref on DVT_INTERLINK_MODULES (default DE)
+#   --profile load     DVT_LOAD_MODULES (1..26) load-node replicas against
+#                      xlxd-sut, first round at DVT_LOAD_START_AT (now + 30 s)
 #   --capture          sniffers on xlxd-ref/xlxd-sut/transcoder-sut (+allstar/nxdn/p25): pcapng in
 #                      out/<utc>/capture/<service>.pcapng (decode: scripts/tshark.sh)
 #   --keep             leave the rig running (default: compose down at the end)
@@ -35,8 +39,8 @@
 # while pytest runs, a host watcher polls out/<utc>/control/ ($DVT_OUT/control
 # in the tester, DVT_RIG_CONTROL=1). A request is a file <id>.req (write .tmp,
 # then rename) with one line "<action> <service>":
-#   action  stop | start | kill (SIGKILL)
-#   service transcoder-ref | transcoder-sut | allstar
+#   action  stop | start | restart | kill (SIGKILL)
+#   service transcoder-ref | transcoder-sut | allstar | xlxd-ref | xlxd-sut
 # The answer is <id>.ack: "ok", "error <rc>" or "error refused" (anything else
 # is refused and nothing runs); the request is renamed to <id>.done.
 # control/control.log gets "<utc> request <line>" before the action and
@@ -63,7 +67,7 @@ while [ "$#" -gt 0 ]; do
     --capture) capture=1; shift ;;
     --down) down_only=1; shift ;;
     --) shift; break ;;
-    -h|--help) sed -n '3,46p' "$0"; exit 0 ;;
+    -h|--help) sed -n '3,50p' "$0"; exit 0 ;;
     *) echo "run.sh: unknown argument '$1' (see --help)" >&2; exit 2 ;;
   esac
 done
@@ -107,7 +111,8 @@ if [ -n "${COMPOSE_OVERRIDE:-}" ] && [ -f "$COMPOSE_OVERRIDE" ]; then
 fi
 compose_all=(docker compose -p "${COMPOSE_PROJECT_NAME:-dvt}" "${compose_files[@]}" "${DVT_ENV_FILES[@]}"
   --profile core --profile allstar --profile nxdn --profile capture --profile capture-allstar
-  --profile capture-nxdn --profile p25 --profile capture-p25)
+  --profile capture-nxdn --profile p25 --profile capture-p25 --profile interlink
+  --profile capture-interlink --profile load)
 
 if [ "$down_only" = 1 ]; then
   take_lock
@@ -119,6 +124,7 @@ profiles=(--profile core)
 has_allstar=0
 has_nxdn=0
 has_p25=0
+has_interlink=0
 IFS=, read -r -a wanted <<< "$profile"
 for p in "${wanted[@]}"; do
   case "$p" in
@@ -143,7 +149,23 @@ for p in "${wanted[@]}"; do
       [ -f .cache/p25clients/P25Reflector/Makefile ] \
         || { echo "run.sh: .cache/p25clients missing; run scripts/pre-fetch-p25.sh" >&2; exit 2; }
       ;;
-    *) echo "run.sh: --profile takes core, allstar, nxdn, p25 or a comma list (allstar,nxdn,p25)" >&2; exit 2 ;;
+    interlink)
+      has_interlink=1
+      profiles+=(--profile interlink)
+      export DVT_INTERLINK=on
+      export XLXD_PEER_DIR="${XLXD_PEER_DIR:-${XLXD_REF_DIR:-ref}}"
+      [ -f ".cache/xlxd/$XLXD_PEER_DIR/src/main.h" ] \
+        || { echo "run.sh: .cache/xlxd/$XLXD_PEER_DIR missing; run scripts/pre-fetch-xlxd.sh" >&2; exit 2; }
+      ;;
+    load)
+      profiles+=(--profile load)
+      export DVT_LOAD=on
+      [[ "${DVT_LOAD_MODULES:-26}" =~ ^([1-9]|1[0-9]|2[0-6])$ ]] \
+        || { echo "run.sh: DVT_LOAD_MODULES must be 1..26" >&2; exit 2; }
+      # every node starts its first round at the same time, after the rig is up
+      export DVT_LOAD_START_AT="${DVT_LOAD_START_AT:-$(( $(date +%s) + ${DVT_LOAD_LEAD_S:-30} ))}"
+      ;;
+    *) echo "run.sh: --profile takes core, allstar, nxdn, p25, interlink, load or a comma list" >&2; exit 2 ;;
   esac
 done
 capture_svcs=()
@@ -163,6 +185,10 @@ if [ "$capture" = 1 ]; then
   if [ "$has_p25" = 1 ]; then
     profiles+=(--profile capture-p25)
     capture_svcs+=(capture-p25-ref capture-p25-sut)
+  fi
+  if [ "$has_interlink" = 1 ]; then
+    profiles+=(--profile capture-interlink)
+    capture_svcs+=(capture-xlxd-peer-sut)
   fi
 fi
 
@@ -213,17 +239,18 @@ watch_control() {
       printf '%s request %s\n' "$(date -u +%FT%T.%3NZ)" "$line" >> "$control/control.log"
       rc=refused
       if [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] && [ -z "$extra" ]; then
-        case "$svc" in transcoder-ref|transcoder-sut|allstar) ;; *) action="" ;; esac
+        case "$svc" in transcoder-ref|transcoder-sut|allstar|xlxd-ref|xlxd-sut) ;; *) action="" ;; esac
         rc=0
         case "$action" in
           stop)  "${compose[@]}" stop "$svc" >> "$control/control.log" 2>&1 || rc=$? ;;
           start) "${compose[@]}" start "$svc" >> "$control/control.log" 2>&1 || rc=$? ;;
           kill)  "${compose[@]}" kill -s SIGKILL "$svc" >> "$control/control.log" 2>&1 || rc=$? ;;
+          restart) "${compose[@]}" restart "$svc" >> "$control/control.log" 2>&1 || rc=$? ;;
           *)     rc=refused ;;
         esac
         # a sniffer shares the namespace of its service and dies with it:
         # restart it, it writes <service>.<n>.pcapng
-        if [ "$action" = start ] && [ "$rc" = 0 ] && [[ " ${capture_svcs[*]} " == *" capture-$svc "* ]]; then
+        if { [ "$action" = start ] || [ "$action" = restart ]; } && [ "$rc" = 0 ] && [[ " ${capture_svcs[*]} " == *" capture-$svc "* ]]; then
           "${compose[@]}" up -d --no-deps "capture-$svc" >> "$control/control.log" 2>&1 || true
         fi
       fi

@@ -13,6 +13,9 @@
 #   env DVT_P25          "on" peers DVT_P25_MODULE with the P25Reflector at
 #                        DVT_P25_PEER:41000 (row "P25<id> <ip>:<port> <module>",
 #                        id = DVT_P25_TG)
+#   env DVT_INTERLINK    "on" interlinks DVT_INTERLINK_MODULES with the XLX
+#                        reflector DVT_INTERLINK_CALLSIGN at DVT_INTERLINK_PEER
+#                        (row "<callsign> <ip> <modules>"; both sides list each other)
 #   env DVT_START_DELAY  seconds to wait before xlxd starts (sniffers attach
 #                        to this network namespace first; default 0)
 set -eu
@@ -38,6 +41,10 @@ fi
 if [ "${DVT_P25:-off}" = on ]; then
   : "${DVT_P25_PEER:?}" "${DVT_P25_TG:?}" "${DVT_P25_MODULE:?}"
   printf 'P25%05d %s:41000 %s\n' "$DVT_P25_TG" "$DVT_P25_PEER" "$DVT_P25_MODULE" >> /xlxd/xlxd.interlink
+fi
+if [ "${DVT_INTERLINK:-off}" = on ]; then
+  : "${DVT_INTERLINK_PEER:?}" "${DVT_INTERLINK_CALLSIGN:?}" "${DVT_INTERLINK_MODULES:?}"
+  printf '%s %s %s\n' "$DVT_INTERLINK_CALLSIGN" "$DVT_INTERLINK_PEER" "$DVT_INTERLINK_MODULES" >> /xlxd/xlxd.interlink
 fi
 [ ! -s /xlxd/xlxd.interlink ] || { echo "dvt: interlink:"; cat /xlxd/xlxd.interlink; }
 
