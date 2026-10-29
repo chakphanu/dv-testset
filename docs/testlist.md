@@ -176,15 +176,15 @@ Interop rows stay differential for every profile.
 | B4 | TOT 180 s: revoke plus terminator | test_xlxd_clients::test_tot_180s | behaviour (slow) | covered |
 | B5 | Immediate revoke after unlink/disconnect | test_xlxd_clients::test_leave_mid_stream_tail[..] | behaviour | covered |
 | B6 | No zero-fill on single-codec egress | test_backend_loss::test_native_passthrough_while_down, ::test_usrp_pcm_not_fabricated | behaviour | covered |
-| B6x | XLX rev 3 egress keeps the frame with the slot zeroed | - | behaviour | planned |
+| B6x | XLX rev 3 egress keeps the frame with the slot zeroed | test_xlxd_interlink::test_interlink_missing_output_slot_zeroed | behaviour | covered |
 | B7 | Extended 24-byte OPEN for every stream when CAPS answers | test_xlxd_usrp_netns::test_no_usrp_* (specs.rule("ambed_open")), dvcheck | behaviour | covered (dvcheck rule planned) |
 | B8 | Admission: reject sid 0, one floor per client; same sid in two rooms allowed | test_floor::test_admission_sid_zero, ::test_admission_one_floor_per_client, ::test_admission_same_sid_two_rooms | behaviour | covered |
-| B8r | Remote-origin sid already open in another room is rejected | test_xlxd_interlink::test_admission_remote_sid_open_elsewhere | behaviour | planned |
+| B8r | Remote-origin sid already open in another room is rejected | test_xlxd_interlink::test_admission_remote_sid_open_elsewhere | behaviour | covered |
 | B9 | No echo to the origin IP:port, USRP included | test_allstar::test_usrp_no_echo, test_xlxd_usrp_netns::test_extended_no_echo_to_usrp_peer | interop | covered |
 | B10 | Stream id preserved on same-protocol egress (D-STAR, DMR, M17, XLX, DExtra) | test_floor::test_sid_preserved[..] | interop | covered |
 | B10x | Cross-protocol egress carries the canonical id (low 16 bits to D-STAR/M17, zero-extended to DMR) | test_floor::test_sid_cross_mapping[..] | behaviour | covered |
 | B10p | Patch of one stream to two modules of the same peer rewrites the second leg's id | test_floor::test_sid_patch_second_leg_rewritten | behaviour | placeholder |
-| B11 | Cross-family transit allowed; XLX/BM never re-forwarded to XLX/BM | test_xlxd_interlink::test_interlink_no_loop, dvcheck xlx.transit | interop | in progress |
+| B11 | Cross-family transit allowed; XLX/BM never re-forwarded to XLX/BM | test_xlxd_interlink::test_interlink_no_loop, ::test_interlink_no_xlx_transit, ::test_interlink_cross_family_transit, dvcheck xlx.transit | interop | covered |
 | B12 | Header CRC/hash not verified (tester zeros/spaces accepted) | dvtest/specs/dvrouter.py NOT_CHECKED | - | recorded |
 | B13 | No frame loss under load; SUT forwarding latency p99 <= 2 ms (same-mode, wire-measured) | test_load::test_no_load_loss_*, test_load::test_dvrouter_forwarding_latency | behaviour | covered |
 | B14 | Per-room isolation: killing one room's controller loses nothing elsewhere | test_floor::test_b14_placeholder | behaviour | placeholder |

@@ -16,6 +16,8 @@
 #   env DVT_INTERLINK    "on" interlinks DVT_INTERLINK_MODULES with the XLX
 #                        reflector DVT_INTERLINK_CALLSIGN at DVT_INTERLINK_PEER
 #                        (row "<callsign> <ip> <modules>"; both sides list each other)
+#   env DVT_INTERLINK2_PEER / DVT_INTERLINK2_CALLSIGN  optional second XLX row
+#                        on the same modules (middle of a three-reflector chain)
 #   env DVT_START_DELAY  seconds to wait before xlxd starts (sniffers attach
 #                        to this network namespace first; default 0)
 #
@@ -61,6 +63,10 @@ fi
 if [ "${DVT_INTERLINK:-off}" = on ]; then
   : "${DVT_INTERLINK_PEER:?}" "${DVT_INTERLINK_CALLSIGN:?}" "${DVT_INTERLINK_MODULES:?}"
   printf '%s %s %s\n' "$DVT_INTERLINK_CALLSIGN" "$DVT_INTERLINK_PEER" "$DVT_INTERLINK_MODULES" >> "$dir/xlxd.interlink"
+  if [ -n "${DVT_INTERLINK2_PEER:-}" ]; then
+    : "${DVT_INTERLINK2_CALLSIGN:?}"
+    printf '%s %s %s\n' "$DVT_INTERLINK2_CALLSIGN" "$DVT_INTERLINK2_PEER" "$DVT_INTERLINK_MODULES" >> "$dir/xlxd.interlink"
+  fi
 fi
 [ ! -s "$dir/xlxd.interlink" ] || { echo "dvt: interlink:"; cat "$dir/xlxd.interlink"; }
 [ -z "${DVT_RENDER_DIR:-}" ] || exit 0

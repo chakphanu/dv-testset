@@ -267,12 +267,13 @@ mkdir -p "$out/logs"
 # (rendered here on the host by rig/xlxd-entry.sh); log on stdout.
 prebuilt=()
 override="$out/xlxd-image.override.yml"
-render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxdn, $7 p25, $8 xlxd peer
+render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxdn, $7 p25, $8 xlxd peer, $9 xlxd peer2
   local svc="$1" img="$2" net="${DVT_NET:-172.30.0}" cfg="$DVT_ROOT/$out/xlxd-config/$1" f
   mkdir -p "$cfg"
   DVT_RENDER_DIR="$cfg" DVT_USRP_TEMPLATE=rig/config/xlxd.usrp.in DVT_USRP="$5" DVT_NET="$net" \
     DVT_NXDN_PEER="$net.$6" DVT_P25_PEER="$net.$7" DVT_INTERLINK_PEER="$net.$8" \
     DVT_INTERLINK_CALLSIGN=XLX998 DVT_INTERLINK_MODULES="${DVT_INTERLINK_MODULES:-DE}" \
+    DVT_INTERLINK2_PEER="$net.$9" DVT_INTERLINK2_CALLSIGN=XLX997 \
     DVT_NXDN_TG="${DVT_NXDN_TG:-31672}" DVT_NXDN_MODULE="${DVT_NXDN_MODULE:-F}" \
     DVT_P25_TG="${DVT_P25_TG:-31672}" DVT_P25_MODULE="${DVT_P25_MODULE:-G}" \
     sh rig/xlxd-entry.sh > "$cfg/render.log"
@@ -289,8 +290,8 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
 }
 if [ -n "${XLXD_REF_IMAGE:-}${XLXD_SUT_IMAGE:-}" ]; then
   echo "services:" > "$override"
-  [ -z "${XLXD_REF_IMAGE:-}" ] || render_xlxd xlxd-ref "$XLXD_REF_IMAGE" 10 20 off 50 60 13
-  [ -z "${XLXD_SUT_IMAGE:-}" ] || render_xlxd xlxd-sut "$XLXD_SUT_IMAGE" 11 21 "${DVT_SUT_USRP:-off}" 51 61 12
+  [ -z "${XLXD_REF_IMAGE:-}" ] || render_xlxd xlxd-ref "$XLXD_REF_IMAGE" 10 20 off 50 60 13 15
+  [ -z "${XLXD_SUT_IMAGE:-}" ] || render_xlxd xlxd-sut "$XLXD_SUT_IMAGE" 11 21 "${DVT_SUT_USRP:-off}" 51 61 12 14
   compose_files+=(-f "$DVT_ROOT/$override")
 fi
 

@@ -16,7 +16,11 @@
 #            peered with xlxd-sut, on module DVT_P25_MODULE (set DVT_P25=on with it)
 #   interlink  xlxd-peer-sut (.12, XLX998) interlinked with xlxd-sut and
 #            xlxd-peer-ref (.13, XLX998) with xlxd-ref on DVT_INTERLINK_MODULES
-#            (set DVT_INTERLINK=on with it); built from XLXD_PEER_DIR (default ref)
+#            (set DVT_INTERLINK=on with it); built from XLXD_PEER_DIR (default ref).
+#            Transit cases: xlxd-peer2-sut (.14, XLX997) is linked only with
+#            xlxd-sut and xlxd-peer2-ref (.15, XLX997) only with xlxd-ref, so
+#            the reflector under test sits between two XLX peers
+#            (XLX998 <-> XLX999 <-> XLX997)
 #   load     DVT_LOAD_MODULES load-node replicas (dvt-tester image, addresses
 #            from <net>.128/25) each running DVT_LOAD_CMD against xlxd-sut
 #   netem    tc netem sidecars on tester, xlxd-ref and xlxd-sut (egress)
@@ -119,6 +123,8 @@ services:
       DVT_INTERLINK: ${DVT_INTERLINK:-off}
       DVT_INTERLINK_PEER: ${DVT_NET:-172.30.0}.13
       DVT_INTERLINK_CALLSIGN: XLX998
+      DVT_INTERLINK2_PEER: ${DVT_NET:-172.30.0}.15
+      DVT_INTERLINK2_CALLSIGN: XLX997
       DVT_INTERLINK_MODULES: ${DVT_INTERLINK_MODULES:-DE}
       DVT_START_DELAY: ${DVT_START_DELAY:-0}
     networks:
@@ -149,6 +155,8 @@ services:
       DVT_INTERLINK: ${DVT_INTERLINK:-off}
       DVT_INTERLINK_PEER: ${DVT_NET:-172.30.0}.12
       DVT_INTERLINK_CALLSIGN: XLX998
+      DVT_INTERLINK2_PEER: ${DVT_NET:-172.30.0}.14
+      DVT_INTERLINK2_CALLSIGN: XLX997
       DVT_INTERLINK_MODULES: ${DVT_INTERLINK_MODULES:-DE}
       DVT_START_DELAY: ${DVT_START_DELAY:-0}
       DVT_NET: ${DVT_NET:-172.30.0}
@@ -210,6 +218,8 @@ services:
       DVT_INTERLINK: ${DVT_INTERLINK:-off}
       DVT_XLXD_PEER_SUT: ${DVT_NET:-172.30.0}.12
       DVT_XLXD_PEER_REF: ${DVT_NET:-172.30.0}.13
+      DVT_XLXD_PEER2_SUT: ${DVT_NET:-172.30.0}.14
+      DVT_XLXD_PEER2_REF: ${DVT_NET:-172.30.0}.15
       DVT_INTERLINK_MODULES: ${DVT_INTERLINK_MODULES:-DE}
       DVT_LOAD: ${DVT_LOAD:-off}
       DVT_LOAD_MODULES: ${DVT_LOAD_MODULES:-26}
@@ -402,6 +412,40 @@ services:
       DVT_START_DELAY: ${DVT_START_DELAY:-0}
     networks:
       rig: {ipv4_address: "${DVT_NET:-172.30.0}.13"}
+
+  xlxd-peer2-sut:
+    <<: *xlxd
+    profiles: [interlink]
+    image: dvt-xlxd:${XLXD_PEER_DIR:-ref}
+    build: *xlxd-peer-build
+    environment:
+      DVT_CALLSIGN: XLX997
+      DVT_IP: ${DVT_NET:-172.30.0}.14
+      DVT_TRANSCODER: 127.0.0.1
+      DVT_INTERLINK: "on"
+      DVT_INTERLINK_PEER: ${DVT_NET:-172.30.0}.11
+      DVT_INTERLINK_CALLSIGN: XLX999
+      DVT_INTERLINK_MODULES: ${DVT_INTERLINK_MODULES:-DE}
+      DVT_START_DELAY: ${DVT_START_DELAY:-0}
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.14"}
+
+  xlxd-peer2-ref:
+    <<: *xlxd
+    profiles: [interlink]
+    image: dvt-xlxd:${XLXD_PEER_DIR:-ref}
+    build: *xlxd-peer-build
+    environment:
+      DVT_CALLSIGN: XLX997
+      DVT_IP: ${DVT_NET:-172.30.0}.15
+      DVT_TRANSCODER: 127.0.0.1
+      DVT_INTERLINK: "on"
+      DVT_INTERLINK_PEER: ${DVT_NET:-172.30.0}.10
+      DVT_INTERLINK_CALLSIGN: XLX999
+      DVT_INTERLINK_MODULES: ${DVT_INTERLINK_MODULES:-DE}
+      DVT_START_DELAY: ${DVT_START_DELAY:-0}
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.15"}
 
   capture-xlxd-peer-sut:
     <<: *capture
