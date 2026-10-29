@@ -81,18 +81,84 @@ def outages(run_dir, hosts):
     return out
 
 
+NETEM_HOSTS = {"tester": ("tester",), "xlxd": ("xlxd_ref", "xlxd_sut"),
+               "xlxd-ref": ("xlxd_ref",), "xlxd-sut": ("xlxd_sut",)}
+SETTLE = 2.0
+
+
+def impairments(run_dir, hosts):
+    """[(ip, t0, t1, label)] of netem windows (run.sh --netem): impaired from
+    the start when netem.txt's start block shows a netem qdisc on a host,
+    and from each control.log "request netem <target> <spec>" until 2 s
+    after the next completed change of that target."""
+    windows, active = [], {}
+
+    def close(target, ts):
+        # "xlxd" also ends a start-up window of xlxd-ref / xlxd-sut
+        for other in [t for t in active if set(NETEM_HOSTS[t]) <= set(NETEM_HOSTS[target])]:
+            t0, label = active.pop(other)
+            windows.extend((hosts[k], t0, ts + SETTLE, label) for k in NETEM_HOSTS[other] if k in hosts)
+
+    path = os.path.join(run_dir, "netem.txt")
+    if os.path.isfile(path):
+        with open(path) as fh:
+            text = fh.read().split("\n==== ")[0]
+        for target, qdisc in re.findall(r"-- netem-(\S+)\n(qdisc netem [^\n]*)", text):
+            if target in NETEM_HOSTS:
+                spec = re.sub(r"^qdisc netem \S+ root (refcnt \d+ )?", "", qdisc).strip()
+                active[target] = (float("-inf"), "netem %s %s" % (target, spec))
+    path = os.path.join(run_dir, "control", "control.log")
+    requested = {}
+    if os.path.isfile(path):
+        with open(path) as fh:
+            for line in fh:
+                m = re.match(r"^(\S+Z) (?:(request) )?netem (\S+) (.+?)(?: -> (\S+))?$", line.strip())
+                if not m or m.group(3) not in NETEM_HOSTS or (m.group(2) is None) == (m.group(5) is None):
+                    continue
+                ts = datetime.fromisoformat(m.group(1).replace("Z", "+00:00")).timestamp()
+                target, spec = m.group(3), m.group(4)
+                if m.group(2):
+                    requested[target] = ts
+                elif m.group(5) == "0":
+                    t0 = requested.pop(target, ts)
+                    close(target, ts)
+                    if spec != "off":
+                        active[target] = (t0, "netem %s %s" % (target, spec))
+    for target in list(active):
+        close(target, float("inf"))
+    return windows
+
+
+# findings an injected impairment explains (netem loss, delay, reorder,
+# dup): sequence gaps, duplicates, reorders and timing (jitter). Stream-end
+# codes (a dropped last frame) are not included: the sniffer sits behind the
+# qdisc, so a drop cannot be tied to the missing packet.
+NETEM_CODES = re.compile(r"\.(\w+_)?(loss|dup|reorder)$|\.jitter$")
+# sut vs ref under the same impairment: a netem-tagged code is an error when
+# the sut shows more than NETEM_FACTOR x the ref count + NETEM_SLACK
+NETEM_FACTOR, NETEM_SLACK = 2, 3
+
+
 def _excuse(report, frame_ts, windows):
     """Errors on flows of a service the control channel had stopped become
-    warnings (still listed, message tagged)."""
+    warnings tagged "[during control stop of X]"; inside a netem window only
+    loss/dup/reorder/jitter findings on flows of the impaired host do, tagged
+    "(netem: <args>)". All stay listed."""
     for index, f in enumerate(report.findings):
         ts = frame_ts.get(f.frame)
         if f.severity != ERROR or ts is None:
             continue
         for ip, t0, t1, svc in windows:
-            if t0 <= ts <= t1 and re.search(r"(^|[>:<])%s:" % re.escape(ip), f.flow):
-                report.findings[index] = f._replace(severity=WARN, message=f.message + (
-                    " [during control stop of %s]" % svc))
-                break
+            if not (t0 <= ts <= t1 and re.search(r"(^|[<>])%s[:<]" % re.escape(ip), f.flow)):
+                continue
+            if svc.startswith("netem "):
+                if not NETEM_CODES.search(f.code):
+                    continue
+                note = " [during %s]" % svc
+            else:
+                note = " [during control stop of %s]" % svc
+            report.findings[index] = f._replace(severity=WARN, message=f.message + note)
+            break
 
 
 def _in(ip, net):
@@ -231,9 +297,22 @@ def differential(results):
         if not pair["ref"] or not pair["sut"]:
             continue
         codes = {side: {f["code"] for r in pair[side] for f in r["findings"]} for side in pair}
+        counts = {side: Counter(f["code"] for r in pair[side] for f in r["findings"]) for side in pair}
         for r in pair["sut"]:
             for f in r["findings"]:
-                if f["code"] in codes["ref"]:
+                if "[during netem " in f["message"]:
+                    # both sides ran under the same impairment: an error when
+                    # the sut shows clearly more than the ref (NETEM_FACTOR,
+                    # NETEM_SLACK) and the ref carried that protocol's streams
+                    proto, want = f["code"].split(".")[0], counts["ref"].get(f["code"], 0)
+                    if not any(x["protocols"].get(proto, {}).get("streams") for x in pair["ref"]):
+                        f["message"] += " (not comparable on reference: no %s stream)" % proto
+                    elif counts["sut"][f["code"]] > NETEM_FACTOR * want + NETEM_SLACK:
+                        _mark(r, f, ERROR, "[sut %d vs ref %d under the same netem impairment, over %dx+%d]" % (
+                            counts["sut"][f["code"]], want, NETEM_FACTOR, NETEM_SLACK))
+                    else:
+                        f["message"] += " (ref %d under the same impairment)" % want
+                elif f["code"] in codes["ref"]:
                     _mark(r, f, WARN, "(also on reference: upstream behaviour)")
                 elif f["code"] in COMPARABLE and not any(COMPARABLE[f["code"]][0](x) for x in pair["ref"]):
                     _mark(r, f, WARN, "(not comparable on reference: %s)" % COMPARABLE[f["code"]][1])
@@ -370,7 +449,7 @@ def main(argv=None):
     rig = rig_config() if args.ports_from == "rig" else None
     windows = []
     if rig and os.path.isdir(args.target):
-        windows = outages(args.target, rig["hosts"])
+        windows = outages(args.target, rig["hosts"]) + impairments(args.target, rig["hosts"])
     results = []
     for path in files:
         try:

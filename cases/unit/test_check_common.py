@@ -142,3 +142,76 @@ def test_outages_from_control_log_and_split_captures(tmp_path):
         (cap / name).write_bytes(b"")
     assert [p.rsplit("/", 1)[1] for p in check.captures(str(tmp_path))] == [
         "allstar.pcapng", "allstar.2.pcapng", "allstar.10.pcapng", "xlxd-sut.pcapng"]
+
+
+def test_netem_impairment_windows(tmp_path):
+    (tmp_path / "control").mkdir()
+    (tmp_path / "control" / "control.log").write_text(
+        "2026-10-29T16:49:31.529Z request netem tester delay 100ms\n"
+        "2026-10-29T16:49:31.797Z netem tester delay 100ms -> 0\n"
+        "2026-10-29T16:49:35.330Z netem tester off -> 0\n"
+        "2026-10-29T16:49:35.541Z request netem xlxd loss 10%\n"
+        "2026-10-29T16:49:35.897Z netem xlxd loss 10% -> 0\n"
+        "2026-10-29T16:49:47.256Z netem xlxd bogus;rm -> refused\n")
+    (tmp_path / "netem.txt").write_text(
+        "==== 2026-10-29T16:49:24.535Z start\n-- netem-xlxd-sut\n"
+        "qdisc netem 8005: root refcnt 33 limit 1000 delay 20ms\n"
+        "==== 2026-10-29T16:49:31.602Z netem tester delay 100ms\n")
+    hosts = check.rig_config("172.30.0.0/24")["hosts"]
+    got = {(ip, label): (t0, t1) for ip, t0, t1, label in check.impairments(str(tmp_path), hosts)}
+    t0, t1 = got[("172.30.0.30", "netem tester delay 100ms")]
+    assert t1 - t0 == pytest.approx(5.801)
+    assert got[("172.30.0.10", "netem xlxd loss 10%")][1] == float("inf")
+    t0, t1 = got[("172.30.0.11", "netem xlxd-sut limit 1000 delay 20ms")]
+    assert t0 == float("-inf") and t1 < float("inf")         # from the start, ended by "netem xlxd"
+    # a loss on an AMBEd data stream of an impaired host becomes a warning,
+    # a pairing finding (unsolicited reply) keeps its severity
+    rig = check.rig_config("172.30.0.0/24")
+    path = ambed_wire(tmp_path, "xlxd-sut", drop={2}, stray=True)
+    w0 = check.check_file(path, rig)
+    windows = [("172.30.0.11", 0, 2e9, "netem xlxd loss 10%")]
+    sut = check.check_file(path, rig, windows=windows)
+    assert severities(w0, "ambed.pid_loss") == ["error"]
+    assert severities(sut, "ambed.pid_loss") == ["warn"]
+    assert [f for f in sut["findings"] if f["code"] == "ambed.pid_loss"][0]["message"].endswith(
+        "[during netem xlxd loss 10%]")
+    assert severities(sut, "ambed.reply_unsolicited") == ["error"]
+
+
+def ambed_wire(tmp_path, name, drop=(), stray=False):
+    """One AMBEd stream from xlxd .11 to the transcoder, pids 0..39 minus drop."""
+    w = Wire()
+    w.send("172.30.0.11", 10100, "172.30.0.21", 10100, b"AMBEDOS" + b"XLX999  " + bytes([5, 1, 0, 0, 0]) + bytes(4))
+    w.send("172.30.0.21", 10100, "172.30.0.11", 10100, b"AMBEDSTD\x01\x00\x75\x27\x05\x01" + bytes(4), 0.001)
+    for pid in range(40):
+        if pid not in drop:
+            w.send("172.30.0.11", 10101, "172.30.0.21", 10101, bytes([5, pid]) + bytes(320), 0.02)
+            w.send("172.30.0.21", 10101, "172.30.0.11", 10101, bytes([1, pid]) + bytes(9), 0.001)
+    if stray:
+        w.send("172.30.0.21", 10101, "172.30.0.11", 10101, bytes([1, 99]) + bytes(9), 0.001)
+    return w.save(tmp_path / ("%s.pcapng" % name))
+
+
+def severities(result, code):
+    return [f["severity"] for f in result["findings"] if f["code"] == code]
+
+
+def test_netem_differential_tolerance(tmp_path):
+    """Under the same impairment a sut loss count over 2 x ref + 3 is an
+    error; within the tolerance, or with no comparable ref stream, a warning."""
+    rig = check.rig_config("172.30.0.0/24")
+    windows = [("172.30.0.11", 0, 2e9, "netem xlxd loss 10%"), ("172.30.0.10", 0, 2e9, "netem xlxd loss 10%")]
+
+    def pair(sut_drop, ref_drop, ref_stream=True):
+        sut = check.check_file(ambed_wire(tmp_path, "xlxd-sut", sut_drop), rig, windows=windows)
+        if ref_stream:
+            ref = check.check_file(ambed_wire(tmp_path, "xlxd-ref", ref_drop), rig, windows=windows)
+        else:
+            ref = check.check_file(Wire().save(tmp_path / "xlxd-ref.pcapng"))
+        check.differential([ref, sut])
+        return set(severities(sut, "ambed.pid_loss"))
+    five = {2, 6, 10, 14, 18}
+    assert pair(five, ()) == {"error"}                 # 5 > 2 x 0 + 3
+    assert pair({2}, ()) == {"warn"}                   # 1 <= 3
+    assert pair(five, {30}) == {"warn"}                # 5 <= 2 x 1 + 3
+    assert pair(five, (), ref_stream=False) == {"warn"}     # not comparable
