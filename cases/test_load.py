@@ -30,7 +30,8 @@ the default verdict is differential (xlxd-sut against xlxd-ref):
     a complete cell already equals the transcoder's own output, and whether
     tandem coding keeps 20 wpm keying is a codec property (AMBE -> Codec2
     3200 never does, vambed-neo often not into AMBE either)
-  - per round and module: lost frames sut <= ref + LOSS_TOL
+  - per round and module, same-mode and cross-mode cells apart (cross-mode
+    is marked crossmode): lost frames sut <= ref + LOSS_TOL
   - across modules: sut does not lose more than ref systematically (one-sided
     sign test over (round, module) pairs with unequal loss, p < SIGN_ALPHA
     fails)
@@ -101,7 +102,9 @@ TAIL_S = 1.5
 # that xlxd-sut may exceed xlxd-ref by. Noise from A/A runs (xlxd-sut built
 # from the reference source, XLXD_SUT_DIR=ref), 26 modules, 3 runs per
 # transcoder image (out/20261029T1704..1725Z-i12): max(sut - ref) 14 frames
-# per round and module (p99 |sut - ref| 13-14); tolerance = max + 4
+# per round and module (p99 |sut - ref| 13-14); tolerance = max + 4. The
+# check runs per cell group (same-mode, cross-mode): A/A max 5 and 9 there,
+# under the same tolerance
 LOSS_TOL = 18
 # sign test: sut losing more than ref on this share of modules by chance
 SIGN_ALPHA = 0.01
@@ -605,19 +608,24 @@ def saturation(rows, probes, res, captured):
     return reasons
 
 
-def module_loss(rows):
-    """{(round, module): {"ref": lost, "sut": lost}} over the xlxd listeners."""
+# cell groups of the loss checks: same-mode needs no transcoding in the sut
+CELLS = {"same": ("passthrough",), "cross": ("cross",), "all": ("passthrough", "cross")}
+
+
+def module_loss(rows, cells="all"):
+    """{(round, module): {"ref": lost, "sut": lost}} over the xlxd listeners
+    of one cell group (CELLS)."""
     lost = {}
     for r in rows:
-        if r["kind"] != "usrp":
+        if r["kind"] in CELLS[cells]:
             lost.setdefault((r["round"], r["module"]), {"ref": 0, "sut": 0})[r["side"]] += r["lost"]
     return lost
 
 
-def sign_test(rows):
+def sign_test(rows, cells="all"):
     """One-sided sign test: P(at least `worse` of the unequal pairs have
     sut > ref) if either side is as likely to lose more."""
-    diffs = [v["sut"] - v["ref"] for v in module_loss(rows).values()]
+    diffs = [v["sut"] - v["ref"] for v in module_loss(rows, cells).values()]
     worse, better = sum(d > 0 for d in diffs), sum(d < 0 for d in diffs)
     n = worse + better
     p = sum(math.comb(n, k) for k in range(worse, n + 1)) / 2 ** n if n else 1.0
@@ -857,16 +865,20 @@ def test_sut_equals_ref_where_complete(verdict):
     assert not bad, "%d complete cells: sut differs from ref: %s" % (len(bad), bad[:8])
 
 
-def test_loss_not_worse_than_ref(verdict):
+@pytest.mark.parametrize("cells", ["same", "cross"])
+def test_loss_not_worse_than_ref(verdict, cells):
     bad = ["round %d module %s: sut %d ref %d" % (k[0], k[1], v["sut"], v["ref"])
-           for k, v in sorted(module_loss(verdict).items()) if v["sut"] > v["ref"] + LOSS_TOL]
-    assert not bad, "%d modules lost more than %d frames over xlxd-ref: %s" % (len(bad), LOSS_TOL, bad[:8])
+           for k, v in sorted(module_loss(verdict, cells).items()) if v["sut"] > v["ref"] + LOSS_TOL]
+    assert not bad, "%d modules lost more %s-mode frames than xlxd-ref + %d: %s" % (
+        len(bad), cells, LOSS_TOL, bad[:8])
 
 
-def test_loss_not_systematically_worse(verdict):
-    sign = sign_test(verdict)
+@pytest.mark.parametrize("cells", ["same", "cross"])
+def test_loss_not_systematically_worse(verdict, cells):
+    sign = sign_test(verdict, cells)
     assert sign["p"] >= SIGN_ALPHA, \
-        "sut lost more than ref on %(worse)d modules, less on %(better)d (sign test p=%(p)g)" % sign
+        "%s-mode: sut lost more than ref on %d modules, less on %d (sign test p=%g)" % (
+            cells, sign["worse"], sign["better"], sign["p"])
 
 
 def test_no_load_loss_passthrough(load, verdict):
