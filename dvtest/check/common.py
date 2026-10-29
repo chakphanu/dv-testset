@@ -18,6 +18,12 @@ def flow_of(d):
     return "%s:%d>%s:%d" % (d.src, d.sport, d.dst, d.dport)
 
 
+def touches(flow, endpoint):
+    """flow (flow_of) runs to or from endpoint (ip, port)."""
+    end = "%s:%d" % endpoint
+    return flow.startswith(end + ">") or flow.endswith(">" + end)
+
+
 def client_of(flow, port):
     """(ip, port) of the side of a flow_of() name that is not on `port`."""
     a, b = flow.split(">")

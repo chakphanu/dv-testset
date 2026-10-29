@@ -318,3 +318,41 @@ def test_xlx_no_transit(tmp_path):
         result = wire(back_to, sid, gap).check(tmp_path)
         assert codes(result, "error") == want, (back_to, sid, gap)
         assert frames_of(result, "xlx.transit") == ([9] if want else [])
+
+
+def test_dextra_unlink_mid_stream_ends_the_stream(tmp_path):
+    """A listener that unlinks mid-stream ends its egress stream (a warning,
+    even with synthesized_terminator declared); silence without an unlink
+    is still an error."""
+    for unlink, want_error in ((True, []), (False, ["dextra.no_last"])):
+        w = Wire()
+        w.send(T, 40001, R, dextra.PORT, dextra.link_packet("N0TEST", "B"))
+        w.send(R, dextra.PORT, T, 40001, dextra.header(0x4444, "N0TEST", "B"), 0.01)
+        for seq in range(10):
+            w.send(R, dextra.PORT, T, 40001, dextra.voice(0x4444, seq, FRAME, False,
+                                                         dextra.SYNC_DATA if seq == 0 else dextra.SLOW_DATA), 0.02)
+        if unlink:
+            w.send(T, 40001, R, dextra.PORT, dextra.unlink_packet("N0TEST", "B"), 0.02)
+        w.send(T, 40002, R, dextra.PORT, dextra.keepalive_packet("N0OTHER"), 6.0)
+        result = check.check_file(w.save(tmp_path / "xlxd-sut.pcapng"))
+        check.apply_divergences([result], {"synthesized_terminator"}, {R})
+        assert codes(result, "error") == want_error
+        cut = [f for f in result["findings"] if f["code"] == "dextra.no_last"]
+        assert len(cut) == 1 and ("peer unlink" in cut[0]["message"]) == unlink
+
+
+def test_m17_disc_mid_stream_ends_the_stream(tmp_path):
+    for disc, want_error in ((True, []), (False, ["m17.no_eot"])):
+        w = Wire()
+        w.send(T, 40003, R, m17.PORT, m17.conn_packet("N0TEST", "B"))
+        w.send(R, m17.PORT, T, 40003, b"ACKN", 0.01)
+        for fn in range(10):
+            w.send(R, m17.PORT, T, 40003, m17.packet(0x5151, fn, "N0OTHER", FRAME[:8] * 2), 0.04)
+        if disc:
+            w.send(T, 40003, R, m17.PORT, m17.disc_packet("N0TEST"), 0.02)
+        w.send(T, 40004, R, m17.PORT, m17.pong_packet("N0X"), 6.0)
+        result = check.check_file(w.save(tmp_path / "xlxd-sut.pcapng"))
+        check.apply_divergences([result], {"synthesized_terminator"}, {R})
+        assert codes(result, "error") == want_error
+        cut = [f for f in result["findings"] if f["code"] == "m17.no_eot"]
+        assert len(cut) == 1 and ("peer DISC" in cut[0]["message"]) == disc

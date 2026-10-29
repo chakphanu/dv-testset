@@ -2,7 +2,7 @@
 """M17 in xlxd reflector-client mode (UDP 17000): CONN/ACKN/PING/... and
 54 B voice packets (frame number, EOT bit, LICH constant per stream)."""
 from ..proto import m17 as M
-from .common import ERROR, WARN, Live, Stream, finish_stream, flow_of, seq_finding, voice_frames
+from .common import ERROR, WARN, Live, Stream, finish_stream, flow_of, seq_finding, touches, voice_frames
 
 NAME = "m17"
 # control packets: tag -> allowed sizes
@@ -41,6 +41,10 @@ class Checker:
         peer = (d.src, d.sport) if d.dport == M.PORT else (d.dst, d.dport)
         if kind in ("conn", "lstn"):
             self.linked.add(peer)
+        elif kind == "disc" and d.dport == M.PORT:
+            # the listener left: its live streams end here (no silence timeout)
+            for key in [k for k in self.streams.live if touches(k[0], peer)]:
+                self.streams.end(key, "peer disconnected")
         if kind != "voice":
             return
         if peer not in self.linked:
@@ -73,7 +77,10 @@ class Checker:
             self.streams.terminate(key, d)
 
     def _ended(self, st):
-        if st.end != "terminated":
+        if st.end == "peer disconnected":
+            self.report.add(NAME, st.flow, st.last_frame, WARN, "no_eot",
+                            "%s cut by the peer DISC (%d packets)" % (st.name, st.frames))
+        elif st.end != "terminated":
             sev = ERROR if st.end == "timeout" else WARN
             self.report.add(NAME, st.flow, st.last_frame, sev, "no_eot",
                             "%s ended by %s without an EOT frame (%d packets)" % (st.name, st.end, st.frames))

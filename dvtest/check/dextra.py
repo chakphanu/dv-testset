@@ -2,7 +2,7 @@
 """D-STAR over DExtra (UDP 30001): link/keepalive packets and DSVT
 streams (header, voice frames 0..20, last frame with bit 0x40)."""
 from ..proto import dextra as D
-from .common import ERROR, WARN, Live, Stream, finish_stream, flow_of, seq_finding, voice_frames
+from .common import ERROR, WARN, Live, Stream, finish_stream, flow_of, seq_finding, touches, voice_frames
 
 NAME = "dextra"
 # xlxd (cm17protocol.cpp) accepts M17 voice only for frame number > 0, so a
@@ -57,6 +57,10 @@ class Checker:
         client = (d.src, d.sport) if d.dport == self.port else (d.dst, d.dport)
         if kind == "link":
             self.linked.add(client)
+        elif kind in ("unlink", "disconnect") and d.dport == self.port:
+            # the client left: its live streams end here (no silence timeout)
+            for key in [k for k in self.streams.live if touches(k[0], client)]:
+                self.streams.end(key, "peer unlinked")
         if kind not in ("header", "voice"):
             return
         if client not in self.linked:
@@ -122,6 +126,9 @@ class Checker:
         if st.end != "terminated" and st.frames == 0:
             r.add(self.name, st.flow, st.last_frame, WARN, "header_only",
                   "%s: header(s) only, no voice and no last frame (ended by %s)" % (st.name, st.end))
+        elif st.end == "peer unlinked":
+            r.add(self.name, st.flow, st.last_frame, WARN, "no_last",
+                  "%s cut by the peer unlink (%d frames)" % (st.name, st.frames))
         elif st.end != "terminated":
             sev = ERROR if st.end == "timeout" else WARN
             r.add(self.name, st.flow, st.last_frame, sev, "no_last",
