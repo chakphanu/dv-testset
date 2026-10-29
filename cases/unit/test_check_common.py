@@ -179,16 +179,18 @@ def test_netem_impairment_windows(tmp_path):
 
 
 def ambed_wire(tmp_path, name, drop=(), stray=False):
-    """One AMBEd stream from xlxd .11 to the transcoder, pids 0..39 minus drop."""
+    """One AMBEd stream from xlxd (.11 sut / .10 ref) to its transcoder
+    (.21 / .20), pids 0..39 minus drop."""
+    x, t = ("172.30.0.11", "172.30.0.21") if name.endswith("sut") else ("172.30.0.10", "172.30.0.20")
     w = Wire()
-    w.send("172.30.0.11", 10100, "172.30.0.21", 10100, b"AMBEDOS" + b"XLX999  " + bytes([5, 1, 0, 0, 0]) + bytes(4))
-    w.send("172.30.0.21", 10100, "172.30.0.11", 10100, b"AMBEDSTD\x01\x00\x75\x27\x05\x01" + bytes(4), 0.001)
+    w.send(x, 10100, t, 10100, b"AMBEDOS" + b"XLX999  " + bytes([5, 1, 0, 0, 0]) + bytes(4))
+    w.send(t, 10100, x, 10100, b"AMBEDSTD\x01\x00\x75\x27\x05\x01" + bytes(4), 0.001)
     for pid in range(40):
         if pid not in drop:
-            w.send("172.30.0.11", 10101, "172.30.0.21", 10101, bytes([5, pid]) + bytes(320), 0.02)
-            w.send("172.30.0.21", 10101, "172.30.0.11", 10101, bytes([1, pid]) + bytes(9), 0.001)
+            w.send(x, 10101, t, 10101, bytes([5, pid]) + bytes(320), 0.02)
+            w.send(t, 10101, x, 10101, bytes([1, pid]) + bytes(9), 0.001)
     if stray:
-        w.send("172.30.0.21", 10101, "172.30.0.11", 10101, bytes([1, 99]) + bytes(9), 0.001)
+        w.send(t, 10101, x, 10101, bytes([1, 99]) + bytes(9), 0.001)
     return w.save(tmp_path / ("%s.pcapng" % name))
 
 
