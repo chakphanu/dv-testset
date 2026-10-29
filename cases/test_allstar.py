@@ -259,6 +259,11 @@ def test_node_crash_releases_module(node, rig_control):
                     break
             time.sleep(0.005)
         assert eot_at is not None, "no M17 EOT within 5 s of the node dying"
+        # the reflector closes the stream (codec stream CS) up to ~170 ms
+        # after the last frame while it drains its jitter buffer; a header
+        # inside that window is relayed native-only by design (C11), so the
+        # next talker starts after the close: 300 ms + 100 ms USRP rx timeout
+        time.sleep(max(0.0, eot_at + 0.4 - time.monotonic()))
         listener.client.inbox.clear()
         frames = signals.prng_frames("dstar", 30, seed="crash")
         clients.talk(talker, "dstar", frames, tail=1.0)

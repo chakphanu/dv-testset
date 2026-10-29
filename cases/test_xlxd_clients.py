@@ -8,6 +8,7 @@ stream by its timeout (reference 1.6 s) and the module is free for the
 next talker. Upstream xlxd sends listeners no last frame for a timed-out
 stream; that is accepted and only reported.
 """
+import threading
 import time
 
 import pytest
@@ -15,7 +16,7 @@ import pytest
 from dvtest import clients
 from dvtest.audio import signals
 from dvtest.net import pace
-from dvtest.proto import dextra, dmr
+from dvtest.proto import dextra, dmr, m17
 
 pytestmark = pytest.mark.rig
 
@@ -107,3 +108,87 @@ def test_stream_timeout_frees_module(xlxd):
             STREAM_TIMEOUT_S + 0.4, len(after))
     print("timed-out stream end marker: %s" % ("last frame %.2f s after the stop" % ended[0]
                                                 if ended else "none (upstream behaviour)"))
+
+
+LATE_MS = 30            # inside the close window (~170 ms after the last frame)
+AFTER_MS = 600          # well after the codec stream CS
+
+
+def late_entry(ip, gap_ms):
+    """DMR stream on F, then a D-STAR header gap_ms after its terminator.
+    Returns (native D-STAR frames, cross-mode M17 frames) of the second
+    stream."""
+    first = clients.make("dmr", "F", 0)
+    second = clients.make("dstar", "F", 0)
+    native = clients.make("dstar", "F", 1)
+    cross = clients.make("m17", "F", 1)
+    try:
+        for client in (first, second, native, cross):
+            assert client.link(ip), "link on %s failed" % ip
+        dsid = clients.fresh_stream_id("dmr")
+        packets, seq = dmr.voice_packets(signals.prng_frames("dmr", FRAMES, seed="c11"), first.id,
+                                         first.tg, dsid)
+        first.client.send(first.dest, dmr.packet(0, first.id, first.tg, first.id, 0xA1, dsid,
+                                                 dmr.data_sync_payload()))
+        first.client.pump(0.5)
+        first.client.paced(first.dest, packets, 0.060, native.client, cross.client)
+        sid = clients.fresh_stream_id("dstar")
+        start = time.monotonic() + 0.060
+        pace(start, 0)
+        first.client.send(first.dest, dmr.packet(seq, first.id, first.tg, first.id, 0xA2, dsid,
+                                                 dmr.data_sync_payload()))
+        pace(start + gap_ms / 1000.0, 0)
+        second.client.send(second.dest, dextra.header(sid, second.callsign, "F"))
+        # stream ids of the first stream (its tail still arrives after this)
+        for client in (native, cross):
+            client.client.drain()
+        old_dstar = {v[0] for v in map(dextra.parse_voice, native.client.inbox) if v}
+        old_m17 = {p["stream_id"] for p in map(m17.parse, cross.client.inbox) if p}
+        frames = signals.prng_frames("dstar", 50, seed="c11b")
+        voice = [dextra.voice(sid, i, f, False, dextra.SYNC_DATA if i % 21 == 0 else dextra.SLOW_DATA)
+                 for i, f in enumerate(frames)] + [dextra.voice(sid, 50, bytes(9), True)]
+        second.client.paced(second.dest, voice, 0.020, native.client, cross.client)
+        native.client.pump(1.5)
+        cross.client.pump(0.5)
+        heard = [v[3] for v in map(dextra.parse_voice, native.client.inbox)
+                 if v and not v[2] and v[0] not in old_dstar]
+        converted = [f for p in map(m17.parse, cross.client.inbox)
+                     if p and p["stream_id"] not in old_m17 for f in p["frames"]]
+        return heard == frames, len(heard), len([f for f in converted if any(f)])
+    finally:
+        clients.close(first, second, native, cross)
+
+
+def test_late_entry_is_native_only(rig):
+    """C11: a header that arrives while the previous stream on the module
+    is still closing (upstream CReflector stashes it and promotes it
+    native-only after the close, creflector.cpp ~556-580 and ~660-745;
+    the close is the codec-stream CS ~170 ms after the last frame, after
+    the jitter buffer drains) is relayed to same-mode listeners but gets no
+    transcoder stream, so cross-mode listeners hear nothing; a header after
+    the close is transcoded. Asserted as the reference behaviour, xlxd-sut
+    must match xlxd-ref. DV-Router may declare a divergence (transcoding a
+    late entry) through a per-case whitelist."""
+    got = {}
+
+    def side(name, ip):
+        try:
+            got[name] = {"late": late_entry(ip, LATE_MS), "after": late_entry(ip, AFTER_MS)}
+        except Exception as exc:                    # reported below
+            got[name] = exc
+
+    threads = [threading.Thread(target=side, args=(n, getattr(rig, "xlxd_" + n))) for n in ("ref", "sut")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    for name in ("ref", "sut"):
+        assert not isinstance(got[name], Exception), "%s: %r" % (name, got[name])
+    print("late entry (native exact, native frames, voiced cross frames):", got)
+    ref = got["ref"]
+    assert ref["late"][0] and ref["after"][0], "ref: native relay not exact %s" % ref
+    assert ref["late"][2] == 0, "ref: late entry was transcoded (%d voiced M17 frames)" % ref["late"][2]
+    assert ref["after"][2] >= 40, "ref: entry after the close not transcoded (%d)" % ref["after"][2]
+    for when in ("late", "after"):
+        assert (got["sut"][when][0], got["sut"][when][2] > 0) == (ref[when][0], ref[when][2] > 0), \
+            "%s entry: sut %s, ref %s" % (when, got["sut"][when], ref[when])

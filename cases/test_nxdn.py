@@ -35,8 +35,6 @@ import hashlib
 import json
 import os
 import random
-import shutil
-import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -45,7 +43,7 @@ from pathlib import Path
 import pytest
 
 from dvtest import clients
-from dvtest.audio import morse, score, signals
+from dvtest.audio import morse, score, signals, tandem
 from dvtest.proto import ambed, iax2, nxdn
 
 pytestmark = [pytest.mark.rig, pytest.mark.nxdn]
@@ -55,6 +53,7 @@ NXDN_IDS = (1001, 1002)                     # N0CALL, N0TEST in rig/config/nxdn.
 CROSS = [("nxdn", "dstar"), ("nxdn", "m17"), ("dstar", "nxdn"), ("m17", "nxdn")]
 ALLSTAR_NODES = {"A": "1901", "B": "1902"}  # USRP bridge of xlxd-sut (profile allstar)
 WPM = 20
+MORSE_TRANSACTION = 0x4E580000             # 'NX'; tandem adds 0x100/0x200/0x300
 RESULTS = {}
 
 
@@ -275,17 +274,6 @@ def codec_of(kind):
     return ambed.AMBE2PLUS if kind == "nxdn" else clients.CODEC[kind]
 
 
-def pcm_of(rig, codec, frames):
-    """Decode frames to PCM: Codec2 with c2dec when installed, everything
-    else (and Codec2 without c2dec) through transcoder-ref."""
-    if codec == ambed.CODEC2_3200 and shutil.which("c2dec"):
-        return subprocess.run(["c2dec", "3200", "-", "-"], input=b"".join(frames),
-                              capture_output=True, check=True).stdout
-    out = ambed.transcode(rig.ambed_ref, codec, [ambed.PCM], frames, port=rig.ambed_port,
-                          transaction=0x4E580100 + codec)
-    return b"".join(out[ambed.PCM])
-
-
 def as_codec(kind, frames):
     """Received frames in the codec form AMBEd takes (NXDN 49-bit -> DMR)."""
     return [nxdn.to_dmr(f) for f in frames] if kind == "nxdn" else frames
@@ -299,25 +287,10 @@ def morse_id(nxdn_rig):
     pcm = signals.frames(morse.encode(text, wpm=WPM))
     pcm += [bytes(320)] * (-len(pcm) % 12)
     out = ambed.transcode(rig.ambed_ref, ambed.PCM, [clients.CODEC[k] for k in clients.KINDS], pcm,
-                          port=rig.ambed_port, transaction=0x4E580000)
+                          port=rig.ambed_port, transaction=MORSE_TRANSACTION)
     frames = {k: out[clients.CODEC[k]] for k in clients.KINDS}
     frames["nxdn"] = [nxdn.from_dmr(f) for f in frames["dmr"]]
     return text, frames
-
-
-def tandem_probe(rig, codec_in, codec_out):
-    """Feature probe: does each side's own transcoder carry a 20 wpm Morse
-    ID through codec_in -> codec_out (the conversion its xlxd asks for)?
-    Encoded and decoded as in the rig case. {side: exact}."""
-    text = "PARIS %04d" % random.SystemRandom().randrange(10000)
-    frames = ambed.transcode(rig.ambed_ref, ambed.PCM, [codec_in], signals.frames(morse.encode(text, wpm=WPM)),
-                             port=rig.ambed_port, transaction=0x4E580200 + codec_in)[codec_in]
-    out = {}
-    for side, addr in (("ref", rig.ambed_ref), ("sut", rig.ambed_sut)):
-        conv = ambed.transcode(addr, codec_in, [codec_out], frames, port=rig.ambed_port,
-                               transaction=0x4E580300 + codec_in)[codec_out]
-        out[side] = morse.check(text, morse.decode(pcm_of(rig, codec_out, conv)))["exact"]
-    return out
 
 
 @pytest.mark.parametrize("cell", CROSS, ids=["%s-%s" % c for c in CROSS])
@@ -330,19 +303,17 @@ def test_morse_round_trip(nxdn_rig, morse_id, cell):
     label = "morse %s-%s" % cell
     text, frames = morse_id
     rig = nxdn_rig["rig"]
-    probe = tandem_probe(rig, codec_of(src), codec_of(dst))
+    decode = tandem.decoder(rig, transaction=MORSE_TRANSACTION)
+    probed = tandem.probe(rig, codec_of(src), codec_of(dst), decode, transaction=MORSE_TRANSACTION)
     got = both(nxdn_rig, src, dst, frames[src])
-    checks = {name: morse.check(text, morse.decode(pcm_of(rig, codec_of(dst), as_codec(dst, r["frames"]))))
-              for name, r in got.items()}
-    record(label, {"sent": text, "probe": probe,
-                   **{n: {"got": c["got"], "exact": c["exact"], "frames": len(got[n]["frames"])}
-                      for n, c in checks.items()}})
-    bad = [n for n in ("ref", "sut") if probe[n] and not checks[n]["exact"]]
-    assert not bad, "%s: %s decoded %s although its transcoder passes the probe" % (
-        label, bad, {n: checks[n]["got"] for n in bad})
-    if not any(probe.values()):
-        pytest.xfail("%s informational: no transcoder carries Morse through this tandem (probe %s); "
-                     "rig decode %s" % (label, probe, {n: c["got"] for n, c in checks.items()}))
+    verdict, rec = tandem.judge(text, {n: decode(codec_of(dst), as_codec(dst, r["frames"]))
+                                       for n, r in got.items()}, probed)
+    for name in tandem.SIDES:
+        rec[name]["frames"] = len(got[name]["frames"])
+    record(label, {"sent": text, **rec})
+    if verdict.startswith("xfail"):
+        pytest.xfail("%s %s" % (label, verdict))
+    assert verdict == "pass", "%s %s" % (label, verdict)
 
 
 # ------------------------------------------------------------------ AllStar
