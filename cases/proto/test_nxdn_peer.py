@@ -20,6 +20,8 @@ else the profile's "nxdn" spec entry {"P-NXD-NN": {key: value}} (skip
 import collections
 import json
 import os
+import socket
+import struct
 import threading
 import time
 from pathlib import Path
@@ -214,6 +216,45 @@ def ingress(side, packets, via="reflector", module=None, gap=nxdn.PACKET_GAP, wa
         close(*[c for c in (gw, listener) if c])
 
 
+SO_TIMESTAMPNS = getattr(socket, "SO_TIMESTAMPNS", 35)    # Linux value; Python may not export it
+
+
+class StampedReader:
+    """Reads a socket in a thread with kernel receive timestamps
+    (SO_TIMESTAMPNS), so arrival gaps are wire gaps, not the tester's drain
+    ticks. Falls back to the read time when the kernel gives no stamp."""
+
+    def __init__(self, sock):
+        self.sock = sock
+        self.rx = []                                 # (seconds, data)
+        self.stamped = 0
+        sock.setsockopt(socket.SOL_SOCKET, SO_TIMESTAMPNS, 1)
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        while not self.stop.is_set():
+            try:
+                data, ancdata, _flags, _addr = self.sock.recvmsg(2048, 64)
+            except (socket.timeout, BlockingIOError):
+                continue
+            except OSError:
+                return
+            stamp = None
+            for level, kind, raw in ancdata:
+                if level == socket.SOL_SOCKET and kind == SO_TIMESTAMPNS and len(raw) >= 16:
+                    sec, nsec = struct.unpack("qq", raw[:16])
+                    stamp = sec + nsec / 1e9
+            if stamp is not None:
+                self.stamped += 1
+            self.rx.append((stamp if stamp is not None else time.time(), data))
+
+    def close(self):
+        self.stop.set()
+        self.thread.join(1.0)
+
+
 def egress(side, frames, dmrid=TALKER_DMR, dmr_frames=None):
     """A DMR stream on the module, heard by a gateway on the reflector:
     the parsed NXDND packets with arrival times."""
@@ -225,20 +266,24 @@ def egress(side, frames, dmrid=TALKER_DMR, dmr_frames=None):
         listener.client.pump(0.5)
         listener.client.inbox.clear()
         listener.client.inbox_times.clear()
-        # DmrClient.talk with the listener drained during the over (arrival times)
-        sid = clients.fresh_stream_id("dmr")
-        voice = dmr_frames or [nxdn.to_dmr(f) for f in frames]
-        talker.client.send(talker.dest, dmr.packet(0, talker.id, talker.tg, talker.id, 0xA1, sid,
-                                                   dmr.data_sync_payload()))
-        listener.client.pump(0.3)
-        bursts, seq = dmr.voice_packets(voice, talker.id, talker.tg, sid)
-        talker.client.paced(talker.dest, bursts, 0.060, listener.client)
-        talker.client.send(talker.dest, dmr.packet(seq, talker.id, talker.tg, talker.id, 0xA2, sid,
-                                                   dmr.data_sync_payload()))
-        listener.client.pump(SETTLE)
-        rx = [(t, nxdn.parse(d)) for d, t in zip(listener.client.inbox, listener.client.inbox_times)
-              if nxdn.parse(d)]
-        return {"_rx": rx, "_raw": [d for d in listener.client.inbox if d.startswith(b"NXDND")]}
+        # the listener is read by a thread with kernel receive stamps
+        reader = StampedReader(listener.client.sock)
+        try:
+            sid = clients.fresh_stream_id("dmr")
+            voice = dmr_frames or [nxdn.to_dmr(f) for f in frames]
+            talker.client.send(talker.dest, dmr.packet(0, talker.id, talker.tg, talker.id, 0xA1, sid,
+                                                       dmr.data_sync_payload()))
+            time.sleep(0.3)
+            bursts, seq = dmr.voice_packets(voice, talker.id, talker.tg, sid)
+            talker.client.paced(talker.dest, bursts, 0.060)
+            talker.client.send(talker.dest, dmr.packet(seq, talker.id, talker.tg, talker.id, 0xA2, sid,
+                                                       dmr.data_sync_payload()))
+            time.sleep(SETTLE)
+        finally:
+            reader.close()
+        rx = [(t, nxdn.parse(d)) for t, d in reader.rx if nxdn.parse(d)]
+        return {"_rx": rx, "_raw": [d for _, d in reader.rx if d.startswith(b"NXDND")],
+                "_stamped": reader.stamped}
     finally:
         close(talker, listener)
 
@@ -500,17 +545,35 @@ def test_nxdn_partial_group_padded(peer):
 
 
 def test_nxdn_egress_pacing(peer, eg):
-    """P-NXD-15: voice packets at the source pace, no bursts (recorded:
-    smallest and largest gap)."""
+    """P-NXD-15: voice packets at the 80 ms frame rate, no bursts. Gaps
+    come from kernel receive stamps (SO_TIMESTAMPNS), i.e. wire arrival at
+    the tester; min/mean/max recorded (xlxd follows the DMR source, mean
+    80 ms). Every side: smallest gap >= 40 ms. Mean: xlxd-ref, and the sut
+    under the xlxd profile, 80 +- 10 ms; another profile 60..100 ms until
+    its SPEC["nxdn"]["P-NXD-15"] {"mean_ms", "tol_ms"} asks for a strict
+    mean."""
+    rig = peer["rig"]
+    strict = {"ref": (80, 10), "sut": (80, 10)}
+    if rig.sut_profile != specs.DEFAULT:
+        entry = specs.rule_mode(rig, "nxdn", "P-NXD-15") or {}
+        strict["sut"] = (entry["mean_ms"], entry.get("tol_ms", 10)) if "mean_ms" in entry else None
     got = {}
     for side in peer["sides"]:
         times = [t for t, p in eg[side.name]["_rx"] if p["kind"] == "voice"]
         gaps = [b - a for a, b in zip(times, times[1:])]
-        got[side.name] = {"burst": min(gaps) < 0.030, "min_ms": round(min(gaps) * 1000),
-                          "max_ms": round(max(gaps) * 1000),
-                          "mean_ms": round((times[-1] - times[0]) / len(gaps) * 1000)}
+        got[side.name] = {"min_ms": round(min(gaps) * 1000, 1), "max_ms": round(max(gaps) * 1000, 1),
+                          "mean_ms": round((times[-1] - times[0]) / len(gaps) * 1000, 1),
+                          "kernel_stamped": eg[side.name]["_stamped"], "packets": len(times),
+                          "bound": "%s +- %s" % strict[side.name] if strict[side.name] else "60..100"}
     record(got)
-    same(got, "burst")
+    for name, row in got.items():
+        assert row["min_ms"] >= 40, "%s: burst, smallest gap %.1f ms" % (name, row["min_ms"])
+        if strict[name]:
+            mean, tol = strict[name]
+            assert abs(row["mean_ms"] - mean) <= tol, "%s: mean gap %.1f ms, not %s +- %s" % (
+                name, row["mean_ms"], mean, tol)
+        else:
+            assert 60 <= row["mean_ms"] <= 100, "%s: mean gap %.1f ms outside 60..100" % (name, row["mean_ms"])
 
 
 @pytest.mark.parametrize("who", ["known", "unknown"])
