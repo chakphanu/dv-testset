@@ -49,6 +49,11 @@
 #   action  stop | start | restart | kill (SIGKILL)
 #   service transcoder-ref | transcoder-sut | allstar | xlxd-ref | xlxd-sut
 # or, with netem on: "netem tester|xlxd <preset|off|netem arguments>".
+# or, with the allstar profile: "asl usrp-show" (chan_usrp counters into
+# <id>.out) or "asl play-1901|play-1902" (app_rpt plays a short telemetry
+# file on that node, i.e. keys its USRP channel toward xlxd-sut).
+# "mark begin|end <tag>" only logs: a case brackets deliberately malformed
+# traffic so the capture check can tell it from a fault.
 # The answer is <id>.ack: "ok", "error <rc>" or "error refused" (anything else
 # is refused and nothing runs); the request is renamed to <id>.done.
 # control/control.log gets "<utc> request <line>" before the action and
@@ -78,7 +83,7 @@ while [ "$#" -gt 0 ]; do
     --netem) [ "$#" -ge 2 ] || { echo "run.sh: --netem needs a preset or netem arguments" >&2; exit 2; }; netem_cli="$2"; netem_set=1; shift 2 ;;
     --down) down_only=1; shift ;;
     --) shift; break ;;
-    -h|--help) sed -n '3,58p' "$0"; exit 0 ;;
+    -h|--help) sed -n '3,63p' "$0"; exit 0 ;;
     *) echo "run.sh: unknown argument '$1' (see --help)" >&2; exit 2 ;;
   esac
 done
@@ -329,7 +334,7 @@ for row in sys.stdin:
 control="$out/control"
 
 watch_control() {
-  local req id line action svc extra rc sniffer args target
+  local req id line action svc extra rc sniffer args target node
   while :; do
     for req in "$control"/*.req; do
       [ -e "$req" ] || continue
@@ -354,6 +359,24 @@ watch_control() {
           [ "$svc" != xlxd ] || export DVT_NETEM_ARGS_XLXD="$args"
           netem_snapshot "netem $svc $extra"
         fi
+      elif [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$action" = mark ] && { [ "$svc" = begin ] || [ "$svc" = end ]; } \
+           && [[ "$extra" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        rc=0
+      elif [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$action" = asl ] && [ -z "$extra" ]; then
+        rc=0
+        case "$svc" in
+          usrp-show)
+            "${compose[@]}" exec -T allstar asterisk -rx "usrp show" > "$control/$id.out" 2>&1 || rc=$? ;;
+          play-1901|play-1902)
+            # telemetry on only around the play, so no other tones reach xlxd
+            node="${svc#play-}"
+            { "${compose[@]}" exec -T allstar asterisk -rx "rpt cmd $node cop 33 1" \
+                && "${compose[@]}" exec -T allstar asterisk -rx "rpt localplay $node rpt/connected" \
+                && sleep 4 \
+                && "${compose[@]}" exec -T allstar asterisk -rx "rpt cmd $node cop 34 1"; } \
+              > "$control/$id.out" 2>&1 || rc=$? ;;
+          *) rc=refused ;;
+        esac
       elif [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] && [ -z "$extra" ]; then
         case "$svc" in transcoder-ref|transcoder-sut|allstar|xlxd-ref|xlxd-sut) ;; *) action="" ;; esac
         rc=0
