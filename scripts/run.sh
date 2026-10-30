@@ -250,6 +250,13 @@ for name in "${xlxd_dirs[@]}"; do
   [ -f ".cache/xlxd/$name/src/main.h" ] || { echo "run.sh: .cache/xlxd/$name missing; run scripts/pre-fetch-xlxd.sh" >&2; exit 2; }
 done
 [ -f .cache/codec2/CMakeLists.txt ] || { echo "run.sh: .cache/codec2 missing; run scripts/pre-fetch-codec2.sh" >&2; exit 2; }
+# A prebuilt reflector image must exist locally: run.sh never builds or pulls it
+for img in "${XLXD_REF_IMAGE:-}" "${XLXD_SUT_IMAGE:-}"; do
+  [ -z "$img" ] || docker image inspect "$img" > /dev/null 2>&1 || {
+    echo "run.sh: image '$img' (XLXD_REF_IMAGE/XLXD_SUT_IMAGE) not found locally; build or load it first" >&2
+    exit 2
+  }
+done
 
 scripts/pii-check.sh
 
@@ -303,6 +310,8 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
   for f in xlxd.whitelist xlxd.blacklist xlxd.terminal ysfnode.dat; do : > "$cfg/$f"; done
   {
     printf '  %s:\n    image: "%s"\n    command: ["XLX999", "%s.%s", "%s.%s"]\n' "$svc" "$img" "$net" "$3" "$net" "$4"
+    # the image is used as it is: no build section, never pulled
+    printf '    build: !reset null\n    pull_policy: never\n'
     printf '    environment:\n      DVT_CONFIG_MOUNTED: "1"\n'
     # P25 gateway id for unknown talkers (P-P25-23; not in rig/config/dmrid.dat)
     [ "$svc" != xlxd-sut ] || printf '      DV_P25_GATEWAY_ID: "%s"\n' "${DV_P25_GATEWAY_ID:-1023000}"
@@ -487,7 +496,8 @@ cat ".cache/xlxd/${XLXD_REF_DIR:-ref}.fetched" ".cache/xlxd/${XLXD_SUT_DIR:-sut}
   mapfile -t to_build < <("${compose[@]}" config --services | grep -vxF -f <(printf '%s\n' "${prebuilt[@]}" "-"))
   "${compose[@]}" build "${to_build[@]}"
 )
-"${compose[@]}" up -d
+# everything was built above; up never builds (a prebuilt image is never replaced)
+"${compose[@]}" up -d --no-build
 
 for svc in "${capture_svcs[@]}"; do
   f="$out/capture/${svc#capture-}.pcapng"
