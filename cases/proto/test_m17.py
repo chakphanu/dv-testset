@@ -131,6 +131,12 @@ def anything(data):
     return True
 
 
+def not_keepalive(data):
+    """Any datagram except the reflector's periodic PING (a reply check
+    must not count the keepalive that happens to arrive meanwhile)."""
+    return not control("PING")(data)
+
+
 def wait_for(c, pred, seconds=1.0):
     deadline = time.monotonic() + seconds
     while True:
@@ -1006,7 +1012,7 @@ def garbage_probe(ip, name):
     c, talker = new(LISTENER), new(TALKER)
     try:
         ready(ip, c, talker)
-        reply = reply_of(ask(c, GARBAGE[name], seconds=0.5))
+        reply = reply_of(ask(c, GARBAGE[name], not_keepalive, seconds=0.5))
         clear(c)
         packets = stream(talker)
         send(talker, packets, c)
