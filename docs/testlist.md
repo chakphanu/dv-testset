@@ -555,7 +555,7 @@ test, "dev" rows are recorded under the `xlxd` profile.
 | P-M17-45 | No datagram to a client above 100 B | test_m17::test_m17_egress_max_size | hb | probe | covered |
 
 K9 (YSF, `docs/protocols/ysf.md`) is reserved for that suite when it
-lands; K14 onward for USRP dynamic clients.
+lands.
 
 ### K10. XLX interlink (`docs/protocols/xlx.md`)
 
@@ -712,6 +712,28 @@ Under a non-xlxd profile the suite skips "edge not ready" until
 | P-IMR-22 | Two repeaters at once: one winner | test_imrs::test_imrs_two_talkers | spec (B1) | probe | covered |
 | P-IMR-23 | IMRS <-> DMR passthrough (P-IMR-12); D-STAR / M17 differential | test_imrs::test_imrs_cross_mode[dstar\|m17] | diff | probe | covered |
 | P-IMR-24 | Empty call from another mode not sent to IMRS | test_imrs::test_imrs_empty_stream_not_relayed | dev | probe | covered |
+
+### K14. USRP dynamic clients (`docs/protocols/usrp.md` section 5)
+
+Senders without a configured `xlxd.usrp` row (DVSwitch clients). The cases
+run against a fake DVSwitch hub; see usrp.md section 5.
+
+| # | Obligation | Case | Judged | How | Status |
+|---|---|---|---|---|---|
+| P-USR-27 | REG:DVSWITCH admitted, REG:OK to the source | test_usrp_dynamic::test_usrp_dyn_register | conv | probe | covered (fake hub) |
+| P-USR-28 | Replies to the source ip:port (ephemeral port) | test_usrp_dynamic::test_usrp_dyn_reply_to_source | conv | probe | covered (fake hub) |
+| P-USR-29 | Unregistered voice from an unknown address | test_usrp_dynamic::test_usrp_dyn_unregistered_voice | dev | probe | covered (fake hub) |
+| P-USR-30 | REG:UNREG ends the session | test_usrp_dynamic::test_usrp_dyn_unregister | conv | probe | covered (fake hub) |
+| P-USR-31 | Silent registered client dropped after the timeout; re-register works | test_usrp_dynamic::test_usrp_dyn_idle_timeout | dev | probe | covered (fake hub; slow) |
+| P-USR-32 | PING keeps the client, no reply | test_usrp_dynamic::test_usrp_dyn_ping_keeps | conv | probe | covered (fake hub; slow) |
+| P-USR-33 | Module selection by dial string | test_usrp_dynamic::test_usrp_dyn_select_module[letter\|tg] | dev | probe | covered (fake hub) |
+| P-USR-34 | Module before any selection | test_usrp_dynamic::test_usrp_dyn_default_module | dev | probe | covered (fake hub) |
+| P-USR-35 | Client SET_INFO names the talker | test_usrp_dynamic::test_usrp_dyn_set_info_in | conv | probe | covered (fake hub) |
+| P-USR-36 | SET_INFO before each call to the client | test_usrp_dynamic::test_usrp_dyn_set_info_out | conv | probe | covered (fake hub) |
+| P-USR-37 | INFO: request | test_usrp_dynamic::test_usrp_dyn_info | dev | probe | covered (fake hub) |
+| P-USR-38 | Several dynamic clients: once each, no echo, one talker | test_usrp_dynamic::test_usrp_dyn_two_clients | conv | probe | covered (fake hub) |
+| P-USR-39 | SLIN to dynamic clients | test_usrp_dynamic::test_usrp_dyn_slin | conv | probe | covered (fake hub) |
+| P-USR-40 | Table bound: refusal when full | test_usrp_dynamic::test_usrp_dyn_table_full | dev | probe | covered (fake hub) |
 
 ## Upstream behaviour the cases accept
 
