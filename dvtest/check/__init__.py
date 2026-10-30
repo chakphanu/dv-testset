@@ -94,6 +94,13 @@ SETTLE = 2.0
 MARK_SETTLE = 1.0
 
 
+# mark tags under which the xlxd peers' own flows may lack a closing frame
+# (test_xlx_cut_stream_no_closing_frame); their windows carry PEER_SUFFIX and
+# excuse only stream-end findings
+PEER_CUT_MARKS = {"xlx-cut-stream"}
+PEER_SUFFIX = " (peer)"
+
+
 def marks(run_dir, hosts):
     """[(tester ip, t0, t1, "mark <tag>")] from control.log "mark begin
     <tag>" / "mark end <tag>" lines: a case brackets traffic it makes
@@ -117,6 +124,11 @@ def marks(run_dir, hosts):
             elif edge == "end" and m.group(5) == "0" and tag in begun:
                 out.append((ip, begun.pop(tag), ts + MARK_SETTLE, "mark " + tag))
     out += [(ip, t0, float("inf"), "mark " + tag) for tag, t0 in begun.items()]
+    # a case that cuts a stream on an XLX peer on purpose (no closing frame)
+    # also marks the stream-end findings of the peers' own flows
+    for ip_, t0, t1, label in list(out):
+        if label[len("mark "):] in PEER_CUT_MARKS:
+            out += [(hosts[k], t0, t1, label + PEER_SUFFIX) for k in sorted(hosts) if k.startswith("xlxd_peer")]
     # the 1 s tail of a window ends where the next mark begins, so back to
     # back cases each get their own tag
     out.sort(key=lambda w: w[1])
@@ -197,6 +209,8 @@ def _excuse(report, frame_ts, windows):
                 continue
             if svc.startswith("mark "):
                 if not f.flow.startswith(ip + ":"):
+                    continue
+                if svc.endswith(PEER_SUFFIX) and f.code not in END_CODES:
                     continue
                 note = " [during %s]" % svc
             elif svc.startswith("netem "):

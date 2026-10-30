@@ -373,3 +373,26 @@ def test_idle_segment_is_not_a_wrong_subnet(tmp_path):
     busy.send("172.30.0.11", 10100, "172.30.0.21", 10100, b"AMBEDPINGXLX999  ")
     busy.rows.append((busy.t + 0.1, ipv6_mdns()))
     assert "idle" not in check.check_file(busy.save(tmp_path / "transcoder-sut.pcapng"), rig)
+
+
+def test_cut_stream_mark_covers_peer_flows(tmp_path):
+    """xlx-cut-stream also opens windows on the xlxd peers; they excuse
+    stream-end errors only."""
+    (tmp_path / "control").mkdir()
+    (tmp_path / "control" / "control.log").write_text(
+        "2026-10-30T06:05:35.000Z request mark begin xlx-cut-stream\n"
+        "2026-10-30T06:05:35.001Z mark begin xlx-cut-stream -> 0\n"
+        "2026-10-30T06:05:40.000Z request mark end xlx-cut-stream\n"
+        "2026-10-30T06:05:40.001Z mark end xlx-cut-stream -> 0\n")
+    hosts = {"tester": "172.30.0.30", "xlxd_peer_sut": "172.30.0.12", "xlxd_peer_ref": "172.30.0.13"}
+    got = check.marks(str(tmp_path), hosts)
+    assert sorted(w[0] for w in got) == ["172.30.0.12", "172.30.0.13", "172.30.0.30"]
+    assert sum(1 for w in got if w[3] == "mark xlx-cut-stream (peer)") == 2
+    report = check.Report(None)
+    flow = "172.30.0.12:30001>172.30.0.11:30001"
+    report.add("xlx", flow, 5, check.ERROR, "no_last", "stream ended without a last frame")
+    report.add("xlx", flow, 6, check.ERROR, "bad_other", "something else")
+    ts = got[0][1] + 1.0
+    check._excuse(report, {5: ts, 6: ts}, got)
+    sev = {f.code: f.severity for f in report.findings}
+    assert sev["xlx.no_last"] == check.WARN and sev["xlx.bad_other"] == check.ERROR
