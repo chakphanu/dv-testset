@@ -14,9 +14,19 @@ directions (xlxd defines "-3" for NXDN->DMR and DMR->NXDN and applies
 gain-table entry nearest to its old gain minus 0.3 dB, which is one index
 lower (b2 = 0 stays 0), and re-encodes the FEC. So the bytes differ in
 almost every frame, the other 44 data bits are untouched. The cases
-assert exactly that: all bits outside b2 equal, b2 one step down, DMR
-FEC valid, ref and sut identical. 60 frames keep whole NXDN packets (xlxd
+assert exactly that: all bits outside b2 equal, b2 stepped as the side's
+rule says, DMR FEC valid. 60 frames keep whole NXDN packets (xlxd
 neither gain-steps nor pads a partial last packet the same way).
+
+The gain step is P-NXD-13 (docs/protocols/nxdn.md): xlxd-ref always steps
+-1; the sut steps -1 under the xlxd profile, else as its profile's
+SPEC["nxdn"]["P-NXD-13"] {"step_in": NXDN -> other, "step_out": other ->
+NXDN} says (DV-Router: 0, AMBE+2 bits unchanged). With equal steps the
+cells compare sut == ref byte for byte; otherwise passthrough cells check
+the sut against the sent frames with its own step, X -> NXDN cross cells
+compare everything but the gain index and the step difference, and NXDN
+-> X cross cells (different transcoder input) compare frame counts only
+(the Morse cells check that the audio still decodes).
 
 Cross cells (NXDN <-> D-STAR, M17) are differential like the matrix:
 tone bursts encoded by transcoder-ref, xlxd-sut must deliver what
@@ -42,7 +52,7 @@ from pathlib import Path
 
 import pytest
 
-from dvtest import clients
+from dvtest import clients, specs
 from dvtest.audio import score, signals, tandem
 from dvtest.proto import ambed, iax2, nxdn
 
@@ -176,24 +186,45 @@ def frames49():
     return [nxdn.from_dmr(f) for f in signals.prng_frames("dmr", FRAMES, seed="nxdn")]
 
 
-def gain_report(sent, got):
-    """Compare 49-bit frames: other bits, b2 steps, one-step-down rule."""
-    steps = collections.Counter(nxdn.gain_index(g) - nxdn.gain_index(s) for s, g in zip(sent, got))
+XLXD_STEP = -1           # P-NXD-13 on xlxd: gain index one step down, both ways
+
+
+@pytest.fixture(scope="module")
+def steps(nxdn_rig):
+    """Gain-index step per side and direction: {"ref"|"sut": {"in": NXDN ->
+    other, "out": other -> NXDN}}; xlxd-ref is always xlxd."""
+    rig = nxdn_rig["rig"]
+    xlxd = {"in": XLXD_STEP, "out": XLXD_STEP}
+    if rig.sut_profile == specs.DEFAULT:
+        return {"ref": xlxd, "sut": dict(xlxd)}
+    entry = (specs.rule(rig, "nxdn") or {}).get("P-NXD-13") or {}
+    if "step_in" not in entry or "step_out" not in entry:
+        pytest.skip("spec pending: no nxdn P-NXD-13 step_in/step_out in dvtest/specs/%s.py" % rig.sut_profile)
+    return {"ref": xlxd, "sut": {"in": entry["step_in"], "out": entry["step_out"]}}
+
+
+def stepped(b2, step):
+    return min(max(b2 + step, 0), 31)
+
+
+def gain_report(sent, got, step):
+    """Compare 49-bit frames: other bits, b2 steps, the side's step rule."""
+    counts = collections.Counter(nxdn.gain_index(g) - nxdn.gain_index(s) for s, g in zip(sent, got))
     return {
-        "sent": len(sent), "received": len(got),
+        "sent": len(sent), "received": len(got), "step": step,
         "other_bits_differ": sum(nxdn.without_gain(s) != nxdn.without_gain(g) for s, g in zip(sent, got)),
         "frames_changed": sum(s != g for s, g in zip(sent, got)),
-        "b2_steps": {str(k): v for k, v in sorted(steps.items())},
-        "one_step_down": all(nxdn.gain_index(g) == max(nxdn.gain_index(s) - 1, 0) for s, g in zip(sent, got)),
+        "b2_steps": {str(k): v for k, v in sorted(counts.items())},
+        "step_ok": all(nxdn.gain_index(g) == stepped(nxdn.gain_index(s), step) for s, g in zip(sent, got)),
     }
 
 
-def test_nxdn_to_dmr_passthrough(nxdn_rig, frames49):
+def test_nxdn_to_dmr_passthrough(nxdn_rig, frames49, steps):
     got = both(nxdn_rig, "nxdn", "dmr", frames49)
     rows = {}
     for name, result in got.items():
         dmr9 = result["frames"]
-        row = gain_report(frames49, [nxdn.from_dmr(f) for f in dmr9])
+        row = gain_report(frames49, [nxdn.from_dmr(f) for f in dmr9], steps[name]["in"])
         row["dmr_fec_valid"] = sum(nxdn.dmr_valid(f) for f in dmr9)
         row["sha256"] = sha(dmr9)
         row["echo_to_talker"] = len(result["echo"])
@@ -204,17 +235,18 @@ def test_nxdn_to_dmr_passthrough(nxdn_rig, frames49):
         assert row["dmr_fec_valid"] == FRAMES, "%s: %d frames with broken FEC" % (name, FRAMES - row["dmr_fec_valid"])
         assert row["other_bits_differ"] == 0, "%s: %d frames differ outside the gain bits" % (
             name, row["other_bits_differ"])
-        assert row["one_step_down"], "%s: gain steps %s" % (name, row["b2_steps"])
+        assert row["step_ok"], "%s: gain steps %s, expected %+d" % (name, row["b2_steps"], row["step"])
         assert row["echo_to_talker"] == 0, "%s: %d NXDN packets came back to the talker" % (
             name, row["echo_to_talker"])
-    assert rows["sut"]["sha256"] == rows["ref"]["sha256"], "sut differs from ref"
+    if steps["sut"] == steps["ref"]:
+        assert rows["sut"]["sha256"] == rows["ref"]["sha256"], "sut differs from ref"
 
 
-def test_dmr_to_nxdn_passthrough_and_lifecycle(nxdn_rig, frames49):
+def test_dmr_to_nxdn_passthrough_and_lifecycle(nxdn_rig, frames49, steps):
     got = both(nxdn_rig, "dmr", "nxdn", [nxdn.to_dmr(f) for f in frames49])
     rows = {}
     for name, result in got.items():
-        row = gain_report(frames49, result["frames"])
+        row = gain_report(frames49, result["frames"], steps[name]["out"])
         packets = result["packets"]
         row["sha256"] = sha(result["frames"])
         row["kinds"] = [p["kind"] for p in packets]
@@ -233,13 +265,14 @@ def test_dmr_to_nxdn_passthrough_and_lifecycle(nxdn_rig, frames49):
         assert row["received"] == FRAMES, "%s: NXDN listener got %d of %d" % (name, row["received"], FRAMES)
         assert row["other_bits_differ"] == 0, "%s: %d frames differ outside the gain bits" % (
             name, row["other_bits_differ"])
-        assert row["one_step_down"], "%s: gain steps %s" % (name, row["b2_steps"])
+        assert row["step_ok"], "%s: gain steps %s, expected %+d" % (name, row["b2_steps"], row["step"])
         assert row["kinds"] == ["header"] + ["voice"] * voice + ["trailer"], "%s: %s" % (name, row["kinds"])
         assert row["dst_ids"] == [nxdn_rig["tg"]] and len(row["src_ids"]) == 1, row
         assert row["facch1"] == [(nxdn.VCALL, True, True), (nxdn.TX_REL, True, True)], row["facch1"]
         assert row["sacch_crc_ok"] and row["sacch_structures"] == [3, 2, 1, 0] * (voice // 4) + \
             [3, 2, 1, 0][:voice % 4], row["sacch_structures"]
-    assert rows["sut"]["sha256"] == rows["ref"]["sha256"], "sut differs from ref"
+    if steps["sut"] == steps["ref"]:
+        assert rows["sut"]["sha256"] == rows["ref"]["sha256"], "sut differs from ref"
 
 
 @pytest.fixture(scope="module")
@@ -256,16 +289,32 @@ def encoded(nxdn_rig):
 
 
 @pytest.mark.parametrize("cell", CROSS, ids=["%s-%s" % c for c in CROSS])
-def test_cross_sut_equals_ref(nxdn_rig, encoded, cell):
+def test_cross_sut_equals_ref(nxdn_rig, encoded, cell, steps):
     src, dst = cell
     got = both(nxdn_rig, src, dst, encoded[src])
     rows = {name: {"received": len(r["frames"]), "sha256": sha(r["frames"]), "echo_to_talker": len(r["echo"])}
             for name, r in got.items()}
+    direction = "in" if src == "nxdn" else "out"
+    diff = steps["ref"][direction] - steps["sut"][direction]
+    if diff and dst == "nxdn":
+        # same transcoder output, stepped differently: everything but the
+        # gain index equal, and the sut's index moved by the step difference
+        pairs = list(zip(got["sut"]["frames"], got["ref"]["frames"]))
+        rows["sut"]["other_bits_equal"] = all(nxdn.without_gain(s) == nxdn.without_gain(r) for s, r in pairs)
+        rows["sut"]["step_diff_ok"] = all(stepped(nxdn.gain_index(s), diff) == nxdn.gain_index(r) for s, r in pairs)
     record("%s-%s" % cell, rows)
     assert rows["ref"]["received"] >= FRAMES * 0.8, "ref got %d frames" % rows["ref"]["received"]
-    assert (rows["sut"]["received"], rows["sut"]["sha256"]) == (rows["ref"]["received"], rows["ref"]["sha256"]), \
-        "sut differs from ref: %s" % rows
     assert rows["sut"]["echo_to_talker"] == 0 and rows["ref"]["echo_to_talker"] == 0, rows
+    if not diff:
+        assert (rows["sut"]["received"], rows["sut"]["sha256"]) == (rows["ref"]["received"], rows["ref"]["sha256"]), \
+            "sut differs from ref: %s" % rows
+    elif dst == "nxdn":
+        assert rows["sut"]["received"] == rows["ref"]["received"], rows
+        assert rows["sut"]["other_bits_equal"] and rows["sut"]["step_diff_ok"], rows
+    else:
+        # different transcoder input (unstepped vs stepped AMBE+2): frame
+        # count only; the Morse cells check the audio still decodes
+        assert rows["sut"]["received"] == rows["ref"]["received"], rows
 
 
 # ------------------------------------------------------------------ Morse
