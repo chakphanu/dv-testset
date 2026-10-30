@@ -45,8 +45,9 @@ internet, and every address is fixed.
 | nxdn-ref / nxdn-sut | 172.30.0.50 / .51 | nxdn | NXDNReflector peered with xlxd-ref / xlxd-sut (module `DVT_NXDN_MODULE`, TG `DVT_NXDN_TG`) |
 | p25-ref / p25-sut | 172.30.0.60 / .61 | p25 | P25Reflector peered with xlxd-ref / xlxd-sut (module `DVT_P25_MODULE`) |
 | xlxd-peer-sut / xlxd-peer-ref | 172.30.0.12 / .13 | interlink | XLX998, interlinked with xlxd-sut / xlxd-ref on `DVT_INTERLINK_MODULES` |
+| urfd | 172.30.0.70 | urfd | URFd (`URF999`, modules A-Z), a second reference reflector; see "URFd as the reference" |
 | load nodes | 172.30.0.128/25 | load | `DVT_LOAD_MODULES` tester replicas running `DVT_LOAD_CMD` against xlxd-sut |
-| capture-* | (shares the netns) | capture | dumpcap on xlxd-ref, xlxd-sut, transcoder-sut, allstar, nxdn-*, p25-* |
+| capture-* | (shares the netns) | capture | dumpcap on xlxd-ref, xlxd-sut, transcoder-sut, allstar, nxdn-*, p25-*, urfd |
 
 | Port | Protocol | Where |
 |------|----------|-------|
@@ -113,6 +114,42 @@ in `out/<utc>-i<n>/`. Instance 0 (the default) is project `dvt` on
 `pytest.log`, `junit.xml`, `compose-ps.txt`, `compose-images.txt`,
 `logs/<service>.log`, `run.txt` (markers, profile, xlxd commits), and with
 `--capture` `capture/<service>.pcapng`.
+
+## URFd as the reference
+
+URFd (https://github.com/n7tae/urfd, GPL-3.0) is built from fetched source:
+`scripts/pre-fetch-urfd.sh` puts the pinned `URFD_COMMIT` (bd0c114e, commit
+verified) into `.cache/urfd`, and `rig/Dockerfile.urfd` builds it without
+DHT as `dvt-urfd:local`. Service `urfd`, profile `urfd`, address `.70`.
+
+Configuration (`rig/config/urfd/urfd.ini.in`, rendered by
+`rig/urfd-entry.sh` and checked with URFd's own `inicheck` before start):
+
+- callsign `URF999`, modules A-Z; no transcoder (same-codec passthrough
+  only, no cross-mode audio); BrandMeister off; USRP off (URFd needs a
+  transcoded module for it); no XLX interlink (URFd cannot interlink with
+  xlxd); G3 on;
+- YSF: AutoLinkModule B (xlxd's default), DG-ID selection off;
+- NXDN 41400 and P25 41000 open natively (reflector id = `DVT_NXDN_TG` /
+  `DVT_P25_TG`); no case targets them yet;
+- ID databases in file mode from the rig's `dmrid.dat` / `nxdn.csv`;
+  blacklist from `DVT_XLXD_BLACKLIST`; `IPv4External` set to the rig
+  address (URFd will not start if it cannot look its address up, and the
+  rig has no internet). Log: `out/<run>/logs/urfd.log`.
+
+`DVT_REF_KIND=xlxd|urfd` (default `xlxd`, in `.env.example`) picks the
+reference. With `urfd`, `run.sh` starts the `urfd` profile and points the
+tester's `DVT_XLXD_REF` at `.70`, so every sut == ref case compares the
+system under test with URFd. Such runs are compatibility data, not gates:
+`run.sh` accepts them only with `DVT_SUT_PROFILE=xlxd` (rc 2 otherwise).
+`run.txt` records `ref_kind=`; the tester also gets `DVT_REF_KIND` and
+`DVT_URFD`. `--capture` adds `capture/urfd.pcapng`.
+
+`scripts/compat-table.py out/<run, ref xlxd> out/<run, ref urfd> ...` prints
+one row per case with its result per reference kind: same, differs, skip,
+error, or n/a for suites that need xlxd itself as the reference
+(interlink, USRP, netns, AMBEd wire, matrix, NXDN/P25 peer, backend loss,
+transcoder lifecycle, AllStar).
 
 ## Prebuilt reflector image
 
