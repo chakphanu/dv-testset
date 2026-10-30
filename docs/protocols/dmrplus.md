@@ -202,11 +202,11 @@ Rows for a K section of `docs/testlist.md` (the lead merges them). Covered
 
 | # | Obligation | Case | Judged | How | Status |
 |---|---|---|---|---|---|
-| P-DMP-01 | Connect -> ACK, linked to 4001 + n | test_dmrplus::test_dmp_connect_ack | diff | probe + dvcheck | covered |
+| P-DMP-01 | Connect -> ACK, linked to 4001 + n | test_dmrplus::test_dmp_connect_ack | diff | probe | covered |
 | P-DMP-02 | Connect from an unknown id: no reply | test_dmrplus::test_dmp_connect_unknown_id | diff | probe | covered |
 | P-DMP-03 | Refused connect -> NAK | test_dmrplus::test_dmp_connect_refused | diff | probe (needs `DVT_XLXD_BLACKLIST=N0DMP`, see Rig needs) | covered |
 | P-DMP-04 | Connect to an unmapped reflector number | test_dmrplus::test_dmp_connect_no_module[4000\|4500] | dev | probe | covered |
-| P-DMP-05 | Keepalive ACKed, no server keepalive | test_dmrplus::test_dmp_keepalive_ack | diff | probe + dvcheck | covered |
+| P-DMP-05 | Keepalive ACKed, no server keepalive | test_dmrplus::test_dmp_keepalive_ack | diff | probe | covered |
 | P-DMP-06 | Keepalive with another reflector number | test_dmrplus::test_dmp_keepalive_other_module | dev | probe | covered |
 | P-DMP-07 | Silent client dropped after 10 s, nothing sent | test_dmrplus::test_dmp_silent_client_dropped | diff | probe | covered |
 | P-DMP-08 | Dropped client gets no voice | test_dmrplus::test_dmp_dropped_client_no_voice | diff | probe | covered |
@@ -220,7 +220,7 @@ Rows for a K section of `docs/testlist.md` (the lead merges them). Covered
 | P-DMP-16 | Header with an unknown source id | test_dmrplus::test_dmp_unknown_source | dev | probe | covered |
 | P-DMP-17 | AMBE+2 frames unchanged, DMR+ -> MMDVM (last byte of frame C recorded) | test_dmrplus::test_dmp_frames_exact_to_mmdvm | dev | probe | covered |
 | P-DMP-18 | Voice without header not relayed | test_dmrplus::test_dmp_no_header_not_relayed | dev | probe | covered |
-| P-DMP-19 | Terminator ends the stream at once | test_dmrplus::test_dmp_terminator_frees_module | dev (B3) | probe | covered |
+| P-DMP-19 | Terminator ends the stream at once | test_dmrplus::test_dmp_terminator_frees_module | dev | probe | covered |
 | P-DMP-20 | Repeated header keeps the stream | test_dmrplus::test_dmp_repeated_header | diff | probe | covered |
 | P-DMP-21 | No echo to the talker | test_dmrplus::test_dmp_no_echo | diff | probe | covered |
 | P-DMP-22 | Egress header fields (TS2, CC1, group, 4001 + n, source id) | test_dmrplus::test_dmp_egress_header_fields[known\|unknown] | diff + dev (src) | probe | covered |
