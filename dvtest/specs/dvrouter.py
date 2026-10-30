@@ -314,6 +314,51 @@ SPEC = {
         "P-DMP-22": {"src_known": 1023007, "src_unknown": None},
         "P-DMP-22@fallback": {"src_known": 1023007, "src_unknown": 1023000},
     },
+    # YSF (UDP 42000, docs/protocols/ysf.md): DV-Router's YSF edge is built, so
+    # no server flag; DV-Router choices 2026-10-30 (P-YSF-28 / 29 follow the
+    # configured modules; WiresX DX / CONN / DISC handling is new work there).
+    "ysf": {
+        # poll reply bytes 4-13: the fixed form every client was tested against (no client checks them)
+        "P-YSF-03": {"reply": "YSFPREFLECTOR "},
+        # answer suffixed and 10-character callsigns: clients send them, the address is the key
+        "P-YSF-04": {"suffix": True, "ten": True},
+        # answer polls longer than 14 B (DroidStar sends one for a long callsign)
+        "P-YSF-05": {"len15": True},
+        # no reflector-initiated polls: every client polls every 5 s, none needs server polls
+        "P-YSF-06": {"server_polls": False},
+        # 60 s timeout like the G4KLX reference: a client silent for 35 s is still linked
+        "P-YSF-07": {"silent_35s": True},
+        # YSFU removes the client at once (G4KLX, pYSF, URFd, ysf-nexus; clients send it on unlink)
+        "P-YSF-08": {"hears_after_unlink": False},
+        # the YSFS count is of YSF clients only (registry users_count), not of other protocols
+        "P-YSF-10": {"dmr_counted": False},
+        # counter changes every egress frame (MMDVMHost drops a repeated counter), both origins
+        "P-YSF-16": {"cross_counter_changes": True, "same_counter_changes": True},
+        # YSF -> YSF passthrough: voice bits and callsigns unchanged (DV-Router passthrough rule)
+        "P-YSF-18": {"voice_exact": True, "src_kept": True, "dst_kept": True, "gateway_kept": True},
+        # end a stream on either marker at once; with neither, after the silence timeout
+        "P-YSF-20": {"end_bit_only": "prompt", "terminator_only": "prompt", "none": "timeout"},
+        # carry a headerless (late-entry) stream; egress still starts with a header (Yaesu 4.1)
+        "P-YSF-21": {"carried": True, "header_synthesised": True},
+        # carry V/D mode 1 and Voice FR between YSF clients (same-mode, no transcoding needed)
+        "P-YSF-25": {"dn1": True, "vw": True},
+        # relay non-WiresX Data FR unchanged (Yaesu 4.3 normal mode; G4KLX, pYSF, ysf-nexus relay it)
+        "P-YSF-26": {"relayed": True},
+        # do not relay a packet whose FICH does not decode (MMDVMHost and the bridges drop it anyway)
+        "P-YSF-27": {"relayed_bad": 0},
+        # DG-ID 10..35 -> module A..Z, kept for later DG-ID 0 overs (XLX-compatible; only if enabled)
+        "P-YSF-28": {"moved": True, "permanent": True},
+        # one default module for a client that only polled: B (XLX-compatible)
+        "P-YSF-29": {"hears_A": False, "hears_B": True},
+        # egress DG-ID 0: opens every radio's squelch
+        "P-YSF-30": {"dgid": [0]},
+        # answer DX_REQ to the requester (multi-module server), never relay command frames to the room
+        "P-YSF-31": {"reply": "dx", "relayed": 0},
+        # CONN room n -> module n with a reply; DISC leaves the module (link kept)
+        "P-YSF-32": {"conn_reply": "conn", "conn_moved": True, "disc_hears": False},
+        # one client per address: a second callsign from the same socket never doubles delivery
+        "P-YSF-36": {"copies": 1},
+    },
     # Yaesu IMRS (UDP 21110, docs/protocols/imrs.md): the edge is not built
     # yet; every IMRS case skips "edge not ready" until server is True.
     # Dev values follow when dv-router chooses.
