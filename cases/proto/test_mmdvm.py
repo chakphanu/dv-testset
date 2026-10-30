@@ -3,10 +3,11 @@
 testlist K1): one case per obligation P-DMR-NN, xlxd-ref and xlxd-sut
 probed in parallel, DMR clients only.
 
-Judged as in mmdvm.md: hb = the obligation itself, asserted on both
-sides; dev = xlxd deviates from [HB]: sut == ref under the xlxd profile,
-else the profile's "mmdvm" spec entry {"P-DMR-NN": {observed key: value}}
-(skip "spec pending" without one); diff = sut == ref. Every case prints
+Judged as in mmdvm.md: hb = a spec requirement, asserted on both sides;
+dev = disputed between masters (or xlxd deviates from the spec): sut ==
+ref under the xlxd profile, else the profile's "mmdvm" spec entry
+{"P-DMR-NN": {observed key: value}} (skip "spec pending" without one);
+diff = sut == ref (a convention the masters agree on). Every case prints
 what both sides did.
 """
 import threading
@@ -357,10 +358,11 @@ def config_size_probe(ip):
 
 
 def test_mmdvm_config_wrong_size(rig):
-    """P-DMR-07 (diff): RPTC of 301 or 303 B is not acked; the login stays."""
+    """P-DMR-07 (dev): RPTC of 301 or 303 B; xlxd and URFd want exactly
+    302 B, the HBlink family does not check the size."""
     got = both(rig, config_size_probe)
     print("P-DMR-07 RPTC size:", got)
-    same(got, "ack_301", "ack_303", "pong")
+    judge_dev(rig, "P-DMR-07", got, "ack_301", "ack_303", "pong")
 
 
 def no_config_probe(ip):
@@ -374,10 +376,11 @@ def no_config_probe(ip):
 
 
 def test_mmdvm_no_config_still_routed(rig):
-    """P-DMR-08 (diff): voice is routed for clients that never sent RPTC."""
+    """P-DMR-08 (dev): voice from clients that never sent RPTC; xlxd and
+    URFd route it, the HBlink family drops DMRD until RPTC."""
     got = both(rig, no_config_probe)
     print("P-DMR-08 no RPTC:", got)
-    same(got, "routed")
+    judge_dev(rig, "P-DMR-08", got, "routed")
 
 
 def options_probe(ip):
@@ -416,12 +419,11 @@ def relogin_probe(ip):
 
 
 def test_mmdvm_relogin_single_session(rig):
-    """P-DMR-10 (hb): RPTL/RPTK again from the same id and address: one
+    """P-DMR-10 (diff): RPTL/RPTK again from the same id and address: one
     MSTPONG per RPTPING (one session) and the module's traffic once."""
     got = both(rig, relogin_probe)
     print("P-DMR-10 re-login:", got)
-    for name, r in got.items():
-        assert r["pongs"] == 1 and r["once"], "%s: after re-login %s" % (name, r)
+    same(got, "pongs", "once")
 
 
 # ---------------------------------------------------------------- 2 keepalive and close
@@ -506,11 +508,11 @@ def silence(rig):
 
 @pytest.mark.slow
 def test_mmdvm_silent_client_dropped(rig, silence):
-    """P-DMR-13 (hb): a client silent for the server timeout gets MSTCL
-    (the timeout value is informative: xlxd 100 s, checked every 10 s)."""
+    """P-DMR-13 (dev): what a client silent for the server timeout gets
+    (xlxd: MSTCL after 100 s; other masters send MSTNAK, nothing or an
+    empty datagram; the timeout value is informative)."""
     print("P-DMR-13 MSTCL after s:", {n: r["mstcl_s"] for n, r in silence.items()})
-    for name, r in silence.items():
-        assert r["mstcl_s"] is not None, "%s: no MSTCL to a client silent for %d s" % (name, SILENCE_S)
+    judge_dev(rig, "P-DMR-13", {n: {"mstcl": r["mstcl_s"] is not None} for n, r in silence.items()}, "mstcl")
 
 
 @pytest.mark.slow
@@ -598,12 +600,11 @@ def garbage_probe(ip, name):
 
 @pytest.mark.parametrize("name", list(GARBAGE))
 def test_mmdvm_garbage_ignored(rig, name):
-    """P-DMR-17 (hb): unknown, short and oversize packets get no answer and
-    the master keeps serving (the client still gets MSTPONG)."""
+    """P-DMR-17 (diff): unknown, short and oversize packets get no answer
+    and the master keeps serving (the client still gets MSTPONG)."""
     got = both(rig, garbage_probe, name)
     print("P-DMR-17 %s:" % name, got)
-    for side, r in got.items():
-        assert not r["reply"] and r["pong"], "%s: after %s %s" % (side, name, r)
+    same(got, "reply", "pong")
 
 
 def wrong_size_probe(ip):
@@ -619,10 +620,11 @@ def wrong_size_probe(ip):
 
 
 def test_mmdvm_dmrd_wrong_size(rig):
-    """P-DMR-18 (diff): voice bursts of 54 and 56 B are not relayed."""
+    """P-DMR-18 (dev): voice bursts of 54 and 56 B (xlxd and URFd want
+    exactly 55 B; HBlink4 >= 55, FreeDMR >= 53, HBlink3 any size)."""
     got = both(rig, wrong_size_probe)
     print("P-DMR-18 DMRD 54/56 B:", got)
-    assert (got["sut"]["voice"] > 0) == (got["ref"]["voice"] > 0), got
+    judge_dev(rig, "P-DMR-18", {n: {"relayed": r["voice"] > 0} for n, r in got.items()}, "relayed")
 
 
 def stranger_probe(ip):
@@ -694,13 +696,16 @@ def sync_probe(ip):
 
 
 def test_mmdvm_header_sync_required(rig):
-    """P-DMR-22 (hb): a header with MS data sync opens the stream; one with
-    the voice sync pattern does not (its voice is not relayed)."""
+    """P-DMR-22 (hb + dev): a header with MS data sync opens the stream
+    (hb); whether the voice after a header with the voice sync pattern is
+    relayed is dev (xlxd: no; URFd opens on the voice, HBlink does not
+    check the sync)."""
     got = both(rig, sync_probe)
     print("P-DMR-22 header sync:", got)
     for name, r in got.items():
         assert r["ms_data_exact"], "%s: stream after an MS data sync header: %d frames" % (name, r["ms_data"])
-        assert r["bs_voice"] == 0, "%s: %d frames after a header with voice sync" % (name, r["bs_voice"])
+    judge_dev(rig, "P-DMR-22", {n: {"voice_sync_header_relayed": r["bs_voice"] > 0} for n, r in got.items()},
+              "voice_sync_header_relayed")
 
 
 def exact_probe(ip):
@@ -715,12 +720,11 @@ def exact_probe(ip):
 
 
 def test_mmdvm_superframe_relayed_exact(rig):
-    """P-DMR-23 (hb): bursts A-F of three AMBE+2 frames are relayed with
+    """P-DMR-23 (diff): bursts A-F of three AMBE+2 frames are relayed with
     every frame unchanged."""
     got = both(rig, exact_probe)
     print("P-DMR-23 frames:", got)
-    for name, r in got.items():
-        assert r["exact"], "%s: %d frames, not byte exact" % (name, r["frames"])
+    same(got, "exact")
 
 
 def terminator_probe(ip):
@@ -771,15 +775,16 @@ def structure_ok(packets):
 
 
 def test_mmdvm_egress_structure(rig):
-    """P-DMR-25 (dev): egress structure is a MUST on both sides; the egress
-    destination TG (xlxd: always 9) is the dev part."""
+    """P-DMR-25 (hb + diff): egress structure is a MUST on both sides; the
+    egress destination TG (xlxd and URFd: always 9, which DMRGateway's XLX
+    mode requires) is sut == ref."""
     raw = both(rig, egress_probe)
     got = {n: {"structure": structure_ok(r["packets"]), "count": len(r["packets"]),
                "dst": sorted({d["dst"] for d in r["packets"]})} for n, r in raw.items()}
     print("P-DMR-25 egress:", got)
     for name, r in got.items():
         assert r["structure"], "%s: egress structure broken (%d packets)" % (name, r["count"])
-    judge_dev(rig, "P-DMR-25", got, "dst")
+    same(got, "dst")
 
 
 def test_mmdvm_egress_sequence(rig):
@@ -795,13 +800,17 @@ def test_mmdvm_egress_sequence(rig):
 
 
 def test_mmdvm_egress_ids(rig):
-    """P-DMR-27 (diff): egress source and repeater id for a radio id
-    (STR002) that differs from the talker's login (repeater) id."""
+    """P-DMR-27 (diff + dev): egress source id (sut == ref) and repeater id
+    (dev: "source", "login" or "other") for a radio id (STR002) that
+    differs from the talker's login (repeater) id."""
     raw = both(rig, egress_probe, EXTRA[1])
     got = {n: {"src": sorted({d["src"] for d in r["packets"]}),
                "repeater": sorted({d["repeater"] for d in r["packets"]})} for n, r in raw.items()}
+    for r in got.values():
+        r["repeater_is"] = {(EXTRA[1],): "source", (TALKER,): "login"}.get(tuple(r["repeater"]), "other")
     print("P-DMR-27 egress ids (talker %d, radio %d):" % (TALKER, EXTRA[1]), got)
-    same(got, "src", "repeater")
+    same(got, "src")
+    judge_dev(rig, "P-DMR-27", got, "repeater_is")
 
 
 def fold(sid):
@@ -1015,11 +1024,11 @@ def headless_probe(ip):
 
 
 def test_mmdvm_voice_without_header(rig):
-    """P-DMR-36 (hb): voice bursts whose stream id had no header."""
+    """P-DMR-36 (dev): voice bursts whose stream id had no header (xlxd:
+    not relayed; URFd and HBlink open the stream on late entry)."""
     got = both(rig, headless_probe)
     print("P-DMR-36 no header:", got)
-    for name, r in got.items():
-        assert r["voice"] == 0, "%s relayed %d frames without a header" % (name, r["voice"])
+    judge_dev(rig, "P-DMR-36", {n: {"relayed": r["voice"] > 0} for n, r in got.items()}, "relayed")
 
 
 def echo_probe(ip):
@@ -1061,12 +1070,12 @@ def data_probe(ip, data_type):
 
 @pytest.mark.parametrize("name", list(DATA_TYPES))
 def test_mmdvm_data_burst_not_voice(rig, name):
-    """P-DMR-41 (hb): four data bursts of one data type, then voice under
-    the same stream id: nothing is relayed (no stream was opened)."""
+    """P-DMR-41 (dev): four data bursts of one data type, then voice under
+    the same stream id (xlxd: nothing relayed; URFd opens on the voice,
+    HBlink3 and FreeDMR forward data bursts)."""
     got = both(rig, data_probe, DATA_TYPES[name])
     print("P-DMR-41 %s:" % name, got)
-    for side, r in got.items():
-        assert r["dmrd"] == 0, "%s relayed %d packets after %s bursts" % (side, r["dmrd"], name)
+    judge_dev(rig, "P-DMR-41", {n: {"relayed": r["dmrd"] > 0} for n, r in got.items()}, "relayed")
 
 
 def wrap_probe(ip):
@@ -1112,11 +1121,11 @@ def test_mmdvm_two_ids_one_ip(rig):
 
 
 def test_mmdvm_same_id_two_ports(rig):
-    """P-DMR-39 (diff): one id from two ports; each port gets the traffic
-    exactly once."""
+    """P-DMR-39 (dev): one id from two ports (xlxd and URFd: two sessions,
+    traffic once each; the HBlink family keeps one session per id)."""
     got = both(rig, two_listeners_probe, LISTENER)
     print("P-DMR-39 same id, two ports:", got)
-    same(got, "first_once", "second_once")
+    judge_dev(rig, "P-DMR-39", got, "first_once", "second_once")
 
 
 # ---------------------------------------------------------------- restart (last: it restarts both masters)

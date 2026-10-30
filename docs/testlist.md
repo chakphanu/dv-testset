@@ -177,27 +177,27 @@ sync patterns: dvcheck H3. "probe" = an active case drives the packets;
 | P-DMR-04 | RPTK completes the login; hash check strict vs lenient (zero hash) | test_mmdvm::test_mmdvm_auth_zero_hash | dev | probe | covered |
 | P-DMR-05 | RPTK without a preceding RPTL | test_mmdvm::test_mmdvm_auth_without_login | dev | probe | covered |
 | P-DMR-06 | RPTC 302 B -> RPTACK | test_mmdvm::test_mmdvm_config_ack | hb | probe | covered |
-| P-DMR-07 | RPTC short/long not acknowledged, login kept | test_mmdvm::test_mmdvm_config_wrong_size | diff | probe | covered |
-| P-DMR-08 | Voice routed without RPTC | test_mmdvm::test_mmdvm_no_config_still_routed | diff | probe | covered |
+| P-DMR-07 | RPTC short/long not acknowledged, login kept | test_mmdvm::test_mmdvm_config_wrong_size | dev | probe | covered |
+| P-DMR-08 | Voice routed without RPTC | test_mmdvm::test_mmdvm_no_config_still_routed | dev | probe | covered |
 | P-DMR-09 | RPTO -> RPTACK | test_mmdvm::test_mmdvm_options_ack | diff | probe | covered |
-| P-DMR-10 | Re-login while logged in: one session, traffic once | test_mmdvm::test_mmdvm_relogin_single_session | hb | probe | covered |
+| P-DMR-10 | Re-login while logged in: one session, traffic once | test_mmdvm::test_mmdvm_relogin_single_session | diff | probe | covered |
 | P-DMR-11 | RPTPING -> MSTPONG + id (id byte order recorded) | test_mmdvm::test_mmdvm_ping_pong | dev | probe + dvcheck | covered |
 | P-DMR-12 | RPTPING from a non-logged-in client: no MSTPONG | test_mmdvm::test_mmdvm_ping_not_logged_in | diff | probe | covered |
-| P-DMR-13 | Silent client dropped after the server timeout, MSTCL sent | test_mmdvm::test_mmdvm_silent_client_dropped | hb | probe | covered (slow) |
+| P-DMR-13 | Silent client dropped after the server timeout, MSTCL sent | test_mmdvm::test_mmdvm_silent_client_dropped | dev | probe | covered (slow) |
 | P-DMR-14 | Dropped client gets no further voice | test_mmdvm::test_mmdvm_dropped_client_no_voice | diff | probe | covered (slow) |
 | P-DMR-15 | RPTCL 13 B / 9 B closes the session | test_mmdvm::test_mmdvm_rptcl_close[13\|9] | dev (B15) | probe | covered |
 | P-DMR-16 | RPTINTR ignored | test_mmdvm::test_mmdvm_rptintr_ignored | diff | probe | covered |
-| P-DMR-17 | Unknown / short / oversize packets ignored, master keeps serving | test_mmdvm::test_mmdvm_garbage_ignored[unknown\|short3\|rptl7\|oversize] | hb | probe | covered |
-| P-DMR-18 | DMRD not 55 B ignored | test_mmdvm::test_mmdvm_dmrd_wrong_size | diff | probe | covered |
+| P-DMR-17 | Unknown / short / oversize packets ignored, master keeps serving | test_mmdvm::test_mmdvm_garbage_ignored[unknown\|short3\|rptl7\|oversize] | diff | probe | covered |
+| P-DMR-18 | DMRD not 55 B ignored | test_mmdvm::test_mmdvm_dmrd_wrong_size | dev | probe | covered |
 | P-DMR-19 | DMRD from a non-logged-in address not relayed | test_mmdvm::test_mmdvm_dmrd_not_logged_in | hb | probe | covered |
 | P-DMR-20 | Slot 1 header/voice/terminator ignored | test_mmdvm::test_mmdvm_slot1_ignored | diff | probe | covered |
 | P-DMR-21 | Private-call voice not relayed | test_mmdvm::test_mmdvm_private_call_not_relayed | diff | probe | covered |
-| P-DMR-22 | Header needs data type 1 + valid data-sync pattern | test_mmdvm::test_mmdvm_header_sync_required | hb | probe | covered |
-| P-DMR-23 | 6-burst superframes, three AMBE+2 frames per burst, relayed unchanged | test_mmdvm::test_mmdvm_superframe_relayed_exact | hb | probe + dvcheck | covered |
+| P-DMR-22 | Header needs data type 1 + valid data-sync pattern | test_mmdvm::test_mmdvm_header_sync_required | hb + dev | probe | covered |
+| P-DMR-23 | 6-burst superframes, three AMBE+2 frames per burst, relayed unchanged | test_mmdvm::test_mmdvm_superframe_relayed_exact | diff | probe + dvcheck | covered |
 | P-DMR-24 | Stream ends with a type-2 terminator | test_mmdvm::test_mmdvm_terminator_ends_stream | hb | probe | covered |
-| P-DMR-25 | Egress structure: header, A-F voice, terminator, slot 2, group, one sid; dst TG recorded | test_mmdvm::test_mmdvm_egress_structure | dev | probe + dvcheck | covered |
+| P-DMR-25 | Egress structure: header, A-F voice, terminator, slot 2, group, one sid; dst TG recorded | test_mmdvm::test_mmdvm_egress_structure | hb + diff | probe + dvcheck | covered |
 | P-DMR-26 | Egress sequence byte counts up per stream | test_mmdvm::test_mmdvm_egress_sequence | diff | probe | covered |
-| P-DMR-27 | Egress source id and repeater id | test_mmdvm::test_mmdvm_egress_ids | diff | probe | covered |
+| P-DMR-27 | Egress source id and repeater id | test_mmdvm::test_mmdvm_egress_ids | diff + dev | probe | covered |
 | P-DMR-28 | Egress stream id (folded on xlxd, kept under dvrouter) | test_mmdvm::test_mmdvm_egress_stream_id | dev (B10) | probe | covered |
 | P-DMR-29 | TG 4001..4026 links module A..Z | test_mmdvm::test_mmdvm_tg_links_module[A\|Z] | diff | probe | covered |
 | P-DMR-30 | TG 4000 unlinks; no further voice | test_mmdvm::test_mmdvm_tg4000_unlinks | diff | probe | covered |
@@ -206,12 +206,12 @@ sync patterns: dvcheck H3. "probe" = an active case drives the packets;
 | P-DMR-33 | Join by an empty stream; join not relayed as voice | test_mmdvm::test_mmdvm_join_by_empty_stream | diff | probe | covered |
 | P-DMR-34 | Lost terminator: stream ends after the silence timeout, module free | test_mmdvm::test_mmdvm_lost_terminator_timeout | spec (B3) | probe | covered |
 | P-DMR-35 | Second header on a busy module not mixed in | test_mmdvm::test_mmdvm_busy_module_no_mix | spec (B1/B2) | probe | covered |
-| P-DMR-36 | Voice without a header not relayed | test_mmdvm::test_mmdvm_voice_without_header | hb | probe | covered |
+| P-DMR-36 | Voice without a header not relayed | test_mmdvm::test_mmdvm_voice_without_header | dev | probe | covered |
 | P-DMR-37 | Talker never gets its own stream back | test_mmdvm::test_mmdvm_no_self_echo | diff | probe | covered |
-| P-DMR-41 | Non-voice data bursts (data type >= 3) not relayed, open no stream | test_mmdvm::test_mmdvm_data_burst_not_voice[csbk\|data_header\|rate12\|rate34] | hb | probe | covered |
+| P-DMR-41 | Non-voice data bursts (data type >= 3) not relayed, open no stream | test_mmdvm::test_mmdvm_data_burst_not_voice[csbk\|data_header\|rate12\|rate34] | dev | probe | covered |
 | P-DMR-42 | Ingress sequence wraps 255 -> 0 in a long over: no loss, one stream | test_mmdvm::test_mmdvm_sequence_wrap | hb | probe | covered |
 | P-DMR-38 | Two ids from one IP: two sessions, traffic once each | test_mmdvm::test_mmdvm_two_ids_one_ip | diff | probe | covered |
-| P-DMR-39 | Same id from two ports: traffic exactly once per port | test_mmdvm::test_mmdvm_same_id_two_ports | diff | probe | covered |
+| P-DMR-39 | Same id from two ports: traffic exactly once per port | test_mmdvm::test_mmdvm_same_id_two_ports | dev | probe | covered |
 | P-DMR-40 | Keepalive of one client does not refresh another | test_mmdvm::test_mmdvm_keepalive_isolated | diff | probe | covered (slow) |
 
 ## Upstream behaviour the cases accept
