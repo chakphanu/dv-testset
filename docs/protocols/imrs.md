@@ -87,6 +87,17 @@ address. xlxd builds always enable IMRS (protocol slot 8, `IMRS_PORT`
   `SPEC["imrs"]["P-IMR-NN"]`; "spec pending" skips.
 - Under any other profile every case skips with "edge not ready" until
   `SPEC["imrs"]["server"]` is True.
+- **Register first.** If a profile's `SPEC["imrs"]["P-IMR-04"]` says a
+  non-peer's ping is not answered (`{"answered": False}`), the tester
+  becomes a peer before it pings that sut:
+  - The readiness wait does not ping that sut. The rig fixture has already
+    seen it answer DExtra, and a fixed 5 s settle follows.
+  - P-IMR-04 runs first, before anything registers the tester.
+  - P-IMR-01, 03 and 05 send an info packet before their ping.
+
+  Peer identity is the IP address, so another source port of the tester
+  is not a stranger. xlxd answers anyone, so under the `xlxd` profile
+  nothing registers first.
 
 ## Packet layout (xlxd, UDP 21110 both ways)
 
@@ -135,7 +146,7 @@ transcoding.
 
 | # | Obligation | Level | Spec / paper | Clients (DR-2X) | Other implementations | xlxd-ref observed | Recommended for DV-Router |
 |---|---|---|---|---|---|---|---|
-| P-IMR-11 | A call starts with a header: FICH FI = 0 (HC), DT = 2 (V/D type 2), callsign data with the source in the src field | structure: MUST ([Y1] 4.6, Table 4-2) | [Y1] 4.2.1, 4.6, Table 4-2 | - | UF as xlxd | measured: one 91 B header first, FI 0, CM 1, DT 2; src `N0CALL`, up `N0CALL B`; dest `*****` + a fixed 5-character text, rem4 the same text (meaning unknown, presumably copied from a DR-2X) | as xlxd for the constants; src = the talker (diff) |
+| P-IMR-11 | A call starts with a header: FICH FI = 0 (HC), DT = 2 (V/D type 2), callsign data with the source in the src field; dest = five asterisks + a 5-byte tail, rem4 = the same 5 bytes | structure: MUST ([Y1] 4.6, Table 4-2); the tail text: disputed | [Y1] 4.2.1, 4.6, Table 4-2 | - | UF as xlxd | measured: one 91 B header first, FI 0, CM 1, DT 2; src `N0CALL`, up `N0CALL B`; dest tail and rem4 hold the same fixed 5-character text (a real device's radio id, presumably copied from a DR-2X; not reproduced here) | structure, src, up, CM as xlxd (hb + diff); the tail text: a neutral constant, the same in dest tail and rem4, never a device's id; DV-Router uses `00000` (dev) |
 | P-IMR-12 | Voice: FICH FI = 1, DT = 2; five V/D type 2 channels (100 ms) per packet; the 49-bit AMBE+2 frames unchanged across IMRS <-> DMR / NXDN (no gain step) | structure: MUST ([Y1] 4.2.3); unchanged: convention (xlxd) | [Y1] 4.2.3 | - | UF as xlxd | measured: 6 voice packets for 30 frames, FI 1, DT 2, FN 0 on every packet; 30/30 frames bit-exact DMR -> IMRS and IMRS -> DMR (no gain step) | as xlxd (FN 0 per the DR-2X note) (diff) |
 | P-IMR-13 | A call ends with a terminator: FICH FI = 2 | MUST ([Y1] 4.6) | [Y1] 4.6 | - | UF same, tag byte 6 differs | measured: one 31 B terminator, last, FI 2 | as xlxd (hb) |
 | P-IMR-14 | No voice is lost at the end of a call: a last group of fewer than five frames is sent (padded with silence) | convention (no loss) | none | - | UF as xlxd | measured: 9 frames in, 5 out (the last 4 dropped) | pad and send (dev) |
@@ -162,6 +173,7 @@ transcoding.
 | P-IMR-05 | advertises DG-ID 2 and 10-35 | exactly the mapped DG-IDs | DG-ID 2 unlinks on xlxd |
 | P-IMR-07 | any egress refreshes every client | per-peer refresh | dead peers otherwise linger while traffic flows |
 | P-IMR-08 | unmapped DG-ID unlinks the peer | drop the call, keep the link | a wrong DG-ID should not disconnect |
+| P-IMR-11 | a real device's radio id as the fixed text in the header dest tail and rem4 | a neutral constant (same in both) | no-PII rule; nothing in [Y1] requires that value |
 | P-IMR-14 | last 1-4 frames dropped | pad and send | up to 80 ms lost per over |
 | P-IMR-18 | the tail of the talker's own call (2 voice packets + terminator) is sent back to it | no echo | the repeater would transmit its own tail |
 | P-IMR-24 | an empty DMR call (a join) goes out as header + terminator | drop empty calls | a key-up on every IMRS repeater (as NXDN P-NXD-30) |
@@ -184,7 +196,7 @@ transcoding.
 | P-IMR-08 | Header DG-ID selects the room; unmapped DG-ID | test_imrs::test_imrs_dgid_room[mapped\|unmapped] | diff + dev | probe | covered |
 | P-IMR-09 | Egress DG-ID = room | test_imrs::test_imrs_egress_dgid | diff | probe | covered |
 | P-IMR-10 | Egress only to the room's peers | test_imrs::test_imrs_egress_room_only | diff | probe | covered |
-| P-IMR-11 | Header frame structure | test_imrs::test_imrs_egress_header | hb + diff | probe | covered |
+| P-IMR-11 | Header frame structure; dest tail / rem4 text | test_imrs::test_imrs_egress_header | hb + diff + dev | probe | covered |
 | P-IMR-12 | Voice frames: VD2, five per packet, AMBE+2 unchanged | test_imrs::test_imrs_voice_passthrough | hb + diff | probe | covered |
 | P-IMR-13 | Terminator FI = 2 | test_imrs::test_imrs_egress_terminator | hb | probe | covered |
 | P-IMR-14 | Last partial group sent | test_imrs::test_imrs_partial_group | dev | probe | covered |

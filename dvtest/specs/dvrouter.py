@@ -373,6 +373,8 @@ SPEC = {
         # exactly the mapped DG-IDs
         "P-IMR-05": {"callsign": "XLX999", "dgids": list(range(10, 36))},
         "P-IMR-06": {"registered": True},
+        # the header's fixed text (dest tail) equals rem4; it is DV-Router's own neutral constant, never a device id
+        "P-IMR-11": {"tail_equals_rem4": True, "fixed_text": "00000"},
         # per-peer refresh: egress does not keep every peer alive
         "P-IMR-07": {"dropped_after_idle": True, "kept_by_egress": False},
         # unmapped DG-ID: drop the call, keep the link

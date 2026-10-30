@@ -7,15 +7,25 @@ binds 21110 once (dvtest.proto.imrs.Hub) and tells ref and sut apart by
 source address. One tester address means one IMRS peer per callsign;
 IMRS-to-IMRS cases need two addresses and are not run.
 
-Order matters: the ping cases run before anything registers; the cases
-that register more callsigns run near the end; the slow case idles 190 s
-first (xlxd drops IMRS clients after 150-180 s).
+Order matters: P-IMR-04 (a ping from a non-peer) runs first, before
+anything registers the tester; the cases that register more callsigns run
+near the end; the slow case idles 190 s first (xlxd drops IMRS clients
+after 150-180 s).
+
+Strangers: xlxd answers a ping from anyone. A profile whose
+SPEC["imrs"]["P-IMR-04"] says a non-peer is not answered ({"answered":
+False}) gets "register first": the readiness wait does not ping that side
+(the rig fixture already saw it answer DExtra; a fixed settle follows),
+and the other ping cases (P-IMR-01, 03, 05) send an info packet first, so
+the tester pings as a registered peer. Peer identity is the IP address,
+so another source port of the same tester is not a stranger.
 
 Judged as in imrs.md: hb asserted on both sides; diff = sut == ref; dev
 = sut == ref under the xlxd profile, else SPEC["imrs"]["P-IMR-NN"]; under
 any other profile every case skips ("edge not ready") until
 SPEC["imrs"]["server"] is True.
 """
+import hashlib
 import json
 import os
 import threading
@@ -119,6 +129,17 @@ def sid():
     return _sid[0]
 
 
+SUT_SETTLE = 5.0                            # register-first sut: no ping before P-IMR-04
+
+
+def register_first(rig):
+    """True when the profile's sut does not answer a non-peer's ping
+    (SPEC["imrs"]["P-IMR-04"]["answered"] is False): ping only as a peer."""
+    if rig.sut_profile == specs.DEFAULT:
+        return False
+    return (specs.rule_mode(rig, "imrs", "P-IMR-04") or {}).get("answered") is False
+
+
 @pytest.fixture(scope="module")
 def ctx(rig):
     if rig.sut_profile != specs.DEFAULT and not (specs.rule(rig, "imrs") or {}).get("server"):
@@ -127,9 +148,15 @@ def ctx(rig):
         hub = imrs.Hub()
     except OSError as exc:
         pytest.skip("cannot bind UDP %d on the tester: %s" % (imrs.PORT, exc))
+    peer_first = register_first(rig)
     try:
         for name in ("ref", "sut"):
             ip = getattr(rig, "xlxd_" + name)
+            if name == "sut" and peer_first:
+                # a ping would be ignored (non-peer) and an info packet would
+                # make the tester a peer before P-IMR-04: settle instead
+                time.sleep(SUT_SETTLE)
+                continue
             deadline = time.monotonic() + 30
             while True:
                 m = hub.mark()
@@ -139,7 +166,7 @@ def ctx(rig):
                     break
                 if time.monotonic() > deadline:
                     pytest.fail("%s %s does not answer an IMRS ping on UDP %d" % (name, ip, imrs.PORT))
-        yield {"rig": rig, "hub": hub}
+        yield {"rig": rig, "hub": hub, "register_first": peer_first}
     finally:
         hub.close()
 
@@ -240,9 +267,13 @@ def voice_frames(packets):
     return [f for p in packets if p["kind"] == "voice" for f in p["frames"]]
 
 
-# ---------------------------------------------------------------- 1-2. transport, ping, info (before any registration)
+# ---------------------------------------------------------------- 1-2. transport, ping, info
 
-def ping_answer(hub, ip):
+def ping_answer(hub, ip, as_peer=False):
+    """What one ping from the tester gets back; as_peer sends an info
+    packet first (the tester is then a registered peer)."""
+    if as_peer:
+        register(hub, ip)
     m = hub.mark()
     hub.send(ip, imrs.PING)
     time.sleep(1.0)
@@ -251,24 +282,26 @@ def ping_answer(hub, ip):
             "bytes": sum(len(d) for _, _, d in got), "_info": next((d for _, _, d in got if len(d) == imrs.INFO_SIZE), None)}
 
 
-def test_imrs_ping_answer(ctx):
-    """P-IMR-03: a ping gets an info packet and a ping back (measured size)."""
-    got = both(ctx, lambda ip: ping_answer(ctx["hub"], ip))
-    same(got, "sizes")
-    assert got["ref"]["sizes"] == [imrs.PING_SIZE, imrs.INFO_SIZE], got["ref"]
-
-
 def test_imrs_ping_from_stranger(ctx):
-    """P-IMR-04: the tester has not sent info yet (not a peer): is the ping
-    answered? (dev: xlxd answers anyone, 16 B in -> 76 B out)."""
+    """P-IMR-04 (runs first): the tester has not sent info to anyone yet
+    (not a peer): is the ping answered? (dev: xlxd answers anyone, 16 B in
+    -> 76 B out)."""
     got = both(ctx, lambda ip: ping_answer(ctx["hub"], ip))
     judge_dev(ctx["rig"], "P-IMR-04", got, "answered")
+
+
+def test_imrs_ping_answer(ctx):
+    """P-IMR-03: a ping gets an info packet and a ping back (measured size);
+    as a registered peer under a register-first profile."""
+    got = both(ctx, lambda ip: ping_answer(ctx["hub"], ip, ctx["register_first"]))
+    same(got, "sizes")
+    assert got["ref"]["sizes"] == [imrs.PING_SIZE, imrs.INFO_SIZE], got["ref"]
 
 
 def test_imrs_info_content(ctx):
     """P-IMR-05: callsign and DG-ID bitmap of the info packet (dev)."""
     def run(ip):
-        info = imrs.parse_info(ping_answer(ctx["hub"], ip)["_info"] or b"")
+        info = imrs.parse_info(ping_answer(ctx["hub"], ip, ctx["register_first"])["_info"] or b"")
         assert info, "%s: no info packet" % ip
         return {"callsign": info["callsign"], "dgids": info["dgids"], "tail": info["tail"].hex()}
 
@@ -278,10 +311,13 @@ def test_imrs_info_content(ctx):
 
 def test_imrs_port_21110(ctx):
     """P-IMR-01: a ping from another source port is answered at port 21110,
-    from port 21110."""
+    from port 21110 (as a registered peer under a register-first profile:
+    the same IP is the same peer)."""
     import socket
 
     def run(ip):
+        if ctx["register_first"]:
+            register(ctx["hub"], ip)
         side = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         side.bind(("0.0.0.0", 0))
         side.settimeout(0.05)
@@ -377,20 +413,37 @@ def test_imrs_egress_room_only(peer):
 
 
 def test_imrs_egress_header(peer, eg):
-    """P-IMR-11: the call starts with a 91 B header, FI 0, DT 2, src = the
-    talker; the fixed fields recorded."""
+    """P-IMR-11: the call starts with one 91 B header, FI 0, DT 2; src, up
+    and CM as xlxd (hb + diff). Callsign data: dest is five asterisks plus
+    a 5-byte tail, rem4 a 5-byte field; xlxd puts the same fixed text in
+    both (a device's radio id). That text is a dev item: sut == ref under
+    the xlxd profile (compared by a short hash, the text is never
+    recorded); another profile: tail equals rem4 and the text equals its
+    SPEC["imrs"]["P-IMR-11"]["fixed_text"] (a neutral constant; recorded
+    for the sut only, never for xlxd-ref)."""
+    neutral = peer["rig"].sut_profile != specs.DEFAULT
     got = {}
     for n in ("ref", "sut"):
         pk = eg["got"][n]["_packets"]
         head = pk[0]
+        dest, rem = head.get("dest", b""), head.get("rem", b"")
+        tail, rem4 = dest[5:10], rem[15:20]
         got[n] = {"first": head["kind"], "fi": head["fich"]["fi"], "dt": head["fich"]["dt"], "cm": head["fich"]["cm"],
                   "src": head.get("src", b"").decode("ascii", "replace").strip(),
-                  "dest": head.get("dest", b"").hex(), "up": head.get("up", b"").decode("ascii", "replace"),
-                  "rem": head.get("rem", b"").hex(), "headers": kinds(pk).count("header")}
+                  "up": head.get("up", b"").decode("ascii", "replace"), "headers": kinds(pk).count("header"),
+                  "dest_len": len(dest), "dest_stars": dest[:5] == b"*****", "rem_len": len(rem),
+                  "tail_equals_rem4": tail == rem4 and len(tail) == 5,
+                  "fixed_text_sha": hashlib.sha256(tail).hexdigest()[:12],
+                  "fixed_text": tail.decode("ascii", "replace") if neutral and n == "sut" else None}
     record(got)
     for n, row in got.items():
         assert row["first"] == "header" and row["fi"] == 0 and row["dt"] == 2 and row["headers"] == 1, (n, row)
-    same(got, "src", "dest", "up", "rem", "cm")
+        assert row["dest_len"] == 10 and row["dest_stars"] and row["rem_len"] == 20, (n, row)
+    same(got, "src", "up", "cm")
+    if peer["rig"].sut_profile == specs.DEFAULT:
+        same(got, "fixed_text_sha", "tail_equals_rem4")
+    else:
+        judge_dev(peer["rig"], "P-IMR-11", got, "tail_equals_rem4", "fixed_text")
 
 
 def test_imrs_voice_passthrough(peer, eg, ig):
