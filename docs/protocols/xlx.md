@@ -91,7 +91,7 @@ padded. `N` nack and `U` disconnect, 10 B: [0] tag, [1-8] callsign, [9] 0.
 | P-XLX-06 | A link carries traffic only after both directions completed (`L` -> `A` each way) | convention (impl) | not stated | XH, XC: the peer is created when an `A` is received, not when one is sent; UR: same structure | measured: our `L` acked, their `L` unanswered: 0 frames | as xlxd |
 | P-XLX-07 | The reflector initiates: every listed peer that is not linked gets an `L` (own callsign, version, configured modules for that peer) every 5 s, also after an `N` | convention (impl) | not stated | XH, XC: 5 s, no backoff; UR: same, BM entries only | measured: `L` every 5 s, callsign XLX999, modules `DE` (XLX996 row) and `D` (BM3109 row) | as xlxd (a backoff after `N` is allowed) |
 | P-XLX-08 | Protocol revision from the version in the peer's `A`: >= 2.6.0 -> 3 (53 B frames), >= 2.2.0 -> 2 (45 B), else 1 (27 B; < 1.4.0 is revision 0, same frame) | convention (impl); README table differs | [README] revision table (0/1 = "< 2.2.0") | XH: as stated; XC: stops at revision 2; UR: always revision 2, announces 2.4.31; BM: revision 2 [BMN] | measured: 1.3.9 -> 27 B, 1.4.0 -> 27 B, 2.2.0 -> 45 B, 2.6.1 -> 53 B | as XH; never send a revision the peer's version does not announce |
-| P-XLX-09 | A peer whose callsign starts with BM (XH also FD, FS, PH) is a DMR peer: revision 2, only the AMBE+2 slot is used | disputed | [BMW] (BM line form only) | XH: BM/FD/FS/PH prefixes; XC: BM only; UR: every 10002 peer is BM | measured (as BM3109): 45 B frames, D-Star slot carries the stream | configured peer type, not inferred from the callsign |
+| P-XLX-09 | A peer whose callsign starts with BM (XH also FD, FS, PH) is a DMR peer: revision 2, only the AMBE+2 slot is used | disputed | [BMW] (BM line form only) | XH: BM/FD/FS/PH prefixes; XC: BM only; UR: every 10002 peer is BM | measured (as BM3109): 45 B frames, D-Star slot carries the stream | configured peer type (dv-router.toml kind; its xlxd-file converter maps BM/FD/FS/PH rows), never the callsign at run time; the rig's BM3109 row is a BM peer either way: 45 B, D-Star slot filled |
 | P-XLX-10 | A repeated `L` or `A` while linked keeps one link; traffic is sent once | convention (impl) | not stated | XH, XC: `L` re-acked (revision >= 1), a second `A` ignored; changed modules apply only after `U` + relink | measured: 21/21 frames once after a repeated `L` and `A` | as xlxd |
 
 ## 2. Keepalive and disconnect
@@ -140,6 +140,7 @@ Codec2".
 | P-XLX-30 | A peer stream without a last frame ends after 1.6 s of silence; the module is free afterwards | convention (impl) | not stated | XH, XC, UR: 1.6 s stream timeout | measured: a local talker 0.5 s after the last frame is not heard, 2.2 s after it is | 1.6 s (floor policy) |
 | P-XLX-31 | A repeated header of an open stream does not open a second stream | convention (impl) | not stated | XH, XC: only resets the stream timer | measured: one stream, 20/20 frames | as xlxd |
 | P-XLX-32 | Voice frames whose stream id had no header | disputed | not stated | XH: held for late-entry promotion; XC: dropped; UR: dropped | measured: 0 frames | not relayed without a header |
+| P-XLX-34 | A stream from one XLX peer that is cut on the reflector (a local header while it has no last frame) sends nothing of it to another XLX peer, the closing last frame included | disputed (D8) | not stated | XH: the closing last frame (53 B, the stream's id) goes to the other XLX peers, which never got the header | measured: 1 packet (the last frame) to XLX996, ref and sut | none (dv-router: `closing_frame_to_other_peers` 0) |
 
 ## Where the recommendation differs from xlxd
 
@@ -171,7 +172,7 @@ Codec2".
   merges revisions 0 and 1, which xlxd treats differently only in the ack
   of a repeated `L`.
 
-- **D8** (P-XLX-28, P-XLX-30): when a stream that came from an XLX peer
+- **D8** (P-XLX-34; seen first in P-XLX-28 / P-XLX-30): when a stream that came from an XLX peer
   is cut (a local header arrives on the module 0.5 s after its last
   frame), xlxd sends that stream's closing last frame (53 B, the peer's
   stream id) to its other XLX peers, which never got the header: a
@@ -226,3 +227,4 @@ then also send `L` to the tester every 5 s while it is not linked.
 | P-XLX-31 | repeated header, one stream | test_xlx::test_xlx_repeated_header | diff | probe | covered |
 | P-XLX-32 | voice without header | test_xlx::test_xlx_headerless_voice | dev | probe | covered |
 | P-XLX-33 | no transcoder for the whole stream: frame form | test_xlx::test_xlx_egress_transcoder_down | dev (B6b) | probe (rig_control) | covered |
+| P-XLX-34 | cut XLX stream: no closing frame to another XLX peer | test_xlx::test_xlx_cut_stream_no_closing_frame | dev | probe + dvcheck xlx.transit | covered |

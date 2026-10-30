@@ -697,6 +697,38 @@ def test_xlx_headerless_voice(xrig, linked):
     judge_dev(xrig, "P-XLX-32", got, "relayed")
 
 
+def test_xlx_cut_stream_no_closing_frame(xrig, linked):
+    """P-XLX-34 (dev; D8): a stream from XLX998 (its D-Star client stops
+    without a last frame) is cut 0.5 s later by a local header on D. We
+    (XLX996) never got that stream (no transit), so we must get no
+    packet of it either, the closing last frame included."""
+    peers = {"sut": xrig.xlxd_peer_sut, "ref": xrig.xlxd_peer_ref}
+
+    def side(name, ip):
+        far = dextra.DstarClient("0.0.0.0", callsign="N0CALL", module=MOD)
+        local = clients.make("dstar", MOD, 1)
+        try:
+            assert far.link(peers[name]), "link to %s failed" % peers[name]
+            assert local.link(ip), "link to %s failed" % ip
+            start = time.monotonic()
+            sid = fresh()
+            far.client.send(far.dest, dextra.header(sid, "N0CALL", MOD, reflector="XLX998"))
+            far.client.paced(far.dest, [dextra.voice(sid, i, f, False) for i, f in
+                                        enumerate(dstar_frames(20, "cut"))], 0.020)
+            time.sleep(0.5)
+            clients.talk(local, "dstar", dstar_frames(20, "cutter"), tail=1.5)
+        finally:
+            clients.close(far, local)
+        ours = [d for _t, d in linked.packets(ip, start) if d.startswith(b"DSVT") and
+                int.from_bytes(d[12:14], "little") == sid]
+        return {"closing_frame_to_other_peers": len(ours),
+                "kinds": sorted({"header" if len(d) == 56 else "last" if (xlx.parse_voice(d) or {}).get("last")
+                                 else "voice" for d in ours})}
+    with marked(xrig, "cut-stream"):
+        got = both(xrig, side)
+    judge_dev(xrig, "P-XLX-34", got, "closing_frame_to_other_peers")
+
+
 # ================================================================ slow / faults (last)
 
 @pytest.mark.slow

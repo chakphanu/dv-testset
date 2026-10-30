@@ -306,6 +306,10 @@ SPEC = {
                      "rev3_27_frames": True},
         "P-XLX-32": {"relayed": 0},
         "P-XLX-33": {"egress": "zero_slot"},
+        # peer kind from the configured row (the BM3109 row maps to a BM peer)
+        "P-XLX-09": {"sizes": [45], "dstar_zero": False},
+        # D8: nothing of a cut XLX stream to a peer that never got its header
+        "P-XLX-34": {"closing_frame_to_other_peers": 0},
     },
     # DExtra dev items (docs/protocols/dextra.md), DV-Router choices
     # 2026-10-30. Reflector name "XRF" + the callsign digits (XRF999 in the
