@@ -111,6 +111,16 @@ SPEC = {
         "P-DMR-39": {"first_once": True, "second_once": True},
         "P-DMR-41": {"relayed": False},
     },
+    # USRP dev items (docs/protocols/usrp.md), DV-Router choices 2026-10-30
+    "usrp": {
+        "P-USR-04": {"seq": "continuous"},
+        # SET_INFO egress off by default (opt-in per DVSwitch endpoint later)
+        "P-USR-09": {"set_info_egress": False},
+        # pyUC's 352 B keyup-0 frame ends the over
+        "P-USR-12": {"keyup0_voice": "unkey"},
+        # ingress SET_INFO callsign is the talker of the over
+        "P-USR-18": {"set_info_talker": "use"},
+    },
 }
 
 # B12: header fields DV-Router does not verify, because the tester (like
