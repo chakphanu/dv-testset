@@ -151,6 +151,18 @@ SPEC = {
         # not be relabelled clear)
         "P-P25-35": {"transcoded": False},
     },
+    # DPlus dev items (docs/protocols/dplus.md), DV-Router choices 2026-10-30.
+    # P-DPL-19: egress RPT2 = "REF" + XLX number + space padding + module.
+    "dplus": {
+        "P-DPL-06": {"reply": "BUSY"},
+        "P-DPL-08": {"reply": "OKRW"},
+        "P-DPL-12": {"dropped": True, "disconnect_sent": True, "timeout_s": 30},
+        "P-DPL-15": {"echo": True},
+        "P-DPL-16": {"rpt1_space_heard": True},
+        "P-DPL-24": {"pattern_at_26": True, "byte8": 0},
+        "P-DPL-30": {"heard": True},
+        "P-DPL-36": {"heard": False},
+    },
 }
 
 # B12: header fields DV-Router does not verify, because the tester (like
