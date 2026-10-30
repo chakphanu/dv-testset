@@ -354,7 +354,12 @@ def test_interlink_missing_output_slot_zeroed(rig, transcoders_down, frames, beh
     """Both chains end in the same XLX998 build, so what its DMR / M17
     clients get is compared sut == ref: the peer itself may add frames
     (e.g. a Codec2 silence frame at the end), the reflector under test
-    must not drop the frame or put content in a missing slot."""
+    must not drop the frame or put content in a missing slot.
+
+    The transcoders are down for the whole stream. The frame form on the
+    wire (full revision size with zero slots) is judged by
+    cases/proto/test_xlx.py::test_xlx_egress_transcoder_down (P-XLX-33),
+    a slot missing inside a transcoded stream by P-XLX-18."""
     (Path(rig.out) / "interlink-zero-slot.json").write_text(json.dumps(
         {s: {k: [f.hex() for f in v] for k, v in r.items()} for s, r in transcoders_down.items()}, indent=1))
     for setup in ("sut", "ref"):

@@ -343,6 +343,11 @@ CROSSMODE = {
     "test_p25_network.py::test_p25_ingress_encrypted": True,
     # B18: a DMR / M17 over is seen only through transcoding to the DExtra listener
     "test_short_stream_guard.py::test_short_stream_guard_cross_protocol_block": True,
+    # XLX interlink cases that need transcoded slots
+    "test_xlx.py::test_xlx_egress_slots_transcoded": True,
+    "test_xlx.py::test_xlx_ingress_rev1_transcoded": True,
+    "test_xlx.py::test_xlx_ingress_size_mismatch": True,
+    "test_xlx.py::test_xlx_egress_slot_missing_mid_stream": True,
 }
 
 
