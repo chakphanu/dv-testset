@@ -69,7 +69,7 @@ def judge_dev(rig, nn, got, *keys):
             assert got["sut"][key] == got["ref"][key], "%s %s: sut %r, ref %r" % (
                 nn, key, got["sut"][key], got["ref"][key])
         return
-    entry = (specs.rule(rig, "mmdvm") or {}).get(nn) or {}
+    entry = specs.rule_mode(rig, "mmdvm", nn) or {}
     pending = [key for key in keys if key not in entry]
     for key in keys:
         if key in entry:
@@ -292,11 +292,14 @@ def unknown_probe(ip):
 
 def test_mmdvm_login_unknown_id(rig):
     """P-DMR-03 (dev): RPTL from an id the master does not know never
-    logs in (no RPTACK); silence (xlxd) or MSTNAK is the dev part."""
+    logs in (no RPTACK); silence (xlxd) or MSTNAK is the dev part. A sut
+    whose DVT_NO_RADIO_ID mode accepts id-less clients (fallback, local)
+    logs it in: its entry "P-DMR-03@<mode>" says RPTACK."""
     got = both(rig, unknown_probe)
     print("P-DMR-03 unknown id:", got)
-    for name, r in got.items():
-        assert r["reply"] != "RPTACK", "%s: unknown id got RPTACK" % name
+    refuses = rig.sut_profile == specs.DEFAULT or (rig.no_radio_id or "drop") == "drop"
+    for name in ("ref", "sut") if refuses else ("ref",):
+        assert got[name]["reply"] != "RPTACK", "%s: unknown id got RPTACK" % name
     judge_dev(rig, "P-DMR-03", got, "reply")
 
 

@@ -125,6 +125,9 @@ SPEC = {
         # refused login (id 0, unknown id): MSTNAK + id (HB15 p.3; DroidStar
         # recovers only on MSTNAK)
         "P-DMR-03": {"reply": "MSTNAK"},
+        # fallback / local accept a login whose id has no real radio id
+        "P-DMR-03@fallback": {"reply": "RPTACK"},
+        "P-DMR-03@local": {"reply": "RPTACK"},
         "P-DMR-04": {"auth": "lenient"},
         "P-DMR-05": {"reply": "MSTNAK", "pong": False},
         # every RPTACK except the RPTL salt reply carries the 4-byte id
@@ -285,6 +288,11 @@ SPEC = {
     # not built yet; client cases skip "edge not ready" until server is True.
     "dmrplus": {
         "server": False,
+        # connect with an id missing from the database: NAK (drop), ACK
+        # (fallback / local accept it)
+        "P-DMP-02": {"replies": [b"NAK OK\n\x00"]},
+        "P-DMP-02@fallback": {"replies": [b"ACK OK\n\x00"]},
+        "P-DMP-02@local": {"replies": [b"ACK OK\n\x00"]},
         "P-DMP-04": {"replies": [b"NAK OK\n\x00"], "heard": False},
         "P-DMP-06": {"hears_new": True, "hears_old": False},
         "P-DMP-15": {"on_linked": True, "on_header_tg": False},

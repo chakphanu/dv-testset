@@ -260,7 +260,9 @@ def test_dmp_connect_ack(dmp):
 
 
 def test_dmp_connect_unknown_id(dmp):
-    """P-DMP-02: an id missing from the database gets no reply."""
+    """P-DMP-02 (dev): an id missing from the database: xlxd sends no
+    reply; under another profile the entry by DVT_NO_RADIO_ID mode (drop:
+    NAK, fallback/local: the connect is accepted with ACK)."""
     def run(rig, side):
         d = dongle(UNKNOWN_ID)
         try:
@@ -270,7 +272,8 @@ def test_dmp_connect_unknown_id(dmp):
             d.dest = None
             done(d)
     got = both(dmp, run)
-    same(got, "replies")
+    print("P-DMP-02 unknown id:", got)
+    judge_dev(dmp, "P-DMP-02", got, "replies")
 
 
 def blocked_id():

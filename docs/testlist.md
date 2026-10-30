@@ -179,7 +179,7 @@ container.
 |---|---|---|---|---|---|
 | P-DMR-01 | RPTL from a known id -> RPTACK + 4-byte salt | test_mmdvm::test_mmdvm_login_ack_salt | hb | probe | covered |
 | P-DMR-02 | Salt not constant across master restarts | test_mmdvm::test_mmdvm_salt_changes_on_restart | diff | probe (rig_control restart) | covered |
-| P-DMR-03 | RPTL from an unknown id: no login (silence or MSTNAK) | test_mmdvm::test_mmdvm_login_unknown_id | dev | probe | covered |
+| P-DMR-03 | RPTL from an unknown id: no login (silence or MSTNAK); a sut whose DVT_NO_RADIO_ID mode accepts id-less clients logs it in | test_mmdvm::test_mmdvm_login_unknown_id | dev | probe | covered |
 | P-DMR-04 | RPTK completes the login; hash check strict vs lenient (zero hash) | test_mmdvm::test_mmdvm_auth_zero_hash | dev | probe | covered |
 | P-DMR-05 | RPTK without a preceding RPTL | test_mmdvm::test_mmdvm_auth_without_login | dev | probe | covered |
 | P-DMR-06 | RPTC 302 B -> RPTACK; RPTK/RPTC/RPTO acks carry the 4-byte id (RPTL ack carries the salt) | test_mmdvm::test_mmdvm_config_ack | hb + dev | probe | covered |
@@ -649,7 +649,7 @@ Under a non-xlxd profile the suite skips "edge not ready" until
 | # | Obligation | Case | Judged | How | Status |
 |---|---|---|---|---|---|
 | P-DMP-01 | Connect -> ACK, linked to 4001 + n | test_dmrplus::test_dmp_connect_ack | diff | probe | covered |
-| P-DMP-02 | Connect from an unknown id: no reply | test_dmrplus::test_dmp_connect_unknown_id | diff | probe | covered |
+| P-DMP-02 | Connect from an unknown id: reply recorded (xlxd: none; dvrouter by DVT_NO_RADIO_ID: drop NAK, fallback ACK) | test_dmrplus::test_dmp_connect_unknown_id | dev | probe | covered |
 | P-DMP-03 | Refused connect -> NAK | test_dmrplus::test_dmp_connect_refused | diff | probe (needs `DVT_XLXD_BLACKLIST=N0DMP`, see Rig needs) | covered |
 | P-DMP-04 | Connect to an unmapped reflector number | test_dmrplus::test_dmp_connect_no_module[4000\|4500] | dev | probe | covered |
 | P-DMP-05 | Keepalive ACKed, no server keepalive | test_dmrplus::test_dmp_keepalive_ack | diff | probe | covered |
