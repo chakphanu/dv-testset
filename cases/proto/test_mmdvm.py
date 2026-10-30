@@ -761,7 +761,10 @@ def sync_probe(ip):
         ready(ip, listener, talker)
         for name, sync in (("ms_data", dmr.MS_DATA), ("bs_voice", dmr.BS_VOICE)):
             voice = frames(seed="p22" + name)
-            send(talker, stream(talker, voice, clients.fresh_stream_id("dmr"), sync=sync), listener)
+            # the refused (voice sync) header's voice carries the embedded LC, so a
+            # server that late-enters a refused stream id from it is caught
+            send(talker, stream(talker, voice, clients.fresh_stream_id("dmr"), sync=sync,
+                                embedded_lc=name == "bs_voice"), listener)
             out[name] = len(heard(listener))
             out[name + "_exact"] = heard(listener) == voice
             clear(listener, talker)
@@ -1201,7 +1204,9 @@ def data_probe(ip, data_type):
         flags = dmr.bitfield(2, False, dmr.DATA, data_type)
         packets = [dmr.packet(i, talker.id, talker.tg, talker.id, flags, sid, dmr.data_sync_payload())
                    for i in range(4)]
-        packets += stream(talker, frames(), sid, seq0=4, head=False)
+        # the voice after the refused data bursts carries the embedded LC (no late
+        # entry for a refused stream id)
+        packets += stream(talker, frames(), sid, seq0=4, head=False, embedded_lc=True)
         send(talker, packets, listener)
         return {"dmrd": len(received(listener)), "voice": len(heard(listener))}
     finally:
