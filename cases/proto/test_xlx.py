@@ -268,7 +268,11 @@ def test_xlx_half_link_no_traffic(xrig, peer):
 
 
 def test_xlx_initiates_connect(xrig, peer):
-    """P-XLX-07: an unlinked listed peer gets an L every 5 s."""
+    """P-XLX-07: an unlinked listed peer gets an L every 5 s, one per
+    listed row. The tester address carries two rows (XLX996 with the
+    interlink modules, BM3109 with the first one). An L names only the
+    sending reflector, not the row, so the rows show up as the distinct
+    module sets offered (l_module_sets: xlxd ["D", "DE"])."""
     def side(name, ip):
         if ip in peer.alive:
             peer.unlink(ip)
@@ -280,14 +284,20 @@ def test_xlx_initiates_connect(xrig, peer):
         times = sorted({round(t, 1) for t, _c in conns})
         gaps = [round(b - a) for a, b in zip(times, times[1:]) if b - a > 1]
         return {"count_ok": len(times) >= 2, "callsign": {c["callsign"] for _t, c in conns},
-                "modules": sorted({c["modules"] for _t, c in conns}), "gaps": sorted(set(gaps))}
+                "l_module_sets": sorted({c["modules"] for _t, c in conns}), "gaps": sorted(set(gaps))}
     got = both(xrig, side)
     same(got, "count_ok", "callsign")
-    # xlxd sends one L per listed row towards the tester: "DE" (XLX996)
-    # and "D" (BM3109); judge that the XLX996 row's module set is offered
-    for n in SIDES:
-        assert "DE" in got[n]["modules"], "%s: no L with the configured modules DE: %s" % (n, got[n]["modules"])
     assert got["ref"]["count_ok"], got["ref"]
+    if xrig.sut_profile == specs.DEFAULT:
+        same(got, "l_module_sets")
+        return
+    entry = (specs.rule(xrig, "xlx") or {}).get("P-XLX-07") or {}
+    if "l_module_sets" in entry:
+        assert got["sut"]["l_module_sets"] == entry["l_module_sets"], "P-XLX-07 l_module_sets: sut %r, spec %r" % (
+            got["sut"]["l_module_sets"], entry["l_module_sets"])
+    else:
+        # until the profile states it: the XLX996 row's set must be offered
+        assert "DE" in got["sut"]["l_module_sets"], "sut: no L with the modules DE: %s" % got["sut"]["l_module_sets"]
 
 
 @pytest.mark.parametrize("version", [(1, 3, 9), (1, 4, 0), (2, 2, 0), (2, 6, 1)],

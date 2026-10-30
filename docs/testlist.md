@@ -79,7 +79,7 @@ run needs an xlxd-compatible DV-Router binary as `DVT_XLXD_BIN`.
 | C7 | Module change / unlink / relink of clients | - | gap |
 | C8 | Stream timeout without a last frame (reference 1.6 s) | dvcheck `header_only` (passive) | gap (active case) |
 | C9 | Many modules talking at once (load) | - | gap (street profile, later) |
-| C10 | YSF, DPlus, DCS clients | - | gap (no clients yet) |
+| C10 | YSF, DPlus, DCS clients | K3 (DPlus), K4 (DCS), K9 (YSF) conformance suites; same-mode and cross-mode cells in test_clients2 | covered |
 
 ## D. Resilience (`rig`)
 
@@ -554,8 +554,53 @@ test, "dev" rows are recorded under the `xlxd` profile.
 | P-M17-44 | 37 B peer CONN not linked | test_m17::test_m17_peer_conn_unconfigured | dev | probe | covered (record) |
 | P-M17-45 | No datagram to a client above 100 B | test_m17::test_m17_egress_max_size | hb | probe | covered |
 
-K9 (YSF, `docs/protocols/ysf.md`) is reserved for that suite when it
-lands.
+### K9. YSF reflector network (`docs/protocols/ysf.md`)
+
+Markers `proto` and `rig`; YSF clients on UDP 42000. No published
+specification of the network protocol exists, so most rows are
+conventions of the clients (YSFGateway, DGIdGateway, DroidStar, MMDVM_CM);
+"hb" rows rest on the Yaesu air-interface frame structure. The cases talk
+65 frames and give every client its own callsign (xlxd loop guard, B18).
+
+| # | Obligation | Case | Judged | How | Status |
+|---|---|---|---|---|---|
+| P-YSF-01 | YSFP answered at once, first poll included | test_ysf::test_ysf_poll_reply | diff | probe | covered |
+| P-YSF-02 | Reply from the addressed port | test_ysf::test_ysf_poll_reply | diff | probe | covered |
+| P-YSF-03 | Reply bytes 4-13 | test_ysf::test_ysf_poll_reply_text | dev | probe | covered |
+| P-YSF-04 | Suffixed / 10-character callsign | test_ysf::test_ysf_poll_callsign_forms | dev | probe | covered |
+| P-YSF-05 | Poll of 15 B | test_ysf::test_ysf_poll_length | dev | probe | covered |
+| P-YSF-06 | Reflector-initiated polls | test_ysf::test_ysf_server_polls | dev | probe (20 s idle) | covered |
+| P-YSF-07 | Timeout drop; polls alone keep the link | test_ysf::test_ysf_timeout_drop | dev | probe (70 s, slow) | covered |
+| P-YSF-08 | YSFU removes the client | test_ysf::test_ysf_unlink | dev | probe | covered |
+| P-YSF-09 | YSFS answered from an unlinked address | test_ysf::test_ysf_status | diff | probe | covered |
+| P-YSF-10 | Status field forms; count includes other protocols | test_ysf::test_ysf_status_fields | dev | probe | covered |
+| P-YSF-11 | Relay to every other linked client once | test_ysf::test_ysf_relay_once | diff | probe | covered |
+| P-YSF-12 | No echo to the talker | test_ysf::test_ysf_no_echo | diff | probe | covered |
+| P-YSF-13 | Unlinked sender not relayed | test_ysf::test_ysf_unlinked_sender | diff | probe | covered |
+| P-YSF-14 | Egress frame structure (sync, FICH, HC first, TC last) | test_ysf::test_ysf_egress_structure | hb | probe + dvcheck | covered |
+| P-YSF-15 | Gateway field constant per stream | test_ysf::test_ysf_egress_gateway_constant | diff | probe | covered |
+| P-YSF-16 | Counter changes every frame (DMR and YSF talker); header end bit clear | test_ysf::test_ysf_egress_counter | dev | probe + dvcheck | covered |
+| P-YSF-17 | End bit on the last frame (DMR and YSF talker) | test_ysf::test_ysf_egress_end_bit | diff | probe + dvcheck | covered |
+| P-YSF-18 | Same-mode relay keeps voice and callsigns | test_ysf::test_ysf_same_mode_kept | dev | probe | covered |
+| P-YSF-19 | Cross-mode egress source and destination | test_ysf::test_ysf_crossmode_callsigns | diff | probe | covered |
+| P-YSF-20 | Ingress end markers: end bit only, TC only, neither (egress end delay) | test_ysf::test_ysf_stream_end_markers | dev | probe | covered |
+| P-YSF-21 | Headerless stream carried | test_ysf::test_ysf_late_entry | dev | probe | covered |
+| P-YSF-22 | Second (DMR) talker not mixed into a YSF over | test_ysf::test_ysf_second_talker | spec (B1) | probe | covered |
+| P-YSF-23 | Counter wrap in a long over | test_ysf::test_ysf_counter_wrap | diff | probe | covered |
+| P-YSF-24 | DN2 carried | test_ysf::test_ysf_relay_once | diff | probe | covered |
+| P-YSF-25 | DN1 and VW between YSF clients | test_ysf::test_ysf_dn1_vw_carried | dev | probe | covered |
+| P-YSF-26 | Non-WIRES-X Data FR | test_ysf::test_ysf_data_fr | dev | probe | covered |
+| P-YSF-27 | Bad FICH not relayed | test_ysf::test_ysf_bad_fich | dev | probe | covered |
+| P-YSF-28 | DG-ID 10..35 selects the module | test_ysf::test_ysf_dgid_module | dev | probe | covered |
+| P-YSF-29 | Default module of a new client | test_ysf::test_ysf_default_module | dev | probe | covered |
+| P-YSF-30 | Egress DG-ID | test_ysf::test_ysf_egress_dgid | dev | probe | covered |
+| P-YSF-31 | WIRES-X DX_REQ | test_ysf::test_ysf_wiresx_dx | dev | probe | covered |
+| P-YSF-32 | WIRES-X CONN_REQ / DISC_REQ | test_ysf::test_ysf_wiresx_conn_disc | dev | probe | covered |
+| P-YSF-33 | YSFO / YSFI / YSFV / unknown tags ignored | test_ysf::test_ysf_other_tags | diff | probe | covered |
+| P-YSF-34 | Malformed packets dropped | test_ysf::test_ysf_malformed | diff | probe | covered |
+| P-YSF-35 | Two ports one IP; same callsign two ports | test_ysf::test_ysf_two_ports | diff | probe | covered |
+| P-YSF-36 | Two callsigns from one address | test_ysf::test_ysf_two_callsigns_one_address | dev | probe | covered |
+| P-YSF-37 | Per-client keepalive | test_ysf::test_ysf_timeout_drop | diff | probe (slow) | covered |
 
 ### K10. XLX interlink (`docs/protocols/xlx.md`)
 
@@ -778,6 +823,7 @@ dvcheck report it as a warning with a note:
   headerless voice is dropped (no late entry), a FACCH1-stolen half is
   decoded as voice and an empty DMR join goes out as VCALL + TX_REL.
 - M17 (section K8): ACKN for any module letter and silence on a bad module byte (no NACK); PING every 5 s; FN 0 payload dropped and only FN 0 opens a stream; only TYPE 0x0005 relayed, TYPE forced 0x0005 and META zeroed on egress; new per-module stream id; egress CRC 0x0000; M17P packet mode dropped; a new client misses about 230 ms (up to 1 s) of a running stream; no DISC when the reflector stops.
+- YSF (section K9): polls with `-` or `/` in the first 7 callsign characters get no reply and only 14 B polls are accepted; 30 s link timeout; YSFU ignored (the client stays linked); the YSFS count includes clients of all protocols; YSF -> YSF frames are rebuilt (AMBE gain index moved); DN1 and VW dropped; on YSF -> YSF the padding packet and the terminator repeat counter 0 (a repeat MMDVMHost drops); a headerless stream is not carried. xlxd meets the client-critical rows P-YSF-01, 02, 15 and 17, and P-YSF-16 for cross-mode streams only.
 - Icom G3 (section K11): presence replies carry the address of the last route query (0.0.0.0 before one); presence is not gated by the operator lists; last frame replaced by 55 C8 7A + zeros / 25 1A C6; invalid RPT1/RPT2 drop the header; any ICMP unreachable for the IP removes all its G3 clients; PING only while all of G3 is idle; the timeout is checked only while idle and presence does not refresh it; the talking terminal gets 9 frames of its own stream back.
 - xlxd-sut (PR tree) occasionally reorders egress frames under load; not seen on ref (dvcheck dextra.seq_reorder x6 in out/20261030T063313Z during P-DXT-44, an earlier one-off dcs.seq_reorder).
 - Short-stream guard (B18): xlxd's loop guard counts short streams per module by callsign, so across protocols. It blocks with the 3 / 10 / 300 s ladder and enforces the block only on DExtra/DPlus/DCS (DMR and M17 pass no module to the gatekeeper). At strike 3 it refuses links and disconnects the talker, and it stops acking YSF polls of the callsign (MayLink on every poll). Measured 2026-10-30: out/20261030T062417Z-i13, out/20261030T063238Z-i13 (decay), out/20261030T064052Z-i13 (per-protocol refusals).
