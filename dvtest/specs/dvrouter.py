@@ -141,6 +141,9 @@ SPEC = {
     },
     # USRP dev items (docs/protocols/usrp.md), DV-Router choices 2026-10-30
     "usrp": {
+        # dynamic DVSwitch-style clients (REG:DVSWITCH / REG:OK) not built yet:
+        # the dynamic-client cases skip "edge not ready" until this is True
+        "dynamic_server": False,
         "P-USR-04": {"seq": "continuous"},
         # SET_INFO egress off by default (opt-in per DVSwitch endpoint later)
         "P-USR-09": {"set_info_egress": False},
