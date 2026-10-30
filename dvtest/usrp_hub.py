@@ -11,12 +11,19 @@ can be proven end to end without a real server (DVT_USRP_DYNAMIC_HUB).
 - A DTMF dial string (module letter A..Z or 4001..4026) or a REMOTE_CMD
   "tgs=..." picks the module, confirmed with "INFO:MSG:module <X>". No
   module until one is picked. "INFO:" is answered with a small JSON.
-- A client's SET_INFO callsign names it as talker. Voice (type 0, 352 B,
-  keyup 1) from a registered client on a module goes to every other client
-  of the module: a padded SET_INFO first, then SLIN frames, then a 32 B
-  unkey. One talker per module; unregistered senders are ignored.
+- A client's SET_INFO callsign names it as talker. A client without a
+  valid, not denied SET_INFO callsign may listen but never transmit.
+  Voice (type 0, 352 B, keyup 1) from an allowed client on a module goes to
+  every other client of the module: a padded SET_INFO first, then SLIN
+  frames, then a 32 B unkey. One talker per module; unregistered senders
+  are ignored.
+
+The idle timeout is DVT_FAKE_HUB_IDLE_S (default 5 s); the unit test runs
+the hub at 1 s.
 """
 import json
+import os
+import re
 import select
 import socket
 import threading
@@ -24,15 +31,25 @@ import time
 
 from .proto import usrp
 
-SPEC = {
-    "dynamic_server": True,
-    "P-USR-29": {"unregistered_voice": "ignored"},
-    "P-USR-31": {"idle_timeout_s": 5.0, "unreg_on_drop": True},
-    "P-USR-33": {"dial_letter": True, "dial_tg": True},
-    "P-USR-34": {"default_module": "none"},
-    "P-USR-37": {"info_reply": "json"},
-    "P-USR-40": {"max_clients": 6, "full_reply": "REG:UNREG"},
-}
+CALLSIGN = re.compile(r"^[A-Z0-9]{3,8}(-[A-Z0-9]{1,2})?$")
+
+
+def spec(idle=None):
+    """The hub's behaviour as a "usrp" spec entry (the cases judge by it)."""
+    idle = float(os.environ.get("DVT_FAKE_HUB_IDLE_S", "5")) if idle is None else idle
+    return {
+        "dynamic_server": True,
+        "P-USR-29": {"unregistered_voice": "ignored"},
+        "P-USR-31": {"idle_timeout_s": idle, "unreg_on_drop": True},
+        "P-USR-33": {"dial_letter": True, "dial_tg": True},
+        "P-USR-34": {"default_module": "none"},
+        "P-USR-37": {"info_reply": "json"},
+        "P-USR-40": {"max_clients": 6, "full_reply": "REG:UNREG"},
+        "P-USR-41": {"denied_callsign": "N0CALL-9"},
+    }
+
+
+SPEC = spec()
 
 FLOOR_HANG = 0.5                                # a talker silent this long loses the floor
 
@@ -41,7 +58,7 @@ class Client:
     def __init__(self, addr):
         self.addr = addr
         self.module = None
-        self.callsign = "N0CALL"
+        self.callsign = None                        # set by a valid SET_INFO
         self.seen = time.monotonic()
         self.seq = 0
 
@@ -53,6 +70,7 @@ class FakeHub:
         self.addr = self.sock.getsockname()
         self.timeout = spec["P-USR-31"]["idle_timeout_s"]
         self.max_clients = spec["P-USR-40"]["max_clients"]
+        self.denied = {spec["P-USR-41"]["denied_callsign"]}
         self.clients = {}
         self.floor = {}                             # module -> [talker addr, last voice time]
         self.running = True
@@ -112,12 +130,13 @@ class FakeHub:
         if text == usrp.REG_UNREG:
             del self.clients[addr]
         elif text == usrp.INFO:
-            body = json.dumps({"module": client.module, "call": client.callsign}).encode()
+            body = json.dumps({"call": client.callsign, "module": client.module, "reflector": "XLX999"}).encode()
             self._text(client, usrp.INFO + body)
         elif text is not None:
             info = usrp.parse_set_info(data[usrp.HEADER_SIZE:])
-            if info and info["callsign"]:
-                client.callsign = info["callsign"]
+            if info is not None:
+                call = info["callsign"].strip().upper()
+                client.callsign = call if CALLSIGN.match(call) and call not in self.denied else None
         elif kind == usrp.TYPE_DTMF:
             self._select(client, data[usrp.HEADER_SIZE:].split(b"\0", 1)[0].decode(errors="replace"))
         elif kind == usrp.TYPE_TLV:
@@ -140,8 +159,8 @@ class FakeHub:
 
     def _voice(self, client, data):
         module = client.module
-        if module is None:
-            return
+        if module is None or client.callsign is None:
+            return                                  # no module, or listen-only (no valid callsign)
         frame = usrp.parse(data)
         floor = self.floor.get(module)
         if floor and floor[0] != client.addr:

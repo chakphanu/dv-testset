@@ -26,8 +26,9 @@ def test_session_builders():
 
 
 def test_dynamic_cases_against_fake_hub(tmp_path):
-    hub = usrp_hub.FakeHub()
-    env = dict(os.environ, DVT_USRP_DYNAMIC_HUB="%s:%d" % hub.addr, DVT_OUT=str(tmp_path))
+    hub = usrp_hub.FakeHub(spec=usrp_hub.spec(idle=0.8))
+    env = dict(os.environ, DVT_USRP_DYNAMIC_HUB="%s:%d" % hub.addr, DVT_OUT=str(tmp_path),
+               DVT_FAKE_HUB_IDLE_S="0.8", DVT_USRP_DYNAMIC_FAST="1")
     try:
         done = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-m", "proto",
                                "cases/proto/test_usrp_dynamic.py"],
@@ -36,4 +37,4 @@ def test_dynamic_cases_against_fake_hub(tmp_path):
         hub.close()
     tail = done.stdout.strip().splitlines()[-1] if done.stdout.strip() else done.stderr[-500:]
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-1000:]
-    assert "15 passed" in tail and "skipped" not in tail, tail
+    assert "18 passed" in tail and "skipped" not in tail, tail

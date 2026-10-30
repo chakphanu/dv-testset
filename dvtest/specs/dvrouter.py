@@ -144,6 +144,16 @@ SPEC = {
         # dynamic DVSwitch-style clients (REG:DVSWITCH / REG:OK) not built yet:
         # the dynamic-client cases skip "edge not ready" until this is True
         "dynamic_server": False,
+        # DVSwitch AR mobilePort default; dv-router to confirm
+        "dynamic_port": 12345,
+        "P-USR-29": {"unregistered_voice": "ignored"},
+        # 60 min idle timeout (refreshed by any packet), REG:UNREG on drop
+        # and on permanent shutdown
+        "P-USR-31": {"idle_timeout_s": 3600, "unreg_on_drop": True},
+        "P-USR-33": {"dial_letter": True, "dial_tg": True},
+        "P-USR-34": {"default_module": "none"},
+        "P-USR-37": {"info_reply": "json"},
+        "P-USR-40": {"max_clients": 64, "full_reply": "REG:UNREG"},
         "P-USR-04": {"seq": "continuous"},
         # SET_INFO egress off by default (opt-in per DVSwitch endpoint later)
         "P-USR-09": {"set_info_egress": False},

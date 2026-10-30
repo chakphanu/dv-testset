@@ -11,6 +11,11 @@ only when its "usrp" spec has "dynamic_server": True ("edge not ready"
 until then), at xlxd-sut:<"dynamic_port", default 12345>, and the dev
 items follow SPEC["usrp"]["P-USR-NN"]. conv items are asserted for every
 target.
+
+DVT_USRP_DYNAMIC_FAST=1 (the unit run against the local fake hub) shortens
+overs and listening windows. DVT_USRP_IDLE_TIMEOUT_S overrides the idle
+timeout the P-USR-31/32 cases wait out (a test server configured shorter);
+a timeout above 600 s skips unless DVT_LONG_TIMEOUTS=1.
 """
 import json
 import os
@@ -26,8 +31,13 @@ from dvtest.proto import usrp
 
 pytestmark = [pytest.mark.proto, pytest.mark.rig]
 
-FRAMES = 25
+FAST = os.environ.get("DVT_USRP_DYNAMIC_FAST") == "1"
+FRAMES = 10 if FAST else 25
+LISTEN = 0.15 if FAST else 0.8                  # listening window after an over
+SETTLE = 0.03 if FAST else 0.2                  # after a module selection
+GAP = 0.005 if FAST else 0.020                  # voice frame period (the local fake hub needs no real time)
 REPLY_S = 1.0
+LONG_TIMEOUT_S = 600
 
 
 class Dyn:
@@ -66,6 +76,18 @@ def judge_dev(dyn, nn, observed):
             assert value == entry[key], "%s %s: sut %r, spec %r" % (nn, key, value, entry[key])
     if pending:
         pytest.skip("spec pending: no usrp %s %s entry" % (nn, pending))
+
+
+def idle_timeout(dyn):
+    """The idle timeout the P-USR-31/32 cases wait out."""
+    env = os.environ.get("DVT_USRP_IDLE_TIMEOUT_S")
+    timeout = float(env) if env else dyn.entry("P-USR-31").get("idle_timeout_s")
+    if timeout is None:
+        pytest.skip("spec pending: no usrp P-USR-31 idle_timeout_s")
+    if timeout > LONG_TIMEOUT_S and os.environ.get("DVT_LONG_TIMEOUTS") != "1":
+        pytest.skip("idle timeout %.0f s > %d s: set DVT_LONG_TIMEOUTS=1, or DVT_USRP_IDLE_TIMEOUT_S to a "
+                    "server configured shorter" % (timeout, LONG_TIMEOUT_S))
+    return timeout
 
 
 class DynClient:
@@ -116,13 +138,13 @@ class DynClient:
         assert self.register(), "no REG:OK"
         self.send(usrp.text_set_info, self.callsign)
         self.send(usrp.dtmf, module)
-        self.pump(0.2)
+        self.pump(SETTLE)
 
     def talk(self, frames=FRAMES, pcm=None):
         pcm = pcm or signals.frames(signals.tone(700, frames * 20))
         start = time.monotonic()
         for index, frame in enumerate(pcm):
-            pace(start, index)
+            pace(start, index, GAP)
             self.send(usrp.voice, frame)
         self.send(usrp.unkey)
 
@@ -165,7 +187,7 @@ def test_usrp_dyn_reply_to_source(make, dyn):
     a.join()
     b.join()
     a.talk()
-    b.pump(0.8)
+    b.pump(LISTEN)
     sources = {s for _, _, s in a.inbox + b.inbox}
     print("reply sources %s, b heard %d frames" % (sources, len(b.voice())))
     assert sources == {dyn.addr} or sources <= {dyn.addr, (socket.gethostbyname(dyn.addr[0]), dyn.addr[1])}
@@ -179,7 +201,7 @@ def test_usrp_dyn_unregistered_voice(make, dyn):
     listener.join()
     stranger = make()
     stranger.talk()
-    listener.pump(0.8)
+    listener.pump(LISTEN)
     stranger.pump(0.2)
     heard = len(listener.voice())
     print("listener heard %d frames, stranger got %d packets" % (heard, len(stranger.inbox)))
@@ -196,7 +218,7 @@ def test_usrp_dyn_unregister(make, dyn):
     leaver.pump(0.2)
     leaver.inbox.clear()
     talker.talk()
-    leaver.pump(0.8)
+    leaver.pump(LISTEN)
     print("after REG:UNREG: %d packets" % len(leaver.inbox))
     assert not leaver.voice()
     leaver.close(unregister=False)
@@ -207,42 +229,38 @@ def test_usrp_dyn_idle_timeout(make, dyn):
     """P-USR-31 (dev, keys "idle_timeout_s", "unreg_on_drop"): a silent
     registered client is dropped after the rule's timeout (REG:UNREG sent
     or not), gets no further voice, and can register again at once."""
-    timeout = dyn.entry("P-USR-31").get("idle_timeout_s")
-    if timeout is None:
-        pytest.skip("spec pending: no usrp P-USR-31 idle_timeout_s")
+    timeout = idle_timeout(dyn)
     talker, idle = make(), make("N0TEST")
     idle.join()
-    idle.pump(timeout + 1.0)
+    idle.pump(timeout + (0.3 if FAST else 1.0))
     talker.join()
     talker.talk()
-    idle.pump(0.8)
+    idle.pump(LISTEN)
     dropped = not idle.voice()
     unreg = any(t.startswith(usrp.REG_UNREG) for t in idle.texts())
     again = idle.register()
-    print("dropped %s, REG:UNREG %s, re-register %s" % (dropped, unreg, again))
+    print("timeout %.1f s: dropped %s, REG:UNREG %s, re-register %s" % (timeout, dropped, unreg, again))
     assert dropped and again
-    judge_dev(dyn, "P-USR-31", {"idle_timeout_s": timeout, "unreg_on_drop": unreg})
+    judge_dev(dyn, "P-USR-31", {"unreg_on_drop": unreg})
 
 
 @pytest.mark.slow
 def test_usrp_dyn_ping_keeps(make, dyn):
     """P-USR-32 (conv): PINGs keep a client registered past the idle
-    timeout and get no reply."""
-    timeout = dyn.entry("P-USR-31").get("idle_timeout_s")
-    if timeout is None:
-        pytest.skip("spec pending: no usrp P-USR-31 idle_timeout_s")
+    timeout (1.3 x) and get no reply."""
+    timeout = idle_timeout(dyn)
     talker, keeper = make(), make("N0TEST")
     keeper.join()
     keeper.inbox.clear()
-    end = time.monotonic() + timeout * 1.5
+    end = time.monotonic() + timeout * 1.3
     while time.monotonic() < end:
         keeper.send(usrp.ping)
         keeper.pump(timeout / 4)
     replies = list(keeper.inbox)
     talker.join()
     talker.talk()
-    keeper.pump(0.8)
-    print("PING replies %d, heard %d frames after %.1f s" % (len(replies), len(keeper.voice()), timeout * 1.5))
+    keeper.pump(LISTEN)
+    print("PING replies %d, heard %d frames after %.1f s" % (len(replies), len(keeper.voice()), timeout * 1.3))
     assert not replies and len(keeper.voice()) >= FRAMES * 0.9
 
 
@@ -256,7 +274,7 @@ def test_usrp_dyn_select_module(make, dyn, form):
     same.join(dial)
     other.join("F")
     talker.talk()
-    same.pump(0.8)
+    same.pump(LISTEN)
     other.pump(0.1)
     works = len(same.voice()) >= FRAMES * 0.9 and not other.voice()
     print("%s: same module %d frames, other module %d, confirms %r" % (
@@ -270,8 +288,10 @@ def test_usrp_dyn_default_module(make, dyn):
     ("none")?"""
     a, b = make(), make("N0TEST")
     assert a.register() and b.register()
+    a.send(usrp.text_set_info, a.callsign)          # allowed to talk, just no module
+    b.send(usrp.text_set_info, b.callsign)
     a.talk()
-    b.pump(0.8)
+    b.pump(LISTEN)
     judge_dev(dyn, "P-USR-34", {"default_module": "shared" if b.voice() else "none"})
 
 
@@ -282,7 +302,7 @@ def test_usrp_dyn_set_info_in(make, dyn):
     talker.join()
     listener.join()
     talker.talk()
-    listener.pump(0.8)
+    listener.pump(LISTEN)
     infos = [usrp.parse_set_info(d[usrp.HEADER_SIZE:]) for _, d, _ in listener.inbox
              if usrp.type_le(d) == usrp.TYPE_TEXT]
     calls = [i["callsign"] for i in infos if i]
@@ -298,7 +318,7 @@ def test_usrp_dyn_set_info_out(make, dyn):
     listener.join()
     for _ in range(2):
         talker.talk()
-        listener.pump(1.0)
+        listener.pump(LISTEN + (0.05 if FAST else 0.2))
     order = ["info" if usrp.type_le(d) == usrp.TYPE_TEXT and usrp.parse_set_info(d[usrp.HEADER_SIZE:])
              else "voice" if len(d) == usrp.VOICE_SIZE and usrp.type_le(d) == 0
              else "unkey" if len(d) == usrp.HEADER_SIZE else "other"
@@ -345,14 +365,14 @@ def test_usrp_dyn_two_clients(make, dyn):
     pcm = signals.frames(signals.tone(700, FRAMES * 20))
     start = time.monotonic()
     for index, frame in enumerate(pcm):
-        pace(start, index)
+        pace(start, index, GAP)
         talker.send(usrp.voice, frame)
         if index >= 5:
             b.send(usrp.voice, frame)              # second talker keys during the over
     talker.send(usrp.unkey)
     b.send(usrp.unkey)
     for client in (talker, b, c):
-        client.pump(0.6)
+        client.pump(LISTEN)
     print("talker got %d, b %d, c %d frames" % (len(talker.voice()), len(b.voice()), len(c.voice())))
     assert not talker.voice(), "echo to the talker"
     assert FRAMES * 0.9 <= len(b.voice()) <= FRAMES and FRAMES * 0.9 <= len(c.voice()) <= FRAMES
@@ -365,7 +385,7 @@ def test_usrp_dyn_slin(make, dyn):
     talker.join()
     listener.join()
     talker.talk()
-    listener.pump(0.8)
+    listener.pump(LISTEN)
     audio = [d for _, d, _ in listener.inbox if usrp.text_payload(d) is None]
     bad = [d[:32].hex() for d in audio if not (usrp.type_le(d) == 0 and len(d) in (usrp.VOICE_SIZE, usrp.HEADER_SIZE))]
     print("audio packets %d, other %d" % (len(audio), len(bad)))
@@ -385,9 +405,41 @@ def test_usrp_dyn_table_full(make, dyn):
     accepted = sum(client.register() for client in clients)
     extra = make()
     extra.send(usrp.text, usrp.REG)
-    extra.pump(REPLY_S)
+    deadline = time.monotonic() + REPLY_S
+    while time.monotonic() < deadline and not {usrp.REG_OK, usrp.REG_UNREG} & set(extra.texts()):
+        extra.pump(0.02)
     texts = extra.texts()
     reply = "REG:OK" if usrp.REG_OK in texts else ("REG:UNREG" if usrp.REG_UNREG in texts else "none")
     print("accepted %d of %d, extra got %s" % (accepted, limit, reply))
     assert accepted == limit
     judge_dev(dyn, "P-USR-40", {"max_clients": limit if reply != "REG:OK" else limit + 1, "full_reply": reply})
+
+
+@pytest.mark.parametrize("case", ["none", "invalid", "denied"])
+def test_usrp_dyn_listen_only_without_callsign(make, dyn, case):
+    """P-USR-41 (conv): a client without a valid SET_INFO callsign (none
+    sent, an invalid one, or one on the deny list) hears its module but its
+    own voice is never relayed. "denied" needs the rule's denied_callsign."""
+    if case == "denied":
+        denied = dyn.entry("P-USR-41").get("denied_callsign")
+        if not denied:
+            pytest.skip("spec pending: no usrp P-USR-41 denied_callsign (a callsign on the server's deny list)")
+    mute, listener, talker = make(), make("N0TEST"), make("N0CALL")
+    assert mute.register(), "no REG:OK"
+    if case == "invalid":
+        mute.send(usrp.text_set_info, "!!")
+    elif case == "denied":
+        mute.send(usrp.text_set_info, denied)
+    mute.send(usrp.dtmf, "D")
+    mute.pump(SETTLE)
+    listener.join()
+    talker.join()
+    mute.talk()
+    listener.pump(LISTEN)
+    blocked = len(listener.voice())
+    talker.talk()
+    mute.pump(LISTEN)
+    heard = len(mute.voice())
+    print("%s: its over relayed %d frames; it heard %d of %d" % (case, blocked, heard, FRAMES))
+    assert blocked == 0, "voice of a client without a valid callsign was relayed"
+    assert heard >= FRAMES * 0.9, "a listen-only client did not hear its module"
