@@ -1,10 +1,13 @@
 # SPDX-License-Identifier: MIT
 """M17 in xlxd reflector-client mode (UDP 17000): CONN/ACKN/PING/... and
-54 B voice packets (frame number, EOT bit, LICH constant per stream)."""
+54 B voice packets (frame number, EOT bit, LICH constant per stream), plus
+M17P packet-mode datagrams (size, LSF and payload CRC, packet-mode TYPE)."""
 from ..proto import m17 as M
 from .common import ERROR, WARN, Live, Stream, finish_stream, flow_of, seq_finding, touches, voice_frames, Departures
 
 NAME = "m17"
+# M17P datagram: "M17P" + LSD + LSF CRC + protocol + data + CRC (m17.md)
+M17P_SIZES = (38, 859)
 # control packets: tag -> allowed sizes
 CONTROL = {b"CONN": (11,), b"LSTN": (11,), b"ACKN": (4,), b"NACK": (4,), b"PING": (10,),
            b"PONG": (10,), b"DISC": (4, 10)}
@@ -25,6 +28,9 @@ class Checker:
         r, p = self.report, d.payload
         self.streams.expire(d.ts)
         tag = p[:4]
+        if tag == b"M17P":
+            self._packet_mode(d, p)
+            return
         if tag == b"M17 ":
             kind = "voice"
             size_ok = len(p) == M.PACKET_SIZE
@@ -80,6 +86,26 @@ class Checker:
         voice_frames(st, [p[36:44], p[44:52]])
         if eot:
             self.streams.terminate(key, d)
+
+    def _packet_mode(self, d, p):
+        """M17P (Part II, Packet Mode IP Packet): magic, LSD 28 B, LSF CRC,
+        then protocol + user data and the payload CRC, 38..859 B in all.
+        Size and the packet-mode TYPE are errors, the two CRCs warnings."""
+        r = self.report
+        r.count(NAME, d, "packet")
+        if not M17P_SIZES[0] <= len(p) <= M17P_SIZES[1]:
+            r.error(NAME, d, "m17p_length", "M17P of %d B, want %d..%d" % ((len(p),) + M17P_SIZES))
+            return
+        lsd, lsf_crc = p[4:32], int.from_bytes(p[32:34], "big")
+        if M.crc16(lsd) != lsf_crc:
+            # a warning: clients send wrong CRCs as a rule and a reflector
+            # forwards M17P unchanged (P-M17-41), so egress carries them too
+            r.warn(NAME, d, "m17p_lsf_crc", "M17P LSF CRC %04x, want %04x" % (lsf_crc, M.crc16(lsd)))
+        if lsd[13] & 1:
+            r.error(NAME, d, "m17p_type", "M17P TYPE %04x has the stream bit set" % int.from_bytes(lsd[12:14], "big"))
+        body, crc = p[34:-2], int.from_bytes(p[-2:], "big")
+        if M.crc16(body) != crc:
+            r.warn(NAME, d, "m17p_crc", "M17P payload CRC %04x, want %04x" % (crc, M.crc16(body)))
 
     def _ended(self, st):
         if st.end == "peer disconnected":

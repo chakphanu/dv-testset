@@ -482,3 +482,29 @@ def test_dmr_stream_id_reuse_after_terminator(tmp_path):
     continued = wire(False)
     assert codes(continued, "error") == ["dmr.after_terminator"]
     assert len([f for f in continued["findings"] if f["code"] == "dmr.after_terminator"]) == 1
+
+
+def test_m17_packet_mode(tmp_path):
+    """M17P is its own kind: size 38..859 and the packet-mode TYPE are
+    errors, the LSF and payload CRCs warnings; a valid one gives no finding."""
+    good = m17.m17p_packet(0x05, b"N0TEST hello", src="N0TEST")
+
+    def check_one(packet):
+        w = Wire()
+        w.send(T, 40003, R, m17.PORT, m17.conn_packet("N0TEST", "B"))
+        w.send(T, 40003, R, m17.PORT, packet, 0.01)
+        w.send(R, m17.PORT, T, 40004, packet, 0.001)
+        result = w.check(tmp_path)
+        assert result["protocols"]["m17"]["kinds"]["packet"] == 2
+        return codes(result, "error"), codes(result, "warn")
+    assert check_one(good) == ([], [])
+    bad_lsf = good[:20] + bytes([good[20] ^ 1]) + good[21:]
+    assert check_one(bad_lsf) == ([], ["m17.m17p_lsf_crc"])
+    assert check_one(good[:-1] + bytes([good[-1] ^ 1])) == ([], ["m17.m17p_crc"])
+    stream_bit = bytearray(good)
+    stream_bit[17] |= 1
+    lsd = bytes(stream_bit[4:32])
+    stream_bit[32:34] = m17.crc16(lsd).to_bytes(2, "big")
+    assert check_one(bytes(stream_bit)) == (["m17.m17p_type"], [])
+    assert check_one(good[:37]) == (["m17.m17p_length"], [])
+    assert check_one(good + bytes(821)) == (["m17.m17p_length"], [])
