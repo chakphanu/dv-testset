@@ -272,6 +272,19 @@ SPEC = {
         "P-NXD-42": {"relayed": 6},
         "P-NXD-43": {"after_35s": False, "after_130s": False},
     },
+    # DMR+ dongle protocol (UDP 8880, docs/protocols/dmrplus.md): the edge is
+    # not built yet; client cases skip "edge not ready" until server is True.
+    # P-DMP-22 (egress source id) waits for a src_known / src_unknown split.
+    "dmrplus": {
+        "server": False,
+        "P-DMP-04": {"replies": [b"NAK OK\n\x00"], "heard": False},
+        "P-DMP-06": {"hears_new": True, "hears_old": False},
+        "P-DMP-15": {"on_linked": True, "on_header_tg": False},
+        "P-DMP-16": {"relayed": True},
+        "P-DMP-17": {"exact": True, "c_last_lost": 0},
+        "P-DMP-18": {"frames": 0},
+        "P-DMP-19": {"second_heard": True, "terminator_within_0.3s": True},
+    },
     # Icom G3 terminal / access point (docs/protocols/g3.md): the DV-Router
     # edge is not built yet; the cases skip "edge not ready" until True.
     # Dev values follow when dv-router chooses.

@@ -137,11 +137,11 @@ Contract for such an image:
    `xlxd.whitelist`, `xlxd.blacklist`, `xlxd.terminal` (empty = everyone),
    `dmrid.dat` (`id;callsign;x`), `nxdn.csv` (`id,callsign,x`), `ysfnode.dat`
    (empty). Env `DVT_CONFIG_MOUNTED=1` is set and may be ignored.
-3. Listens on OWN_IP: DExtra 30001, MMDVM 62030, M17 17000, XLX interlink
-   10002, the USRP bind ports of `xlxd.usrp`; talks AMBEd to
+3. Listens on OWN_IP: DExtra 30001, MMDVM 62030, M17 17000, DMR+ 8880, XLX
+   interlink 10002, the USRP bind ports of `xlxd.usrp`; talks AMBEd to
    TRANSCODER_IP:10100 and the stream ports. NXDN and P25 peers are reached
-   from an ephemeral port. DPlus 20001, DCS 30051, YSF 42000 and DMR+ 8880
-   are not used by the cases yet.
+   from an ephemeral port. DPlus 20001, DCS 30051 and YSF 42000 are not used
+   by the cases yet.
 4. Logs on stdout/stderr (`out/<run>/logs/<service>.log`).
 5. No internet: the rig network is internal, so ID databases come from the
    mounted files.

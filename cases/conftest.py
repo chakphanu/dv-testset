@@ -273,6 +273,7 @@ BEHAVIOUR = {
     "test_short_stream_guard.py::test_short_stream_guard_third_strike",  # B18
     "test_short_stream_guard.py::test_short_stream_guard_decay",  # B18
     "test_short_stream_guard.py::test_short_stream_guard_third_strike_protocols",  # B18
+    "test_dmrplus.py::test_dmp_busy_module_no_mix",                  # P-DMP-35 (B1)
 }
 SYSTEM_MARKERS = {"rig", "netns", "allstar", "nxdn", "p25", "load", "interlink"}
 
@@ -343,6 +344,7 @@ CROSSMODE = {
     "test_p25_network.py::test_p25_ingress_encrypted": True,
     # B18: a DMR / M17 over is seen only through transcoding to the DExtra listener
     "test_short_stream_guard.py::test_short_stream_guard_cross_protocol_block": True,
+    "test_dmrplus.py::test_dmp_cross_mode": True,
     # XLX interlink cases that need transcoded slots
     "test_xlx.py::test_xlx_egress_slots_transcoded": True,
     "test_xlx.py::test_xlx_ingress_rev1_transcoded": True,
