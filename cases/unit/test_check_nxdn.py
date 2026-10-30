@@ -69,3 +69,25 @@ def test_faults(tmp_path):
     assert codes(nxdn_wire("relay_back").check(tmp_path)) == ["nxdn.relay_to_sender"]
     assert codes(nxdn_wire("no_echo").check(tmp_path)) == ["nxdn.no_echo"]
     assert codes(nxdn_wire("wrong_tg_poll").check(tmp_path)) == ["nxdn.poll_wrong_tg"]
+
+
+def test_reflector_on_another_port(tmp_path):
+    """A tester playing an NXDNReflector on port 41410: the traffic is NXDN,
+    the side xlxd polls first is the reflector, and faults are still found."""
+    def wire(flip_lich=False):
+        w = Wire()
+        w.send(X, 47680, "192.0.2.30", 41410, nxdn.poll_packet("XLX999", TG))
+        w.send("192.0.2.30", 41410, X, 47680, nxdn.poll_packet("XLX999", TG), 0.001)
+        packets = nxdn.stream_packets([bytes([i + 1]) * 7 for i in range(16)], SRC, TG)
+        if flip_lich:
+            packets[2] = flip(packets[2], 10)
+        for p in packets:
+            w.send(X, 47680, "192.0.2.30", 41410, p, 0.080)
+        w.send(X, 47680, "192.0.2.30", 41410, nxdn.poll_packet("XLX999", TG), 6.0)
+        w.send("192.0.2.30", 41410, X, 47680, nxdn.poll_packet("XLX999", TG), 0.001)
+        return w.check(tmp_path)
+    result = wire()
+    assert codes(result) == [] and sum(result["other"].values()) == 0
+    assert result["protocols"]["nxdn"]["kinds"]["poll_echo"] == 2
+    assert result["protocols"]["nxdn"]["streams"][0]["end"] == "terminated"
+    assert codes(wire(flip_lich=True)) == ["nxdn.lich_parity"]

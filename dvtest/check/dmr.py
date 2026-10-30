@@ -109,13 +109,19 @@ class Checker:
         fields = (p[5:8], p[8:11], bits & 0xC0)
         st = self.streams.live.get(key)
         if st is None:
-            if kind != "header" and self.streams.after_end(key) is not None:
-                r.error(NAME, d, "after_terminator", "%s for stream %08x after its terminator" % (kind, stream_id))
-                return
+            # a voice LC header opens a new stream even when it reuses the
+            # id of a terminated one; anything else after a terminator
+            # continues the old stream (one finding, then tracked again)
+            old = self.streams.after_end(key) if kind != "header" else None
+            if old is not None:
+                r.error(NAME, d, "after_terminator", "%s for stream %08x after its terminator at frame %d,"
+                        " without a new voice LC header" % (kind, stream_id, old.last_frame))
             st = Stream(NAME, key[0], "stream %08x" % stream_id, 256, 0.060, d)
             st.fields, st.vseq = fields, None
             self.streams.live[key] = st
-            if kind != "header":
+            if old is not None:
+                st.notes["after_terminator"] += 1
+            elif kind != "header":
                 r.warn(NAME, d, "no_header", "%s opens stream %08x without a voice LC header" % (kind, stream_id))
         elif st.fields != fields:
             r.error(NAME, d, "field_changed", "src/dst/slot changed inside stream %08x" % stream_id)

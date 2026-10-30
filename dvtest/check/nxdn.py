@@ -4,7 +4,7 @@ NXDNU unlink, and NXDND streams (header, voice every 80 ms, trailer) with
 LICH parity, SACCH CRC-6 and structure cycle 3,2,1,0, FACCH1 CRC-12 and
 message type, dst == the reflector TG, and no relay back to the sender."""
 from ..proto import nxdn as N
-from .common import ERROR, REPLY_TIMEOUT, WARN, Live, Stream, client_of, finish_stream, flow_of, seq_finding, voice_frames
+from .common import ERROR, REPLY_TIMEOUT, WARN, Live, Stream, finish_stream, flow_of, seq_finding, voice_frames
 
 NAME = "nxdn"
 CONTROL_LICH = (0x81, 0x83)          # FACCH1 in both blocks (header/trailer)
@@ -18,15 +18,29 @@ class Checker:
         self.tg = {}              # reflector ip -> TG learned from an echo
         self.unlinked = {}        # client (ip, port) -> frame of its NXDNU
         self.talking = {}         # (client ip, port) -> src id of its live stream
+        self.reflectors = set()   # (ip, port) of reflectors off port 41400
 
     def claims(self, d):
-        return N.PORT in (d.sport, d.dport)
+        """UDP 41400, or an NXDN packet (tag and size) on any port: a tester
+        acting as an NXDNReflector listens elsewhere."""
+        p = d.payload
+        return N.PORT in (d.sport, d.dport) or (p[:4] == b"NXDN" and len(p) in (N.POLL_SIZE, N.PACKET_SIZE))
+
+    def _to_reflector(self, d):
+        """The reflector side is port 41400, else the endpoint the first
+        packet of a pair went to (a client polls before anything else)."""
+        if N.PORT in (d.sport, d.dport):
+            return d.dport == N.PORT
+        if (d.src, d.sport) in self.reflectors:
+            return False
+        self.reflectors.add((d.dst, d.dport))
+        return True
 
     def feed(self, d):
         r, p = self.report, d.payload
         self.streams.expire(d.ts)
         self._expire(d.ts)
-        to_reflector = d.dport == N.PORT
+        to_reflector = self._to_reflector(d)
         reflector = d.dst if to_reflector else d.src
         client = (d.src, d.sport) if to_reflector else (d.dst, d.dport)
         poll = N.parse_poll(p)
@@ -94,9 +108,11 @@ class Checker:
     def _new(self, key, d, pkt, header):
         st = Stream(NAME, key[0], "src %d to %d" % (pkt["src"], pkt["dst"]), 4, N.PACKET_GAP, d,
                     0 if header else None)
+        st.talker = None
         self.streams.live[key] = st
-        if d.dport == N.PORT:
-            self.talking[(d.src, d.sport)] = pkt["src"]
+        if self._to_reflector(d):
+            st.talker = (d.src, d.sport)
+            self.talking[st.talker] = pkt["src"]
         return st
 
     def _payload(self, d, pkt):
@@ -142,9 +158,8 @@ class Checker:
         self.polls = keep
 
     def _ended(self, st):
-        client = client_of(st.flow, N.PORT)
-        if self.talking.get(client) is not None and st.flow.endswith(":%d" % N.PORT):
-            self.talking.pop(client, None)
+        if st.talker is not None:
+            self.talking.pop(st.talker, None)
         if st.end != "terminated":
             sev = ERROR if st.end == "timeout" else WARN
             self.report.add(NAME, st.flow, st.last_frame, sev, "no_trailer",

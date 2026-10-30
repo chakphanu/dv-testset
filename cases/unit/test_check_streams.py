@@ -454,3 +454,31 @@ def test_stream_end_in_flight_at_unlink(tmp_path):
     result = w.check(tmp_path)
     assert codes(result, "error") == []
     assert [f for f in result["findings"] if f["code"] == "m17.in_flight"][0]["message"].startswith("EOT frame")
+
+
+def test_dmr_stream_id_reuse_after_terminator(tmp_path):
+    """A voice LC header that reuses a terminated stream id opens a new
+    stream; voice after the terminator without one is a single finding."""
+    src, tg, sid = dmr.DMR_ID, dmr.module_tg("B"), 0x4f87
+    sync = dmr.data_sync_payload()
+
+    def wire(with_header):
+        w = dmr_wire(sid=sid, bursts=6)            # header, A..F, terminator
+        w.rows.pop()
+        w.t = w.rows[-1][0]
+        if with_header:
+            w.send(R, dmr.PORT, T, 40002, dmr.packet(0, src, tg, src, 0xA1, sid, sync), 0.5)
+        for n in range(12):
+            vseq = n % 6
+            w.send(R, dmr.PORT, T, 40002, dmr.packet((1 if with_header else 8) + n, src, tg, src,
+                                                     0x80 | (0x10 if vseq == 0 else 0) | vseq,
+                                                     sid, dmr.voice_payload(FRAME, FRAME, FRAME)),
+                   0.06 if n or with_header else 0.5)
+        w.send(R, dmr.PORT, T, 40002, dmr.packet(13 if with_header else 20, src, tg, src, 0xA2, sid, sync), 0.06)
+        w.send(T, 40002, R, dmr.PORT, b"RPTPING" + dmr.DMR_ID.to_bytes(4, "big"), 6.0)
+        return w.check(tmp_path)
+    reused = wire(True)
+    assert codes(reused, "error") == [] and len(reused["protocols"]["dmr"]["streams"]) == 2
+    continued = wire(False)
+    assert codes(continued, "error") == ["dmr.after_terminator"]
+    assert len([f for f in continued["findings"] if f["code"] == "dmr.after_terminator"]) == 1
