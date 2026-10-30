@@ -301,7 +301,19 @@ def test_cross_sut_equals_ref(nxdn_rig, encoded, cell, steps):
         # gain index equal, and the sut's index moved by the step difference
         pairs = list(zip(got["sut"]["frames"], got["ref"]["frames"]))
         rows["sut"]["other_bits_equal"] = all(nxdn.without_gain(s) == nxdn.without_gain(r) for s, r in pairs)
-        rows["sut"]["step_diff_ok"] = all(stepped(nxdn.gain_index(s), diff) == nxdn.gain_index(r) for s, r in pairs)
+        # xlxd steps only whole packets: a partial last packet (padded with
+        # silence) goes out unstepped (P-NXD-13/14), so the ref's last four
+        # frames may carry the sut's index unchanged
+        def step_ok(s, r):
+            return stepped(nxdn.gain_index(s), diff) == nxdn.gain_index(r)
+
+        body, last = pairs[:-nxdn.FRAMES_PER_PACKET], pairs[-nxdn.FRAMES_PER_PACKET:]
+        last_unstepped = all(nxdn.gain_index(s) == nxdn.gain_index(r) for s, r in last)
+        rows["sut"]["step_diff_ok"] = all(step_ok(s, r) for s, r in body) and (
+            all(step_ok(s, r) for s, r in last) or last_unstepped)
+        rows["sut"]["ref_last_packet_unstepped"] = last_unstepped and not all(step_ok(s, r) for s, r in last)
+        rows["sut"]["step_diff_bad"] = [(i, nxdn.gain_index(s), nxdn.gain_index(r)) for i, (s, r) in enumerate(pairs)
+                                        if not step_ok(s, r)][:16]
     record("%s-%s" % cell, rows)
     assert rows["ref"]["received"] >= FRAMES * 0.8, "ref got %d frames" % rows["ref"]["received"]
     assert rows["sut"]["echo_to_talker"] == 0 and rows["ref"]["echo_to_talker"] == 0, rows
