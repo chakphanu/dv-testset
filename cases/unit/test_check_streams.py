@@ -508,3 +508,20 @@ def test_m17_packet_mode(tmp_path):
     assert check_one(bytes(stream_bit)) == (["m17.m17p_type"], [])
     assert check_one(good[:37]) == (["m17.m17p_length"], [])
     assert check_one(good + bytes(821)) == (["m17.m17p_length"], [])
+
+
+def test_m17_only_the_10_byte_disc_is_an_unlink(tmp_path):
+    """A 4 B DISC (the acknowledgement form) from a client does not unlink
+    it: later traffic to it is no after_disc. The 10 B DISC does."""
+    for disc, want_error in ((m17.disc_packet("N0TEST"), ["m17.after_disc"]), (b"DISC", [])):
+        w = Wire()
+        w.send(T, 40003, R, m17.PORT, m17.conn_packet("N0TEST", "B"))
+        w.send(T, 40003, R, m17.PORT, disc, 0.5)
+        for fn in range(6):
+            w.send(R, m17.PORT, T, 40003, m17.packet(0x6161, fn, "N0OTHER", FRAME[:8] * 2, eot=fn == 5), 0.04 + (
+                0.5 if fn == 0 else 0))
+        w.send(T, 40004, R, m17.PORT, m17.pong_packet("N0X"), 6.0)
+        result = w.check(tmp_path)
+        assert codes(result, "error") == want_error, len(disc)
+        kinds = result["protocols"]["m17"]["kinds"]
+        assert kinds.get("disc_ack", 0) == (len(disc) == 4) and kinds.get("disc", 0) == (len(disc) == 10)

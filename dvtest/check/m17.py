@@ -8,7 +8,8 @@ from .common import ERROR, WARN, Live, Stream, finish_stream, flow_of, seq_findi
 NAME = "m17"
 # M17P datagram: "M17P" + LSD + LSF CRC + protocol + data + CRC (m17.md)
 M17P_SIZES = (38, 859)
-# control packets: tag -> allowed sizes
+DISC_ACK_SIZE = 4
+# control packets: tag -> allowed sizes (DISC: 10 B request, 4 B acknowledgement)
 CONTROL = {b"CONN": (11,), b"LSTN": (11,), b"ACKN": (4,), b"NACK": (4,), b"PING": (10,),
            b"PONG": (10,), b"DISC": (4, 10)}
 
@@ -37,6 +38,10 @@ class Checker:
         elif tag in CONTROL:
             kind = tag.decode().lower()
             size_ok = len(p) in CONTROL[tag]
+            if tag == b"DISC" and len(p) == DISC_ACK_SIZE:
+                # the 4 B form only acknowledges a DISC (Part II, Disconnecting);
+                # a client sending it does not leave (P-M17-17)
+                kind = "disc_ack"
         else:
             r.count(NAME, d, "unparseable")
             r.error(NAME, d, "unparseable", "%d B packet with no known M17 tag" % len(p))
