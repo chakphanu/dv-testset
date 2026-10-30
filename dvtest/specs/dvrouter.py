@@ -286,6 +286,12 @@ SPEC = {
         # unknown talker: the configured gateway id (as P25)
         "P-DMP-22": {"src_known": 1023007, "src_unknown": 1023000},
     },
+    # Yaesu IMRS (UDP 21110, docs/protocols/imrs.md): the edge is not built
+    # yet; every IMRS case skips "edge not ready" until server is True.
+    # Dev values follow when dv-router chooses.
+    "imrs": {
+        "server": False,
+    },
     # Icom G3 terminal / access point (docs/protocols/g3.md): the DV-Router
     # edge is not built yet; the cases skip "edge not ready" until True.
     # Dev values follow when dv-router chooses.
