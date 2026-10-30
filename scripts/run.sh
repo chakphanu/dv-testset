@@ -280,6 +280,8 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
     DVT_INTERLINK_CALLSIGN=XLX998 DVT_INTERLINK_MODULES="${DVT_INTERLINK_MODULES:-DE}" \
     DVT_INTERLINK2_PEER="$net.$9" DVT_INTERLINK2_CALLSIGN=XLX997 \
     DVT_NXDN_TG="${DVT_NXDN_TG:-31672}" DVT_NXDN_MODULE="${DVT_NXDN_MODULE:-F}" \
+    DVT_NXDN_PROBE_PEER="$net.30:$([ "$1" = xlxd-ref ] && echo 41410 || echo 41411)" \
+    DVT_NXDN_PROBE_TG="${DVT_NXDN_PROBE_TG:-31673}" DVT_NXDN_PROBE_MODULE="${DVT_NXDN_PROBE_MODULE:-I}" \
     DVT_P25_TG="${DVT_P25_TG:-31672}" DVT_P25_MODULE="${DVT_P25_MODULE:-G}" \
     sh rig/xlxd-entry.sh > "$cfg/render.log"
   cp rig/config/dmrid.dat rig/config/nxdn.csv "$cfg/"

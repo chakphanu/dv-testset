@@ -10,6 +10,8 @@
 #   env DVT_NXDN         "on" peers DVT_NXDN_MODULE with the NXDNReflector at
 #                        DVT_NXDN_PEER:41400 on talkgroup DVT_NXDN_TG
 #                        (xlxd.interlink row "NX<tg> <ip>:<port> <module>")
+#   env DVT_NXDN_PROBE_PEER / _TG / _MODULE  with DVT_NXDN=on, a second NX row
+#                        "NX<tg> <ip:port> <module>" whose reflector is the tester
 #   env DVT_P25          "on" peers DVT_P25_MODULE with the P25Reflector at
 #                        DVT_P25_PEER:41000 (row "P25<id> <ip>:<port> <module>",
 #                        id = DVT_P25_TG)
@@ -57,6 +59,10 @@ if [ "${DVT_NXDN:-off}" = on ]; then
   printf 'NX%05d %s:41400 %s\n' "$DVT_NXDN_TG" "$DVT_NXDN_PEER" "$DVT_NXDN_MODULE" >> "$dir/xlxd.interlink"
 fi
 if [ "${DVT_P25:-off}" = on ]; then
+  if [ -n "${DVT_NXDN_PROBE_PEER:-}" ]; then
+    : "${DVT_NXDN_PROBE_TG:?}" "${DVT_NXDN_PROBE_MODULE:?}"
+    printf 'NX%05d %s %s\n' "$DVT_NXDN_PROBE_TG" "$DVT_NXDN_PROBE_PEER" "$DVT_NXDN_PROBE_MODULE" >> "$dir/xlxd.interlink"
+  fi
   : "${DVT_P25_PEER:?}" "${DVT_P25_TG:?}" "${DVT_P25_MODULE:?}"
   printf 'P25%05d %s:41000 %s\n' "$DVT_P25_TG" "$DVT_P25_PEER" "$DVT_P25_MODULE" >> "$dir/xlxd.interlink"
 fi

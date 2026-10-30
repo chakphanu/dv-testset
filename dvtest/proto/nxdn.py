@@ -44,12 +44,22 @@ FRAMES_PER_PACKET = 4
 PACKET_GAP = 0.080
 
 GROUP, DATA, HEADER, TRAILER = 0x01, 0x02, 0x04, 0x08
-VCALL, TX_REL = 0x01, 0x08
+# layer 3 message types (TS 1-A 6.4.5)
+VCALL, TX_REL, IDLE = 0x01, 0x08, 0x10
+# call type, VCALL octet 2 bits 7-5 (TS 1-A 6.5.12)
+CALL_GROUP, CALL_INDIVIDUAL = 1, 4
+# SACCH data of an IDLE message (its first 18 bits)
+SACCH_IDLE = IDLE << 10
 
-# LICH fields
+# LICH fields (TS 1-A 5.2.1)
 RFCT_RDCH = 2
-FCT_SACCH_NS, FCT_SACCH_SS = 0, 2
-OPTION_STEAL_FACCH, OPTION_STEAL_NONE = 0, 3
+FCT_SACCH_NS, FCT_UDCH, FCT_SACCH_SS = 0, 1, 2
+# steal option: both halves FACCH1, first half FACCH1, second half FACCH1, none
+OPTION_STEAL_FACCH, OPTION_STEAL_FIRST, OPTION_STEAL_SECOND, OPTION_STEAL_NONE = 0, 1, 2, 3
+
+# EHR test vectors (TS 1-A 7.2.1/1, 7.2.1/2): 72-bit DMR form
+TONE_DMR = bytes.fromhex("CEA8FE83ACC458200A")
+SILENCE_DMR = bytes.fromhex("B9E881526173002A6B")
 
 # gain index b2 of AMBE+2 2450: raw frame bits 8..11 (high 4) and 36 (low)
 GAIN_BITS = (8, 9, 10, 11, 36)
@@ -197,6 +207,14 @@ def gain_index(frame7):
     return value
 
 
+def set_gain_index(frame7, b2):
+    """The frame with its gain parameter b2 set (0..31)."""
+    buf = bytearray(frame7)
+    for index, pos in enumerate(GAIN_BITS):
+        _put(buf, pos, (b2 >> (4 - index)) & 1)
+    return bytes(buf)
+
+
 def without_gain(frame7):
     """The frame with its gain bits cleared, to compare everything else."""
     buf = bytearray(frame7)
@@ -218,9 +236,19 @@ def parse_lich(byte):
             "outbound": bool(byte & 2), "parity_ok": (byte & 1) == (bin(byte >> 4).count("1") & 1)}
 
 
-def layer3(msg, src, dst):
-    """10-byte layer 3 call message (VCALL / TX_REL), group call."""
-    return bytes([msg & 0x3F, 0x00, 0x20, src >> 8, src & 0xFF, dst >> 8, dst & 0xFF, 0, 0, 0])
+def layer3(msg, src, dst, call_type=CALL_GROUP, cipher=0, key=0):
+    """10-byte layer 3 call message (VCALL / TX_REL): type, CC option 0,
+    call type (bits 7-5), src, dst; VCALL octet 7 = cipher type and key id."""
+    octet7 = ((cipher & 3) << 6) | (key & 0x3F) if msg == VCALL else 0
+    return bytes([msg & 0x3F, 0x00, (call_type & 7) << 5, src >> 8, src & 0xFF, dst >> 8, dst & 0xFF,
+                  octet7, 0, 0])
+
+
+def parse_layer3(block):
+    """dict of a layer 3 call message (FACCH1 block or the 9 SACCH octets)."""
+    return {"msg": block[0] & 0x3F, "cc_option": block[1], "call_type": block[2] >> 5,
+            "src": (block[3] << 8) | block[4], "dst": (block[5] << 8) | block[6],
+            "cipher": block[7] >> 6, "key": block[7] & 0x3F}
 
 
 def sacch(structure, data18=0, ran=0):
@@ -232,40 +260,73 @@ def sacch(structure, data18=0, ran=0):
     return bytes(buf)
 
 
-def facch1(msg, src, dst):
+def facch1(msg, src, dst, **call):
     """12-byte FACCH1 block: layer 3 message + CRC-12 + 4 zero bits."""
-    buf = bytearray(layer3(msg, src, dst) + bytes(2))
+    buf = bytearray(layer3(msg, src, dst, **call) + bytes(2))
     _write(buf, 80, 12, crc12(buf))
     return bytes(buf)
 
 
-def control_payload(msg, src, dst):
-    """Header (VCALL) or trailer (TX_REL): FACCH1 in both blocks, idle
-    single-structure SACCH."""
+def control_payload(msg, src, dst, sacch_data=0, **call):
+    """Header (VCALL) or trailer (TX_REL): FACCH1 in both blocks, single
+    SACCH with sacch_data (0 as xlxd sends, SACCH_IDLE as TS 1-B 4.1.3)."""
     out = bytearray(PAYLOAD_SIZE)
     out[0] = lich(RFCT_RDCH, FCT_SACCH_NS, OPTION_STEAL_FACCH)
-    out[1:5] = sacch(0)
-    block = facch1(msg, src, dst)
+    out[1:5] = sacch(0, sacch_data)
+    block = facch1(msg, src, dst, **call)
     out[5:17] = block
     out[19:31] = block
     return bytes(out)
 
 
-def voice_payload(frames, src, dst, index):
+def _put_frame(out, slot, frame):
+    base = (5 + 14 * (slot // 2)) * 8 + FRAME_BITS * (slot % 2)
+    for bit in range(FRAME_BITS):
+        _put(out, base + bit, _get(frame, bit))
+
+
+def vcall_sacch(src, dst, part, **call):
+    """18 SACCH data bits of the VCALL superframe, part 0..3 (1/4..4/4)."""
+    message = int.from_bytes(layer3(VCALL, src, dst, **call)[:9], "big")
+    return (message >> (72 - 18 * (part + 1))) & 0x3FFFF
+
+
+def voice_payload(frames, src, dst, index, **call):
     """Four 49-bit frames; the SACCH carries the VCALL message 18 bits at a
     time over four packets (structure 3, 2, 1, 0)."""
     if len(frames) != FRAMES_PER_PACKET:
         raise ValueError("an NXDN voice packet carries 4 frames")
     part = index % 4
-    message = int.from_bytes(layer3(VCALL, src, dst)[:9], "big")
-    data18 = (message >> (72 - 18 * (part + 1))) & 0x3FFFF
     out = bytearray(PAYLOAD_SIZE)
     out[0] = lich(RFCT_RDCH, FCT_SACCH_SS, OPTION_STEAL_NONE)
-    out[1:5] = sacch(3 - part, data18)
+    out[1:5] = sacch(3 - part, vcall_sacch(src, dst, part, **call))
     for slot, frame in enumerate(frames):
-        base = (5 + 14 * (slot // 2)) * 8 + FRAME_BITS * (slot % 2)
-        for bit in range(FRAME_BITS):
-            _put(out, base + bit, _get(frame, bit))
+        _put_frame(out, slot, frame)
+    return bytes(out)
+
+
+def steal_payload(frames2, src, dst, index, half=1, **call):
+    """A voice frame with one half stolen for FACCH1 (a VCALL): half 1 =
+    block 1 is FACCH1 (LICH option 01), half 2 = block 2 (option 10); the
+    other half carries the two 49-bit frames of frames2."""
+    part = index % 4
+    out = bytearray(PAYLOAD_SIZE)
+    option = OPTION_STEAL_FIRST if half == 1 else OPTION_STEAL_SECOND
+    out[0] = lich(RFCT_RDCH, FCT_SACCH_SS, option)
+    out[1:5] = sacch(3 - part, vcall_sacch(src, dst, part, **call))
+    block = facch1(VCALL, src, dst, **call)
+    start = 5 if half == 1 else 19
+    out[start:start + 12] = block
+    for slot, frame in enumerate(frames2):
+        _put_frame(out, (2 if half == 1 else 0) + slot, frame)
+    return bytes(out)
+
+
+def data_payload(body=b""):
+    """A UDCH data frame (LICH RDCH/UDCH, 0x90): flags_for marks it data."""
+    out = bytearray(PAYLOAD_SIZE)
+    out[0] = lich(RFCT_RDCH, FCT_UDCH, OPTION_STEAL_FACCH)
+    out[1:1 + len(body)] = body[:PAYLOAD_SIZE - 1]
     return bytes(out)
 
 
@@ -360,14 +421,24 @@ def is_voice(data):
     return info is not None and info["kind"] == "voice"
 
 
-def stream_packets(frames, src, dst):
+def stream_packets(frames, src, dst, header=True, trailer=True, group=True, sacch_data=0, **call):
     """Header, voice packets (frames padded with zeros to a multiple of
-    four), trailer."""
+    four), trailer. group=False sends an individual call (flags without
+    0x01, call type individual unless given)."""
+    if not group:
+        call.setdefault("call_type", CALL_INDIVIDUAL)
     frames = list(frames) + [bytes(FRAME_BYTES)] * (-len(frames) % FRAMES_PER_PACKET)
-    out = [packet(src, dst, control_payload(VCALL, src, dst))]
+    out = []
+
+    def add(payload):
+        out.append(packet(src, dst, payload, flags_for(payload, group)))
+
+    if header:
+        add(control_payload(VCALL, src, dst, sacch_data, **call))
     for index in range(0, len(frames), FRAMES_PER_PACKET):
-        out.append(packet(src, dst, voice_payload(frames[index:index + 4], src, dst, index // 4)))
-    out.append(packet(src, dst, control_payload(TX_REL, src, dst)))
+        add(voice_payload(frames[index:index + 4], src, dst, index // 4, **call))
+    if trailer:
+        add(control_payload(TX_REL, src, dst, sacch_data, **call))
     return out
 
 
@@ -428,6 +499,56 @@ class NxdnClient:
             if info["kind"] == "voice":
                 out.extend(voice_frames(info["payload"]))
         return out
+
+    def close(self):
+        self.client.close()
+
+
+class FakeReflector:
+    """The tester as the NXDNReflector of a peer (an `NX<tg>` interlink row
+    pointing here): records every poll and unlink with its arrival time,
+    echoes polls for its TG while echo is True (the peer only links after an
+    echo), and sends NXDND to the peer's address."""
+
+    def __init__(self, bind_ip, port, tg, echo=True):
+        self.tg = tg
+        self.echo = echo
+        self.polls = []                     # (monotonic, addr, parse_poll dict)
+        self.peer = None
+        self.client = UdpClient(bind_ip, responder=self._answer, port=port)
+
+    def _answer(self, data, addr):
+        info = parse_poll(data)
+        if info is None:
+            return None
+        self.polls.append((time.monotonic(), addr, info))
+        if info["kind"] != "poll":
+            return None
+        self.peer = addr
+        return data if self.echo and info["tg"] == self.tg else None
+
+    def pump(self, seconds):
+        self.client.pump(seconds)
+
+    def wait_poll(self, timeout=12.0):
+        """Pump until a poll arrives; True when one did."""
+        start = len(self.polls)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            self.client.pump(0.05)
+            if any(p[2]["kind"] == "poll" for p in self.polls[start:]):
+                return True
+        return False
+
+    def send(self, data):
+        self.client.send(self.peer, data)
+
+    def paced(self, packets, gap=PACKET_GAP, *extra_clients):
+        return self.client.paced(self.peer, packets, gap, *extra_clients)
+
+    def packets(self):
+        """Parsed NXDND packets received so far."""
+        return [p for p in (parse(d) for d in self.client.inbox) if p]
 
     def close(self):
         self.client.close()

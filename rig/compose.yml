@@ -116,6 +116,10 @@ services:
       DVT_NXDN_PEER: ${DVT_NET:-172.30.0}.50
       DVT_NXDN_TG: ${DVT_NXDN_TG:-31672}
       DVT_NXDN_MODULE: ${DVT_NXDN_MODULE:-F}
+      # second NX row: the tester plays the reflector (cases/proto/test_nxdn_peer.py)
+      DVT_NXDN_PROBE_PEER: ${DVT_NET:-172.30.0}.30:41410
+      DVT_NXDN_PROBE_TG: ${DVT_NXDN_PROBE_TG:-31673}
+      DVT_NXDN_PROBE_MODULE: ${DVT_NXDN_PROBE_MODULE:-I}
       DVT_P25: ${DVT_P25:-off}
       DVT_P25_PEER: ${DVT_NET:-172.30.0}.60
       DVT_P25_TG: ${DVT_P25_TG:-31672}
@@ -149,6 +153,10 @@ services:
       DVT_NXDN_TG: ${DVT_NXDN_TG:-31672}
       DVT_NXDN_MODULE: ${DVT_NXDN_MODULE:-F}
       DVT_P25: ${DVT_P25:-off}
+      # second NX row: the tester plays the reflector (cases/proto/test_nxdn_peer.py)
+      DVT_NXDN_PROBE_PEER: ${DVT_NET:-172.30.0}.30:41411
+      DVT_NXDN_PROBE_TG: ${DVT_NXDN_PROBE_TG:-31673}
+      DVT_NXDN_PROBE_MODULE: ${DVT_NXDN_PROBE_MODULE:-I}
       DVT_P25_PEER: ${DVT_NET:-172.30.0}.61
       DVT_P25_TG: ${DVT_P25_TG:-31672}
       DVT_P25_MODULE: ${DVT_P25_MODULE:-G}
@@ -212,6 +220,10 @@ services:
       DVT_NXDN_MODULE: ${DVT_NXDN_MODULE:-F}
       DVT_P25: ${DVT_P25:-off}
       DVT_P25_REF: ${DVT_NET:-172.30.0}.60
+      DVT_NXDN_PROBE_TG: ${DVT_NXDN_PROBE_TG:-31673}
+      DVT_NXDN_PROBE_MODULE: ${DVT_NXDN_PROBE_MODULE:-I}
+      DVT_NXDN_PROBE_PORT_REF: "41410"
+      DVT_NXDN_PROBE_PORT_SUT: "41411"
       DVT_P25_SUT: ${DVT_NET:-172.30.0}.61
       DVT_P25_TG: ${DVT_P25_TG:-31672}
       DVT_P25_MODULE: ${DVT_P25_MODULE:-G}
