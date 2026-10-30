@@ -303,6 +303,26 @@ SPEC = {
     # Dev values follow when dv-router chooses.
     "imrs": {
         "server": False,
+        "P-IMR-02": {"copies": 1},
+        # unknown addresses get no ping answer (no amplifier)
+        "P-IMR-04": {"answered": False},
+        # exactly the mapped DG-IDs
+        "P-IMR-05": {"callsign": "XLX999", "dgids": list(range(10, 36))},
+        "P-IMR-06": {"registered": True},
+        # per-peer refresh: egress does not keep every peer alive
+        "P-IMR-07": {"dropped_after_idle": True, "kept_by_egress": False},
+        # unmapped DG-ID: drop the call, keep the link
+        "P-IMR-08": {"follows_or_linked": True},
+        # pad to whole packets
+        "P-IMR-14": {"frames": 10},
+        "P-IMR-15": {"frames": 15, "zero_frames": 0},
+        "P-IMR-17": {"same_sid": False},
+        "P-IMR-18": {"echo": 0},
+        # lower-case callsigns are normalized to upper-case
+        "P-IMR-20": {"heard": True},
+        "P-IMR-21": {"terminator": True, "freed": True},
+        "P-IMR-22": {"mixed": False},
+        "P-IMR-24": {"relayed": False},
     },
     # Icom G3 terminal / access point (docs/protocols/g3.md): the DV-Router
     # edge is not built yet; the cases skip "edge not ready" until True.
