@@ -181,11 +181,14 @@ def reply_kind(data):
 
 # ---------------------------------------------------------------- streams
 
-def stream(client, voice, sid, tg=None, seq0=0, src=None, head=True, end=True, sync=dmr.BS_DATA):
+def stream(client, voice, sid, tg=None, seq0=0, src=None, head=True, end=True, sync=dmr.BS_DATA,
+           embedded_lc=False):
     """Header, voice bursts A-F (three frames each), terminator; the
-    repeater id is the client's login id."""
+    repeater id is the client's login id. embedded_lc: bursts B-E carry
+    the group LC of src -> tg (colour code 1), F the null message."""
     tg = tg or client.tg
     src = src or client.id
+    fragments = dmr.encode_embedded_lc(dmr.full_lc_group(src, tg)) if embedded_lc else None
     out = []
     if head:
         out.append(dmr.packet(seq0, src, tg, client.id, 0xA1, sid, dmr.data_sync_payload(sync)))
@@ -193,7 +196,10 @@ def stream(client, voice, sid, tg=None, seq0=0, src=None, head=True, end=True, s
         trio = (list(voice[index:index + 3]) + [bytes(9)] * 2)[:3]
         vseq = (index // 3) % 6
         bits = dmr.bitfield(2, False, dmr.VOICE_SYNC if vseq == 0 else dmr.VOICE, vseq)
-        out.append(dmr.packet(seq0 + len(out), src, tg, client.id, bits, sid, dmr.voice_payload(*trio)))
+        payload = dmr.voice_payload(*trio)
+        if fragments:
+            payload = dmr.with_embedded(payload, vseq, fragments)
+        out.append(dmr.packet(seq0 + len(out), src, tg, client.id, bits, sid, payload))
     if end:
         out.append(dmr.packet(seq0 + len(out), src, tg, client.id, 0xA2, sid, dmr.data_sync_payload()))
     return out
@@ -1134,7 +1140,9 @@ def headless_probe(ip):
     talker, listener = new(TALKER), new(LISTENER)
     try:
         ready(ip, listener, talker)
-        send(talker, stream(talker, frames(), clients.fresh_stream_id("dmr"), head=False), listener)
+        # embedded LC in B-E: what a receiver needs for late entry
+        send(talker, stream(talker, frames(), clients.fresh_stream_id("dmr"), head=False, embedded_lc=True),
+             listener)
         voiced = [[kind(d) for d in s] for s in by_stream(listener) if any(kind(d) == "voice" for d in s)]
         kinds = voiced[0] if voiced else []
         relayed = len(heard(listener)) > 0

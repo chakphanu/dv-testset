@@ -134,8 +134,22 @@ parallel; the Judged column of testlist K1 says how:
 Lenient authentication (a zero RPTK hash acked) stays the default
 expectation for every profile: the tester sends zero hashes and no RPTC;
 a strict-hash probe is recorded, not failed, unless a profile spec asks for
-strict. Egress embedded LC and sync patterns are checked passively by
-dvcheck (testlist H3), not repeated here.
+strict. dvcheck (testlist H3) checks the DMRD framing passively in both
+directions (sizes, sequence, header -> bursts A..F order and the
+voice-sync flag on A, terminator, traffic after close); it decodes no sync
+pattern, EMB or embedded LC, so those are not checked anywhere yet.
+
+Embedded LC: the tester's voice bursts B..F carry an all-zero centre
+(EMB with CC 0 and LCSS 0, no LC) by default. `dvtest/proto/dmr.py`
+builds the real embedded signalling on request (`voice_packets(...,
+embedded_lc=True)`, `DmrClient.talk(..., embedded_lc=True)`): the group
+voice channel user LC (ETSI-2 7.1.1/1) of src -> dst with its 5-bit
+checksum (ETSI-1 B.3.11) in the Hamming (16,11,4) BPTC of B.2.1 (table
+B.16, figure B.3), interleaved over bursts B, C, D, E with LCSS 1, 3, 3, 2
+(9.3.3 table 9.20), burst F the null message with LCSS 0 (7.1.3/2, D.1),
+each EMB (9.1.2 table 9.3) protected by QR (16,7,6) (B.3.2 table B.12) and
+placed around the fragment in the burst centre (annex E tables E.6..E.9,
+E.11). Only P-DMR-36 sends it (late entry needs it).
 
 Conventions: ids and 32-bit control fields are big endian on the wire
 unless noted. "Silently ignored" means no reply and no state change.
@@ -177,7 +191,9 @@ unless noted. "Silently ignored" means no reply and no state change.
   them. Never relay a non-55 B DMRD.
 - **P-DMR-22** header with voice sync. Every client sends its header as a
   data-sync burst of data type 1; none sends a voice-sync header. No
-  client depends on the answer.
+  client depends on the answer. A refused header refuses its stream id:
+  the voice after it is not a late entry (P-DMR-36), because a client
+  whose call was refused does not expect it to start later.
 - **P-DMR-27 / 28 / 26** egress repeater id, stream id, sequence. GW
   ignores the repeater id and passes the stream id and sequence through
   as opaque bytes; MH does not use the stream id or the sequence byte; DS
@@ -198,6 +214,8 @@ unless noted. "Silently ignored" means no reply and no state change.
 - **P-DMR-41** data bursts. MH would key data from the network on air and
   GW passes slot 2 group TG 9 data in XLX mode; DS ignores data. No XLX
   client sends data on the reflector link. Either answer is tolerated.
+  The stream id of a refused data burst stays refused, so headerless voice
+  under it is not a late entry (as P-DMR-22).
 
 ## 1. Login
 
@@ -247,7 +265,7 @@ wire layout above, which follows MMDVMHost/DMRGateway.
 |---|---|---|---|---|---|---|---|
 | P-DMR-20 | Only slot 2 is a reflector slot: header, voice and terminator on slot 1 are ignored | convention (XLX family) | ETSI-1 4.2.2 / 5.1 define the two time slots; nothing on network use | GW XLX mode maps its RF slot/TG to slot 2 TG 9; YSF2DMR and HB3p XLX links use slot 2; DS defaults to slot 2 (user can pick 1) | xlxd, URFd slot 2 only; HB3, HB4, FDMR route both slots by their bridge rules | measured: 0 packets | slot 2 only (XLX family; all XLX clients use it) |
 | P-DMR-21 | Group calls are relayed; private-call (bit 6) voice is not | convention (XLX family) | ETSI-2 5.2.1 (group call), 5.2.2 (individual call); ETSI-1 9.3.11 (FLCO) | GW, CM, HB3p link with private-call bursts and talk group calls; BD: private call to connect, then TG 9 group; DS sends private voice only when its PC switch is on | xlxd, URFd drop private voice (URFd still acts on private 4000/400x headers); HB3, HB4 route unit calls (map, opt-in); FDMR uses private calls as dial-a-TG control | measured: 0 voice frames (private voice after a group header: header and terminator relayed) | relay group, not private voice (XLX family) |
-| P-DMR-22 | A stream opens with a data-sync burst of data type 1 (voice LC header) with a BS or MS data sync pattern; a header with another sync opens nothing | form: MUST (ETSI); rejecting another sync: disputed | ETSI-1 5.1.2/2 (voice initiation), 7.1.1 (LC header in a general data burst), 9.1.1 table 9.2 (sync patterns), 9.3.6 table 9.22 (data type 1) | every client sends a data-sync header of data type 1 (GW link bursts BS data sync); none sends a voice-sync header; receivers re-derive the framing | xlxd, URFd check BS/MS data sync on the header, but URFd then opens the stream on the following voice (late entry); HB3, HB4, FDMR do not check the sync | measured: MS data sync header 36/36 frames; header with BS voice sync 0 frames | accept BS/MS data sync; reject another sync (no client affected) |
+| P-DMR-22 | A stream opens with a data-sync burst of data type 1 (voice LC header) with a BS or MS data sync pattern; a header with another sync opens nothing | form: MUST (ETSI); rejecting another sync: disputed | ETSI-1 5.1.2/2 (voice initiation), 7.1.1 (LC header in a general data burst), 9.1.1 table 9.2 (sync patterns), 9.3.6 table 9.22 (data type 1) | every client sends a data-sync header of data type 1 (GW link bursts BS data sync); none sends a voice-sync header; receivers re-derive the framing | xlxd, URFd check BS/MS data sync on the header, but URFd then opens the stream on the following voice (late entry); HB3, HB4, FDMR do not check the sync | measured: MS data sync header 36/36 frames; header with BS voice sync 0 frames | accept BS/MS data sync; reject another sync (no client affected); the refused header marks its stream id refused, so the voice after it is not relayed and no late entry (P-DMR-36) happens for that id: a refused call stays refused, clients do not expect a refused call to start later |
 | P-DMR-23 | Voice comes as superframes of bursts A-F (A voice sync, B-F embedded signalling), three 72-bit AMBE+2 frames per burst; the master relays every frame unchanged | structure: MUST (ETSI); unchanged relay: convention (impl, agreed; HB15 allows FEC fixes) | ETSI-1 4.2.2 (three 72-bit vocoder frames + 48-bit sync), 5.1.2/1 (superframe), 7.1.3 (embedded LC); HB15 p.6 "DMR Data" | GW, CM, DS send A-F with the voice sequence in bits 3-0; DS extracts the three AMBE frames; embedded LC use on receive: MH late entry (not checked further) | AMBE passthrough agreed: HB3, FDMR rewrite only the embedded LC when the TG changes (HB3 also on data bursts); URFd null embedded LC; xlxd re-encodes it | measured: 60/60 frames byte exact | AMBE frames unchanged (all agree) |
 | P-DMR-24 | A stream ends with a data-sync burst of data type 2 (terminator with LC), passed to listeners | MUST (ETSI) | ETSI-1 5.1.2/3 (voice termination), 7.1.2, 9.3.6 | GW, CM, DS send it; DS ends playback on it | agreed | measured: listeners get it; a second talker 100 ms later is relayed whole | relay it (spec) |
 | P-DMR-25 | Egress: header, voice A-F (A voice sync), terminator, slot 2, group call, one stream id per stream; destination TG 9 | structure: MUST (ETSI); TG 9: convention (XLX family, the client requires it) | ETSI-1 5.1.2/1-5.1.2/3 | GW XLX mode accepts only slot 2 group TG 9 from the reflector (anything else logged as unexpected and dropped) and rewrites it to its RF slot/TG; DS and CM accept any slot (CM: enabled slots) and TG | xlxd, URFd always TG 9, slot 2, group; HB3, HB4, FDMR write the target bridge TG | measured: structure ok (14 packets), dst TG 9 | slot 2, group, TG 9 (GW requires it) |
@@ -278,9 +296,9 @@ and HB3p (P-DMR-43) and a plain over to TG 400x from DS, BD and openSPOT
 |---|---|---|---|---|---|---|---|
 | P-DMR-34 | A stream whose terminator is lost ends after a silence timeout; the module is then free | convention (impl, agreed); timeout and closing terminator: differ (judged by B3) | not stated (ETSI-1 5.2.1/4 hang times are air-interface only) | MH and DS end a stream without a terminator by their own watchdogs; a closing terminator is tolerated | xlxd, URFd 1.6 s; HB3, FDMR 0.36 s contention and 5 s cleanup; HB4 2 s | measured: module free within 2.2 s; listeners got a terminator | per B3 |
 | P-DMR-35 | A second header on a busy module is not mixed into the running stream | convention (impl, agreed); late-entry policy judged by B1/B2 | not stated | no client mixes two streams on one slot; GW keeps one network per slot at a time | URFd one stream per module; HB3, FDMR contention window plus hang time; HB4 busy-slot check, 200 ms | measured: first stream whole, no mixing, late talker 0 frames | no mixing (all agree); policy per B1/B2 |
-| P-DMR-36 | Voice bursts whose stream id had no header are not relayed | disputed (ETSI provides late entry) | ETSI-1 4.3 and 7.1.3 (embedded LC "to facilitate late entry"), 5.1.2/2 (trunked voice without header) | clients always send a header first (MH synthesises one on RF late entry; DS sends exactly one), so this is a lost header datagram; MH does network late entry, DS plays any voice | URFd builds a header from the voice and opens the stream; HB3, HB4 synthesise the LC and relay; FDMR not checked | measured: 0 frames (xlxd only buffers them for late-entry promotion) | late entry: open from the embedded LC with a synthesised header (ETSI, URFd, HB3, HB4; receivers tolerate it) |
+| P-DMR-36 | Voice bursts whose stream id had no header are not relayed | disputed (ETSI provides late entry) | ETSI-1 4.3 and 7.1.3 (embedded LC "to facilitate late entry"), 5.1.2/2 (trunked voice without header) | clients always send a header first (MH synthesises one on RF late entry; DS sends exactly one), so this is a lost header datagram; MH does network late entry, DS plays any voice | URFd builds a header from the voice and opens the stream; HB3, HB4 synthesise the LC and relay; FDMR not checked | measured: 0 frames (xlxd only buffers them for late-entry promotion); still 0 with a valid embedded LC in B..E (rerun 2026-10-30) | late entry: open from the embedded LC with a synthesised header (ETSI, URFd, HB3, HB4; receivers tolerate it), never for a stream id whose header or data burst was refused (P-DMR-21, 22, 41) |
 | P-DMR-37 | The talker never receives its own stream back | convention (impl, agreed) | not stated | not checked whether clients filter their own source id; GW would hand an echo to MH | HB3, HB4, FDMR skip the source system; URFd skips the stream owner | measured: 0 packets to the talker | no echo (all agree) |
-| P-DMR-41 | Data-sync bursts that are not voice (CSBK, data header, rate 1/2, 3/4: data type >= 3) open no voice stream; whether they or a following headerless voice are relayed | non-voice: MUST (ETSI); forwarding: disputed | ETSI-1 9.3.6 table 9.22, 7.2.1 (CSBK), 8.2.1 (data headers), 9.2.2 / 9.2.7 (rate 3/4, 1/2); ETSI-3 5.3.1 | no XLX client sends data on the reflector link; GW passes slot 2 group TG 9 data to MH, which would key it on air; DS ignores data | xlxd, URFd, HB4 do not forward data (URFd opens a stream on the voice that follows); HB3 forwards data (and overwrites part of it with embedded LC); FDMR forwards group data | measured: 0 packets (data and the voice after it) | do not relay data (no client needs it); the voice after it follows P-DMR-36 |
+| P-DMR-41 | Data-sync bursts that are not voice (CSBK, data header, rate 1/2, 3/4: data type >= 3) open no voice stream; whether they or a following headerless voice are relayed | non-voice: MUST (ETSI); forwarding: disputed | ETSI-1 9.3.6 table 9.22, 7.2.1 (CSBK), 8.2.1 (data headers), 9.2.2 / 9.2.7 (rate 3/4, 1/2); ETSI-3 5.3.1 | no XLX client sends data on the reflector link; GW passes slot 2 group TG 9 data to MH, which would key it on air; DS ignores data | xlxd, URFd, HB4 do not forward data (URFd opens a stream on the voice that follows); HB3 forwards data (and overwrites part of it with embedded LC); FDMR forwards group data | measured: 0 packets (data and the voice after it) | do not relay data (no client needs it); the refused burst marks its stream id refused, so the voice after it is not relayed and no late entry (P-DMR-36) happens for that id: a refused call stays refused, clients do not expect a refused call to start later |
 | P-DMR-42 | The ingress sequence byte wraps 255 -> 0 in a long over without loss or a new stream | MUST (HB15: wraps to zero) | HB15 p.6 "Seq No" | GW and CM pass the caller's byte through; DS counts per over; no client resets anything on a wrap | xlxd, URFd ignore the byte; HB3, HB4 track streams by stream id | measured: 120/120 frames, one stream, one header | track streams by stream id (spec) |
 
 ## 7. Several clients

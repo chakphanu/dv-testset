@@ -163,8 +163,10 @@ as one case in `cases/proto/test_<protocol>.py` (markers `proto` and `rig`).
 the `xlxd` profile sut == ref, under another profile its spec entry (spec
 pending -> skip); "diff" = sut == ref in the same run; "spec" = judged by
 `DVT_SUT_PROFILE` (`dvtest/specs/<profile>.py`); "slow" = needs the server
-timeout (about 100 s on xlxd), also marked `slow`. Egress embedded LC and
-sync patterns: dvcheck H3. "probe" = an active case drives the packets;
+timeout (about 100 s on xlxd), also marked `slow`. dvcheck H3 checks DMRD
+sizes, order and burst types but does not decode sync patterns, EMB or
+embedded LC; the embedded LC of tester bursts is unit-tested
+(cases/unit/test_dmr.py). "probe" = an active case drives the packets;
 "dvcheck" = the passive capture check also covers it. Where no reference
 endpoint exists (USRP, the NXDN server): "conv" = an implementation
 convention the clients rely on, asserted on the system under test for every
@@ -552,8 +554,53 @@ test, "dev" rows are recorded under the `xlxd` profile.
 | P-M17-44 | 37 B peer CONN not linked | test_m17::test_m17_peer_conn_unconfigured | dev | probe | covered (record) |
 | P-M17-45 | No datagram to a client above 100 B | test_m17::test_m17_egress_max_size | hb | probe | covered |
 
-K9 (YSF, `docs/protocols/ysf.md`) and K10 (XLX interlink,
-`docs/protocols/xlx.md`) are reserved for those suites when they land.
+K9 (YSF, `docs/protocols/ysf.md`) is reserved for that suite when it
+lands; K11 onward for G3, DMR+, IMRS and USRP dynamic clients.
+
+### K10. XLX interlink (`docs/protocols/xlx.md`)
+
+Markers `proto`, `rig` and `interlink`. The tester is the XLX peer XLX996
+(and BM3109) of both reflectors (profile interlink, tester rows added by
+`DVT_INTERLINK_TESTER`). No row is hb: the interlink has no published spec.
+Measured on xlxd: sut == ref everywhere (out/20261030T062157Z-i11,
+out/20261030T075049Z-i11).
+
+| # | Obligation | Case | Judged | How | Status |
+|---|---|---|---|---|---|
+| P-XLX-01 | `L` -> `A` with shared modules | test_xlx::test_xlx_connect_ack | diff | probe | covered |
+| P-XLX-02 | `A` module list = intersection | test_xlx::test_xlx_ack_module_intersection | dev | probe | covered |
+| P-XLX-03 | unlisted callsign -> `N` | test_xlx::test_xlx_unlisted_nack | diff | probe | covered |
+| P-XLX-04 | no common module -> `N` | test_xlx::test_xlx_no_common_module_nack | diff | probe | covered |
+| P-XLX-05 | listed callsign from another address | test_xlx::test_xlx_wrong_address | dev | probe | covered |
+| P-XLX-06 | traffic only after both acks | test_xlx::test_xlx_half_link_no_traffic | diff | probe | covered |
+| P-XLX-07 | `L` every 5 s to an unlinked peer | test_xlx::test_xlx_initiates_connect | diff | probe + dvcheck | covered |
+| P-XLX-08 | revision from the peer's version (27/45/53 B) | test_xlx::test_xlx_revision_by_version[..] | diff | probe | covered |
+| P-XLX-09 | BM-prefixed peer is a DMR peer | test_xlx::test_xlx_bm_peer_class | dev | probe | covered |
+| P-XLX-10 | repeated `L`/`A`: one link, traffic once | test_xlx::test_xlx_relink_single | diff | probe | covered |
+| P-XLX-11 | keepalive 9 B about every second | test_xlx::test_xlx_keepalive_form | diff | probe + dvcheck | covered |
+| P-XLX-12 | silent peer: `U` after 30 s, removed | test_xlx::test_xlx_silent_peer_dropped | diff | probe (slow) | covered |
+| P-XLX-13 | `U` removes the link | test_xlx::test_xlx_disconnect | diff | probe | covered |
+| P-XLX-14 | keepalive/`U` with another callsign | test_xlx::test_xlx_foreign_callsign_unlink | dev | probe | covered |
+| P-XLX-15 | egress header form | test_xlx::test_xlx_egress_header | diff | probe + dvcheck | covered |
+| P-XLX-16 | egress voice size and layout | test_xlx::test_xlx_egress_voice_layout | diff | probe + dvcheck | covered |
+| P-XLX-17 | transcoded slots filled | test_xlx::test_xlx_egress_slots_transcoded | diff | probe (crossmode) | covered |
+| P-XLX-18 | missing slot inside a transcoded stream: zero, frame kept | test_xlx::test_xlx_egress_slot_missing_mid_stream | dev (B6b) | probe (rig_control) | covered |
+| P-XLX-19 | last frame form | test_xlx::test_xlx_egress_last_frame | diff | probe | covered |
+| P-XLX-20 | revision 3 ingress slots used as given | test_xlx::test_xlx_ingress_rev3_slots | diff | probe | covered |
+| P-XLX-21 | revision 1 ingress transcoded locally | test_xlx::test_xlx_ingress_rev1_transcoded | diff | probe (crossmode) | covered |
+| P-XLX-22 | size not matching the revision | test_xlx::test_xlx_ingress_size_mismatch | dev | probe | covered |
+| P-XLX-23 | malformed packets ignored, link kept | test_xlx::test_xlx_garbage_ignored | diff | probe | covered |
+| P-XLX-24 | stream id kept | test_xlx::test_xlx_stream_id_kept | diff | probe | covered |
+| P-XLX-25 | stream id 0 refused | test_xlx::test_xlx_sid_zero | diff | probe | covered |
+| P-XLX-26 | sid open elsewhere refused | test_xlx::test_xlx_sid_open_elsewhere | spec (B8c) | probe | covered |
+| P-XLX-27 | same module letter; unshared module dropped | test_xlx::test_xlx_module_mapping | diff | probe | covered |
+| P-XLX-28 | no XLX transit (tester sees the wire) | test_xlx::test_xlx_no_transit | spec (B11) | probe + dvcheck xlx.transit | covered |
+| P-XLX-29 | cross-family transit | test_xlx::test_xlx_cross_family | diff | probe | covered |
+| P-XLX-30 | 1.6 s stream timeout | test_xlx::test_xlx_stream_timeout | diff | probe | covered |
+| P-XLX-31 | repeated header, one stream | test_xlx::test_xlx_repeated_header | diff | probe | covered |
+| P-XLX-32 | voice without header | test_xlx::test_xlx_headerless_voice | dev | probe | covered |
+| P-XLX-33 | no transcoder for the whole stream: frame form | test_xlx::test_xlx_egress_transcoder_down | dev (B6b) | probe (rig_control) | covered |
+| P-XLX-34 | cut XLX stream: no closing frame to another XLX peer | test_xlx::test_xlx_cut_stream_no_closing_frame | dev | probe + dvcheck xlx.transit | covered |
 
 ## Upstream behaviour the cases accept
 
