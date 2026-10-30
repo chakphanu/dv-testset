@@ -138,7 +138,13 @@ parallel; the Judged column of the testlist rows says how:
 The tester sends spaces as the header CRC (B12: not checked by any
 reflector); a case that needs a real CRC computes it. Egress counter,
 sync position and last frame are also checked passively by dvcheck
-(testlist H2).
+(testlist H2). Ingress that a case makes malformed or out-of-protocol on
+purpose (P-DXT-04 invalid links, 14 and 54 streams without a last frame,
+15 garbage, 16 stream without a link, 17 header prefix, 19 bad CRC, 21
+lower-case fields, 22 flags, 31 counters, 34 voice after the last frame,
+42 voice without a header, 52 polls without a link) is bracketed with the
+control-channel `mark begin|end dextra-<tag>-<reflector ip>`, so dvcheck
+reports findings on those tester flows as WARN `[during mark ...]`.
 
 Conventions: offsets are into the UDP payload. "RPT2" is the destination
 field at offset 18, "RPT1" the departure field at offset 26 (QnetGateway
@@ -170,6 +176,7 @@ the reflector module; keepalive 9 B = callsign (8) + 0x00; ACK / NAK
 | P-DXT-12 | Unlink (11 B, byte 9 space) removes the client; no reply (except the revision 1/2 forms) | convention (impl, agreed) | not stated | IG, DSG send their unlink twice, QN five times, DS once on closing; none waits for a reply | URFd: no reply (revision 1 `DISCONNECTED`, revision 2 echo); IG, QN, dxrfd no reply | measured: no reply, client removed (test_dextra_unlink_no_reply; also 25 unlinks of the clients.md capture) | remove on the first copy; later copies silently ignored |
 | P-DXT-13 | After the unlink no further voice reaches the client | removal: convention (impl, agreed); tail: judged by B5 | not stated | a client that unlinked may already have closed its socket (ICMP unreachable) | URFd, IG stop at once | measured: tail <= 1.0 s (test_xlxd_clients::test_leave_mid_stream_tail[dstar], C7b); code: per-module client list refreshed once a second | stop at once (B5) |
 | P-DXT-14 | An unlink from the client that is talking ends its stream and frees the module | disputed | not stated | IG sends its local repeater an end frame on a local unlink; QN clears the slot and lets its 2 s timer end the stream | URFd refuses to remove a stream owner (unlink lost); | measured: the talker's unlink is lost (still linked afterwards); the listener got a last frame 0.7 s after the unlink; the module carried the next stream 2.4 s later (test_dextra_unlink_while_talking) | end the stream (terminator to listeners, B3) and remove the client |
+| P-DXT-54 | An unlink from a client whose own stream is still open (no last frame sent) removes it at once: no further keepalives, no later stream | disputed | not stated (JARL has nothing on unlink; there is no DExtra spec) | IG, DSG send the unlink without closing their outgoing stream (the end frame on unlink goes only to the local repeater, for incoming traffic), then stop polling; DS sends its unlink once on disconnect, also mid-transmission with no last frame, then closes its socket; QN not checked | URFd keeps a stream owner on unlink (same rule as xlxd, code; not run); dxrfd removes the link on the unlink with no stream-owner check (code) | measured: unlink ignored: 2 keepalives in the 25 s after it (8.2 s, 18.2 s), and the header and all 30 voice frames + last frame of B's stream 3 s later (test_dextra_unlink_with_open_stream); first seen in a client capture; code: a stream owner is not removed | remove at once even while the client owns a stream: end its stream (B3), no keepalive, no later stream (B5) |
 | P-DXT-52 | A 9 B keepalive from an address that is not linked creates no link and gets no traffic | disputed | not stated | dongle-type clients (byte 8 not 0, "DExtra dongle") poll without a link packet; no dongle client was identified in this survey | IG (server) creates a dongle entry for a poll whose byte 8 is not 0 and answers it; URFd ignores it | measured: no reply, no traffic (test_dextra_poll_without_link) | ignore (no dongle mode) |
 
 ## 2. Malformed and unknown packets
@@ -265,6 +272,7 @@ a peer that links in.
 | P-DXT-02 | first ACK after a random 0-2 s | at once | DS sends its link once and never retries |
 | P-DXT-09 | timeout notice of 10 spaces + 0x00 | none, or callsign + module + space + 0x00 | IG and QN ignore xlxd's form; URFd's form is the one they parse |
 | P-DXT-14 | unlink of the talker lost, stream runs on | end the stream, remove the client | the client asked to leave |
+| P-DXT-54 | unlink with an open stream lost: keepalives and later streams keep going to the client | remove at once (B5) | IG, DSG and DS do unlink mid-stream; the client may have closed its socket |
 | P-DXT-26 | id equal to the last outbound id dropped, also after the stream ended | no drop once the earlier stream ended | random ids collide; loops are handled by B8/B11 |
 | P-DXT-33 | last frame payload replaced by 55 C8 7A + zeros / 25 1A C6, and the previous frame's slow data by 55 55 55 | pass the ingress payload and slow data; JARL end pattern only when synthesized | clients and URFd pass them; xlxd's end pattern starts 3 bytes early, inside the slow data of the last voice frame |
 | P-DXT-36 | routed by the RPT2 module | route by the linked module | the link is the contract; RPT2 into another module bypasses it |
@@ -273,7 +281,7 @@ a peer that links in.
 
 ## Testlist rows
 
-The same rows as `docs/testlist.md` K2, plus P-DXT-52 and P-DXT-53 (new;
+The same rows as `docs/testlist.md` K2, plus P-DXT-52, P-DXT-53 and P-DXT-54 (new;
 the lead merges them into the testlist).
 
 | # | Obligation | Case | Judged | How | Status |
@@ -292,6 +300,7 @@ the lead merges them into the testlist).
 | P-DXT-12 | Unlink removes the client, no reply | test_dextra::test_dextra_unlink_no_reply | diff | probe + dvcheck | covered |
 | P-DXT-13 | No voice after unlink (tail) | test_xlxd_clients::test_leave_mid_stream_tail[dstar] | spec (B5) | probe | covered (C7b) |
 | P-DXT-14 | Unlink by the talker ends its stream, frees the module | test_dextra::test_dextra_unlink_while_talking | dev | probe | covered |
+| P-DXT-54 | Unlink with the client's own stream open: no keepalive, no later stream to it | test_dextra::test_dextra_unlink_with_open_stream | dev | probe | covered |
 | P-DXT-15 | Unknown / wrong-size packets ignored, reflector keeps serving | test_dextra::test_dextra_garbage_ignored[nat1\|short3\|link10\|oversize\|dsvt55\|dsvt57\|voice26\|voice28] | diff | probe | covered |
 | P-DXT-16 | DSVT from a non-linked address not relayed | test_dextra::test_dextra_dsvt_not_linked | diff | probe | covered |
 | P-DXT-17 | Header prefix variants (byte 8, byte 14, bytes 9-11) | test_dextra::test_dextra_header_prefix[byte8\|byte14\|ids] | dev | probe | covered |

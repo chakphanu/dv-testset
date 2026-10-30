@@ -161,6 +161,15 @@ def pong(client):
     return ask(client, dmr.rptping(client.id), tagged("MSTPONG")) is not None
 
 
+def control(data):
+    return dmr.parse_control(data) is not None
+
+
+def reply_kind(data):
+    """Tag of a master reply ("MSTNAK", "RPTACK", ...), "none" for no reply."""
+    return "none" if data is None else (dmr.parse_control(data) or {"tag": "other"})["tag"]
+
+
 # ---------------------------------------------------------------- streams
 
 def stream(client, voice, sid, tg=None, seq0=0, src=None, head=True, end=True, sync=dmr.BS_DATA):
@@ -260,8 +269,7 @@ def unknown_probe(ip):
     c = new(UNKNOWN_ID)
     c.dest = (ip, dmr.PORT)
     try:
-        reply = ask(c, dmr.rptl(c.id))
-        return {"reply": (dmr.parse_control(reply) or {"tag": "other"})["tag"] if reply else "none"}
+        return {"reply": reply_kind(ask(c, dmr.rptl(c.id)))}
     finally:
         c.dest = None
         done(c)
@@ -313,36 +321,52 @@ def auth_first_probe(ip):
     c = new()
     c.dest = (ip, dmr.PORT)
     try:
-        ack = ask(c, dmr.rptk(c.id), lambda d: tagged("RPTACK")(d) or tagged("MSTNAK")(d))
-        return {"reply": (dmr.parse_control(ack) or {}).get("tag", "none"), "pong": pong(c)}
+        reply = reply_kind(ask(c, dmr.rptk(c.id), control))
+        return {"reply": reply, "pong": pong(c)}
     finally:
         c.dest = None
         done(c)
 
 
 def test_mmdvm_auth_without_login(rig):
-    """P-DMR-05 (dev): RPTK without RPTL; xlxd acks and logs the client in."""
+    """P-DMR-05 (dev): RPTK without RPTL -> reply kind ("none", "MSTNAK",
+    "RPTACK"), then an RPTPING -> MSTPONG or not (after a NAK there is no
+    session). xlxd acks and logs the client in."""
     got = both(rig, auth_first_probe)
     print("P-DMR-05 RPTK first:", got)
     judge_dev(rig, "P-DMR-05", got, "reply", "pong")
 
 
 def config_probe(ip):
+    """RPTL, RPTK, RPTC (302 B), RPTO; the tail of each RPTACK after the
+    RPTL one (whose tail is the salt): "id" (the 4-byte id, big endian), "bare",
+    "none" (no RPTACK) or its hex."""
     c = new()
+    c.dest = (ip, dmr.PORT)
     try:
-        login(ip, c, join=False)
-        ack = ask(c, dmr.rptc(c.id), tagged("RPTACK"))
-        return {"ack": ack is not None, "tail": len(dmr.parse_control(ack)["tail"]) if ack else None}
+        assert ask(c, dmr.rptl(c.id), tagged("RPTACK")), "%s: no RPTACK to RPTL" % ip
+        tails = {}
+        for name, packet in (("rptk", dmr.rptk(c.id)), ("rptc", dmr.rptc(c.id)),
+                             ("rpto", dmr.rpto(c.id, "TS2=%d;" % c.tg))):
+            ack = ask(c, packet, tagged("RPTACK"))
+            tail = dmr.parse_control(ack)["tail"] if ack else None
+            tails[name] = "none" if tail is None else "id" if tail == c.id.to_bytes(4, "big") else tail.hex() or "bare"
+        return {"ack": tails["rptc"] != "none", "tails": tails,
+                "ack_id": all(t == "id" for t in tails.values())}
     finally:
         done(c)
 
 
 def test_mmdvm_config_ack(rig):
-    """P-DMR-06 (hb): RPTC of 302 B -> RPTACK."""
+    """P-DMR-06 (hb + dev): RPTC of 302 B -> RPTACK (hb); whether every
+    RPTACK of the login flow except the RPTL one (salt) carries the 4-byte
+    id, big endian, after the tag (RPTK, RPTC and RPTO acks) is dev (xlxd:
+    bare 6-byte RPTACK)."""
     got = both(rig, config_probe)
     print("P-DMR-06 RPTC:", got)
     for name, r in got.items():
         assert r["ack"], "%s: no RPTACK to RPTC" % name
+    judge_dev(rig, "P-DMR-06", got, "ack_id")
 
 
 def config_size_probe(ip):
@@ -454,17 +478,20 @@ def ping_stranger_probe(ip):
     c = new(LISTENER)
     c.dest = (ip, dmr.PORT)
     try:
-        return {"pong": pong(c)}
+        return {"reply": reply_kind(ask(c, dmr.rptping(c.id), control))}
     finally:
         c.dest = None
         done(c)
 
 
 def test_mmdvm_ping_not_logged_in(rig):
-    """P-DMR-12 (diff): RPTPING from an address that is not logged in."""
+    """P-DMR-12 (dev): RPTPING from an address that is not logged in never
+    gets MSTPONG; the reply kind ("none" on xlxd, MSTNAK per HB15) is dev."""
     got = both(rig, ping_stranger_probe)
     print("P-DMR-12 ping, not logged in:", got)
-    same(got, "pong")
+    for name, r in got.items():
+        assert r["reply"] != "MSTPONG", "%s: MSTPONG to a client that is not logged in" % name
+    judge_dev(rig, "P-DMR-12", got, "reply")
 
 
 SILENCE_S = 125
@@ -492,9 +519,18 @@ def silence_scenario(ip):
         keeper_mstcl = any(tagged("MSTCL")(p) for p in keeper.client.inbox)
         clear(keeper, silent, talker)
         voice, _ = talk(talker, keeper, silent)
-        return {"mstcl_s": None if mstcl_at is None else round(mstcl_at, 1),
-                "silent_heard": len(heard(silent)), "keeper_heard": heard(keeper) == voice,
-                "keeper_mstcl": keeper_mstcl, "keeper_pong": pong(keeper)}
+        out = {"mstcl_s": None if mstcl_at is None else round(mstcl_at, 1),
+               "silent_heard": len(heard(silent)), "keeper_heard": heard(keeper) == voice,
+               "keeper_mstcl": keeper_mstcl, "keeper_pong": pong(keeper)}
+        # the dropped client's next packet: an RPTPING, then (no reply) a
+        # lone terminator DMRD, which opens no stream on the module
+        reply = ask(silent, dmr.rptping(silent.id), control)
+        if reply is None:
+            end = dmr.packet(0, silent.id, silent.tg, silent.id, 0xA2, clients.fresh_stream_id("dmr"),
+                             dmr.data_sync_payload())
+            reply = ask(silent, end, control)
+        out["next_after_drop"] = reply_kind(reply)
+        return out
     finally:
         done(keeper, silent, talker)
 
@@ -510,9 +546,12 @@ def silence(rig):
 def test_mmdvm_silent_client_dropped(rig, silence):
     """P-DMR-13 (dev): what a client silent for the server timeout gets
     (xlxd: MSTCL after 100 s; other masters send MSTNAK, nothing or an
-    empty datagram; the timeout value is informative)."""
-    print("P-DMR-13 MSTCL after s:", {n: r["mstcl_s"] for n, r in silence.items()})
-    judge_dev(rig, "P-DMR-13", {n: {"mstcl": r["mstcl_s"] is not None} for n, r in silence.items()}, "mstcl")
+    empty datagram; the timeout value is informative), and the reply kind
+    to its next packet after the drop (RPTPING, else a DMRD)."""
+    got = {n: {"mstcl": r["mstcl_s"] is not None, "next_after_drop": r["next_after_drop"]}
+           for n, r in silence.items()}
+    print("P-DMR-13 MSTCL after s:", {n: r["mstcl_s"] for n, r in silence.items()}, got)
+    judge_dev(rig, "P-DMR-13", got, "mstcl", "next_after_drop")
 
 
 @pytest.mark.slow
@@ -627,25 +666,46 @@ def test_mmdvm_dmrd_wrong_size(rig):
     judge_dev(rig, "P-DMR-18", {n: {"relayed": r["voice"] > 0} for n, r in got.items()}, "relayed")
 
 
+STRANGER_BURST = 20                             # DMRD: a header + 19 voice bursts
+STRANGER_GAP = 0.090                            # 20 packets in 1.8 s
+STRANGER_SETTLE = 2.0
+
+
+def per_window_max(times, window=10.0):
+    """Most of times (seconds, sorted) inside any window."""
+    return max((sum(1 for u in times[i:] if u - t < window) for i, t in enumerate(times)), default=0)
+
+
 def stranger_probe(ip):
+    """A burst of 20 DMRD within 2 s (header + voice, module TG) from an
+    address that never logged in, a logged-in listener on the module."""
     stranger, listener = new(TALKER), new(LISTENER)
     try:
         ready(ip, listener)
         stranger.dest = (ip, dmr.PORT)
-        send(stranger, stream(stranger, frames(), clients.fresh_stream_id("dmr")), listener)
-        return {"dmrd": len(received(listener))}
+        voice = frames(3 * (STRANGER_BURST - 1), "p19")
+        packets = stream(stranger, voice, clients.fresh_stream_id("dmr"), end=False)
+        assert len(packets) == STRANGER_BURST
+        stranger.client.paced(stranger.dest, packets, STRANGER_GAP, listener.client)
+        settle(stranger, listener, seconds=STRANGER_SETTLE)
+        naks = [t for d, t in zip(stranger.client.inbox, stranger.client.inbox_times) if tagged("MSTNAK")(d)]
+        return {"dmrd": len(received(listener)), "relayed": len(received(listener)) > 0,
+                "nak": bool(naks), "nak_count": len(naks), "nak_per_10s_max": per_window_max(naks)}
     finally:
         stranger.dest = None
         done(stranger, listener)
 
 
 def test_mmdvm_dmrd_not_logged_in(rig):
-    """P-DMR-19 (hb): DMRD from an address that is not logged in is not
-    relayed (nothing reaches the module's listener)."""
+    """P-DMR-19 (hb + dev): DMRD from an address that is not logged in is
+    not relayed (hb: nothing reaches the module's listener); whether it
+    gets MSTNAK, and at most how many per 10 s for a 20-DMRD burst, is dev
+    (xlxd: silence; HB15 dead link: MSTNAK)."""
     got = both(rig, stranger_probe)
     print("P-DMR-19 DMRD, not logged in:", got)
     for name, r in got.items():
         assert r["dmrd"] == 0, "%s relayed %d packets of a stranger" % (name, r["dmrd"])
+    judge_dev(rig, "P-DMR-19", got, "relayed", "nak", "nak_per_10s_max")
 
 
 # ---------------------------------------------------------------- 4 DMRD layout
@@ -1065,17 +1125,32 @@ def headless_probe(ip):
     try:
         ready(ip, listener, talker)
         send(talker, stream(talker, frames(), clients.fresh_stream_id("dmr"), head=False), listener)
-        return {"voice": len(heard(listener))}
+        voiced = [[kind(d) for d in s] for s in by_stream(listener) if any(kind(d) == "voice" for d in s)]
+        kinds = voiced[0] if voiced else []
+        relayed = len(heard(listener)) > 0
+        # a voice LC header (data sync, data type 1) before the first voice burst
+        header_first = (kinds[0] == "header") if relayed else None
+        return {"voice": len(heard(listener)), "relayed": relayed, "header_first": header_first,
+                "first_kinds": kinds[:3]}
     finally:
         done(talker, listener)
 
 
 def test_mmdvm_voice_without_header(rig):
     """P-DMR-36 (dev): voice bursts whose stream id had no header (xlxd:
-    not relayed; URFd and HBlink open the stream on late entry)."""
+    not relayed; URFd and HBlink open the stream on late entry); when
+    relayed, whether the listener gets a voice LC header before the first
+    voice burst (a non-xlxd profile must send it, B16)."""
     got = both(rig, headless_probe)
     print("P-DMR-36 no header:", got)
-    judge_dev(rig, "P-DMR-36", {n: {"relayed": r["voice"] > 0} for n, r in got.items()}, "relayed")
+    if rig.sut_profile == specs.DEFAULT:
+        judge_dev(rig, "P-DMR-36", got, "relayed", "header_first")
+        return
+    entry = (specs.rule(rig, "mmdvm") or {}).get("P-DMR-36") or {}
+    if got["sut"]["relayed"]:
+        assert got["sut"]["header_first"], "sut: late entry relayed without a header first: %s" % (
+            got["sut"]["first_kinds"],)
+    judge_dev(rig, "P-DMR-36", got, *(["relayed"] + (["header_first"] if "header_first" in entry else [])))
 
 
 def echo_probe(ip):

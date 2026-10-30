@@ -9,10 +9,14 @@ clients): sut == ref under the xlxd profile, else the profile's "dextra"
 spec entry {"P-DXT-NN": {observed key: value}} (skip "spec pending"
 without one); diff = sut == ref. Rows covered by other cases (P-DXT-13,
 23, 25, 27, 38, 40, 41) have no case here. Every case prints what both
-sides did.
+sides did. Deliberately malformed or out-of-protocol ingress is
+bracketed with control-channel marks so dvcheck does not count it.
 """
+import contextlib
+import os
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -53,6 +57,33 @@ def both(rig, func, *args):
     for name in ("ref", "sut"):
         assert not isinstance(got[name], Exception), "%s: %r" % (name, got[name])
     return got
+
+
+def mark(rig, phase, tag):
+    """Control channel "mark begin|end <tag>": brackets deliberately
+    malformed ingress so dvcheck can tell it from a fault (no-op without
+    the control channel). Same request form as test_usrp.mark."""
+    if os.environ.get("DVT_RIG_CONTROL") != "1":
+        return
+    directory = Path(rig.out) / "control"
+    name = "dextra-mark-%d-%d" % (os.getpid(), time.monotonic_ns())
+    (directory / (name + ".tmp")).write_text("mark %s %s\n" % (phase, tag))
+    (directory / (name + ".tmp")).rename(directory / (name + ".req"))
+    deadline = time.monotonic() + 5
+    while not (directory / (name + ".ack")).exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+
+@contextlib.contextmanager
+def marked(rig, ip, tag):
+    """mark begin/end around the block; one tag per side (ref and sut run
+    in parallel threads)."""
+    tag = "dextra-%s-%s" % (tag, ip)
+    mark(rig, "begin", tag)
+    try:
+        yield
+    finally:
+        mark(rig, "end", tag)
 
 
 def judge_dev(rig, nn, got, *keys):
@@ -274,18 +305,35 @@ def test_dextra_ack_latency(rig):
     judge_dev(rig, "P-DXT-02", got, "acked", "delayed")
 
 
-def unserved_probe(ip):
-    c = new(EXTRA, "Z")
+def unserved_probe(ip, letter="Z"):
+    c = new(EXTRA, letter)
     try:
         return {"z": link(ip, c)["kind"]}
     finally:
         done(c)
 
 
+def unserved_letter():
+    """DVT_UNSERVED_MODULE: a letter the sut is started without (the rig
+    then leaves it out of the sut's rooms); empty when unset."""
+    return os.environ.get("DVT_UNSERVED_MODULE", "").strip().upper()[:1]
+
+
 def test_dextra_link_unserved_module_nak(rig):
     """P-DXT-03 (diff): a link to a module letter that is not served gets
-    NAK and no link. Probed with Z (xlxd serves A.. contiguously): when
-    both serve Z there is no unserved letter to probe."""
+    NAK and no link. Without DVT_UNSERVED_MODULE it is probed with Z
+    (xlxd serves A.. contiguously): when both serve Z there is no
+    unserved letter to probe. With it, the sut must NAK that letter (the
+    profile's "reply" when its spec names one); xlxd-ref is recorded."""
+    letter = unserved_letter()
+    if letter:
+        got = both(rig, unserved_probe, letter)
+        print("P-DXT-03 link to unserved %s:" % letter, got)
+        if got["sut"]["z"] == "ack" and rig.sut_profile == specs.DEFAULT:
+            pytest.skip("DVT_UNSERVED_MODULE=%s has no effect on this sut (it serves %s)" % (letter, letter))
+        want = ((specs.rule(rig, "dextra") or {}).get("P-DXT-03") or {}).get("reply", "nak")
+        assert got["sut"]["z"] == want, "sut: link to unserved %s got %s, want %s" % (letter, got["sut"]["z"], want)
+        return
     got = both(rig, unserved_probe)
     print("P-DXT-03 link to Z:", got)
     if got["ref"]["z"] == got["sut"]["z"] == "ack":
@@ -297,11 +345,12 @@ INVALID = {"callsign": dextra.raw_link(b"n0call  ", MOD, MOD),
            "module": dextra.raw_link(b"N0OTHER ", MOD, "5")}
 
 
-def invalid_probe(ip, name):
+def invalid_probe(ip, rig, name):
     bad, talker = new(EXTRA), new(TALKER)
     try:
         ready(ip, talker)
-        got = link(ip, bad, INVALID[name], seconds=2.5)
+        with marked(rig, ip, "p04-" + name):
+            got = link(ip, bad, INVALID[name], seconds=2.5)
         replied = replies(bad)
         settle(bad, seconds=CACHE)
         clear(bad)
@@ -317,7 +366,7 @@ def invalid_probe(ip, name):
 def test_dextra_link_invalid(rig, name):
     """P-DXT-04 (dev): a link with a lower-case callsign or a digit as the
     reflector module: reply recorded, never linked (hears no stream)."""
-    got = both(rig, invalid_probe, name)
+    got = both(rig, invalid_probe, rig, name)
     print("P-DXT-04 %s:" % name, got)
     judge_dev(rig, "P-DXT-04", got, "reply", "linked")
 
@@ -417,15 +466,16 @@ def test_dextra_unlink_no_reply(rig):
     same(got, "reply", "heard")
 
 
-def unlink_talking_probe(ip):
+def unlink_talking_probe(ip, rig):
     talker, listener, nxt = new(TALKER), new(LISTENER), new(GW)
     try:
         ready(ip, listener, nxt, talker)
         stream_id = sid()
-        send(talker, stream(stream_id, frames(40, "p14"), end=False), listener, nxt, wait=0.0)
-        talker.client.send(talker.dest, dextra.unlink_packet(talker.callsign, talker.module))
-        unlinked = time.monotonic()
-        settle(talker, listener, nxt, seconds=2.4)              # past xlxd's 1.6 s stream timeout
+        with marked(rig, ip, "p14-no-last"):                    # a stream with no last frame
+            send(talker, stream(stream_id, frames(40, "p14"), end=False), listener, nxt, wait=0.0)
+            talker.client.send(talker.dest, dextra.unlink_packet(talker.callsign, talker.module))
+            unlinked = time.monotonic()
+            settle(talker, listener, nxt, seconds=2.4)          # past xlxd's 1.6 s stream timeout
         ends = [t for d, t in zip(listener.client.inbox, listener.client.inbox_times)
                 if (dextra.parse_voice_raw(d) or {}).get("last")]
         clear(talker, listener, nxt)
@@ -440,9 +490,69 @@ def test_dextra_unlink_while_talking(rig):
     """P-DXT-14 (dev): the talker unlinks mid-stream and stops: end marker
     to the listener (and when), whether the talker is still linked, and
     whether the module carries the next stream 2.4 s later."""
-    got = both(rig, unlink_talking_probe)
+    got = both(rig, unlink_talking_probe, rig)
     print("P-DXT-14 unlink while talking:", got)
     judge_dev(rig, "P-DXT-14", got, "end_marker", "still_linked", "next_heard")
+
+
+OPEN_NEXT_S = 3.0       # B starts its stream 3 s after A's unlink (xlxd stream timeout 1.6 s)
+OPEN_WATCH_S = 25.0     # A's inbox watched for 25 s after its unlink (xlxd keepalive every 10 s)
+REVOKED = {"keepalives_after_unlink": 0, "new_stream_heard": False}    # B5 immediate revoke
+
+
+def unlink_open_probe(ip, rig):
+    """A (no keepalives of its own: it left) talks on OTHER without a last
+    frame and unlinks mid-stream; B starts a fresh stream 3 s later; L
+    confirms the module carried it. What reaches A after its unlink."""
+    a, b = new(TALKER, OTHER, keepalive="none"), new(GW, OTHER)
+    listener = new(LISTENER, OTHER)
+    try:
+        ready(ip, listener, b, a)
+        with marked(rig, ip, "p54-open-unlink"):            # a stream with no last frame
+            send(a, stream(sid(), frames(40, "p54"), end=False, module=OTHER), b, listener, wait=0.0)
+            a.client.send(a.dest, dextra.unlink_packet(a.callsign, a.module))
+            unlinked = time.monotonic()
+        settle(a, b, listener, seconds=max(0.0, unlinked + OPEN_NEXT_S - time.monotonic()))
+        clear(listener)
+        voice_b, sid_b = talk(b, a, listener, voice=frames(30, "p54b"))
+        settle(a, b, listener, seconds=max(0.0, unlinked + OPEN_WATCH_S - time.monotonic()))
+        after = [(d, t) for d, t in zip(a.client.inbox, a.client.inbox_times) if t > unlinked]
+        kas = [round(t - unlinked, 1) for d, t in after if is_keepalive(d)]
+        own_b = [d for d, _ in after if d.startswith(b"DSVT") and
+                 (dextra.parse_header_full(d) or dextra.parse_voice_raw(d) or {}).get("stream_id") == sid_b]
+        return {"keepalives_after_unlink": len(kas), "keepalive_s": kas,
+                "new_stream_heard": bool(own_b),
+                "header_heard": any(dextra.parse_header_full(d) for d in own_b),
+                "voice_heard": sum(1 for d in own_b if dextra.parse_voice_raw(d)),
+                "next_relayed": heard(listener) == voice_b}
+    finally:
+        done(a, b, listener)                                   # A's unlink again (xlxd kept it)
+
+
+def test_dextra_unlink_with_open_stream(rig):
+    """P-DXT-54 (dev): a client talks without a last frame and unlinks
+    while its own stream is open, then goes quiet; another client talks on
+    the module 3 s later. Recorded for A over 25 s after its unlink:
+    reflector keepalives and B's stream (header, voice). xlxd profile:
+    sut == ref (keepalives compared as kept or not); other profiles: the
+    "dextra" P-DXT-54 entry, else B5 immediate revoke when the profile
+    states it (test_leave_mid_stream_tail revoke immediate), else pending."""
+    got = both(rig, unlink_open_probe, rig)
+    print("P-DXT-54 unlink with open stream:", got)
+    for name, r in got.items():
+        assert r["next_relayed"], "%s: the module did not carry B's stream after A's unlink: %s" % (name, r)
+    if rig.sut_profile == specs.DEFAULT:
+        view = {n: {"kept_alive": r["keepalives_after_unlink"] > 0, "new_stream_heard": r["new_stream_heard"]}
+                for n, r in got.items()}
+        same(view, "kept_alive", "new_stream_heard")
+        return
+    entry = (specs.rule(rig, "dextra") or {}).get("P-DXT-54")
+    if entry is None and (specs.rule(rig, "test_leave_mid_stream_tail") or {}).get("revoke") == "immediate":
+        entry = REVOKED
+    if entry is None:
+        pytest.skip("spec pending: no dextra P-DXT-54 entry in dvtest/specs/%s.py" % rig.sut_profile)
+    for key, want in entry.items():
+        assert got["sut"][key] == want, "P-DXT-54 %s: sut %r, spec %r" % (key, got["sut"][key], want)
 
 
 # ---------------------------------------------------------------- 1 slow: keepalive timeout
@@ -547,14 +657,15 @@ def test_dextra_keepalive_isolated(rig, silence):
     same(got, "keeper_whole", "keeper_notice")
 
 
-def poll_probe(ip):
+def poll_probe(ip, rig):
     poller, talker = new(EXTRA), new(TALKER)
     try:
         ready(ip, talker)
         poller.dest = (ip, dextra.PORT)
-        for _ in range(3):
-            poller.client.send(poller.dest, dextra.keepalive_packet(poller.callsign))
-            settle(poller, seconds=1.0)
+        with marked(rig, ip, "p52-poll"):
+            for _ in range(3):
+                poller.client.send(poller.dest, dextra.keepalive_packet(poller.callsign))
+                settle(poller, seconds=1.0)
         reply = poller.client.inbox[0] if poller.client.inbox else None
         clear(poller)
         talk(talker, poller)
@@ -567,7 +678,7 @@ def poll_probe(ip):
 def test_dextra_poll_without_link(rig):
     """P-DXT-52 (dev): 9 B keepalives from an address that never linked:
     reply recorded, no traffic of the module reaches it."""
-    got = both(rig, poll_probe)
+    got = both(rig, poll_probe, rig)
     print("P-DXT-52 poll without link:", got)
     judge_dev(rig, "P-DXT-52", got, "reply", "heard")
 
@@ -594,16 +705,18 @@ GARBAGE = {
 }
 
 
-def garbage_probe(ip, name):
+def garbage_probe(ip, rig, name):
     talker, listener = new(TALKER), new(LISTENER)
     try:
         if name == "nat1":
             talker.dest = (ip, dextra.PORT)
-            reply = ask(talker, GARBAGE[name], seconds=0.5)
+            with marked(rig, ip, "p15-" + name):
+                reply = ask(talker, GARBAGE[name], seconds=0.5)
             ready(ip, listener, talker)
         else:
             ready(ip, listener, talker)
-            reply = ask(talker, GARBAGE[name], seconds=0.5)
+            with marked(rig, ip, "p15-" + name):
+                reply = ask(talker, GARBAGE[name], seconds=0.5)
         clear(talker, listener)
         voice, _ = talk(talker, listener)
         return {"reply": kind_of(reply), "served": heard(listener) == voice}
@@ -615,17 +728,18 @@ def garbage_probe(ip, name):
 def test_dextra_garbage_ignored(rig, name):
     """P-DXT-15 (diff): unknown sizes and wrong-size DSVT get no reply and
     the reflector keeps serving (the next stream arrives whole)."""
-    got = both(rig, garbage_probe, name)
+    got = both(rig, garbage_probe, rig, name)
     print("P-DXT-15 %s:" % name, got)
     same(got, "reply", "served")
 
 
-def stranger_probe(ip):
+def stranger_probe(ip, rig):
     stranger, listener = new(TALKER), new(LISTENER)
     try:
         ready(ip, listener)
         stranger.dest = (ip, dextra.PORT)
-        send(stranger, stream(sid(), frames()), listener)
+        with marked(rig, ip, "p16-not-linked"):
+            send(stranger, stream(sid(), frames()), listener)
         return {"heard": dsvt_count(listener) > 0}
     finally:
         stranger.dest = None
@@ -635,14 +749,15 @@ def stranger_probe(ip):
 def test_dextra_dsvt_not_linked(rig):
     """P-DXT-16 (diff): a stream from an address that never linked does
     not reach the module's listener."""
-    got = both(rig, stranger_probe)
+    got = both(rig, stranger_probe, rig)
     print("P-DXT-16 stranger stream:", got)
     same(got, "heard")
 
 
-def variant_probe(ip, stream_kw=None, other_listener=False, raw_header=None):
+def variant_probe(ip, stream_kw=None, other_listener=False, raw_header=None, odd=None):
     """talker (MOD) sends one stream built with stream_kw; listener on MOD
-    (and one on OTHER): what they got."""
+    (and one on OTHER): what they got. odd = (rig, tag): the stream is
+    malformed on purpose, bracketed with marks."""
     talker, listener, other = new(TALKER), new(LISTENER), new(GW, OTHER)
     try:
         ready(ip, listener, other, talker)
@@ -650,7 +765,8 @@ def variant_probe(ip, stream_kw=None, other_listener=False, raw_header=None):
         packets = stream(sid(), voice, **(stream_kw or {}))
         if raw_header is not None:
             packets[0] = raw_header(packets[0])
-        send(talker, packets, listener, other)
+        with marked(odd[0], ip, odd[1]) if odd else contextlib.nullcontext():
+            send(talker, packets, listener, other)
         return {"voice": voice, "sent": packets, "relayed": len(heard(listener)) > 0,
                 "exact": heard(listener) == voice, "other_relayed": len(heard(other)) > 0,
                 "headers": headers(listener), "voices": voices(listener)}
@@ -673,7 +789,7 @@ PREFIX = {"byte8": _patch(8, b"\x21"), "byte14": _patch(14, b"\x00"), "ids": _pa
 def test_dextra_header_prefix(rig, name):
     """P-DXT-17 (dev): header with byte 8 = 0x21, byte 14 = 0x00, or trunk
     ids 00 02 01 (IG default), voice unchanged: relayed or not."""
-    got = both(rig, variant_probe, None, False, PREFIX[name])
+    got = both(rig, variant_probe, None, False, PREFIX[name], (rig, "p17-" + name))
     print("P-DXT-17 %s:" % name, {n: {"relayed": r["relayed"]} for n, r in got.items()})
     judge_dev(rig, "P-DXT-17", got, "relayed")
 
@@ -858,7 +974,8 @@ CRC = {"spaces": b"  ", "ffff": b"\xff\xff", "wrong": b"\x12\x34", "valid": None
 def test_dextra_header_crc_ingress(rig, name):
     """P-DXT-19 (diff, B12): the ingress P_FCS is not checked: spaces,
     FF FF (IG when not computed), a wrong value and a valid one."""
-    got = both(rig, variant_probe, {"crc": CRC[name]})
+    got = both(rig, variant_probe, {"crc": CRC[name]}, False, None,
+               None if name == "valid" else (rig, "p19-" + name))
     print("P-DXT-19 %s:" % name, {n: {"exact": r["exact"]} for n, r in got.items()})
     same(got, "exact")
 
@@ -869,14 +986,14 @@ INVALID_FIELDS = {"my": {"my": "n0call"}, "rpt1": {"rpt1": b"n0call P"}, "rpt2":
 @pytest.mark.parametrize("name", list(INVALID_FIELDS))
 def test_dextra_header_invalid_callsign(rig, name):
     """P-DXT-21 (dev): a header with lower-case MY, RPT1 or RPT2."""
-    got = both(rig, variant_probe, INVALID_FIELDS[name])
+    got = both(rig, variant_probe, INVALID_FIELDS[name], False, None, (rig, "p21-" + name))
     print("P-DXT-21 %s:" % name, {n: {"relayed": r["relayed"]} for n, r in got.items()})
     judge_dev(rig, "P-DXT-21", got, "relayed")
 
 
 def test_dextra_header_flags_passed(rig):
     """P-DXT-22 (dev): flag bytes 40 01 02 in: what egress carries."""
-    got = both(rig, variant_probe, {"flags": b"\x40\x01\x02"})
+    got = both(rig, variant_probe, {"flags": b"\x40\x01\x02"}, False, None, (rig, "p22-flags"))
     got = {n: {"relayed": r["relayed"], "flags": (r["headers"] or [{"flags": b""}])[0]["flags"].hex()}
            for n, r in got.items()}
     print("P-DXT-22 flags:", got)
@@ -963,7 +1080,7 @@ def test_dextra_slow_data_passthrough(rig, name):
     same(got, "exact", "slow_exact", "pre_last_slow")
 
 
-def counter_probe(ip, name):
+def counter_probe(ip, rig, name):
     talker, listener = new(TALKER), new(LISTENER)
     try:
         ready(ip, listener, talker)
@@ -975,7 +1092,8 @@ def counter_probe(ip, name):
             packets.append(dextra.voice_packet(stream_id, counter, f,
                                                dextra.SYNC_DATA if i % 21 == 0 else dextra.SLOW_DATA))
         packets.append(dextra.last_frame(stream_id, 42))
-        send(talker, packets, listener)
+        with marked(rig, ip, "p31-" + name):
+            send(talker, packets, listener)
         body = [v["counter"] for v in voices(listener) if not v["last"]]
         return {"relayed": len(body), "egress_mod21": body == [i % 21 for i in range(len(body))],
                 "raw_mod21": body == [c % 21 for c in sent[:len(body)]], "exact": heard(listener) == voice}
@@ -988,7 +1106,7 @@ def test_dextra_counter_out_of_range(rig, name):
     """P-DXT-31 (dev): voice counters 0..31 (over20) or with bit 0x80 set:
     relayed frames and whether egress counts 0..20 (raw_mod21: egress is
     the received byte mod 21, recorded)."""
-    got = both(rig, counter_probe, name)
+    got = both(rig, counter_probe, rig, name)
     print("P-DXT-31 %s:" % name, got)
     judge_dev(rig, "P-DXT-31", got, "exact", "egress_mod21")
 
@@ -1011,14 +1129,15 @@ def test_dextra_last_frame_payload(rig):
     judge_dev(rig, "P-DXT-33", got, "passed", "jarl_end", "pre_last_kept")
 
 
-def after_last_probe(ip):
+def after_last_probe(ip, rig):
     talker, listener = new(TALKER), new(LISTENER)
     try:
         ready(ip, listener, talker)
         voice = frames(30, "p34")
         stream_id = sid()
         extra = [dextra.voice_packet(stream_id, (31 + i) % 21, f) for i, f in enumerate(frames(20, "p34x"))]
-        send(talker, stream(stream_id, voice) + extra, listener)
+        with marked(rig, ip, "p34-after-last"):
+            send(talker, stream(stream_id, voice) + extra, listener)
         vs = voices(listener)
         at = next((i for i, v in enumerate(vs) if v["last"]), len(vs))
         return {"before_exact": [v["ambe"] for v in vs[:at]] == voice, "after_last": len(vs) - at - 1 if at < len(vs) else None}
@@ -1029,7 +1148,7 @@ def after_last_probe(ip):
 def test_dextra_voice_after_last(rig):
     """P-DXT-34 (diff): 20 voice frames with the same id after the last
     frame are not relayed."""
-    got = both(rig, after_last_probe)
+    got = both(rig, after_last_probe, rig)
     print("P-DXT-34 voice after last:", got)
     same(got, "before_exact", "after_last")
 
@@ -1096,11 +1215,12 @@ def test_dextra_second_module_link(rig):
 
 # ---------------------------------------------------------------- 6 stream lifetime
 
-def headless_probe(ip):
+def headless_probe(ip, rig):
     talker, listener = new(TALKER), new(LISTENER)
     try:
         ready(ip, listener, talker)
-        send(talker, stream(sid(), frames(seed="p42"), head=False), listener)
+        with marked(rig, ip, "p42-no-header"):
+            send(talker, stream(sid(), frames(seed="p42"), head=False), listener)
         return {"relayed": len(heard(listener)) > 0}
     finally:
         done(talker, listener)
@@ -1108,7 +1228,7 @@ def headless_probe(ip):
 
 def test_dextra_voice_without_header(rig):
     """P-DXT-42 (dev): voice whose stream id had no header."""
-    got = both(rig, headless_probe)
+    got = both(rig, headless_probe, rig)
     print("P-DXT-42 no header:", got)
     judge_dev(rig, "P-DXT-42", got, "relayed")
 
