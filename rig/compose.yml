@@ -109,6 +109,8 @@ services:
         src: ../.cache/xlxd/${XLXD_REF_DIR:-ref}
     environment:
       DVT_CALLSIGN: XLX999
+      # operator blacklist (P-G3-05; affects every protocol, default empty)
+      DVT_BLACKLIST: ${DVT_XLXD_BLACKLIST:-}
       DVT_IP: ${DVT_NET:-172.30.0}.10
       DVT_TRANSCODER: ${DVT_NET:-172.30.0}.20
       DVT_USRP: "off"
@@ -129,6 +131,7 @@ services:
       DVT_INTERLINK_CALLSIGN: XLX998
       DVT_INTERLINK2_PEER: ${DVT_NET:-172.30.0}.15
       DVT_INTERLINK2_CALLSIGN: XLX997
+      DVT_INTERLINK_TESTER: ${DVT_NET:-172.30.0}.30
       DVT_INTERLINK_MODULES: ${DVT_INTERLINK_MODULES:-DE}
       DVT_START_DELAY: ${DVT_START_DELAY:-0}
     networks:
@@ -145,6 +148,8 @@ services:
         src: ../.cache/xlxd/${XLXD_SUT_DIR:-sut}
     environment:
       DVT_CALLSIGN: XLX999
+      # operator blacklist (P-G3-05; affects every protocol, default empty)
+      DVT_BLACKLIST: ${DVT_XLXD_BLACKLIST:-}
       DVT_IP: ${DVT_NET:-172.30.0}.11
       DVT_TRANSCODER: ${DVT_NET:-172.30.0}.21
       DVT_USRP: ${DVT_SUT_USRP:-off}
@@ -152,11 +157,11 @@ services:
       DVT_NXDN_PEER: ${DVT_NET:-172.30.0}.51
       DVT_NXDN_TG: ${DVT_NXDN_TG:-31672}
       DVT_NXDN_MODULE: ${DVT_NXDN_MODULE:-F}
-      DVT_P25: ${DVT_P25:-off}
       # second NX row: the tester plays the reflector (cases/proto/test_nxdn_peer.py)
       DVT_NXDN_PROBE_PEER: ${DVT_NET:-172.30.0}.30:41411
       DVT_NXDN_PROBE_TG: ${DVT_NXDN_PROBE_TG:-31673}
       DVT_NXDN_PROBE_MODULE: ${DVT_NXDN_PROBE_MODULE:-I}
+      DVT_P25: ${DVT_P25:-off}
       DVT_P25_PEER: ${DVT_NET:-172.30.0}.61
       DVT_P25_TG: ${DVT_P25_TG:-31672}
       DVT_P25_MODULE: ${DVT_P25_MODULE:-G}
@@ -165,6 +170,7 @@ services:
       DVT_INTERLINK_CALLSIGN: XLX998
       DVT_INTERLINK2_PEER: ${DVT_NET:-172.30.0}.14
       DVT_INTERLINK2_CALLSIGN: XLX997
+      DVT_INTERLINK_TESTER: ${DVT_NET:-172.30.0}.30
       DVT_INTERLINK_MODULES: ${DVT_INTERLINK_MODULES:-DE}
       DVT_START_DELAY: ${DVT_START_DELAY:-0}
       DVT_NET: ${DVT_NET:-172.30.0}
@@ -218,12 +224,12 @@ services:
       DVT_NXDN_SUT: ${DVT_NET:-172.30.0}.51
       DVT_NXDN_TG: ${DVT_NXDN_TG:-31672}
       DVT_NXDN_MODULE: ${DVT_NXDN_MODULE:-F}
-      DVT_P25: ${DVT_P25:-off}
-      DVT_P25_REF: ${DVT_NET:-172.30.0}.60
       DVT_NXDN_PROBE_TG: ${DVT_NXDN_PROBE_TG:-31673}
       DVT_NXDN_PROBE_MODULE: ${DVT_NXDN_PROBE_MODULE:-I}
       DVT_NXDN_PROBE_PORT_REF: "41410"
       DVT_NXDN_PROBE_PORT_SUT: "41411"
+      DVT_P25: ${DVT_P25:-off}
+      DVT_P25_REF: ${DVT_NET:-172.30.0}.60
       DVT_P25_SUT: ${DVT_NET:-172.30.0}.61
       DVT_P25_TG: ${DVT_P25_TG:-31672}
       DVT_P25_MODULE: ${DVT_P25_MODULE:-G}
@@ -233,9 +239,11 @@ services:
       DVT_XLXD_PEER2_SUT: ${DVT_NET:-172.30.0}.14
       DVT_XLXD_PEER2_REF: ${DVT_NET:-172.30.0}.15
       DVT_INTERLINK_MODULES: ${DVT_INTERLINK_MODULES:-DE}
+      DVT_UNSERVED_MODULE: ${DVT_UNSERVED_MODULE:-}
+      # on with --profile g3: g3-term2 at .31 is a second G3 terminal (cases/proto/test_g3.py)
+      DVT_G3: ${DVT_G3:-off}
       DVT_LOAD: ${DVT_LOAD:-off}
       DVT_LOAD_MODULES: ${DVT_LOAD_MODULES:-26}
-      DVT_UNSERVED_MODULE: ${DVT_UNSERVED_MODULE:-}
       DVT_LOAD_START_AT: ${DVT_LOAD_START_AT:-0}
       DVT_LOAD_DURATION: ${DVT_LOAD_DURATION:-60}
       # names (comma separated, dvtest/divergences.py) of intended differences
@@ -516,6 +524,23 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command: ["exec ${DVT_LOAD_CMD:-python -m dvtest.load_node}"]
     networks: [rig]
+
+  # ---- second Icom G3 terminal (profile g3) ----
+  # G3 keys a terminal by IP: this relay gives the tester a second address.
+  # The tester drives it over UDP 40100 (dvtest/proto/g3.py relay_main).
+  g3-term2:
+    profiles: [g3]
+    init: true
+    image: dvt-tester:local
+    user: "${DVT_UID:-1000}:${DVT_GID:-1000}"
+    working_dir: /dvt
+    environment:
+      HOME: /tmp
+    volumes:
+      - ..:/dvt
+    entrypoint: ["python", "-m", "dvtest.proto.g3", "relay"]
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.31"}
 
 networks:
   rig:

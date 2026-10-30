@@ -18,6 +18,9 @@
 #                      first round at DVT_LOAD_START_AT (now + 30 s);
 #                      DVT_SUT_USRP=on; host samples docker stats every ~1-2 s
 #                      into out/<utc>/stats.jsonl while pytest runs
+#   --profile g3       a second Icom G3 terminal: relay g3-term2 at .31 (DVT_G3=on)
+#   DVT_XLXD_BLACKLIST callsigns written to both reflectors' xlxd.blacklist
+#                      (default empty; P-G3-05 uses N0G3X, no other suite does)
 #   --capture          sniffers on xlxd-ref/xlxd-sut/transcoder-sut (+allstar/nxdn/p25): pcapng in
 #                      out/<utc>/capture/<service>.pcapng (decode: scripts/tshark.sh)
 #   --netem SPEC       impair the tester's egress: a preset (lan, good_internet,
@@ -192,7 +195,11 @@ for p in "${wanted[@]}"; do
       # every node starts its first round at the same time, after the rig is up
       export DVT_LOAD_START_AT="${DVT_LOAD_START_AT:-$(( $(date +%s) + ${DVT_LOAD_LEAD_S:-30} ))}"
       ;;
-    *) echo "run.sh: --profile takes core, allstar, nxdn, p25, interlink, load or a comma list" >&2; exit 2 ;;
+    g3)
+      profiles+=(--profile g3)
+      export DVT_G3=on
+      ;;
+    *) echo "run.sh: --profile takes core, allstar, nxdn, p25, interlink, load, g3 or a comma list" >&2; exit 2 ;;
   esac
 done
 # netem: a preset name (NETEM_PRESET_<NAME>), "off", or netem arguments
@@ -300,7 +307,7 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
   DVT_RENDER_DIR="$cfg" DVT_USRP_TEMPLATE=rig/config/xlxd.usrp.in DVT_USRP="$5" DVT_NET="$net" \
     DVT_NXDN_PEER="$net.$6" DVT_P25_PEER="$net.$7" DVT_INTERLINK_PEER="$net.$8" \
     DVT_INTERLINK_CALLSIGN=XLX998 DVT_INTERLINK_MODULES="${DVT_INTERLINK_MODULES:-DE}" \
-    DVT_INTERLINK2_PEER="$net.$9" DVT_INTERLINK2_CALLSIGN=XLX997 \
+    DVT_INTERLINK2_PEER="$net.$9" DVT_INTERLINK2_CALLSIGN=XLX997 DVT_INTERLINK_TESTER="$net.30" \
     DVT_NXDN_TG="${DVT_NXDN_TG:-31672}" DVT_NXDN_MODULE="${DVT_NXDN_MODULE:-F}" \
     DVT_NXDN_PROBE_PEER="$net.30:$([ "$1" = xlxd-ref ] && echo 41410 || echo 41411)" \
     DVT_NXDN_PROBE_TG="${DVT_NXDN_PROBE_TG:-31673}" DVT_NXDN_PROBE_MODULE="${DVT_NXDN_PROBE_MODULE:-I}" \
@@ -308,6 +315,7 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
     sh rig/xlxd-entry.sh > "$cfg/render.log"
   cp rig/config/dmrid.dat rig/config/nxdn.csv "$cfg/"
   for f in xlxd.whitelist xlxd.blacklist xlxd.terminal ysfnode.dat; do : > "$cfg/$f"; done
+  [ -z "${DVT_XLXD_BLACKLIST:-}" ] || printf '%s\n' $DVT_XLXD_BLACKLIST > "$cfg/xlxd.blacklist"
   {
     printf '  %s:\n    image: "%s"\n    command: ["XLX999", "%s.%s", "%s.%s"]\n' "$svc" "$img" "$net" "$3" "$net" "$4"
     # the image is used as it is: no build section, never pulled

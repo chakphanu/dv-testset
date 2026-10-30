@@ -20,6 +20,8 @@
 #                        (row "<callsign> <ip> <modules>"; both sides list each other)
 #   env DVT_INTERLINK2_PEER / DVT_INTERLINK2_CALLSIGN  optional second XLX row
 #                        on the same modules (middle of a three-reflector chain)
+#   env DVT_INTERLINK_TESTER  optional tester address: rows "XLX996 <ip> <modules>"
+#                        and "BM3109 <ip> <first module>" (tester as XLX / BM peer)
 #   env DVT_START_DELAY  seconds to wait before xlxd starts (sniffers attach
 #                        to this network namespace first; default 0)
 #
@@ -57,12 +59,12 @@ fi
 if [ "${DVT_NXDN:-off}" = on ]; then
   : "${DVT_NXDN_PEER:?}" "${DVT_NXDN_TG:?}" "${DVT_NXDN_MODULE:?}"
   printf 'NX%05d %s:41400 %s\n' "$DVT_NXDN_TG" "$DVT_NXDN_PEER" "$DVT_NXDN_MODULE" >> "$dir/xlxd.interlink"
-fi
-if [ "${DVT_P25:-off}" = on ]; then
   if [ -n "${DVT_NXDN_PROBE_PEER:-}" ]; then
     : "${DVT_NXDN_PROBE_TG:?}" "${DVT_NXDN_PROBE_MODULE:?}"
     printf 'NX%05d %s %s\n' "$DVT_NXDN_PROBE_TG" "$DVT_NXDN_PROBE_PEER" "$DVT_NXDN_PROBE_MODULE" >> "$dir/xlxd.interlink"
   fi
+fi
+if [ "${DVT_P25:-off}" = on ]; then
   : "${DVT_P25_PEER:?}" "${DVT_P25_TG:?}" "${DVT_P25_MODULE:?}"
   printf 'P25%05d %s:41000 %s\n' "$DVT_P25_TG" "$DVT_P25_PEER" "$DVT_P25_MODULE" >> "$dir/xlxd.interlink"
 fi
@@ -73,7 +75,13 @@ if [ "${DVT_INTERLINK:-off}" = on ]; then
     : "${DVT_INTERLINK2_CALLSIGN:?}"
     printf '%s %s %s\n' "$DVT_INTERLINK2_CALLSIGN" "$DVT_INTERLINK2_PEER" "$DVT_INTERLINK_MODULES" >> "$dir/xlxd.interlink"
   fi
+  if [ -n "${DVT_INTERLINK_TESTER:-}" ]; then
+    printf 'XLX996 %s %s\n' "$DVT_INTERLINK_TESTER" "$DVT_INTERLINK_MODULES" >> "$dir/xlxd.interlink"
+    printf 'BM3109 %s %.1s\n' "$DVT_INTERLINK_TESTER" "$DVT_INTERLINK_MODULES" >> "$dir/xlxd.interlink"
+  fi
 fi
+# operator blacklist, one callsign per line (default: none)
+[ -z "${DVT_BLACKLIST:-}" ] || { printf '%s\n' $DVT_BLACKLIST > "$dir/xlxd.blacklist"; echo "dvt: blacklist: $DVT_BLACKLIST"; }
 [ ! -s "$dir/xlxd.interlink" ] || { echo "dvt: interlink:"; cat "$dir/xlxd.interlink"; }
 [ -z "${DVT_RENDER_DIR:-}" ] || exit 0
 
