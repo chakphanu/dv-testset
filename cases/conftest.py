@@ -261,6 +261,8 @@ BEHAVIOUR = {
     "test_floor.py::test_m17_frame0_relayed",                        # B17
     "test_xlxd_interlink.py::test_admission_remote_sid_open_elsewhere",  # B8c
     "test_xlxd_interlink.py::test_interlink_missing_output_slot_zeroed",  # B6b
+    "test_mmdvm.py::test_mmdvm_lost_terminator_timeout",             # P-DMR-34 (B3)
+    "test_mmdvm.py::test_mmdvm_busy_module_no_mix",                  # P-DMR-35 (B1/B2)
 }
 SYSTEM_MARKERS = {"rig", "netns", "allstar", "nxdn", "p25", "load", "interlink"}
 

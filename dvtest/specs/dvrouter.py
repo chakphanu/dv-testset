@@ -76,6 +76,12 @@ SPEC = {
     # one peer rewrites the second leg (placeholder case).
     "sid_kept": ("dstar", "dmr", "m17", "xlx", "dextra"),
     "sid_cross": "canonical",
+    # MMDVM conformance (cases/proto/test_mmdvm.py): behaviour rows reuse B3
+    # and B2; "mmdvm" maps P-DMR-NN to {observed key: expected value} for the
+    # items where xlxd deviates (RPTCL and stream id use the B15/B10 keys)
+    "test_mmdvm_lost_terminator_timeout": {"terminator": "all_egress", "timeout_s": 1.6},
+    "test_mmdvm_busy_module_no_mix": {"late_entry": "deny"},
+    "mmdvm": {"P-DMR-04": {"auth": "lenient"}},
 }
 
 # B12: header fields DV-Router does not verify, because the tester (like

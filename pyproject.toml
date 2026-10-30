@@ -33,4 +33,5 @@ markers = [
     "interop: protocol interop, always judged against xlxd-ref",
     "behaviour: reflector behaviour, follows DVT_SUT_PROFILE (dvtest/specs)",
     "crossmode: needs cross-mode audio through the system under test's transcoding",
+    "proto: per-protocol conformance case (docs/protocols/<protocol>.md, testlist K)",
 ]

@@ -13,7 +13,8 @@ Rig cases are also marked `interop` or `behaviour` (DV-Router profile below)
 and, when their assertions need cross-mode audio through the system under
 test's transcoding, `crossmode` (only the cross-mode params of a
 parametrized case); a system under test without transcoding runs
-`-m "rig and not crossmode"`. The table lives in `cases/conftest.py`.
+`-m "rig and not crossmode"`. `proto` marks the per-protocol conformance
+cases (section K); `slow` marks cases that wait for a server timeout. The table lives in `cases/conftest.py`.
 
 ## A. Transcoder link conformance (`wire`)
 
@@ -153,6 +154,66 @@ run needs an xlxd-compatible DV-Router binary as `DVT_XLXD_BIN`.
 | J2 | Pinned sources verified (git commit, sha256 for downloads) | scripts/pre-fetch-*.sh, fetch_verified | covered |
 | J3 | No audio, bitstreams or captures committed | .gitignore + pii-check ELF rule | covered (audio by .gitignore only) |
 
+## K. Protocol conformance (`proto`)
+
+One protocol at a time, each obligation of `docs/protocols/<protocol>.md`
+as one case in `cases/proto/test_<protocol>.py` (markers `proto` and `rig`).
+"hb" = the system under test is held to the protocol obligation itself
+(xlxd-ref is recorded); "dev" = xlxd-ref deviates from the protocol: under
+the `xlxd` profile sut == ref, under another profile its spec entry (spec
+pending -> skip); "diff" = sut == ref in the same run; "spec" = judged by
+`DVT_SUT_PROFILE` (`dvtest/specs/<profile>.py`); "slow" = needs the server
+timeout (about 100 s on xlxd), also marked `slow`. Egress embedded LC and
+sync patterns: dvcheck H3. "probe" = an active case drives the packets;
+"dvcheck" = the passive capture check also covers it.
+
+### K1. MMDVM Homebrew / DMR (`docs/protocols/mmdvm.md`)
+
+| # | Obligation | Case | Judged | How | Status |
+|---|---|---|---|---|---|
+| P-DMR-01 | RPTL from a known id -> RPTACK + 4-byte salt | test_mmdvm::test_mmdvm_login_ack_salt | hb | probe | covered |
+| P-DMR-02 | Salt not constant across master restarts | test_mmdvm::test_mmdvm_salt_changes_on_restart | diff | probe (rig_control restart) | covered |
+| P-DMR-03 | RPTL from an unknown id: no login (silence or MSTNAK) | test_mmdvm::test_mmdvm_login_unknown_id | dev | probe | covered |
+| P-DMR-04 | RPTK completes the login; hash check strict vs lenient (zero hash) | test_mmdvm::test_mmdvm_auth_zero_hash | dev | probe | covered |
+| P-DMR-05 | RPTK without a preceding RPTL | test_mmdvm::test_mmdvm_auth_without_login | dev | probe | covered |
+| P-DMR-06 | RPTC 302 B -> RPTACK | test_mmdvm::test_mmdvm_config_ack | hb | probe | covered |
+| P-DMR-07 | RPTC short/long not acknowledged, login kept | test_mmdvm::test_mmdvm_config_wrong_size | diff | probe | covered |
+| P-DMR-08 | Voice routed without RPTC | test_mmdvm::test_mmdvm_no_config_still_routed | diff | probe | covered |
+| P-DMR-09 | RPTO -> RPTACK | test_mmdvm::test_mmdvm_options_ack | diff | probe | covered |
+| P-DMR-10 | Re-login while logged in: one session, traffic once | test_mmdvm::test_mmdvm_relogin_single_session | hb | probe | covered |
+| P-DMR-11 | RPTPING -> MSTPONG + id (id byte order recorded) | test_mmdvm::test_mmdvm_ping_pong | dev | probe + dvcheck | covered |
+| P-DMR-12 | RPTPING from a non-logged-in client: no MSTPONG | test_mmdvm::test_mmdvm_ping_not_logged_in | diff | probe | covered |
+| P-DMR-13 | Silent client dropped after the server timeout, MSTCL sent | test_mmdvm::test_mmdvm_silent_client_dropped | hb | probe | covered (slow) |
+| P-DMR-14 | Dropped client gets no further voice | test_mmdvm::test_mmdvm_dropped_client_no_voice | diff | probe | covered (slow) |
+| P-DMR-15 | RPTCL 13 B / 9 B closes the session | test_mmdvm::test_mmdvm_rptcl_close[13\|9] | dev (B15) | probe | covered |
+| P-DMR-16 | RPTINTR ignored | test_mmdvm::test_mmdvm_rptintr_ignored | diff | probe | covered |
+| P-DMR-17 | Unknown / short / oversize packets ignored, master keeps serving | test_mmdvm::test_mmdvm_garbage_ignored[unknown\|short3\|rptl7\|oversize] | hb | probe | covered |
+| P-DMR-18 | DMRD not 55 B ignored | test_mmdvm::test_mmdvm_dmrd_wrong_size | diff | probe | covered |
+| P-DMR-19 | DMRD from a non-logged-in address not relayed | test_mmdvm::test_mmdvm_dmrd_not_logged_in | hb | probe | covered |
+| P-DMR-20 | Slot 1 header/voice/terminator ignored | test_mmdvm::test_mmdvm_slot1_ignored | diff | probe | covered |
+| P-DMR-21 | Private-call voice not relayed | test_mmdvm::test_mmdvm_private_call_not_relayed | diff | probe | covered |
+| P-DMR-22 | Header needs data type 1 + valid data-sync pattern | test_mmdvm::test_mmdvm_header_sync_required | hb | probe | covered |
+| P-DMR-23 | 6-burst superframes, three AMBE+2 frames per burst, relayed unchanged | test_mmdvm::test_mmdvm_superframe_relayed_exact | hb | probe + dvcheck | covered |
+| P-DMR-24 | Stream ends with a type-2 terminator | test_mmdvm::test_mmdvm_terminator_ends_stream | hb | probe | covered |
+| P-DMR-25 | Egress structure: header, A-F voice, terminator, slot 2, group, one sid; dst TG recorded | test_mmdvm::test_mmdvm_egress_structure | dev | probe + dvcheck | covered |
+| P-DMR-26 | Egress sequence byte counts up per stream | test_mmdvm::test_mmdvm_egress_sequence | diff | probe | covered |
+| P-DMR-27 | Egress source id and repeater id | test_mmdvm::test_mmdvm_egress_ids | diff | probe | covered |
+| P-DMR-28 | Egress stream id (folded on xlxd, kept under dvrouter) | test_mmdvm::test_mmdvm_egress_stream_id | dev (B10) | probe | covered |
+| P-DMR-29 | TG 4001..4026 links module A..Z | test_mmdvm::test_mmdvm_tg_links_module[A\|Z] | diff | probe | covered |
+| P-DMR-30 | TG 4000 unlinks; no further voice | test_mmdvm::test_mmdvm_tg4000_unlinks | diff | probe | covered |
+| P-DMR-31 | Talk to another module's TG while linked stays on the linked module | test_mmdvm::test_mmdvm_other_tg_stays_on_module | diff | probe | covered |
+| P-DMR-32 | TG 9 / unmapped TG: linked -> own module, unlinked -> ignored | test_mmdvm::test_mmdvm_tg9_routing[linked\|unlinked] | diff | probe | covered |
+| P-DMR-33 | Join by an empty stream; join not relayed as voice | test_mmdvm::test_mmdvm_join_by_empty_stream | diff | probe | covered |
+| P-DMR-34 | Lost terminator: stream ends after the silence timeout, module free | test_mmdvm::test_mmdvm_lost_terminator_timeout | spec (B3) | probe | covered |
+| P-DMR-35 | Second header on a busy module not mixed in | test_mmdvm::test_mmdvm_busy_module_no_mix | spec (B1/B2) | probe | covered |
+| P-DMR-36 | Voice without a header not relayed | test_mmdvm::test_mmdvm_voice_without_header | hb | probe | covered |
+| P-DMR-37 | Talker never gets its own stream back | test_mmdvm::test_mmdvm_no_self_echo | diff | probe | covered |
+| P-DMR-41 | Non-voice data bursts (data type >= 3) not relayed, open no stream | test_mmdvm::test_mmdvm_data_burst_not_voice[csbk\|data_header\|rate12\|rate34] | hb | probe | covered |
+| P-DMR-42 | Ingress sequence wraps 255 -> 0 in a long over: no loss, one stream | test_mmdvm::test_mmdvm_sequence_wrap | hb | probe | covered |
+| P-DMR-38 | Two ids from one IP: two sessions, traffic once each | test_mmdvm::test_mmdvm_two_ids_one_ip | diff | probe | covered |
+| P-DMR-39 | Same id from two ports: traffic exactly once per port | test_mmdvm::test_mmdvm_same_id_two_ports | diff | probe | covered |
+| P-DMR-40 | Keepalive of one client does not refresh another | test_mmdvm::test_mmdvm_keepalive_isolated | diff | probe | covered (slow) |
+
 ## Upstream behaviour the cases accept
 
 Known xlxd behaviour that is not a defect of the build under test; cases and
@@ -164,6 +225,13 @@ dvcheck report it as a warning with a note:
 - A 9-byte RPTCL is ignored by xlxd.
 - With the transcoder down, cross-mode frames are all zero and D-STAR frame 0 has no sync.
 - Legacy opens always ask for IMBE as the third output.
+- MMDVM (section K1): RPTL from an unknown id gets no reply (not MSTNAK);
+  RPTK hash not checked and accepted without a prior RPTL; MSTPONG carries
+  the id little endian; neither RPTCL form closes the session; egress
+  destination is always TG 9; egress stream id is the 16-bit fold of the
+  ingress id; egress repeater id is the source id, not the talker's login
+  id; RPTACK to RPTK/RPTC/RPTO carries no id. A DMR stream that times out
+  still ends with a terminator on DMR egress (measured, P-DMR-34).
 
 ## DV-Router profile (`DVT_SUT_PROFILE=dvrouter`)
 
