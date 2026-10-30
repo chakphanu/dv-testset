@@ -767,3 +767,103 @@ class YsfClient:
 
     def close(self):
         self.client.close()
+
+
+# ------------------------------------------------------------------ conformance helpers
+# (docs/protocols/ysf.md, cases/proto/test_ysf.py)
+
+WIRESX_DX_REQ = bytes((0x5D, 0x71, 0x5F))
+WIRESX_ALL_REQ = bytes((0x5D, 0x66, 0x5F))
+# reply codes a WiresX-answering reflector sends (first bytes of its data)
+WIRESX_REPLIES = {"dx": bytes((0x5D, 0x51, 0x5F, 0x26)), "conn": bytes((0x5D, 0x41, 0x5F, 0x26)),
+                  "all": bytes((0x5D, 0x46, 0x5F, 0x26))}
+OPTIONS_SIZE = 50
+INFO_SIZE = 80
+
+
+def wiresx_conn(room):
+    """CONN_REQ for room 1..26 (xlxd: module A..Z): the room as 5 digits
+    after one separator byte; xlxd reads the last 3 digits."""
+    return WIRESX_CONN_REQ + b"\x5f" + b"%05d" % room
+
+
+def raw_frame(fi, dt, payload90, fn=0, ft=7, sq=0, mr=MR_BUSY):
+    """120-byte frame with a valid FICH for any data type and an opaque
+    payload: for DT / FI cases where the payload coding does not matter
+    to a forwarding reflector."""
+    if len(payload90) != PAYLOAD_SIZE:
+        raise ValueError("a YSF payload is 90 bytes")
+    return frame(fich_encode(fi, fn=fn, ft=ft, dt=dt, sq=sq, mr=mr), payload90)
+
+
+def dt_stream_packets(callsign, dt, count, sq=0, gateway=None, seed=1):
+    """Header, count communications packets and terminator of data type
+    dt (V/D mode 1, Data FR, Voice FR ...) with PRNG payloads; counter
+    +1 per packet, end bit on the terminator."""
+    gateway = callsign if gateway is None else gateway
+    rng = (seed * 2654435761) & 0xFFFFFFFF
+    bodies = []
+    for index in range(count + 2):
+        payload = bytearray()
+        for _ in range(PAYLOAD_SIZE):
+            rng = (rng * 1103515245 + 12345) & 0x7FFFFFFF
+            payload.append(rng >> 16 & 0xFF)
+        bodies.append(bytes(payload))
+    out = [packet(gateway, callsign, ALL, 0, raw_frame(FI_HEADER, dt, bodies[0], sq=sq))]
+    for index in range(count):
+        out.append(packet(gateway, callsign, ALL, len(out),
+                          raw_frame(FI_COMMUNICATIONS, dt, bodies[index + 1], fn=index % 7, ft=6, sq=sq)))
+    out.append(packet(gateway, callsign, ALL, len(out), raw_frame(FI_TERMINATOR, dt, bodies[-1], sq=sq),
+                      eot=True))
+    return out
+
+
+def with_status(data, counter=None, eot=None):
+    """A YSFD packet with its status byte (byte 34) changed."""
+    data = bytearray(data)
+    if counter is not None:
+        data[34] = ((counter & 0x7F) << 1) | (data[34] & 1)
+    if eot is not None:
+        data[34] = (data[34] & 0xFE) | (1 if eot else 0)
+    return bytes(data)
+
+
+def corrupt_fich(data):
+    """A YSFD packet whose FICH no longer decodes (every FICH byte inverted)."""
+    data = bytearray(data)
+    for pos in range(40, 65):
+        data[pos] ^= 0xFF
+    return bytes(data)
+
+
+def options_packet(callsign, options):
+    """YSFO (50 B): callsign + options text (YSFGateway: a DG-ID list such as "20;21;")."""
+    text = options.encode("ascii") if isinstance(options, str) else bytes(options)
+    return b"YSFO" + _cs(callsign) + text[:OPTIONS_SIZE - 14].ljust(OPTIONS_SIZE - 14, b" ")
+
+
+def info_packet(callsign, rx_hz=430000000, tx_hz=430000000, locator="AA00AA", name="dvtest",
+                kind="dvtest", gateway_id=0):
+    """YSFI (80 B): callsign, RX/TX frequency (9 digits each), locator (6),
+    name (20), hotspot type (12), gateway id (7), filler (3)."""
+    body = (_cs(callsign) + b"%09d" % rx_hz + b"%09d" % tx_hz + _cs(locator, 6) + _cs(name, 20)
+            + _cs(kind, 12) + b"%07d" % gateway_id + b"   ")
+    return b"YSFI" + body
+
+
+def status_layout(data):
+    """Field-form checks of a status reply: {size, id_digits, count_digits}."""
+    data = bytes(data)
+    return {"size": len(data), "id_digits": data[4:9].isdigit(),
+            "count_digits": len(data) >= 42 and data[39:42].isdigit()}
+
+
+def wiresx_reply_kind(packets):
+    """Which WiresX reply ("dx", "conn", "all") the data FR packets carry,
+    or None: searches the concatenated Data1/Data2 blocks."""
+    blob = b"".join((info.get("data1") or b"") + (info.get("data2") or b"")
+                    for info in packets if info and info.get("kind") == "data")
+    for name, code in WIRESX_REPLIES.items():
+        if code in blob:
+            return name
+    return None
