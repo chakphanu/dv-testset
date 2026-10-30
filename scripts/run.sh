@@ -98,6 +98,11 @@ if [ -n "${DVT_SUBNET:-}" ]; then
     *) echo "run.sh: DVT_SUBNET must be a /24 like 172.30.0.0/24" >&2; exit 2 ;;
   esac
 fi
+# DVT_NO_RADIO_ID: the sut's policy for a talker without a radio id (unset = its default)
+case "${DVT_NO_RADIO_ID:-}" in
+  ''|drop|fallback|local) ;;
+  *) echo "run.sh: DVT_NO_RADIO_ID must be drop, fallback or local" >&2; exit 2 ;;
+esac
 instance="${DVT_INSTANCE:-0}"
 [[ "$instance" =~ ^([0-9]|[1-9][0-9])$ ]] || { echo "run.sh: DVT_INSTANCE must be 0..99" >&2; exit 2; }
 lock=".cache/rig.lock"
@@ -302,7 +307,7 @@ dvt_rooms_without() {
   printf '%s' "$out"
 }
 render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxdn, $7 p25, $8 xlxd peer, $9 xlxd peer2
-  local svc="$1" img="$2" net="${DVT_NET:-172.30.0}" cfg="$DVT_ROOT/$out/xlxd-config/$1" f
+  local svc="$1" img="$2" net="${DVT_NET:-172.30.0}" cfg="$DVT_ROOT/$out/xlxd-config/$1" f p
   mkdir -p "$cfg"
   DVT_RENDER_DIR="$cfg" DVT_USRP_TEMPLATE=rig/config/xlxd.usrp.in DVT_USRP="$5" DVT_NET="$net" \
     DVT_NXDN_PEER="$net.$6" DVT_P25_PEER="$net.$7" DVT_INTERLINK_PEER="$net.$8" \
@@ -323,6 +328,11 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
     printf '    environment:\n      DVT_CONFIG_MOUNTED: "1"\n'
     # P25 gateway id for unknown talkers (P-P25-23; not in rig/config/dmrid.dat)
     [ "$svc" != xlxd-sut ] || printf '      DV_P25_GATEWAY_ID: "%s"\n' "${DV_P25_GATEWAY_ID:-1023000}"
+    [ "$svc" != xlxd-sut ] || printf '      DV_DMRPLUS_GATEWAY_ID: "1023000"\n'
+    # DVT_NO_RADIO_ID: no-radio-id policy of every radio-id protocol (unset = not written; xlxd ignores it)
+    if [ "$svc" = xlxd-sut ] && [ -n "${DVT_NO_RADIO_ID:-}" ]; then
+      for p in MMDVM DMRPLUS NXDN P25; do printf '      DV_%s_NO_RADIO_ID: "%s"\n' "$p" "$DVT_NO_RADIO_ID"; done
+    fi
     # DVT_USRP_IDLE_TIMEOUT_S: dynamic USRP idle timeout of the sut (unset = not written; xlxd ignores it)
     [ "$svc" != xlxd-sut ] || [ -z "${DVT_USRP_IDLE_TIMEOUT_S:-}" ] ||
       printf '      DV_USRP_IDLE_TIMEOUT_S: "%s"\n' "$DVT_USRP_IDLE_TIMEOUT_S"
@@ -493,9 +503,9 @@ collect() {
 }
 trap collect EXIT
 
-printf 'markers=%s profile=%s xlxd_ref=%s xlxd_sut=%s transcoder=%s sut_divergences=%s sut_name=%s sut_profile=%s\n' \
+printf 'markers=%s profile=%s xlxd_ref=%s xlxd_sut=%s transcoder=%s sut_divergences=%s sut_name=%s sut_profile=%s no_radio_id=%s\n' \
   "$markers" "$profile" "${XLXD_REF_IMAGE:-${XLXD_REF_DIR:-ref}}" "${XLXD_SUT_IMAGE:-${XLXD_SUT_DIR:-sut}}" "$TRANSCODER_IMAGE" \
-  "${DVT_SUT_DIVERGENCES:-}" "${DVT_SUT_NAME:-}" "${DVT_SUT_PROFILE:-xlxd}" \
+  "${DVT_SUT_DIVERGENCES:-}" "${DVT_SUT_NAME:-}" "${DVT_SUT_PROFILE:-xlxd}" "${DVT_NO_RADIO_ID:-}" \
   > "$out/run.txt"
 cat ".cache/xlxd/${XLXD_REF_DIR:-ref}.fetched" ".cache/xlxd/${XLXD_SUT_DIR:-sut}.fetched" >> "$out/run.txt" 2>/dev/null || true
 

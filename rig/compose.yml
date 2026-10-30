@@ -246,6 +246,8 @@ services:
       DVT_XLXD_BLACKLIST: ${DVT_XLXD_BLACKLIST:-}
       # dynamic USRP idle timeout the sut was given (P-USR-31/32 wait it out)
       DVT_USRP_IDLE_TIMEOUT_S: ${DVT_USRP_IDLE_TIMEOUT_S:-}
+      # no-radio-id policy the sut was given (drop|fallback|local; empty = its default)
+      DVT_NO_RADIO_ID: ${DVT_NO_RADIO_ID:-}
       DVT_LOAD: ${DVT_LOAD:-off}
       DVT_LOAD_MODULES: ${DVT_LOAD_MODULES:-26}
       DVT_LOAD_START_AT: ${DVT_LOAD_START_AT:-0}
