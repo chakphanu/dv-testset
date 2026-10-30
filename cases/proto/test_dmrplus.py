@@ -535,9 +535,16 @@ def test_dmp_frames_exact_to_mmdvm(dmp):
 
 
 def test_dmp_no_header_not_relayed(dmp):
-    """P-DMP-18: voice bursts without a header."""
-    got = both(dmp, lambda rig, side: {"frames": len(to_mmdvm(rig, side, tag="dmp-no-header", head=False)["frames"])})
-    judge_dev(dmp, "P-DMP-18", got, "frames")
+    """P-DMP-18: voice bursts without a header: relayed (late entry) or
+    not, and whether the MMDVM listener's first packet of the stream is a
+    voice LC header (a synthesized one; None when nothing arrives)."""
+    def run(rig, side):
+        res = to_mmdvm(rig, side, tag="dmp-no-header", head=False)
+        first = next((dmr.parse(d) for d in res["raw"] if dmr.parse(d)), None)
+        return {"relayed": len(res["frames"]) > 0, "frames": len(res["frames"]),
+                "header_first": None if first is None else first["bitfield"] & 0x3F == 0x21}
+    got = both(dmp, run)
+    judge_dev(dmp, "P-DMP-18", got, "relayed", "header_first")
 
 
 def test_dmp_terminator_frees_module(dmp):

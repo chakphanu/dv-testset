@@ -159,7 +159,7 @@ Voice, 72 B:
 | P-DMP-15 | The module of the stream: the header's TG or the linked module | disputed | none | the client talks to its reflector | xlxd opens on the header's TG (a client linked to B can talk into C by TG 4003); URFd opens on the TG but tags frames with the linked module | measured: a client linked to H talking to 4010: heard on J, not on H | the linked module (as MMDVM P-DMR-31) |
 | P-DMP-16 | A header with a source id missing from the id database | disputed | none | dongle users are registered DMR ids | URFd and xlxd drop the stream | measured: source 1023999: not relayed | relay with the numeric id (callsign from the database when known) |
 | P-DMP-17 | The three AMBE+2 frames of each burst reach listeners unchanged | MUST (ETSI-1 4.2.2: 3 x 72-bit vocoder frames); layout: convention | ETSI-1 4.2.2, 6.1 | - | URFd reads byte 32 of the burst from wire offset 58 (and swaps past its buffer) | measured: layout written by the server (byte 32 at wire 59): the last byte of every frame C lost (12/12); layout read by the server (byte 32 at 58): exact | read the burst with the same pair-swapped 34-byte layout the server writes (byte 32 at wire 59) |
-| P-DMP-18 | Voice packets without a header (no stream) are not relayed | disputed (ETSI provides late entry) | ETSI-1 4.3, 7.1.3 (embedded LC for late entry) | - | URFd drops them | measured: 0 frames | as MMDVM P-DMR-36 (B16) |
+| P-DMP-18 | Voice packets without a header (no stream): relayed by late entry or dropped | disputed (ETSI provides late entry) | ETSI-1 4.3, 7.1.3 (embedded LC for late entry) | - | URFd drops them | measured: 0 frames (not relayed, no header) | late entry on burst A, relayed behind a synthesized voice LC header (as MMDVM P-DMR-36; B16 judges the egress: header before voice) |
 | P-DMP-19 | A type-3 packet (voice terminator) ends the stream and frees the module at once | MUST (ETSI-1 5.1.2/3, 7.1.2: a terminator ends the transmission) | ETSI-1 5.1.2/3 | dongles send a terminator at PTT release (DMR air behaviour) | URFd: ends only by the 1.6 s timeout | measured: the MMDVM listener gets a terminator, but an MMDVM talker 0.3 s later is not heard (module held for the 1.6 s timeout) | end the stream at once; listeners get the terminator |
 | P-DMP-20 | A second header within a running stream does not open a new one | convention (impl) | ETSI-1 5.1.2/2 | - | URFd retries the open on every header (fails, logs again) | measured: 39 frames, one header at the listener | keep the stream |
 | P-DMP-21 | The talker never receives its own stream back | convention (impl, agreed) | none | - | URFd skips clients that are talking | measured: 0 packets back to the talker; another dongle hears it | no echo |
@@ -219,7 +219,7 @@ Rows for a K section of `docs/testlist.md` (the lead merges them). Covered
 | P-DMP-15 | Header TG of another module | test_dmrplus::test_dmp_header_other_module | dev | probe | covered |
 | P-DMP-16 | Header with an unknown source id | test_dmrplus::test_dmp_unknown_source | dev | probe | covered |
 | P-DMP-17 | AMBE+2 frames unchanged, DMR+ -> MMDVM (last byte of frame C recorded) | test_dmrplus::test_dmp_frames_exact_to_mmdvm | dev | probe | covered |
-| P-DMP-18 | Voice without header not relayed | test_dmrplus::test_dmp_no_header_not_relayed | dev | probe | covered |
+| P-DMP-18 | Voice without header: late entry with a synthesized header, or dropped | test_dmrplus::test_dmp_no_header_not_relayed | dev | probe | covered |
 | P-DMP-19 | Terminator ends the stream at once | test_dmrplus::test_dmp_terminator_frees_module | dev | probe | covered |
 | P-DMP-20 | Repeated header keeps the stream | test_dmrplus::test_dmp_repeated_header | diff | probe | covered |
 | P-DMP-21 | No echo to the talker | test_dmrplus::test_dmp_no_echo | diff | probe | covered |
@@ -243,6 +243,7 @@ Rows for a K section of `docs/testlist.md` (the lead merges them). Covered
 - P-DMP-04: NAK only (xlxd sends ACK, then NAK).
 - P-DMP-06: follow a new reflector number from a linked client.
 - P-DMP-15: route by the linked module, not by the header's TG.
+- P-DMP-18: late entry on burst A behind a synthesized header (xlxd drops the voice).
 - P-DMP-16: relay a talker whose id is not in the database.
 - P-DMP-17: read the burst with the same layout the server writes.
 - P-DMP-19: end the stream on the terminator.

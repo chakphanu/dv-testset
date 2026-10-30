@@ -309,7 +309,9 @@ SPEC = {
         "P-DMP-16": {"relayed": False},
         "P-DMP-16@fallback": {"relayed": True},
         "P-DMP-17": {"exact": True, "c_last_lost": 0},
-        "P-DMP-18": {"frames": 0},
+        # voice without a header: late entry on burst A, relayed behind a
+        # synthesized header (as MMDVM P-DMR-36; B16 judges the egress)
+        "P-DMP-18": {"relayed": True, "header_first": True},
         "P-DMP-19": {"second_heard": True, "terminator_within_0.3s": True},
         # unknown talker: the configured gateway id (as P25)
         "P-DMP-22": {"src_known": 1023007, "src_unknown": None},
