@@ -285,17 +285,24 @@ def unconfigured_probe(ip, module):
 
 def test_m17_conn_unconfigured_module(rig):
     """P-M17-03 (dev): CONN for a module the reflector does not run ->
-    NACK 4 B. xlxd-ref runs all 26 modules, so only a profile spec entry
-    {"module": <letter not configured>, "reply": "NACK 4"} can judge it."""
-    entry = (specs.rule(rig, "m17") or {}).get("P-M17-03") if rig.sut_profile != specs.DEFAULT else None
+    NACK 4 B. xlxd-ref runs all 26 modules, so it is judged only under a
+    profile: DVT_UNSERVED_MODULE names a module the sut does not serve
+    (scripts/run.sh passes DV_ROOMS without it to a prebuilt xlxd-sut) and
+    the profile's P-M17-03 entry gives the reply."""
+    if rig.sut_profile == specs.DEFAULT:
+        pytest.skip("xlxd runs all 26 modules; judged under a profile with DVT_UNSERVED_MODULE")
+    module = os.environ.get("DVT_UNSERVED_MODULE", "")
+    if not module:
+        pytest.skip("set DVT_UNSERVED_MODULE=<letter> (a module the sut does not serve) to judge P-M17-03")
+    entry = (specs.rule(rig, "m17") or {}).get("P-M17-03")
     if not entry:
-        pytest.skip("xlxd runs all 26 modules; a profile spec P-M17-03 {module, reply} judges the sut")
-    c = new(module=entry["module"])
+        pytest.skip("spec pending: no m17 P-M17-03 entry in dvtest/specs/%s.py" % rig.sut_profile)
+    c = new(module=module)
     try:
         reply = connect(rig.xlxd_sut, c)
     finally:
         done(c)
-    print("P-M17-03 CONN %s on sut: %s" % (entry["module"], reply))
+    print("P-M17-03 CONN %s on sut: %s" % (module, reply))
     assert reply == entry["reply"], "sut answered %s, spec %s" % (reply, entry["reply"])
 
 

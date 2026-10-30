@@ -107,6 +107,11 @@ if [ "$instance" != 0 ]; then
   suffix="-i$instance"
 fi
 export DVT_SUBNET="${DVT_NET:-172.30.0}.0/24"
+# DVT_UNSERVED_MODULE (P-M17-03, P-DXT-03, P-DCS-04): one module a prebuilt
+# xlxd-sut must not serve (DV_ROOMS); the tester gets the letter
+if [ -n "${DVT_UNSERVED_MODULE:-}" ] && ! [[ "$DVT_UNSERVED_MODULE" =~ ^[A-Z]$ ]]; then
+  echo "run.sh: DVT_UNSERVED_MODULE must be one letter A-Z" >&2; exit 2
+fi
 
 # Serialize users of this instance: project and subnet are shared. The lock
 # is released when this script exits, after compose down.
@@ -272,6 +277,16 @@ mkdir -p "$out/logs"
 # (rendered here on the host by rig/xlxd-entry.sh); log on stdout.
 prebuilt=()
 override="$out/xlxd-image.override.yml"
+# All modules A-Z except $1, as DV_ROOMS ranges: Z -> A-Y, M -> A-L,N-Z, A -> B-Z
+dvt_rooms_without() {
+  local all=ABCDEFGHIJKLMNOPQRSTUVWXYZ part out=""
+  for part in "${all%%"$1"*}" "${all#*"$1"}"; do
+    [ -n "$part" ] || continue
+    [ "${#part}" -eq 1 ] || part="${part:0:1}-${part: -1}"
+    out="${out:+$out,}$part"
+  done
+  printf '%s' "$out"
+}
 render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxdn, $7 p25, $8 xlxd peer, $9 xlxd peer2
   local svc="$1" img="$2" net="${DVT_NET:-172.30.0}" cfg="$DVT_ROOT/$out/xlxd-config/$1" f
   mkdir -p "$cfg"
@@ -291,6 +306,9 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
     printf '    environment:\n      DVT_CONFIG_MOUNTED: "1"\n'
     # P25 gateway id for unknown talkers (P-P25-23; not in rig/config/dmrid.dat)
     [ "$svc" != xlxd-sut ] || printf '      DV_P25_GATEWAY_ID: "%s"\n' "${DV_P25_GATEWAY_ID:-1023000}"
+    # DVT_UNSERVED_MODULE: the sut serves every module but that one (xlxd ignores DV_ROOMS)
+    [ "$svc" != xlxd-sut ] || [ -z "${DVT_UNSERVED_MODULE:-}" ] ||
+      printf '      DV_ROOMS: "%s"\n' "$(dvt_rooms_without "$DVT_UNSERVED_MODULE")"
     printf '    volumes:\n'
     for f in xlxd.usrp xlxd.interlink xlxd.whitelist xlxd.blacklist xlxd.terminal dmrid.dat nxdn.csv ysfnode.dat; do
       printf '      - "%s/%s:/xlxd/%s:ro"\n' "$cfg" "$f" "$f"

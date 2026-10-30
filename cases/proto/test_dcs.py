@@ -330,10 +330,28 @@ def module_probe(ip, module):
         done(gw)
 
 
+def unserved_letter():
+    """DVT_UNSERVED_MODULE: a letter the sut is started without (the rig
+    then leaves it out of the sut's rooms); empty when unset."""
+    return os.environ.get("DVT_UNSERVED_MODULE", "").strip().upper()[:1]
+
+
 def test_dcs_link_unserved_module_nak(rig):
     """P-DCS-04 (diff): a link to a module the reflector does not serve
-    gets NAK. Both rig reflectors serve A-Z, so module Z is probed and
-    the answer recorded (no unserved letter exists on this rig)."""
+    gets NAK. Without DVT_UNSERVED_MODULE both rig reflectors serve A-Z, so
+    module Z is probed and the answer recorded (the case skips). With it,
+    the sut must NAK that letter (the profile's "reply" when its spec
+    names one); xlxd-ref is recorded."""
+    letter = unserved_letter()
+    if letter:
+        got = both(rig, module_probe, letter)
+        print("P-DCS-04 module %s (unserved on the sut):" % letter, got)
+        if got["sut"]["reply"] == "ack" and rig.sut_profile == specs.DEFAULT:
+            pytest.skip("DVT_UNSERVED_MODULE=%s has no effect on this sut (it serves %s)" % (letter, letter))
+        want = ((specs.rule(rig, "dcs") or {}).get("P-DCS-04") or {}).get("reply", "nak")
+        assert got["sut"]["reply"] == want, "sut: link to unserved %s got %s, want %s" % (
+            letter, got["sut"]["reply"], want)
+        return
     got = both(rig, module_probe, "Z")
     print("P-DCS-04 module Z:", got)
     same(got, "reply")

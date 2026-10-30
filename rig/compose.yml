@@ -235,6 +235,7 @@ services:
       DVT_INTERLINK_MODULES: ${DVT_INTERLINK_MODULES:-DE}
       DVT_LOAD: ${DVT_LOAD:-off}
       DVT_LOAD_MODULES: ${DVT_LOAD_MODULES:-26}
+      DVT_UNSERVED_MODULE: ${DVT_UNSERVED_MODULE:-}
       DVT_LOAD_START_AT: ${DVT_LOAD_START_AT:-0}
       DVT_LOAD_DURATION: ${DVT_LOAD_DURATION:-60}
       # names (comma separated, dvtest/divergences.py) of intended differences
