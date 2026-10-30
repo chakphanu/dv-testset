@@ -290,6 +290,23 @@ SPEC = {
         # no M17 interlink / peer CONN support for now
         "P-M17-44": {"reply": "none"},
     },
+    # XLX interlink dev items (docs/protocols/xlx.md), DV-Router choices
+    # 2026-10-30. Peer kind comes from the configured row (P-XLX-09; the
+    # xlxd-file converter maps BM / FD / FS / PH prefixes), never from the
+    # callsign at runtime. No closing frame toward a peer that never got
+    # the stream's header (D8).
+    "xlx": {
+        "P-XLX-02": {"reply": "A", "modules": "DE"},
+        # peer address checked (as URFd)
+        "P-XLX-05": {"reply": "N"},
+        "P-XLX-14": {"linked_after": True},
+        "P-XLX-18": {"egress": "zero_slot"},
+        # present slots decided by the received size
+        "P-XLX-22": {"rev1_53_dmr_is_sent": True, "rev1_53_frames": True, "rev3_27_dmr_zero": False,
+                     "rev3_27_frames": True},
+        "P-XLX-32": {"relayed": 0},
+        "P-XLX-33": {"egress": "zero_slot"},
+    },
     # DExtra dev items (docs/protocols/dextra.md), DV-Router choices
     # 2026-10-30. Reflector name "XRF" + the callsign digits (XRF999 in the
     # rig, as on ref: P-DXT-07 / P-DXT-37 compare bytes with xlxd). No
