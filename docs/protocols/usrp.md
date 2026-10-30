@@ -94,8 +94,14 @@ idle timeout, and `DVT_USRP_DYNAMIC_FAST=1` shortens overs and listening
 windows. That proves the cases before a real dynamic server exists. The
 idle-timeout and PING cases (P-USR-31/32) wait out the rule's
 `idle_timeout_s`. `DVT_USRP_IDLE_TIMEOUT_S` overrides it for a test
-server configured shorter. Above 600 s they skip unless
-`DVT_LONG_TIMEOUTS=1`.
+server configured shorter. On the rig the same variable also goes to a
+prebuilt xlxd-sut as `DV_USRP_IDLE_TIMEOUT_S` (the system under test's
+setting; xlxd ignores it). Above 600 s they skip unless
+`DVT_LONG_TIMEOUTS=1`. P-USR-41 [denied] uses the rule's
+`denied_callsign`, N0DENY. That callsign is well-formed, so the deny
+list really decides. On the rig the case needs `DVT_XLXD_BLACKLIST=N0DENY`
+(rendered into both reflectors' `xlxd.blacklist`) and skips without it.
+N0DENY must stay out of every other suite.
 
 Conventions: "USRP" (4 bytes) followed by seven 32-bit fields: seq, memory,
 keyup, talkgroup, type, mpxid, reserved (32-byte header). seq and keyup are

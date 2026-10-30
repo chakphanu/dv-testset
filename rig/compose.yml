@@ -242,6 +242,10 @@ services:
       DVT_UNSERVED_MODULE: ${DVT_UNSERVED_MODULE:-}
       # on with --profile g3: g3-term2 at .31 is a second G3 terminal (cases/proto/test_g3.py)
       DVT_G3: ${DVT_G3:-off}
+      # the operator blacklist both reflectors got (P-G3-05 checks it is set)
+      DVT_XLXD_BLACKLIST: ${DVT_XLXD_BLACKLIST:-}
+      # dynamic USRP idle timeout the sut was given (P-USR-31/32 wait it out)
+      DVT_USRP_IDLE_TIMEOUT_S: ${DVT_USRP_IDLE_TIMEOUT_S:-}
       DVT_LOAD: ${DVT_LOAD:-off}
       DVT_LOAD_MODULES: ${DVT_LOAD_MODULES:-26}
       DVT_LOAD_START_AT: ${DVT_LOAD_START_AT:-0}

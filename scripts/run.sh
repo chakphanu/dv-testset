@@ -323,6 +323,9 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
     printf '    environment:\n      DVT_CONFIG_MOUNTED: "1"\n'
     # P25 gateway id for unknown talkers (P-P25-23; not in rig/config/dmrid.dat)
     [ "$svc" != xlxd-sut ] || printf '      DV_P25_GATEWAY_ID: "%s"\n' "${DV_P25_GATEWAY_ID:-1023000}"
+    # DVT_USRP_IDLE_TIMEOUT_S: dynamic USRP idle timeout of the sut (unset = not written; xlxd ignores it)
+    [ "$svc" != xlxd-sut ] || [ -z "${DVT_USRP_IDLE_TIMEOUT_S:-}" ] ||
+      printf '      DV_USRP_IDLE_TIMEOUT_S: "%s"\n' "$DVT_USRP_IDLE_TIMEOUT_S"
     # DVT_UNSERVED_MODULE: the sut serves every module but that one (xlxd ignores DV_ROOMS)
     [ "$svc" != xlxd-sut ] || [ -z "${DVT_UNSERVED_MODULE:-}" ] ||
       printf '      DV_ROOMS: "%s"\n' "$(dvt_rooms_without "$DVT_UNSERVED_MODULE")"

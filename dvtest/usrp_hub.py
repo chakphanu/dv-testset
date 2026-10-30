@@ -31,6 +31,8 @@ import time
 
 from .proto import usrp
 
+# well-formed, so it exercises the deny list (the rig puts it in xlxd.blacklist)
+DENIED = "N0DENY"
 CALLSIGN = re.compile(r"^[A-Z0-9]{3,8}(-[A-Z0-9]{1,2})?$")
 
 
@@ -45,7 +47,7 @@ def spec(idle=None):
         "P-USR-34": {"default_module": "none"},
         "P-USR-37": {"info_reply": "json"},
         "P-USR-40": {"max_clients": 6, "full_reply": "REG:UNREG"},
-        "P-USR-41": {"denied_callsign": "N0CALL-9"},
+        "P-USR-41": {"denied_callsign": DENIED},
     }
 
 

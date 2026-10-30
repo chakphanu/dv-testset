@@ -419,11 +419,14 @@ def test_usrp_dyn_table_full(make, dyn):
 def test_usrp_dyn_listen_only_without_callsign(make, dyn, case):
     """P-USR-41 (conv): a client without a valid SET_INFO callsign (none
     sent, an invalid one, or one on the deny list) hears its module but its
-    own voice is never relayed. "denied" needs the rule's denied_callsign."""
+    own voice is never relayed. "denied" needs the rule's denied_callsign
+    (N0DENY) and, on the rig, that callsign in DVT_XLXD_BLACKLIST."""
     if case == "denied":
         denied = dyn.entry("P-USR-41").get("denied_callsign")
         if not denied:
             pytest.skip("spec pending: no usrp P-USR-41 denied_callsign (a callsign on the server's deny list)")
+        if not os.environ.get("DVT_USRP_DYNAMIC_HUB") and denied not in os.environ.get("DVT_XLXD_BLACKLIST", "").split():
+            pytest.skip("run with DVT_XLXD_BLACKLIST=%s so the system under test denies it" % denied)
     mute, listener, talker = make(), make("N0TEST"), make("N0CALL")
     assert mute.register(), "no REG:OK"
     if case == "invalid":
