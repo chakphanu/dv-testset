@@ -25,7 +25,8 @@ the default verdict is differential (xlxd-sut against xlxd-ref):
   - a cell is complete when the listener got the intact stream in one
     unbroken run: passthrough the sent frames, cross the sent frames run
     through a fresh transcoder-ref stream (lost = frames of it missing)
-  - cells complete on both reflectors: sut sha256 == ref sha256
+  - cells complete on both reflectors: sut sha256 == ref sha256 (same-mode
+    M17: without packet 0 when the sut relays it, specs.m17_fn0_relayed)
   - the Morse text decoded from every sut cross stream is recorded only:
     a complete cell already equals the transcoder's own output, and whether
     tandem coding keeps 20 wpm keying is a codec property (AMBE -> Codec2
@@ -372,6 +373,10 @@ def run_round(rig, mods, rnd, encoded, usrp_on):
                     row["exact"] = got == want
                     if not row["exact"]:
                         row["missing"] = missing(want, got)
+                    # sut vs ref basis: without M17 packet 0 when this side
+                    # relays it (B17) and the stream is the expected one
+                    common = got[2:] if k == "m17" and fn0[u.side] and row["exact"] else got
+                    row["sha256_common"] = sha(common)
                 row.update(timing(voice_times(k, c.client), u.stamps, k, u.t_talk))
                 row.update(send_lateness(u.stamps, u.talker_kind))
                 rows.append((row, got))
@@ -872,7 +877,11 @@ def test_sut_equals_ref_where_complete(verdict):
     bad = []
     for r in verdict:
         other = ref.get((r["round"], r["module"], r["dst"]))
-        if r["side"] == "sut" and other and r["complete"] and other["complete"] and r["sha256"] != other["sha256"]:
+        if r["side"] != "sut" or not (other and r["complete"] and other["complete"]):
+            continue
+        # same-mode: the M17 packet 0 a relaying sut adds is not compared
+        key = "sha256_common" if r["kind"] == "passthrough" else "sha256"
+        if r.get(key, r["sha256"]) != other.get(key, other["sha256"]):
             bad.append("%s: sut %d ref %d frames" % (label(r), r["received"], other["received"]))
     assert not bad, "%d complete cells: sut differs from ref: %s" % (len(bad), bad[:8])
 
