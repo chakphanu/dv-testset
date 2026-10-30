@@ -110,8 +110,7 @@ run needs an xlxd-compatible DV-Router binary as `DVT_XLXD_BIN`.
 | F3 | NXDN <-> D-STAR / M17 / AllStar through the transcoder; system under test == reference | cases/test_nxdn.py | planned |
 | F4 | P25 reflector peered with xlxd | rig profile p25 | planned |
 | F5 | P25 (IMBE) <-> DMR / D-STAR / M17 / AllStar through the transcoder | cases/test_p25.py | planned |
-| F6 | NXDN and P25 client codecs (offline) | cases/unit/test_nxdn.py, cases/unit/test_p25.py | covered |
-| F7 | NXDN and P25 client codecs (offline) | cases/unit/test_nxdn_proto.py, cases/unit/test_nxdn_conf.py, cases/unit/test_p25_proto.py, cases/unit/test_p25_conf.py | covered |
+| F6 | NXDN and P25 client codecs (offline) | cases/unit/test_nxdn_proto.py, cases/unit/test_nxdn_conf.py, cases/unit/test_p25_proto.py, cases/unit/test_p25_conf.py | covered |
 
 ## G. Audio content
 
@@ -503,9 +502,58 @@ test, "dev" rows are recorded under the `xlxd` profile.
 | P-NXD-42 | Data frames relayed or dropped | test_nxdn_server::test_nxdn_server_data_frames | dev | probe | covered |
 | P-NXD-43 | Silent gateway dropped after the timeout | test_nxdn_server::test_nxdn_server_client_expiry | dev | probe | covered (slow) |
 
-K8 (M17, `docs/protocols/m17.md`), K9 (YSF, `docs/protocols/ysf.md`) and
-K10 (XLX interlink, `docs/protocols/xlx.md`) are reserved for those suites
-when they land.
+### K8. M17 (`docs/protocols/m17.md`)
+
+| # | Obligation | Case | Judged | How | Status |
+|---|---|---|---|---|---|
+| P-M17-01 | CONN -> ACKN 4 B | test_m17::test_m17_conn_ack | hb | probe | covered |
+| P-M17-02 | CONN callsign with a 9th character linked | test_m17::test_m17_conn_suffix | diff | probe | covered |
+| P-M17-03 | CONN to an unconfigured module -> NACK | test_m17::test_m17_conn_unconfigured_module | dev | probe (profile spec names the module; skips under xlxd: all 26 run) | covered |
+| P-M17-04 | CONN with a bad module byte / callsign: no link | test_m17::test_m17_conn_bad_module | dev | probe | covered |
+| P-M17-05 | CONN/LSTN of another length ignored | test_m17::test_m17_conn_wrong_size | diff | probe | covered |
+| P-M17-06 | LSTN: ACKN, receives, cannot talk | test_m17::test_m17_listen_only | dev | probe | covered |
+| P-M17-07 | Repeat CONN: same module ACKN, other module moves | test_m17::test_m17_reconn | dev | probe | covered |
+| P-M17-08 | Same callsign from two ports: two clients | test_m17::test_m17_two_ports | diff | probe | covered |
+| P-M17-09 | PING every 3 s with the reflector callsign | test_m17::test_m17_ping_interval | dev | probe | covered |
+| P-M17-10 | Unsolicited PONG keeps the link (DroidStar style) | test_m17::test_m17_unsolicited_pong_keeps_link | diff | probe | covered (slow) |
+| P-M17-11 | Client PING accepted as keepalive | test_m17::test_m17_client_ping_keepalive | diff | probe | covered (slow) |
+| P-M17-12 | Silent client dropped after 30 s, DISC 10 B | test_m17::test_m17_silent_client_dropped | dev | probe | covered (slow) |
+| P-M17-13 | Dropped client gets no PING or traffic | test_m17::test_m17_dropped_client_no_traffic | diff | probe | covered (slow) |
+| P-M17-14 | Stream packets reset the timeout | test_m17::test_m17_stream_resets_timeout | diff | probe | covered (slow) |
+| P-M17-15 | DISC 10 B -> DISC 4 B, client removed | test_m17::test_m17_disc_ack | hb | probe | covered |
+| P-M17-16 | Repeated DISC from an unlinked address | test_m17::test_m17_disc_repeat | dev | probe | covered |
+| P-M17-17 | DISC of another length ignored, link kept | test_m17::test_m17_disc_wrong_size | diff | probe | covered |
+| P-M17-18 | DISC 10 B to all clients on shutdown | test_m17::test_m17_disc_on_shutdown | dev | probe (rig_control restart, last case) | covered (slow) |
+| P-M17-19 | 54 B stream relayed to the module | test_m17::test_m17_stream_relayed | hb | probe | covered |
+| P-M17-20 | FN 0 payload relayed | test_floor::test_m17_frame0_relayed | spec (B17) | probe | covered |
+| P-M17-21 | Stream without FN 0 still relayed | test_m17::test_m17_stream_without_fn0 | dev | probe | covered |
+| P-M17-22 | Last-frame bit closes the stream, module free | test_m17::test_m17_last_frame_closes | diff | probe | covered |
+| P-M17-23 | Silence timeout and closing packet | test_xlxd_clients::test_stream_timeout_frees_module | spec (B3) | probe | covered |
+| P-M17-24 | Destination forms relayed on the linked module | test_m17::test_m17_destination_forms[..] | dev | probe | covered |
+| P-M17-25 | Wrong CRC relayed | test_m17::test_m17_bad_crc_relayed | diff | probe | covered |
+| P-M17-26 | Stream TYPE variants relayed | test_m17::test_m17_type_variants[..] | dev | probe | covered |
+| P-M17-27 | Source callsign relayed as sent | test_m17::test_m17_source_not_login | diff | probe | covered |
+| P-M17-28 | Stream id 0 not relayed | test_floor::test_admission_sid_zero | spec (B8) | probe | covered |
+| P-M17-29 | Stream from an unlinked address dropped | test_m17::test_m17_unlinked_stream_dropped | diff | probe | covered |
+| P-M17-30 | Listen-only client's stream dropped | test_m17::test_m17_listen_only_cannot_talk | dev | probe | covered |
+| P-M17-31 | 53/55/56 B stream packets not relayed | test_m17::test_m17_stream_wrong_size | diff | probe | covered |
+| P-M17-32 | Second stream not mixed | test_floor::test_first_talker_wins, ::test_late_entry_denied | spec (B1/B2) | probe | covered |
+| P-M17-33 | No echo to the talker | test_floor::test_no_self_echo_other_sid | spec (B16) | probe | covered |
+| P-M17-34 | Egress 54 B, consecutive FN, bit 15 last | test_m17::test_m17_egress_fn | diff | probe + dvcheck H4 | covered |
+| P-M17-35 | Egress stream id kept | test_floor::test_sid_preserved[m17] | spec (B10) | probe | covered |
+| P-M17-36 | Egress destination rule | test_m17::test_m17_egress_destination | dev | probe | covered |
+| P-M17-37 | Egress CRC valid | test_m17::test_m17_egress_crc | dev | probe | covered |
+| P-M17-38 | Egress TYPE / META kept | test_m17::test_m17_egress_type_meta | dev | probe | covered |
+| P-M17-39 | Egress source = talker | test_m17::test_m17_egress_source | diff | probe | covered |
+| P-M17-40 | Late linker gets the next packet | test_m17::test_m17_late_link_receives | dev | probe | covered |
+| P-M17-41 | M17P forwarded | test_m17::test_m17_packet_mode | dev | probe | covered |
+| P-M17-42 | PARROT echo | test_m17::test_m17_parrot | dev | probe | covered (record) |
+| P-M17-43 | Unknown / short / oversize packets ignored | test_m17::test_m17_garbage_ignored | diff | probe | covered |
+| P-M17-44 | 37 B peer CONN not linked | test_m17::test_m17_peer_conn_unconfigured | dev | probe | covered (record) |
+| P-M17-45 | No datagram to a client above 100 B | test_m17::test_m17_egress_max_size | hb | probe | covered |
+
+K9 (YSF, `docs/protocols/ysf.md`) and K10 (XLX interlink,
+`docs/protocols/xlx.md`) are reserved for those suites when they land.
 
 ## Upstream behaviour the cases accept
 
@@ -549,6 +597,8 @@ dvcheck report it as a warning with a note:
   bits, not IDLE; the AMBE+2 gain index is stepped -0.3 dB both ways;
   headerless voice is dropped (no late entry), a FACCH1-stolen half is
   decoded as voice and an empty DMR join goes out as VCALL + TX_REL.
+- M17 (section K8): ACKN for any module letter and silence on a bad module byte (no NACK); PING every 5 s; FN 0 payload dropped and only FN 0 opens a stream; only TYPE 0x0005 relayed, TYPE forced 0x0005 and META zeroed on egress; new per-module stream id; egress CRC 0x0000; M17P packet mode dropped; a new client misses about 230 ms (up to 1 s) of a running stream; no DISC when the reflector stops.
+- xlxd-sut (PR tree) occasionally reorders egress frames under load; not seen on ref (dvcheck dextra.seq_reorder x6 in out/20261030T063313Z during P-DXT-44, an earlier one-off dcs.seq_reorder).
 - Short-stream guard (B18): xlxd's loop guard counts short streams per module by callsign, so across protocols. It blocks with the 3 / 10 / 300 s ladder and enforces the block only on DExtra/DPlus/DCS (DMR and M17 pass no module to the gatekeeper). At strike 3 it refuses links and disconnects the talker, and it stops acking YSF polls of the callsign (MayLink on every poll). Measured 2026-10-30: out/20261030T062417Z-i13, out/20261030T063238Z-i13 (decay), out/20261030T064052Z-i13 (per-protocol refusals).
 
 ## DV-Router profile (`DVT_SUT_PROFILE=dvrouter`)
