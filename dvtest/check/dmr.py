@@ -94,7 +94,7 @@ class Checker:
                 self.left.leave(peer, d)
             else:
                 self.left.back(peer)
-        elif self.left.sent(peer, d, kind in ("voice", "voice_sync")):
+        elif self.left.sent(peer, d, kind if kind in ("voice", "voice_sync", "terminator") else None):
             return
         if peer not in self.logged:
             self.logged.add(peer)

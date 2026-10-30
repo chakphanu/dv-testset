@@ -50,7 +50,7 @@ class Checker:
             self.left.leave(peer, d)
         if kind != "voice":
             return
-        if d.dport != M.PORT and self.left.sent(peer, d, True):
+        if d.dport != M.PORT and self.left.sent(peer, d, "EOT frame" if p[34] & 0x80 else "voice"):
             return
         if peer not in self.linked:
             self.linked.add(peer)

@@ -67,7 +67,8 @@ class Checker:
             self.left.leave(client, d)
         if kind not in ("header", "voice"):
             return
-        if d.dport != self.port and self.left.sent(client, d, kind == "voice"):
+        if d.dport != self.port and self.left.sent(
+                client, d, ("last frame" if p[14] & 0x40 else "voice") if kind == "voice" else None):
             return
         if client not in self.linked:
             self.linked.add(client)

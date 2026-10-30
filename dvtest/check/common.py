@@ -28,7 +28,8 @@ def touches(flow, endpoint):
 
 class Departures:
     """Clients that left (unlink, DISC): traffic sent to them afterwards.
-    One voice packet within one frame time after the departure was in
+    One stream packet (voice, or the stream's end: DMR terminator, D-STAR
+    last frame, M17 EOT) within one frame time after the departure was in
     flight (warning in_flight); anything else is an error `code`, reported
     once per departure."""
 
@@ -42,17 +43,18 @@ class Departures:
     def back(self, client):
         self.left.pop(client, None)
 
-    def sent(self, client, d, voice):
+    def sent(self, client, d, what=None):
         """True when d (to client) came after the client left: reported, and
-        the caller must not count it in a stream."""
+        the caller must not count it in a stream. what names a stream packet
+        that may be in flight ("voice", "terminator", ...), None otherwise."""
         e = self.left.get(client)
         if e is None:
             return False
         dt = None if d.ts is None or e[0] is None else d.ts - e[0]
-        if voice and not e[2] and dt is not None and 0 <= dt <= self.window:
+        if what and not e[2] and dt is not None and 0 <= dt <= self.window:
             e[2] = True
-            self.report.warn(self.protocol, d, "in_flight", "voice in flight at the unlink of frame %d"
-                             " (%.1f ms after it)" % (e[1], dt * 1000.0))
+            self.report.warn(self.protocol, d, "in_flight", "%s in flight at the unlink of frame %d"
+                             " (%.1f ms after it)" % (what, e[1], dt * 1000.0))
         elif not e[3]:
             e[3] = True
             self.report.error(self.protocol, d, self.code, "traffic to the client %s after its unlink at"

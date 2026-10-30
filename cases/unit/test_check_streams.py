@@ -409,3 +409,48 @@ def test_m17_frame_after_disc(tmp_path):
         w.send(R, m17.PORT, T, 40003, m17.packet(0x5252, 10, "N0OTHER", FRAME[:8] * 2), gap)
         w.send(T, 40004, R, m17.PORT, m17.pong_packet("N0X"), 6.0)
         assert codes(w.check(tmp_path), "error") == want_error, gap
+
+
+def test_stream_end_in_flight_at_unlink(tmp_path):
+    """A stream's end (DMR terminator, D-STAR last frame, M17 EOT) within one
+    frame time after the listener left is in flight, like one voice packet;
+    more packets, or a later one, stay an error."""
+    src, tg = dmr.DMR_ID, dmr.module_tg("B")
+    sync = dmr.data_sync_payload()
+    for packets, gap, want_error in (([0xA2], 0.00004, []), ([0x81, 0xA2], 0.00004, ["dmr.after_unlink"]),
+                                     ([0xA2], 0.080, ["dmr.after_unlink"])):
+        w = dmr_wire(bursts=6, terminator=False)
+        w.rows.pop()
+        w.t = w.rows[-1][0]
+        w.send(T, 40002, R, dmr.PORT, dmr.packet(0, src, 4000, src, 0xA2, 0x33333333, sync), 0.005)
+        for n, bits in enumerate(packets):
+            payload = sync if bits == 0xA2 else dmr.voice_payload(FRAME, FRAME, FRAME)
+            w.send(R, dmr.PORT, T, 40002, dmr.packet(7 + n, src, tg, src, bits, 0x01020304, payload),
+                   gap if n == 0 else 0.001)
+        w.wait(6.0)
+        result = w.check(tmp_path)
+        assert codes(result, "error") == want_error, (packets, gap)
+        if not want_error:
+            assert [f for f in result["findings"] if f["code"] == "dmr.in_flight"][0]["message"].startswith(
+                "terminator in flight")
+    w = Wire()
+    w.send(T, 40001, R, dextra.PORT, dextra.link_packet("N0TEST", "B"))
+    w.send(R, dextra.PORT, T, 40001, dextra.header(0x4545, "N0TEST", "B"), 0.01)
+    for seq in range(5):
+        w.send(R, dextra.PORT, T, 40001, dextra.voice(0x4545, seq, FRAME, False,
+                                                     dextra.SYNC_DATA if seq == 0 else dextra.SLOW_DATA), 0.02)
+    w.send(T, 40001, R, dextra.PORT, dextra.unlink_packet("N0TEST", "B"), 0.019)
+    w.send(R, dextra.PORT, T, 40001, dextra.voice(0x4545, 5, FRAME, True), 0.001)
+    w.send(T, 40002, R, dextra.PORT, dextra.keepalive_packet("N0OTHER"), 6.0)
+    result = w.check(tmp_path)
+    assert codes(result, "error") == [] and "dextra.in_flight" in codes(result)
+    w = Wire()
+    w.send(T, 40003, R, m17.PORT, m17.conn_packet("N0TEST", "B"))
+    for fn in range(5):
+        w.send(R, m17.PORT, T, 40003, m17.packet(0x5353, fn, "N0OTHER", FRAME[:8] * 2), 0.04)
+    w.send(T, 40003, R, m17.PORT, m17.disc_packet("N0TEST"), 0.03)
+    w.send(R, m17.PORT, T, 40003, m17.packet(0x5353, 5, "N0OTHER", FRAME[:8] * 2, eot=True), 0.001)
+    w.send(T, 40004, R, m17.PORT, m17.pong_packet("N0X"), 6.0)
+    result = w.check(tmp_path)
+    assert codes(result, "error") == []
+    assert [f for f in result["findings"] if f["code"] == "m17.in_flight"][0]["message"].startswith("EOT frame")
