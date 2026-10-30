@@ -160,8 +160,9 @@ SPEC = {
         # dynamic DVSwitch-style clients (REG:DVSWITCH / REG:OK) not built yet:
         # the dynamic-client cases skip "edge not ready" until this is True
         "dynamic_server": False,
-        # DVSwitch AR mobilePort default; dv-router to confirm
-        "dynamic_port": 12345,
+        # UDP port of the dynamic-client hub: 34001 (12345 is Icom G3's fixed
+        # config port, urfd Defines.h G3_CONFIG_PORT)
+        "dynamic_port": 34001,
         "P-USR-29": {"unregistered_voice": "ignored"},
         # 60 min idle timeout (refreshed by any packet), REG:UNREG on drop
         # and on permanent shutdown
