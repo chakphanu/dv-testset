@@ -270,6 +270,21 @@ SPEC = {
     # Dev values follow when dv-router chooses.
     "g3": {
         "server": False,
+        "P-G3-03": {"before_route_is_reflector": True},
+        # presence is subject to the operator lists; a refused terminal gets
+        # no terminal entry (status 1)
+        "P-G3-05": {"presence_status": 1},
+        "P-G3-10": {"ur": b"XLX999 J", "rpt1": b"XLX999 G", "rpt2": b"XLX999 J"},
+        # at least one header copy; the ingress last frame is passed unchanged
+        "P-G3-17": {"min_headers": 1, "last_payload": "pass"},
+        # drop only on a malformed MY
+        "P-G3-21": {"heard_my": 0, "heard_rpt1": 63},
+        "P-G3-22": {"synthesized_last": 1},
+        # remove a terminal only when its own 40000 port is unreachable
+        "P-G3-23": {"removed_own_port": True, "removed_other_port": False},
+        # PING every 10 s per terminal
+        "P-G3-24": {"period_10s": True},
+        "P-G3-26": {"reply": 0},
     },
     # M17 dev items (docs/protocols/m17.md), DV-Router choices 2026-10-30.
     # Cross-mode: only unencrypted voice 3200 (any CAN / signed) is
