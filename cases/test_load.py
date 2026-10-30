@@ -69,7 +69,7 @@ from pathlib import Path
 
 import pytest
 
-from dvtest import check, clients, pcap
+from dvtest import check, clients, pcap, specs
 from dvtest.audio import morse, signals
 from dvtest.net import UdpClient
 from dvtest.proto import ambed, dextra, dmr, m17, usrp
@@ -234,8 +234,18 @@ def missing(expected, got):
 def timing(arrivals, stamps, kind, t_talk=None):
     """Latency talker send -> listener arrival of the first and last voice
     packet (talker send stamps when the client keeps them, else from the
-    talk call: first_after_talk_ms), and arrival jitter."""
+    talk call: first_after_talk_ms), and arrival jitter.
+
+    The stamps are the paced voice packets; an M17 talker sends packet 0
+    (frames 0-1) one settle time (~0.3 s) before them. A sut that relays it
+    (B17, specs.m17_fn0_relayed) delivers voice before the first stamp:
+    those early_packets are counted and left out of latency and jitter, so
+    they show neither as negative latency nor as a 0.3 s gap."""
     row = {"first_ms": None, "last_ms": None}
+    if stamps:
+        early = sum(1 for a in arrivals if a < stamps[0])
+        arrivals = [a for a in arrivals if a >= stamps[0]]
+        row["early_packets"] = early
     if arrivals and stamps:
         row["first_ms"] = ms(arrivals[0] - stamps[0])
         row["last_ms"] = ms(arrivals[-1] - stamps[-1])
@@ -278,6 +288,8 @@ class Unit:
 
 def run_round(rig, mods, rnd, encoded, usrp_on):
     sides = (("ref", rig.xlxd_ref), ("sut", rig.xlxd_sut))
+    # M17 packet 0: xlxd-ref drops it, the sut relays it if its profile says so
+    fn0 = {"ref": False, "sut": specs.m17_fn0_relayed(rig)}
     units = [Unit(side, ip, m, mod, KINDS[(m + rnd) % len(KINDS)])
              for side, ip in sides for m, mod in enumerate(mods)]
     peer = UdpClient("0.0.0.0", port=USRP_PEER_PORT) if usrp_on else None
@@ -356,7 +368,7 @@ def run_round(rig, mods, rnd, encoded, usrp_on):
                        "talker_port": u.talker.client.local[1], "listener_port": c.client.local[1],
                        "foreign": sorted(i for i in seen if owner_of(i) not in (u.m,))}
                 if k == u.talker_kind:
-                    want = clients.wire_frames(k, sent)
+                    want = clients.wire_frames(k, sent, m17_fn0=fn0[u.side])
                     row["exact"] = got == want
                     if not row["exact"]:
                         row["missing"] = missing(want, got)
