@@ -192,6 +192,26 @@ SPEC = {
                      "k_after_unlink_b": False},
         "P-DCS-46": {"heard": 42},
     },
+    # NXDN peer dev items (docs/protocols/nxdn.md), DV-Router choices
+    # 2026-10-30. Client-serving NXDN (UDP 41400) is not built yet.
+    "nxdn": {
+        "P-NXD-03": {"keeps_polling": True, "routed_during_loss": False, "resumed": True},
+        # NXDNU x3 on peer removal and shutdown
+        "P-NXD-04": {"unlink": True},
+        "P-NXD-07": {"sacch_type": 0x10},
+        # AMBE bits unchanged both ways (no xlxd gain-index step)
+        "P-NXD-13": {"step_out": 0, "step_in": 0},
+        "P-NXD-20": {"late_entry": True},
+        "P-NXD-23": {"facch_as_voice": False, "frames": 60},
+        "P-NXD-25": {"routed": False},
+        # encrypted calls are dropped (as P25 and M17)
+        "P-NXD-26": {"routed": False},
+        # streams keyed by address + src id, floor per B1
+        "P-NXD-27": {"mixed": False},
+        "P-NXD-28": {"terminator": True, "freed": True},
+        # a DMR join (empty stream) is not sent to NXDN as an empty over
+        "P-NXD-30": {"relayed": False},
+    },
 }
 
 # B12: header fields DV-Router does not verify, because the tester (like
