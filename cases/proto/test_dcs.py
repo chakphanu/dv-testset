@@ -288,19 +288,21 @@ def source_probe(ip):
             kind = dcs.parse_reply(data)["kind"]
             if kind in ("ack", "poll"):
                 sources.add((kind, addr[1]))
-        return {"sources": sorted(sources)}
+        return {"sources": sorted(sources), "ports": sorted({port for _kind, port in sources})}
     finally:
         done(gw)
 
 
 def test_dcs_source_port(rig):
     """P-DCS-44 (diff): ACK and polls come from port 30051 (ircDDBGateway
-    and QnetGateway accept nothing else)."""
+    and QnetGateway accept nothing else). Whether a poll falls into the 8 s
+    window depends on the poll timer (xlxd delays its first one at random),
+    so only the source ports of what arrived are compared."""
     got = both(rig, source_probe)
     print("P-DCS-44 sources:", got)
     for name, r in got.items():
-        assert r["sources"] and all(port == dcs.PORT for _kind, port in r["sources"]), "%s: %s" % (name, r)
-    same(got, "sources")
+        assert r["sources"] and r["ports"] == [dcs.PORT], "%s: %s" % (name, r)
+    same(got, "ports")
 
 
 def minimal_probe(ip):
@@ -699,8 +701,10 @@ def test_dcs_voice_size(rig, size):
         got = both(rig, probe)
     print("P-DCS-22 voice %d B:" % size, got)
     if size == 99:
+        # too short for a DCS voice packet: dropped on every side (no spec value)
         for side, r in got.items():
             assert r["heard"] == 0, "%s: short voice relayed" % side
+        return
     judge_dev(rig, "P-DCS-22", got, "heard")
 
 
@@ -787,8 +791,11 @@ def test_dcs_egress_sequence(rig):
 
 
 def test_dcs_passthrough_exact(rig):
-    """P-DCS-28 (diff): AMBE relayed byte exact on both sides; the frames
-    whose slow data changed on the way are recorded, sut == ref."""
+    """P-DCS-28 (diff): AMBE relayed byte exact on both sides, and the slow
+    data of every frame but the one before the last packet; that frame's
+    slow data is recorded apart (xlxd writes 55 55 55 there, P-DCS-28 /
+    P-DXT-33): sut == ref under xlxd, passed unchanged under another
+    profile."""
     got = both(rig, stream_probe)
     rows = {}
     for name, r in got.items():
@@ -796,9 +803,17 @@ def test_dcs_passthrough_exact(rig):
         assert [p["frame"] for p in body] == r["sent"], "%s: AMBE changed (%d of %d)" % (
             name, len(body), len(r["sent"]))
         want = [dextra.SYNC_DATA if i % 21 == 0 else dextra.SLOW_DATA for i in range(len(body))]
-        rows[name] = {"slow_changed": [(i, p["slow"].hex()) for i, p in enumerate(body) if p["slow"] != want[i]]}
-    print("P-DCS-28 slow data changed (index, bytes):", rows)
-    same(rows, "slow_changed")
+        rows[name] = {"slow_changed": [(i, p["slow"].hex()) for i, p in enumerate(body[:-1]) if p["slow"] != want[i]],
+                      "pre_last_slow": body[-1]["slow"].hex() if body else None,
+                      "sent_pre_last": want[-1].hex() if want else None}
+    print("P-DCS-28 slow data changed (index, bytes) and pre-last:", rows)
+    for name, r in rows.items():
+        assert not r["slow_changed"], "%s: slow data changed %s" % (name, r["slow_changed"])
+    if rig.sut_profile == specs.DEFAULT:
+        same(rows, "pre_last_slow")
+    else:
+        assert rows["sut"]["pre_last_slow"] == rows["sut"]["sent_pre_last"], "sut: pre-last slow data %s, sent %s" % (
+            rows["sut"]["pre_last_slow"], rows["sut"]["sent_pre_last"])
 
 
 def test_dcs_last_packet(rig):

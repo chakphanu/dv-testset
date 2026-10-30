@@ -1083,7 +1083,13 @@ def test_dextra_slow_data_passthrough(rig, name):
                "pre_last_slow": _pre_last_slow(r), "sent_pre_last": slow[-1].hex()}
            for n, r in got.items()}
     print("P-DXT-28 %s:" % name, got)
-    same(got, "exact", "slow_exact", "pre_last_slow")
+    same(got, "exact", "slow_exact")
+    # the frame before the last frame: xlxd writes 55 55 55 (P-DXT-33)
+    if rig.sut_profile == specs.DEFAULT:
+        same(got, "pre_last_slow")
+    elif ((specs.rule(rig, "dextra") or {}).get("P-DXT-33") or {}).get("pre_last_kept"):
+        assert got["sut"]["pre_last_slow"] == got["sut"]["sent_pre_last"], "sut: pre-last slow data %s, sent %s" % (
+            got["sut"]["pre_last_slow"], got["sut"]["sent_pre_last"])
 
 
 def counter_probe(ip, rig, name):
