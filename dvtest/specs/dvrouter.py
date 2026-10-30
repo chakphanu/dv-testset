@@ -104,7 +104,9 @@ SPEC = {
         # legacy AMBEd: never an OPEN, CAPS after every PONG, ready again on
         # a valid CAPS (transcoding.md "dv-codec-ambed" > "Lifecycle")
         "legacy_swap": {"opens_while_legacy": 0, "caps_after_each_pong": True, "recovers": True},
-        "swap_caps_reprobe": None,
+        # an extended OPEN unanswered for 1000+50 ms triggers one immediate
+        # CAPS re-probe (dv-router:dev 85ccacfd and later)
+        "swap_caps_reprobe": {"within_s": 1.0},
     },
     # B10 stream ids: same-protocol egress carries the exact ingress sid on
     # every protocol (test_sid_preserved); cross-protocol egress carries the
