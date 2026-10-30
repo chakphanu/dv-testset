@@ -555,7 +555,7 @@ test, "dev" rows are recorded under the `xlxd` profile.
 | P-M17-45 | No datagram to a client above 100 B | test_m17::test_m17_egress_max_size | hb | probe | covered |
 
 K9 (YSF, `docs/protocols/ysf.md`) is reserved for that suite when it
-lands; K11 onward for G3, DMR+, IMRS and USRP dynamic clients.
+lands; K12 onward for DMR+, IMRS and USRP dynamic clients.
 
 ### K10. XLX interlink (`docs/protocols/xlx.md`)
 
@@ -602,6 +602,43 @@ out/20261030T075049Z-i11).
 | P-XLX-33 | no transcoder for the whole stream: frame form | test_xlx::test_xlx_egress_transcoder_down | dev (B6b) | probe (rig_control) | covered |
 | P-XLX-34 | cut XLX stream: no closing frame to another XLX peer | test_xlx::test_xlx_cut_stream_no_closing_frame | dev | probe + dvcheck xlx.transit | covered |
 
+### K11. Icom G3 terminal / access point (`docs/protocols/g3.md`)
+
+Ports UDP 12345 (presence), 12346 (route query), 40000 (DSVT voice). Under
+a non-xlxd profile the cases skip until `SPEC["g3"]["server"]` is True.
+P-G3-27 needs `--profile g3` (second terminal `g3-term2`).
+
+| # | Obligation | Case | Judged | How | Status |
+|---|---|---|---|---|---|
+| P-G3-01 | 32 B presence -> 36 B reply (0x80, status 0, IPv4) | test_g3::test_g3_presence_reply | diff | probe | covered |
+| P-G3-02 | Presence of another size: no reply | test_g3::test_g3_presence_wrong_size[31\|33] | diff | probe | covered |
+| P-G3-03 | Presence IPv4 before and after a route query | test_g3::test_g3_presence_address | dev | probe | covered |
+| P-G3-04 | Presence: one terminal per IP; another callsign replaces it | test_g3::test_g3_presence_replaces | diff | probe | covered |
+| P-G3-05 | Blacklisted terminal: presence status recorded, header muted | test_g3::test_g3_blacklisted | dev | probe (DVT_XLXD_BLACKLIST=N0G3X) | covered |
+| P-G3-06 | Route query for reflector + module accepted (UR, RPT1 G, RPT2, IPv4) | test_g3::test_g3_route_accepted | diff | probe | covered |
+| P-G3-07 | Routed / foreign callsign rejected (status 1, IPv4 0) | test_g3::test_g3_route_rejected[routed\|foreign] | diff | probe | covered |
+| P-G3-08 | Route query of another size: no reply | test_g3::test_g3_route_wrong_size[15\|17] | diff | probe | covered |
+| P-G3-09 | All-space destination | test_g3::test_g3_route_blank_callsign | diff | probe | covered |
+| P-G3-10 | Reflector callsign on the G3 wire | test_g3::test_g3_route_accepted | dev | probe | covered |
+| P-G3-11 | Voice without presence not relayed | test_g3::test_g3_voice_without_presence | diff | probe | covered |
+| P-G3-12 | Header to reflector + module opens a stream; DExtra hears it | test_g3::test_g3_talk_reaches_dextra | diff | probe | covered |
+| P-G3-13 | Header with a foreign RPT2 dropped | test_g3::test_g3_foreign_rpt2_dropped | diff | probe | covered |
+| P-G3-14 | Module = RPT2 of the last header; silent terminal hears nothing | test_g3::test_g3_module_follows_talk | diff | probe | covered |
+| P-G3-15 | Egress to IP:40000 | test_g3::test_g3_listen | diff | probe | covered |
+| P-G3-16 | Egress layout, sequence, RPT2 | test_g3::test_g3_listen | hb | probe + dvcheck | covered |
+| P-G3-17 | Egress header copies and last payload | test_g3::test_g3_listen | dev | probe | covered |
+| P-G3-18 | Voice from another source port accepted | test_g3::test_g3_other_source_port | diff | probe | covered |
+| P-G3-19 | No echo to the talking terminal | test_g3::test_g3_talk_reaches_dextra | spec (B9) | probe | covered |
+| P-G3-20 | AMBE byte exact G3 <-> DExtra | test_g3::test_g3_talk_reaches_dextra, ::test_g3_listen | diff | probe | covered |
+| P-G3-21 | Invalid MY / RPT1 header | test_g3::test_g3_invalid_callsign[my\|rpt1] | dev | probe | covered |
+| P-G3-22 | Lost last frame: stream ends, module free | test_g3::test_g3_lost_last | spec (B3) | probe | covered |
+| P-G3-23 | ICMP unreachable for 40000 / for another port of the IP | test_g3::test_g3_icmp_removal[own_port\|other_port] | dev | probe | covered |
+| P-G3-24 | PING every 10 s while idle | test_g3::test_g3_ping | dev | probe | covered |
+| P-G3-25 | Silent terminal removed after 1 h | - | dev | code only (1 h) | code only |
+| P-G3-26 | HPCH from the terminal: reply recorded | test_g3::test_g3_hpch | dev | probe | covered |
+| P-G3-27 | Two terminals on one module | test_g3::test_g3_two_terminals | diff | probe (--profile g3) | covered |
+| P-G3-28 | G3 failure does not stop the reflector | - | dev | code only (no NET_RAW-less xlxd) | code only |
+
 ## Upstream behaviour the cases accept
 
 Known xlxd behaviour that is not a defect of the build under test; cases and
@@ -645,6 +682,7 @@ dvcheck report it as a warning with a note:
   headerless voice is dropped (no late entry), a FACCH1-stolen half is
   decoded as voice and an empty DMR join goes out as VCALL + TX_REL.
 - M17 (section K8): ACKN for any module letter and silence on a bad module byte (no NACK); PING every 5 s; FN 0 payload dropped and only FN 0 opens a stream; only TYPE 0x0005 relayed, TYPE forced 0x0005 and META zeroed on egress; new per-module stream id; egress CRC 0x0000; M17P packet mode dropped; a new client misses about 230 ms (up to 1 s) of a running stream; no DISC when the reflector stops.
+- Icom G3 (section K11): presence replies carry the address of the last route query (0.0.0.0 before one); presence is not gated by the operator lists; last frame replaced by 55 C8 7A + zeros / 25 1A C6; invalid RPT1/RPT2 drop the header; any ICMP unreachable for the IP removes all its G3 clients; PING only while all of G3 is idle; the timeout is checked only while idle and presence does not refresh it; the talking terminal gets 9 frames of its own stream back.
 - xlxd-sut (PR tree) occasionally reorders egress frames under load; not seen on ref (dvcheck dextra.seq_reorder x6 in out/20261030T063313Z during P-DXT-44, an earlier one-off dcs.seq_reorder).
 - Short-stream guard (B18): xlxd's loop guard counts short streams per module by callsign, so across protocols. It blocks with the 3 / 10 / 300 s ladder and enforces the block only on DExtra/DPlus/DCS (DMR and M17 pass no module to the gatekeeper). At strike 3 it refuses links and disconnects the talker, and it stops acking YSF polls of the callsign (MayLink on every poll). Measured 2026-10-30: out/20261030T062417Z-i13, out/20261030T063238Z-i13 (decay), out/20261030T064052Z-i13 (per-protocol refusals).
 
