@@ -286,7 +286,10 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
   for f in xlxd.whitelist xlxd.blacklist xlxd.terminal ysfnode.dat; do : > "$cfg/$f"; done
   {
     printf '  %s:\n    image: "%s"\n    command: ["XLX999", "%s.%s", "%s.%s"]\n' "$svc" "$img" "$net" "$3" "$net" "$4"
-    printf '    environment:\n      DVT_CONFIG_MOUNTED: "1"\n    volumes:\n'
+    printf '    environment:\n      DVT_CONFIG_MOUNTED: "1"\n'
+    # P25 gateway id for unknown talkers (P-P25-23; not in rig/config/dmrid.dat)
+    [ "$svc" != xlxd-sut ] || printf '      DV_P25_GATEWAY_ID: "%s"\n' "${DV_P25_GATEWAY_ID:-1023000}"
+    printf '    volumes:\n'
     for f in xlxd.usrp xlxd.interlink xlxd.whitelist xlxd.blacklist xlxd.terminal dmrid.dat nxdn.csv ysfnode.dat; do
       printf '      - "%s/%s:/xlxd/%s:ro"\n' "$cfg" "$f" "$f"
     done
