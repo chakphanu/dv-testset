@@ -85,6 +85,139 @@ def parse(data):
             "counter": int.from_bytes(data[58:61], "little")}
 
 
+# ------------------------------------------------- conformance builders
+# Client forms as real gateways send them (docs/protocols/dcs.md); the
+# functions above are the tester's own compact forms and stay as they are.
+
+REFLECTOR = "DCS999"
+POLL_SIZE = 22
+NOTICE_SIZE = 19
+# last-packet payloads: (AMBE 9, slow data 3)
+END_JARL = (b"\x55\x55\x55\x55\xc8\x7a\x00\x00\x00", b"\x55\x55\x55")    # IG
+END_XLXD = (b"\x55\xc8\x7a\x00\x00\x00\x00\x00\x00", b"\x25\x1a\xc6")    # xlxd
+HTML = (b"<table border=\"0\" width=\"95%\"><tr><td width=\"4%\"><img border=\"0\" "
+        b"src=hotspot.jpg></td><td width=\"96%\"><font size=\"2\"><b>HOTSPOT</b> dvtest"
+        b"</font></td></tr></table>")
+
+
+def _cs8(callsign):
+    if isinstance(callsign, str):
+        callsign = callsign.encode()
+    return (callsign + b" " * 8)[:8]
+
+
+def gateway_link(callsign, own_module, module, reflector=REFLECTOR, text=HTML):
+    """519 B link as ircDDBGateway / DStarGateway / QnetGateway send it:
+    callsign (8), own module, reflector module, 0x00, reflector name (8),
+    HTML text, zero padded."""
+    out = (_cs8(callsign) + own_module.encode() + module.encode() + b"\x00"
+           + _cs8(reflector) + text)
+    return out + bytes(LINK_SIZE - len(out))
+
+
+def droidstar_link(callsign, module):
+    """519 B link as DroidStar sends it: callsign (8), module twice, 0x0B,
+    nothing else (bytes 11-518 left as allocated: zero here)."""
+    out = _cs8(callsign) + module.encode() * 2 + b"\x0b"
+    return out + bytes(LINK_SIZE - len(out))
+
+
+def raw_link(head10, tail=b"\x00", body=b"", size=LINK_SIZE):
+    """A link of any first 10 bytes, byte 10 and size (invalid forms)."""
+    out = bytes(head10) + bytes(tail) + bytes(body)
+    return (out + bytes(size))[:size]
+
+
+def unlink19(callsign, own_module, reflector=REFLECTOR):
+    """19 B unlink (ircDDBGateway, QnetGateway): callsign (8), own module,
+    space, 0x00, reflector name (8)."""
+    return _cs8(callsign) + own_module.encode() + b" \x00" + _cs8(reflector)
+
+
+def unlink11(callsign, own_module):
+    """11 B unlink (DroidStar): callsign (8), own module, space, 0x00."""
+    return _cs8(callsign) + own_module.encode() + b" \x00"
+
+
+def keepalive17(callsign, own_module, reflector=REFLECTOR, module=None, form="gateway"):
+    """17 B client keepalive. gateway: callsign (7) + own module + 0x00 +
+    reflector (7) + its module; droidstar: callsign (7) + module + 0x00 +
+    reflector name as is + 0x00 + module (17 B for a 6-character name)."""
+    module = module or own_module
+    head = _cs7(callsign) + own_module.encode() + b"\x00"
+    if form == "droidstar":
+        name = reflector.encode() if isinstance(reflector, str) else reflector
+        return head + name + b"\x00" + module.encode()
+    return head + _cs7(reflector) + module.encode()
+
+
+def parse_reply(data):
+    """A packet from the reflector: {"kind": "ack" | "nak" | "poll" |
+    "ref9" | "notice" | "voice" | "other", ...fields}."""
+    size = len(data)
+    if size == ACK_SIZE and data[10:13] in (b"ACK", b"NAK") and data[13:14] == b"\x00":
+        return {"kind": data[10:13].decode().lower(), "callsign": data[:7], "byte7": data[7:8],
+                "own_module": data[8:9], "module": data[9:10]}
+    if size == POLL_SIZE:
+        return {"kind": "poll", "reflector": data[:7], "module": data[7:8], "byte8": data[8:9],
+                "callsign": data[9:16], "byte16": data[16:17], "own_module": data[17:18],
+                "tail": data[18:22]}
+    if size == 9 and data[8] == 0:
+        return {"kind": "ref9", "reflector": data[:8]}
+    if size == NOTICE_SIZE:
+        return {"kind": "notice", "raw": data}
+    if size >= PACKET_SIZE and data.startswith(b"0001"):
+        return dict(parse_raw(data), kind="voice")
+    return {"kind": "other", "size": size}
+
+
+def voice_packet(stream_id, seq_byte, frame=bytes(9), slow=dextra.SLOW_DATA, *, callsign="N0CALL",
+                 module="B", reflector=REFLECTOR, rpt2=None, rpt1=None, ur=b"CQCQCQ  ", my=None,
+                 suffix=b"    ", flags=b"\x00\x00\x00", counter=0, tail=None, sid_bytes=None):
+    """100 B voice with every field settable: raw sequence byte (0x40 =
+    last), header fields, counter, the area from byte 61 (default 0x01 +
+    zeros) and the raw stream id bytes (default low byte first)."""
+    rpt2 = rpt2 if rpt2 is not None else _cs7(reflector) + module.encode()
+    rpt1 = rpt1 if rpt1 is not None else _cs7(callsign) + module.encode()
+    my = my if my is not None else _cs8(callsign)
+    sid = sid_bytes if sid_bytes is not None else (stream_id & 0xFFFF).to_bytes(2, "little")
+    out = (b"0001" + bytes(flags) + _field(rpt2) + _field(rpt1) + _field(ur) + _field(my)
+           + (bytes(suffix) + b"    ")[:4] + bytes(sid) + bytes([seq_byte & 0xFF]) + bytes(frame)
+           + bytes(slow) + (counter & 0xFFFFFF).to_bytes(3, "little"))
+    out += tail if tail is not None else b"\x01"
+    return (out + bytes(PACKET_SIZE))[:max(PACKET_SIZE, len(out))]
+
+
+def _field(value):
+    value = value.encode() if isinstance(value, str) else bytes(value)
+    return (value + b" " * 8)[:8]
+
+
+def parse_raw(data):
+    """Every field of a voice packet (100 B or longer), raw."""
+    return {"flags": data[4:7], "rpt2": data[7:15], "rpt1": data[15:23], "ur": data[23:31],
+            "my": data[31:39], "suffix": data[39:43], "sid": data[43:45], "seq_byte": data[45],
+            "seq": data[45] & 0x3F, "last": bool(data[45] & 0x40), "frame": data[46:55],
+            "slow": data[55:58], "counter": int.from_bytes(data[58:61], "little"),
+            "tail": data[61:100], "size": len(data)}
+
+
+def stream_packets(stream_id, frames, *, start=0, last=True, end=None, **fields):
+    """Voice packets of one over: sequence from start (mod 21), sync slow
+    data at sequence 0, counter from 0, then a last packet (payload end =
+    (AMBE, slow) or the default zero AMBE + filler)."""
+    out = []
+    for index, frame in enumerate(frames):
+        seq = (start + index) % 21
+        out.append(voice_packet(stream_id, seq, frame, dextra.SYNC_DATA if seq == 0 else dextra.SLOW_DATA,
+                                counter=index, **fields))
+    if last:
+        ambe, slow = end or (bytes(9), dextra.SLOW_DATA)
+        seq = (start + len(frames)) % 21
+        out.append(voice_packet(stream_id, seq | 0x40, ambe, slow, counter=len(frames), **fields))
+    return out
+
+
 class DcsClient:
     def _keepalive(self, data, _addr):
         # xlxd drops a DCS client it has not heard from for 60 s; answer
