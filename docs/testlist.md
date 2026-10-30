@@ -43,20 +43,25 @@ parametrized case); a system under test without transcoding runs
 
 ## B. xlxd with a transcoder (`netns`)
 
+Under `DVT_SUT_PROFILE=dvrouter` rows B2, B4, B6, B11 and B12 assert the
+expectations of `dvtest/specs/dvrouter.py` "netns_ambed" (design D5: AMBEd
+outputs opened on demand, extended OPEN only) instead of xlxd's; the dvrouter
+run needs an xlxd-compatible DV-Router binary as `DVT_XLXD_BIN`.
+
 | # | Check | Case | Status |
 |---|---|---|---|
 | B1 | Without USRP endpoints xlxd sends no CAPS | test_xlxd_usrp_netns::test_no_usrp_sends_no_caps | covered |
-| B2 | Without USRP endpoints xlxd uses legacy opens | test_xlxd_usrp_netns::test_no_usrp_legacy_open | covered |
+| B2 | Without USRP endpoints xlxd uses legacy opens (dvrouter: no OPEN at all, no listener in another profile) | test_xlxd_usrp_netns::test_no_usrp_legacy_open | covered |
 | B3 | Without USRP endpoints the transcoder link bytes equal upstream master | test_xlxd_usrp_netns::test_no_usrp_link_bytes_equal_reference | covered |
-| B4 | Legacy transcoder: a single CAPS probe, then legacy opens | test_xlxd_usrp_netns::test_legacy_ambed_single_caps_probe, ::test_legacy_ambed_digital_uses_legacy_open | covered |
+| B4 | Legacy transcoder: a single CAPS probe, then legacy opens (dvrouter: CAPS re-sent on each PONG of the 5 s PING cycle until answered, never a legacy OPEN) | test_xlxd_usrp_netns::test_legacy_ambed_single_caps_probe, ::test_legacy_ambed_digital_uses_legacy_open | covered |
 | B5 | Legacy transcoder: PCM streams are not transcoded (and logged once) | test_xlxd_usrp_netns::test_legacy_ambed_pcm_not_transcoded | covered |
-| B6 | Extended transcoder: a single CAPS probe and extended opens for PCM | test_xlxd_usrp_netns::test_extended_single_caps_probe, ::test_extended_opens | covered |
+| B6 | Extended transcoder: a single CAPS probe and extended opens for PCM (dvrouter: outputs on demand, opens [[24,1,[5]],[24,5,[1]]]) | test_xlxd_usrp_netns::test_extended_single_caps_probe, ::test_extended_opens | covered |
 | B7 | D-STAR -> USRP peer: voice then unkey | test_xlxd_usrp_netns::test_extended_dstar_to_usrp | covered |
 | B8 | USRP peer -> digital listeners | test_xlxd_usrp_netns::test_extended_usrp_to_digital | covered |
 | B9 | No echo back to the originating USRP peer | test_xlxd_usrp_netns::test_extended_no_echo_to_usrp_peer | covered |
 | B10 | Malformed frames from a USRP peer are dropped; xlxd survives | test_xlxd_usrp_netns::test_extended_bad_frame_dropped | covered |
-| B11 | Transcoder that serves one output: separate opens, distinct transactions | test_xlxd_usrp_netns::test_one_output_opens | covered |
-| B12 | Slow open reply: a short burst is still delivered | test_xlxd_usrp_netns::test_slow_open_short_burst_delivered | covered |
+| B11 | Transcoder that serves one output: separate opens, distinct transactions (dvrouter: [[24,1,[5]]] twice) | test_xlxd_usrp_netns::test_one_output_opens | covered |
+| B12 | Slow open reply: a short burst is still delivered (dvrouter: no OPEN, no digital listener) | test_xlxd_usrp_netns::test_slow_open_short_burst_delivered | covered |
 | B13 | Transcoder lost > 30 s and back: CAPS is probed again, PCM transcoding resumes | - (seen in a triage run only) | gap |
 | B14 | Transcoder replaced within 30 s: stale CAPS is not used | - | gap (known PR edge case) |
 

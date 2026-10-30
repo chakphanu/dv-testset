@@ -58,6 +58,17 @@ SPEC = {
     "test_no_load_loss_latency": {"loss": 0},
     # B7 AMBEd open policy, read by the netns link cases through specs.rule
     "ambed_open": "extended_always",
+    # netns transcoder-link cases (test_xlxd_usrp_netns, design D5): AMBEd
+    # outputs are opened on demand, only for listeners in another profile,
+    # and only with the 24 B extended OPEN (never a legacy OPEN)
+    "netns_ambed": {
+        "no_usrp_opens": [],                        # B2: no listener in another profile
+        "caps_probe": {"period_s": 5.0, "tolerance_s": 0.3, "min_probes": 2},  # B4: one per 5 s PING/PONG cycle until answered
+        "legacy_open": False,                       # B4: never a legacy OPEN
+        "extended_opens": [[24, 1, [5]], [24, 5, [1]]],         # B6
+        "one_output_opens": [[24, 1, [5]], [24, 1, [5]]],       # B11
+        "slow_open_opens": [],                      # B12: no digital listener
+    },
     # B10 stream ids: same-protocol egress carries the exact ingress sid on
     # every protocol (test_sid_preserved); cross-protocol egress carries the
     # canonical id in the target width: low 16 bits for D-STAR/M17, zero

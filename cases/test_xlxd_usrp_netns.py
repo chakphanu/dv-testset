@@ -238,12 +238,35 @@ def extended_always(target):
         "ambed_extended_open_always" in target.divergences
 
 
+def netns_spec(target):
+    """The profile's expectations for these cases (dvrouter: on-demand
+    extended opens, dvtest/specs/dvrouter.py "netns_ambed"), None under the
+    xlxd profile."""
+    from dvtest import specs
+    return specs.rule(target, "netns_ambed")
+
+
+def caps_times(run):
+    return [t for t, h in run["ctrl"] if bytes.fromhex(h) == b"AMBEDCAPS"]
+
+
+def assert_no_legacy_open(run):
+    legacy = [o for o in run["opens"] if o[1] != 24]
+    assert not legacy, "legacy OPEN sent: %s" % legacy
+
+
 def test_no_usrp_sends_no_caps(runs, target):
     assert caps_count(get(runs, "no_usrp")) == (1 if extended_always(target) else 0)
 
 
 def test_no_usrp_legacy_open(runs, target):
+    """B2: xlxd opens a legacy 19 B stream for the D-STAR talker. Profile
+    spec (dvrouter): no OPEN at all, nobody listens in another profile."""
     run = get(runs, "no_usrp")
+    spec = netns_spec(target)
+    if spec is not None:
+        assert [o[1:4] for o in run["opens"]] == spec["no_usrp_opens"], run["opens"]
+        return
     assert len(run["opens"]) == 1
     _t, size, codec_in, outs, tx, callsign, port = run["opens"][0]
     if extended_always(target):
@@ -265,12 +288,31 @@ def test_no_usrp_link_bytes_equal_reference(runs, ref_run, target):
 
 # transcoder without the extension (never answers CAPS)
 
-def test_legacy_ambed_single_caps_probe(runs):
-    assert caps_count(get(runs, "legacy_ambed")) == 1
-
-
-def test_legacy_ambed_digital_uses_legacy_open(runs):
+def test_legacy_ambed_single_caps_probe(runs, target):
+    """B4: xlxd probes CAPS once. Profile spec (dvrouter): the probe repeats
+    every period_s until answered (this transcoder never answers)."""
     run = get(runs, "legacy_ambed")
+    spec = netns_spec(target)
+    if spec is None:
+        assert caps_count(run) == 1
+        return
+    probe = spec["caps_probe"]
+    times = caps_times(run)
+    gaps = [b - a for a, b in zip(times, times[1:])]
+    assert len(times) >= probe["min_probes"], "CAPS probes %d" % len(times)
+    assert all(abs(g - probe["period_s"]) <= probe["tolerance_s"] for g in gaps), \
+        "CAPS probe gaps %s s, expected %.1f +- %.1f" % ([round(g, 2) for g in gaps], probe["period_s"],
+                                                       probe["tolerance_s"])
+
+
+def test_legacy_ambed_digital_uses_legacy_open(runs, target):
+    """B4: xlxd falls back to the legacy open. Profile spec (dvrouter):
+    extended opens only, so never a legacy OPEN."""
+    run = get(runs, "legacy_ambed")
+    spec = netns_spec(target)
+    if spec is not None and spec["legacy_open"] is False:
+        assert_no_legacy_open(run)
+        return
     digital = [o for o in run["opens"] if o[2] == 1]
     assert len(digital) == 1 and digital[0][1:5] == [19, 1, [2, 3, 4], None], digital
     check_dstar_requests(run, digital[0][6])
@@ -285,13 +327,18 @@ def test_legacy_ambed_pcm_not_transcoded(runs):
 # extended transcoder: D-STAR -> USRP, USRP -> digital, bad frame
 
 def test_extended_single_caps_probe(runs):
+    """B6: one CAPS probe; the transcoder answers it (every profile)."""
     assert caps_count(get(runs, "extended")) == 1
 
 
-def test_extended_opens(runs):
+def test_extended_opens(runs, target):
+    """B6: xlxd asks for every codec its module may need; profile spec
+    (dvrouter): outputs on demand, only the listeners' profiles."""
     run = get(runs, "extended")
     shapes = [o[1:4] for o in run["opens"]]
-    assert shapes == [[24, 1, [2, 5]], [24, 5, [1, 2]]], shapes
+    spec = netns_spec(target)
+    want = spec["extended_opens"] if spec is not None else [[24, 1, [2, 5]], [24, 5, [1, 2]]]
+    assert shapes == want, shapes
     txs = [o[4] for o in run["opens"]]
     assert all(txs) and len(set(txs)) == 2, txs
     assert len(run["closes"]) == 2
@@ -337,10 +384,14 @@ def test_extended_bad_frame_dropped(runs):
 
 # transcoder announcing a single output
 
-def test_one_output_opens(runs):
+def test_one_output_opens(runs, target):
+    """B11: one output per open, distinct transactions; profile spec
+    (dvrouter): the on-demand output (PCM for the USRP peer)."""
     run = get(runs, "one_output")
     shapes = [o[1:4] for o in run["opens"]]
-    assert shapes == [[24, 1, [2]], [24, 1, [2]]], shapes
+    spec = netns_spec(target)
+    want = spec["one_output_opens"] if spec is not None else [[24, 1, [2]], [24, 1, [2]]]
+    assert shapes == want, shapes
     assert run["opens"][0][4] != run["opens"][1][4], "transaction reused"
     for o in run["opens"]:
         check_dstar_requests(run, o[6])
@@ -348,8 +399,14 @@ def test_one_output_opens(runs):
 
 # STD delayed 1 s: a short USRP burst is held until the stream is open
 
-def test_slow_open_short_burst_delivered(runs):
+def test_slow_open_short_burst_delivered(runs, target):
+    """B12: STD delayed 1 s, the burst is held and delivered. Profile spec
+    (dvrouter): no digital listener, so no OPEN at all."""
     run = get(runs, "slow_open")
+    spec = netns_spec(target)
+    if spec is not None:
+        assert [o[1:4] for o in run["opens"]] == spec["slow_open_opens"], run["opens"]
+        return
     assert [o[1:4] for o in run["opens"]] == [[24, 5, [1, 2]]]
     reqs = requests(run, run["opens"][0][6])
     assert len(reqs) >= 5, "data requests %d for a 5-frame burst" % len(reqs)
