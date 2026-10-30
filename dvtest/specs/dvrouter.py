@@ -121,6 +121,36 @@ SPEC = {
         # ingress SET_INFO callsign is the talker of the over
         "P-USR-18": {"set_info_talker": "use"},
     },
+    # P25 dev items (docs/protocols/p25.md), DV-Router choices 2026-10-30.
+    # Egress padding: max(18, ceil(n/9)*9) records with IMBE silence, then
+    # one 0x80; nothing for an empty stream.
+    "p25": {
+        # client-serving P25 edge (UDP 41000) not built yet: server-side
+        # cases skip "edge not ready" until this is True
+        "server": False,
+        "P-P25-03": {"reply": 0, "linked": False},
+        # 30 s link timeout refreshed by polls and voice, nothing sent on drop
+        "P-P25-08": {"heard": [False, False, False, False]},
+        "P-P25-14": {"term_relayed": True, "second_whole": True},
+        "P-P25-16": {"relayed": 0},
+        "P-P25-17": {"relayed": 0},
+        "P-P25-22": {"dst_is_tg": True},
+        # unknown talker -> the configured gateway id (rig value 1023000,
+        # not in the rig dmrid.dat); no callsign hash
+        "P-P25-23": {"src_is_talker": True, "src": [1023000]},
+        "P-P25-24": {"terminated": True, "whole_ldu": True, "records": 46},
+        "P-P25-25": {"lone": 0, "voice": 0},
+        "P-P25-26": {"has_0x73": True, "records": 19},
+        # today's constant parity bytes; real RS parity later
+        "P-P25-28": {"parity": {"67": ["f09d6a"], "68": ["19d426"], "69": ["e0eb7b"], "71": ["acb8a4"],
+                                "72": ["9bdc75"]}, "lsd": ["0000"]},
+        "P-P25-30": {"received": 36},
+        "P-P25-31": {"received": 34},
+        "P-P25-33": {"my": ["P31672"], "received": 36},
+        # encrypted calls are dropped (records are rebuilt; ciphertext must
+        # not be relabelled clear)
+        "P-P25-35": {"transcoded": False},
+    },
 }
 
 # B12: header fields DV-Router does not verify, because the tester (like
