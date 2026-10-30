@@ -987,14 +987,15 @@ def malformed_probe(ip):
 
 
 def test_ysf_malformed(rig):
-    """P-YSF-34 (diff): 154 / 156 B YSFD and a short YSFU are not relayed
-    or answered; service continues. A bad frame sync is recorded."""
+    """P-YSF-34 (diff + dev): 154 / 156 B YSFD and a short YSFU are not relayed
+    or answered; service continues. A bad frame sync is a dev item: bad_sync
+    True = the packet is not relayed (xlxd relays it repaired)."""
     got = marked(rig, "ysf-malformed", malformed_probe)
     print("P-YSF-34 malformed:", got)
     for name, r in got.items():
         assert r["poll_after"] and r["error_replies"] == 0, "%s: %s" % (name, r)
         assert r["short_ysfd"] == 0 and r["long_ysfd"] == 0, "%s: malformed YSFD relayed: %s" % (name, r)
-    same(got, "bad_sync")
+    judge_dev(rig, "P-YSF-34", got, "bad_sync")
 
 
 # ---------------------------------------------------------------- 8 several clients

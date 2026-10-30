@@ -339,6 +339,8 @@ SPEC = {
         "P-YSF-16": {"cross_counter_changes": True, "same_counter_changes": True},
         # YSF -> YSF passthrough: voice bits and callsigns unchanged (DV-Router passthrough rule)
         "P-YSF-18": {"voice_exact": True, "src_kept": True, "dst_kept": True, "gateway_kept": True},
+        # a YSFD with a corrupt frame sync is dropped (xlxd relays it repaired)
+        "P-YSF-34": {"bad_sync": True},
         # end a stream on either marker at once; with neither, after the silence timeout
         "P-YSF-20": {"end_bit_only": "prompt", "terminator_only": "prompt", "none": "timeout"},
         # carry a headerless (late-entry) stream; egress still starts with a header (Yaesu 4.1)

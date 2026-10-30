@@ -34,7 +34,7 @@ from pathlib import Path
 
 import pytest
 
-from dvtest import clients
+from dvtest import clients, specs
 from dvtest.audio import signals
 from dvtest.proto import ambed, dcs, dplus, nxdn, ysf
 
@@ -195,10 +195,17 @@ def test_dstar_family_exact(cells, cell):
 
 
 @pytest.mark.parametrize("cell", GAIN_STEPPED, ids=ids(GAIN_STEPPED))
-def test_ysf_gain_step_only(cells, cell):
+def test_ysf_gain_step_only(rig, cells, cell):
     """All 49 voice bits but b2 arrive unchanged, as one contiguous run, and
-    sut delivers the same bytes as ref."""
+    sut delivers the same bytes as ref. YSF -> YSF under another profile whose
+    SPEC["ysf"]["P-YSF-18"]["voice_exact"] is True is a passthrough: the sut
+    delivers exactly the sent frames (ref keeps its gain steps)."""
     row = row_of(cells, cell)
+    if cell == ("ysf", "ysf") and rig.sut_profile != specs.DEFAULT and \
+            (specs.rule(rig, "ysf") or {}).get("P-YSF-18", {}).get("voice_exact"):
+        assert (row["sut"]["received"], row["sut"]["sha256"]) == (row["sent"], row["input_sha256"]), \
+            "sut: %d frames, not the %d sent frames" % (row["sut"]["received"], row["sent"])
+        return
     for name in ("ref", "sut"):
         assert row[name]["bits_offset"] is not None, \
             "%s: the sent voice bits are not in the %d received frames" % (name, row[name]["received"])

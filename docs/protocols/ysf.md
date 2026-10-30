@@ -198,7 +198,7 @@ starts with `XLX` (it then sends one `DX_REQ` after linking).
 | # | Obligation | Level | Spec / paper | Clients | Other reflectors | xlxd-ref | Recommended for DV-Router |
 |---|---|---|---|---|---|---|---|
 | P-YSF-33 | `YSFO`, `YSFI`, `YSFV` and unknown tags get no reply; the link and service continue | convention (impl, agreed no reply) | [YCS] (YSFO/YSFI), [BMY] (BrandMeister tags) | GW sends `YSFO` after the first reply and with every poll when Options is set | YR, URF, xlxd ignore; PY3 takes the first DG-ID of `YSFO` as the home room; PY answers `YSFV` with its version | measured: no reply to `YSFO`, `YSFI`, `YSFV`, `XXXX`; polls still answered | ignore without reply; do not interpret `YSFO` (three incompatible meanings: YCS DG-ID list, PY3 home DG-ID, BrandMeister `group=`) |
-| P-YSF-34 | Short or long `YSFD` (154/156 B), a bad frame sync, a short `YSFU`: no reply, not relayed, service continues | convention (impl) | none | none send them | xlxd, URF, PY, PY3 exact 155 B; YR no length check (relays a short packet padded with stale bytes) | measured: 154 / 156 B not relayed, short `YSFU` ignored, no error reply; a bad frame sync on one packet costs that packet | drop silently |
+| P-YSF-34 | Short or long `YSFD` (154/156 B), a bad frame sync, a short `YSFU`: no reply, not relayed, service continues | convention (impl) | none | none send them | xlxd, URF, PY, PY3 exact 155 B; YR no length check (relays a short packet padded with stale bytes) | measured: 154 / 156 B not relayed, short `YSFU` ignored, no error reply; a bad frame sync: xlxd-ref relays the packet with the sync repaired plus 2 extra trailing frames (16 frames out against 14; reported from a capture, 2026-10-31) | drop silently (dev) |
 
 ## 8. Several clients
 
@@ -264,7 +264,7 @@ reading but measured one copy.
 | P-YSF-31 | WIRES-X DX_REQ | test_ysf::test_ysf_wiresx_dx | dev | probe | covered |
 | P-YSF-32 | WIRES-X CONN_REQ / DISC_REQ | test_ysf::test_ysf_wiresx_conn_disc | dev | probe | covered |
 | P-YSF-33 | YSFO / YSFI / YSFV / unknown tags ignored | test_ysf::test_ysf_other_tags | diff | probe | covered |
-| P-YSF-34 | Malformed packets dropped | test_ysf::test_ysf_malformed | diff | probe | covered |
+| P-YSF-34 | Malformed packets dropped | test_ysf::test_ysf_malformed | diff + dev (bad sync) | probe | covered |
 | P-YSF-35 | Two ports one IP; same callsign two ports | test_ysf::test_ysf_two_ports | diff | probe | covered |
 | P-YSF-36 | Two callsigns from one address | test_ysf::test_ysf_two_callsigns_one_address | dev | probe | covered |
 | P-YSF-37 | Per-client keepalive | test_ysf::test_ysf_timeout_drop | diff | probe (slow) | covered |
