@@ -94,7 +94,8 @@ def marks(run_dir, hosts):
     """[(tester ip, t0, t1, "mark <tag>")] from control.log "mark begin
     <tag>" / "mark end <tag>" lines: a case brackets traffic it makes
     malformed on purpose. A window runs from the begin request to 1 s after
-    the completed end (to the capture end without one)."""
+    the completed end (to the capture end without one), but no further
+    than the next mark's begin."""
     path = os.path.join(run_dir, "control", "control.log")
     ip = hosts.get("tester")
     if not ip or not os.path.isfile(path):
@@ -112,6 +113,13 @@ def marks(run_dir, hosts):
             elif edge == "end" and m.group(5) == "0" and tag in begun:
                 out.append((ip, begun.pop(tag), ts + MARK_SETTLE, "mark " + tag))
     out += [(ip, t0, float("inf"), "mark " + tag) for tag, t0 in begun.items()]
+    # the 1 s tail of a window ends where the next mark begins, so back to
+    # back cases each get their own tag
+    out.sort(key=lambda w: w[1])
+    for index in range(len(out) - 1):
+        nxt = out[index + 1][1]
+        if out[index][2] > nxt:
+            out[index] = out[index][:2] + (max(nxt, out[index][1]),) + out[index][3:]
     return out
 
 

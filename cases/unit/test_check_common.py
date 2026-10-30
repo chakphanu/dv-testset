@@ -234,8 +234,16 @@ def test_mark_windows(tmp_path):
     hosts = check.rig_config("172.30.0.0/24")["hosts"]
     got = check.marks(str(tmp_path), hosts)
     assert [(ip, round(t1 - t0, 3), label) for ip, t0, t1, label in got][0] == (
-        "172.30.0.30", round(40.936 + 1.0 - 35.613, 3), "mark usrp-keyup0")
+        "172.30.0.30", round(41.146 - 35.613, 3), "mark usrp-keyup0")      # tail stops at the next begin
     assert got[1][2] == float("inf") and got[1][3] == "mark open-ended"
+    # back to back: the first window's 1 s tail stops at the next begin
+    (tmp_path / "control" / "control.log").write_text(
+        "2026-10-30T06:05:35.000Z request mark begin a\n2026-10-30T06:05:35.001Z mark begin a -> 0\n"
+        "2026-10-30T06:05:40.000Z request mark end a\n2026-10-30T06:05:40.300Z mark end a -> 0\n"
+        "2026-10-30T06:05:40.200Z request mark begin b\n2026-10-30T06:05:40.500Z mark begin b -> 0\n"
+        "2026-10-30T06:05:45.000Z request mark end b\n2026-10-30T06:05:45.001Z mark end b -> 0\n")
+    (_, a0, a1, _), (_, b0, b1, _) = check.marks(str(tmp_path), hosts)
+    assert a1 == b0 and round(b1 - b0, 3) == 5.801
     usrp = __import__("dvtest.proto.usrp", fromlist=["usrp"])
     w = Wire(t0=1000.0)
     w.send("172.30.0.30", 32003, "172.30.0.11", 34003, usrp.header(0, 1))            # keyed, 32 B: bad_length

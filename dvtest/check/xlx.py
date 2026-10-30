@@ -37,7 +37,8 @@ class Checker(dextra.Checker):
     """DSVT stream rules plus the no-transit rule: a DSVT stream id that a
     reflector received on 10002 is not sent by it to an XLX peer within
     TRANSIT_WINDOW of the last received packet (xlx.transit, one finding
-    per reflector, stream id and destination)."""
+    per reflector, stream id and destination). Any packet counts, also a
+    lone closing (last) frame sent to a peer that never got the header."""
 
     def __init__(self, report, m17=None):
         super().__init__(report, m17, name=NAME, port=PORT, kinds=kind_of)
@@ -51,7 +52,9 @@ class Checker(dextra.Checker):
             got = self.received.get((d.src, sid))
             if got is not None and d.ts - got[0] <= TRANSIT_WINDOW and (d.src, sid, d.dst) not in self.reported:
                 self.reported.add((d.src, sid, d.dst))
+                lone = " (a lone closing frame)" if kind == "voice" and p[14] & 0x40 else ""
                 self.report.error(NAME, d, "transit", "stream %04x received from XLX peer %s is sent on to XLX peer"
-                                  " %s (%.2f s after its last received packet)" % (sid, got[1], d.dst, d.ts - got[0]))
+                                  " %s (%.2f s after its last received packet)%s" % (
+                                      sid, got[1], d.dst, d.ts - got[0], lone))
             self.received[(d.dst, sid)] = (d.ts, d.src)
         super().feed(d)
