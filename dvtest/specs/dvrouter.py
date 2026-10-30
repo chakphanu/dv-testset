@@ -95,6 +95,13 @@ SPEC = {
         "swap_ignored_opens": 1,
         "swap_dstar_opens": [],
         # open question to dv-router: CAPS re-probe after an unanswered OPEN
+        # D-STAR listener on the USRP module: demand = AMBE+ only, opened at
+        # grant (transcoding.md "Demand", "Controller transcoding")
+        "pcm_listener_opens": [[24, 5, [1]]],
+        "pcm_listener_heard": True,
+        # legacy AMBEd: never an OPEN, CAPS after every PONG, ready again on
+        # a valid CAPS (transcoding.md "dv-codec-ambed" > "Lifecycle")
+        "legacy_swap": {"opens_while_legacy": 0, "caps_after_each_pong": True, "recovers": True},
         "swap_caps_reprobe": None,
     },
     # B10 stream ids: same-protocol egress carries the exact ingress sid on

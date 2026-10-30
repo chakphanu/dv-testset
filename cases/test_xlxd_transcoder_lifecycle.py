@@ -17,6 +17,16 @@ again, so even D-STAR on that module is no longer transcoded. Desired:
 after an open that times out or gets BUSY, probe CAPS again and fall back
 to legacy opens for digital input. That case is xfail(strict) until fixed.
 
+B13 with a listener: a D-STAR client stays linked on module B (DExtra
+keepalives through the loss), so the USRP PCM streams before the loss and
+after the reconnect must be transcoded to D-STAR (the listener hears the
+fake's AMBE+ payload) through the new transcoder.
+
+Legacy swap (slow): the extended transcoder is lost (> 30 s) and a legacy
+one answers instead, then an extended one is back within the keepalive
+window. Under xlxd the observations are only recorded (observed.json);
+another profile judges its spec "legacy_swap".
+
 netns cases (marker netns): xlxd XLX999 on 127.0.0.1, FakeAmbed on
 127.0.0.2 (stopped and started again by the scenario), DExtra talker on
 127.0.0.3, USRP peer on 127.0.0.4, module B bridged to the peer. Needs
@@ -47,14 +57,27 @@ USRP_PCM = (b"\xe8\x03\x18\xfc") * 80          # +1000, -1000 S16LE
 LOST_SECONDS = 40                               # > 30 s keepalive timeout + 5 s ping period
 SWAP_SECONDS = 2                                # well inside the keepalive window
 
-# steps: talk on module B ("usrpB", "dstarB"), "down:<s>" stops the fake,
+CAPS_TOLERANCE = 0.3                            # s, CAPS after a PONG / after the reply wait
+LISTENER = "N0LSTN"
+LISTEN_SETTLE = 1.0                             # s after the link ack (DV-Router demand token)
+
+# steps: talk on module B ("usrpB", "dstarB"), "listenB" links a D-STAR
+# listener on B for the rest of the run, "down:<s>" stops the fake,
 # "up:<mode>" starts a new one and waits for its first PING,
-# "swap:<mode>:<s>" stops the fake and starts another after s seconds
+# "swap:<mode>:<s>" stops the fake and starts another after s seconds,
+# "wait:<s>" idles. "cases": name prefix of the cases that read the
+# scenario; only scenarios of selected cases are launched.
 SCENARIOS = {
-    "lost_and_back": dict(mode="extended",
+    "lost_and_back": dict(mode="extended", cases="test_lost_transcoder_",
                           steps=["usrpB", "down:%d" % LOST_SECONDS, "up:extended", "usrpB", "dstarB"]),
-    "fast_swap": dict(mode="extended",
+    "fast_swap": dict(mode="extended", cases="test_fast_swap_",
                       steps=["usrpB", "swap:legacy:%d" % SWAP_SECONDS, "usrpB", "dstarB"]),
+    "listener_lost_and_back": dict(mode="extended", cases="test_lost_listener_",
+                                   steps=["listenB", "usrpB", "down:%d" % LOST_SECONDS,
+                                          "up:extended", "usrpB"]),
+    "legacy_swap": dict(mode="extended", cases="test_legacy_swap_",
+                        steps=["down:%d" % LOST_SECONDS, "up:legacy", "dstarB", "wait:3",
+                               "swap:extended:%d" % SWAP_SECONDS, "dstarB"]),
 }
 TIMEOUT = 150
 
@@ -100,7 +123,8 @@ def _inside(spec, run_dir):
     log = open(run_dir / "xlxd.log", "wb")
     xlxd = subprocess.Popen([spec["bin"], "XLX999", XLXD_IP, AMBED_IP], cwd=run_dir,
                             stdout=log, stderr=subprocess.STDOUT, preexec_fn=die_with_parent)
-    result = {"phases": [], "usrp_rx": [], "dextra_ack": [], "up_pinged": []}
+    result = {"phases": [], "usrp_rx": [], "dextra_ack": [], "up_pinged": [],
+              "listen_ack": [], "dstar_rx": []}
     lock = threading.Lock()
     stop = threading.Event()
     peer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -139,6 +163,42 @@ def _inside(spec, run_dir):
                                   slow=dextra.SYNC_DATA), dest)
         s.close()
 
+    def listen(module):
+        """D-STAR listener linked on module for the rest of the run; voice
+        frames go to result["dstar_rx"] as [t, sid, seq, ambe == fake AMBE+]."""
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.bind((DEXTRA_IP, 0))
+        s.settimeout(0.2)
+        dest = (XLXD_IP, dextra.PORT)
+        acked = threading.Event()
+
+        def loop():
+            last = time.monotonic()
+            while not stop.is_set():
+                if time.monotonic() - last >= 3:        # DExtra keepalive period (xlxd 3 s)
+                    s.sendto(dextra.keepalive_packet(LISTENER), dest)
+                    last = time.monotonic()
+                try:
+                    data = s.recv(2048)
+                except socket.timeout:
+                    continue
+                voice = dextra.parse_voice(data)
+                reply = dextra.parse_link_reply(data)
+                with lock:
+                    if voice:
+                        result["dstar_rx"].append([now(), voice[0], voice[1],
+                                                   voice[3] == ambed.fake_payload(ambed.AMBEPLUS)])
+                    elif reply and reply["kind"] in ("ack", "nak") and not acked.is_set():
+                        result["listen_ack"].append(data.hex())
+                        acked.set()
+            s.close()
+
+        threading.Thread(target=loop, daemon=True).start()
+        s.sendto(dextra.link_packet(LISTENER, module, own_module="D"), dest)
+        if not acked.wait(3):
+            result["listen_ack"].append(None)
+        time.sleep(LISTEN_SETTLE)
+
     def usrp_talk(count):
         start = time.monotonic()
         for seq in range(count):
@@ -159,6 +219,10 @@ def _inside(spec, run_dir):
             elif kind == "usrpB":
                 usrp_talk(50)
                 time.sleep(2.5)
+            elif kind == "listenB":
+                listen("B")
+            elif kind == "wait":
+                time.sleep(float(arg))
             elif kind == "down":
                 stop_fake()
                 time.sleep(float(arg))
@@ -214,8 +278,10 @@ def _launch(binary, name, spec, out_root):
 
 
 @pytest.fixture(scope="module")
-def runs(xlxd_bin, out_root):
-    launched = {name: _launch(xlxd_bin, name, spec, out_root) for name, spec in SCENARIOS.items()}
+def runs(request, xlxd_bin, out_root):
+    selected = {getattr(item, "originalname", item.name) for item in request.session.items}
+    launched = {name: _launch(xlxd_bin, name, spec, out_root) for name, spec in SCENARIOS.items()
+                if any(case.startswith(spec["cases"]) for case in selected)}
     results = {}
     deadline = time.monotonic() + TIMEOUT
     for name, (run_dir, proc, stderr) in launched.items():
@@ -228,10 +294,12 @@ def runs(xlxd_bin, out_root):
         path = run_dir / "result.json"
         results[name] = json.loads(path.read_text()) if path.exists() else \
             {"error": (run_dir / "harness.err").read_text()[-2000:]}
+        results[name]["run_dir"] = str(run_dir)
     return results
 
 
 def get(runs, name):
+    assert name in runs, "scenario %s was not launched" % name
     run = runs[name]
     assert "error" not in run, run.get("error")
     assert run["pinged"], "xlxd never sent AMBEDPING to the transcoder"
@@ -241,6 +309,14 @@ def get(runs, name):
 
 def caps_times(fake):
     return [t for t, h in fake["ctrl"] if bytes.fromhex(h) == b"AMBEDCAPS"]
+
+
+def ping_times(fake):
+    return [t for t, h in fake["ctrl"] if bytes.fromhex(h).startswith(b"AMBEDPING")]
+
+
+def ignored_opens(fake):
+    return [t for t, e in fake["events"] if e == "ignored extended open"]
 
 
 def requests(fake, port):
@@ -347,6 +423,55 @@ def test_lost_transcoder_dstar_to_usrp_resumes(runs, target):
     assert all(r[3] == 1 and r[4] for r in keyed), "keyed frames must carry the transcoder PCM"
 
 
+# B13 with a D-STAR listener linked on the USRP module
+
+def listener_run(runs):
+    run = get(runs, "listener_lost_and_back")
+    assert run["listen_ack"] and run["listen_ack"][0], "D-STAR listener link not acked"
+    assert run["up_pinged"] == [True], "xlxd did not ping the restarted transcoder"
+    return run
+
+
+@pytest.mark.netns
+def test_lost_listener_pcm_opens(runs, target):
+    """xlxd: the PCM stream opens [1, 2] before the loss and after the
+    reconnect. Profile spec: pcm_listener_opens (a D-STAR listener is
+    linked during both USRP steps)."""
+    spec = lifecycle_spec(target)
+    run = listener_run(runs)
+    first, second = run["fakes"]
+    want = [[24, 5, [1, 2]]] if spec is None else spec_key(spec, "pcm_listener_opens")
+    assert want, "pcm_listener_opens must name the open that feeds the D-STAR listener"
+    before = opens_in(first, *phase(run, 1))
+    assert [o[1:4] for o in before] == want, before
+    after = opens_in(second, *phase(run, 4))
+    assert [o[1:4] for o in after] == want, "PCM open after the reconnect: %s" % after
+    for fake, opens in ((first, before), (second, after)):
+        for o in opens:
+            check_pcm_requests(fake, o[5])
+    txs = [o[4] for o in before + after]
+    assert all(txs) and len(set(txs)) == len(txs), "transactions %s" % txs
+
+
+@pytest.mark.netns
+def test_lost_listener_heard(runs, target):
+    """xlxd: the D-STAR listener hears the transcoded USRP stream (the
+    fake's AMBE+ payload) before the loss and after the reconnect. Profile
+    spec: pcm_listener_heard (True / False)."""
+    spec = lifecycle_spec(target)
+    run = listener_run(runs)
+    want = True if spec is None else spec_key(spec, "pcm_listener_heard")
+    for index, label in ((1, "before the loss"), (4, "after the reconnect")):
+        start, end = phase(run, index)
+        frames = [r for r in run["dstar_rx"] if start <= r[0] < end]
+        voiced = [r for r in frames if r[3]]
+        if want:
+            assert len(voiced) >= 45, "D-STAR listener %s: %d of %d frames carry the transcoder AMBE+" % (
+                label, len(voiced), len(frames))
+        else:
+            assert not voiced, "D-STAR listener %s heard %d transcoded frames" % (label, len(voiced))
+
+
 # B14: replaced within the keepalive window by a legacy transcoder
 
 @pytest.mark.netns
@@ -396,10 +521,11 @@ def fast_swap_profile(run, spec):
     kept): swap_ignored_opens = extended OPENs the legacy transcoder
     ignored; swap_dstar_opens = opens it accepted (with none, the USRP peer
     gets no voice); swap_caps_reprobe = CAPS probed again after the ignored
-    open (True / False)."""
+    open: False = never, {"within_s": s} = a CAPS request reaches the new
+    transcoder within s + CAPS_TOLERANCE (0.3 s) after the ignored open."""
     second = run["fakes"][1]
     start, end = phase(run, 3)
-    ignored = [t for t, e in second["events"] if e == "ignored extended open"]
+    ignored = ignored_opens(second)
     want_ignored = spec_key(spec, "swap_ignored_opens")
     assert len([t for t in ignored if start <= t < end]) == want_ignored == len(ignored), \
         "ignored extended opens %s (D-STAR step %.1f-%.1f s), expected %d" % (ignored, start, end, want_ignored)
@@ -413,8 +539,82 @@ def fast_swap_profile(run, spec):
         assert not keyed, "%d USRP voice frames without an open transcoder stream" % len(keyed)
     reprobe = spec_key(spec, "swap_caps_reprobe")
     probes = [t for t in caps_times(second) if ignored and t >= ignored[0]]
+    if isinstance(reprobe, dict):
+        assert ignored, "no ignored extended open to time the re-probe from"
+        limit = reprobe["within_s"] + CAPS_TOLERANCE
+        assert probes and probes[0] - ignored[0] <= limit, \
+            "first CAPS after the ignored open at %.2f s: %s, expected within %.2f s" % (
+                ignored[0], ["%.2f" % t for t in probes[:3]], limit)
+        return
     assert bool(probes) == reprobe, "CAPS after the ignored open at %s: %s, expected re-probe %s" % (
         ignored[:1], probes, reprobe)
+
+
+# Legacy swap: extended lost (> 30 s), legacy answers, extended back
+
+def legacy_swap_observed(run):
+    """Summary of the legacy_swap scenario: OPENs the legacy transcoder got
+    (accepted legacy forms + ignored extended), PINGs and CAPS on its
+    connection, and the opens / USRP voice of the D-STAR step after the
+    extended transcoder is back."""
+    _first, legacy, back = run["fakes"]
+    pings, caps = ping_times(legacy), caps_times(legacy)
+    judged = [p for p in pings if p + CAPS_TOLERANCE < legacy["stopped"]]
+    start, end = phase(run, 5)
+    recovered = opens_in(back, start, end)
+    keyed = keyed_usrp(run, start, end)
+    return {
+        "legacy_opens": [o[1:4] for o in legacy["opens"]],
+        "legacy_ignored": len(ignored_opens(legacy)),
+        "legacy_pings": len(pings),
+        "legacy_caps": len(caps),
+        "caps_after_each_pong": bool(judged) and all(
+            any(p <= c <= p + CAPS_TOLERANCE for c in caps) for p in judged),
+        "legacy_keyed_usrp": len(keyed_usrp(run, *phase(run, 2))),
+        "back_caps": len(caps_times(back)),
+        "recovered_opens": [o[1:4] for o in recovered],
+        "recovered_keyed_usrp": len(keyed),
+        "recovered_keyed_pcm": sum(1 for r in keyed if r[3] == 1 and r[4]),
+    }
+
+
+@pytest.mark.slow
+@pytest.mark.netns
+def test_legacy_swap_recovers(runs, target):
+    """xlxd: recorded only (netns-lifecycle/legacy_swap/observed.json).
+    Profile spec legacy_swap: opens_while_legacy = OPENs (any form) the
+    legacy transcoder gets; caps_after_each_pong = a CAPS request follows
+    every PING/PONG of the legacy connection within CAPS_TOLERANCE;
+    recovers = extended OPENs and transcoded voice for D-STAR -> USRP once
+    the extended transcoder is back, without a restart."""
+    spec = lifecycle_spec(target)
+    run = get(runs, "legacy_swap")
+    assert [f["mode"] for f in run["fakes"]] == ["extended", "legacy", "extended"]
+    assert run["up_pinged"] == [True, True], "new transcoder not pinged: %s" % run["up_pinged"]
+    observed = legacy_swap_observed(run)
+    (Path(run["run_dir"]) / "observed.json").write_text(json.dumps(observed, indent=1))
+    print("legacy_swap observed:", json.dumps(observed))
+    if spec is None:
+        return
+    want = spec_key(spec, "legacy_swap")
+    opens = len(observed["legacy_opens"]) + observed["legacy_ignored"]
+    assert opens == want["opens_while_legacy"], "OPENs to the legacy transcoder: %s" % observed
+    if not want["opens_while_legacy"]:
+        assert not observed["legacy_keyed_usrp"], "USRP voice without a transcoder stream: %s" % observed
+    if want["caps_after_each_pong"]:
+        assert observed["legacy_pings"] >= 2 and observed["caps_after_each_pong"], \
+            "CAPS must follow every PONG of the legacy connection: %s" % observed
+    else:
+        assert observed["legacy_caps"] <= 1, "CAPS re-probed on the legacy connection: %s" % observed
+    if want["recovers"]:
+        start, end = phase(run, 5)
+        recovered = opens_in(run["fakes"][2], start, end)
+        assert recovered and all(o[1] == 24 for o in recovered), \
+            "no extended OPEN after the extended transcoder is back: %s" % observed
+        check_dstar_requests(run["fakes"][2], recovered[0][5])
+        assert observed["recovered_keyed_pcm"] >= 45, "USRP voice after recovery: %s" % observed
+    else:
+        assert not observed["recovered_opens"], observed
 
 
 # ---------------------------------------------------------------- rig
