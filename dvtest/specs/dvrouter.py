@@ -83,23 +83,31 @@ SPEC = {
     "test_mmdvm_busy_module_no_mix": {"late_entry": "deny"},
     # dev items (docs/protocols/mmdvm.md), DV-Router choices 2026-10-30.
     # Unknown id: id 0 and ids without a dmrid.dat callsign are refused
-    # silently (9-digit hotspot ids fall back to id/100); with no dmrid.dat
-    # every non-zero id is accepted. P-DMR-25 (egress dst TG 9) is a diff
+    # with MSTNAK (9-digit hotspot ids fall back to id/100); with no
+    # dmrid.dat every non-zero id is accepted. P-DMR-25 (egress dst TG 9) is a diff
     # item: DV-Router writes TG 9 on every MMDVM egress, as xlxd does.
     "mmdvm": {
-        "P-DMR-03": {"reply": "none"},
+        # refused login (id 0, unknown id): MSTNAK + id (HB15 p.3; DroidStar
+        # recovers only on MSTNAK)
+        "P-DMR-03": {"reply": "MSTNAK"},
         "P-DMR-04": {"auth": "lenient"},
-        "P-DMR-05": {"reply": "RPTACK", "pong": True},
+        "P-DMR-05": {"reply": "MSTNAK", "pong": False},
+        # every RPTACK except the RPTL salt reply carries the 4-byte id
+        "P-DMR-06": {"ack_id": True},
         # RPTC of 302 B or longer is acked (BrandMeister 306 B form)
         "P-DMR-07": {"ack_301": False, "ack_303": True, "pong": True},
         "P-DMR-08": {"routed": True},
         "P-DMR-11": {"order": "be"},
-        "P-DMR-13": {"mstcl": True},
+        "P-DMR-12": {"reply": "MSTNAK"},
+        "P-DMR-13": {"mstcl": True, "next_after_drop": "MSTNAK"},
         "P-DMR-18": {"relayed": False},
+        # DMRD from a non-logged-in address: MSTNAK, at most one per 10 s
+        "P-DMR-19": {"relayed": False, "nak": True, "nak_per_10s_max": 1},
         "P-DMR-22": {"voice_sync_header_relayed": False},
         "P-DMR-27": {"repeater_is": "login"},
-        # headerless voice is dropped silently (no voice before a header)
-        "P-DMR-36": {"relayed": False},
+        # ingress late entry from the embedded LC; egress still starts with
+        # a synthesized header (B16 judges egress)
+        "P-DMR-36": {"relayed": True},
         "P-DMR-39": {"first_once": True, "second_once": True},
         "P-DMR-41": {"relayed": False},
     },
