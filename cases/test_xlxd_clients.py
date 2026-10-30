@@ -20,7 +20,12 @@ from dvtest.proto import ambed, dextra, dmr, m17
 
 pytestmark = pytest.mark.rig
 
-FRAMES = 30
+# xlxd's short-stream guard (B18, cases/test_short_stream_guard.py)
+# strikes a callsign after three streams under 50 frames in a row on a
+# module, each opening within 2 s of the previous close (any gap once it
+# has a strike). A DMR link (join) is an empty stream and already counts as
+# a short one, so every talk here is a normal stream of FRAMES.
+FRAMES = 63
 STREAM_TIMEOUT_S = 1.6      # xlxd STREAM_TIMEOUT
 
 
@@ -215,7 +220,7 @@ def test_late_entry_is_native_only(rig, behaviour_spec):
     a header 30 ms later is a normal grant) expects the same as
     late_entry_transcoded."""
     tone = ambed.transcode(rig.ambed_ref, ambed.PCM, [ambed.AMBEPLUS],
-                           signals.frames(signals.tone(700, 1000)), port=rig.ambed_port)[ambed.AMBEPLUS]
+                           signals.frames(signals.tone(700, FRAMES * 20)), port=rig.ambed_port)[ambed.AMBEPLUS]
     got = {}
 
     def side(name, ip):

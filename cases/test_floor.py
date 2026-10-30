@@ -21,6 +21,14 @@ from dvtest.proto import ambed, dextra, dmr, m17, usrp
 pytestmark = pytest.mark.rig
 
 FRAMES = 100
+# Every over meant as a normal stream is at least NORMAL frames: xlxd's
+# short-stream guard (B18, cases/test_short_stream_guard.py) strikes a
+# callsign after three streams under 50 frames in a row on a module, each
+# opening within 2 s of the previous close (any gap once it has a strike),
+# and these cases share N0CALL / N0TEST with the other suites. A DMR link
+# (join) is an empty stream and already counts as a short one. No STR
+# identities of rig/config/dmrid.dat are used here.
+NORMAL = 63
 
 
 def both(rig, func, *args):
@@ -214,7 +222,7 @@ def test_usrp_unkey_after_silence(rig_usrp, behaviour_spec):
     try:
         linked(rig_usrp.xlxd_sut, talker)
         frames = ambed.transcode(rig_usrp.ambed_ref, ambed.PCM, [ambed.AMBEPLUS],
-                                 signals.frames(signals.tone(700, 1000)), port=rig_usrp.ambed_port)[1]
+                                 signals.frames(signals.tone(700, NORMAL * 20)), port=rig_usrp.ambed_port)[1]
         sid = clients.fresh_stream_id("dstar")
         talker.client.send(talker.dest, talker.header(sid))
         start = time.monotonic() + 0.1
@@ -231,7 +239,7 @@ def test_usrp_unkey_after_silence(rig_usrp, behaviour_spec):
         clients.close(talker)
     keyed = [t for t, p in rx if usrp.is_voice(p) and len(p) == usrp.VOICE_SIZE]
     unkeys = [t for t, p in rx if usrp.is_voice(p) and len(p) == usrp.HEADER_SIZE]
-    assert len(keyed) >= 40, "USRP peer got %d keyed frames" % len(keyed)
+    assert len(keyed) >= len(frames) * 0.8, "USRP peer got %d keyed frames" % len(keyed)
     assert unkeys, "no USRP unkey after the stream went silent"
     gap = unkeys[0] - keyed[-1]
     print("USRP unkey %.0f ms after the last voice" % (gap * 1000))
@@ -285,7 +293,7 @@ def talk_dstar_sid(ip, module, sid, seed, listen_kind):
     listener = clients.make(listen_kind, module, 1)
     try:
         linked(ip, listener, talker)
-        frames = signals.prng_frames("dstar", 50, seed=seed)
+        frames = signals.prng_frames("dstar", NORMAL, seed=seed)
         talker.client.send(talker.dest, talker.header(sid))
         talker.client.paced(talker.dest, dstar_stream_packets(sid, frames), 0.020, listener.client)
         return len(listener.collect(settle=1.0))
@@ -314,7 +322,7 @@ def second_floor(ip):
         sid_q, sid_r = clients.fresh_stream_id("dmr"), clients.fresh_stream_id("dmr")
         tg_r = dmr.module_tg("R")
         q, seq_q = dmr.voice_packets(signals.prng_frames("dmr", 90, seed="b8q"), talker.id, talker.tg, sid_q)
-        r, seq_r = dmr.voice_packets(signals.prng_frames("dmr", 60, seed="b8r"), talker.id, tg_r, sid_r)
+        r, seq_r = dmr.voice_packets(signals.prng_frames("dmr", NORMAL, seed="b8r"), talker.id, tg_r, sid_r)
         sync = dmr.data_sync_payload()
         talker.client.send(talker.dest, dmr.packet(0, talker.id, talker.tg, talker.id, 0xA1, sid_q, sync))
         start = time.monotonic() + 0.1
@@ -353,7 +361,7 @@ def same_sid_two_rooms(ip):
     listeners = {"S": clients.make("m17", "S", 1), "T": clients.make("dmr", "T", 1)}
     try:
         linked(ip, *listeners.values(), *talkers.values())
-        packets = {m: dstar_stream_packets(sid, signals.prng_frames("dstar", 60, seed="b8" + m)) for m in "ST"}
+        packets = {m: dstar_stream_packets(sid, signals.prng_frames("dstar", NORMAL, seed="b8" + m)) for m in "ST"}
         for m, t in talkers.items():
             t.client.send(t.dest, dextra.header(sid, t.callsign, m))
             if m == "S":
@@ -380,9 +388,9 @@ def test_admission_same_sid_two_rooms(rig, behaviour_spec):
     got = both(rig, same_sid_two_rooms)
     print("same sid in two rooms, frames heard:", got)
     for name, r in got.items():
-        assert r["S"] >= 40, "%s: first room heard %d frames" % (name, r["S"])
+        assert r["S"] >= NORMAL * 2 // 3, "%s: first room heard %d frames" % (name, r["S"])
     if (behaviour_spec or {}).get("admit_same_sid_local") is True:
-        assert got["sut"]["T"] >= 40, "sut dropped the second room's stream (%d frames)" % got["sut"]["T"]
+        assert got["sut"]["T"] >= NORMAL * 2 // 3, "sut dropped the second room's stream (%d frames)" % got["sut"]["T"]
     else:
         assert (got["sut"]["T"] > 0) == (got["ref"]["T"] > 0), "second room: sut %s, ref %s" % (
             got["sut"], got["ref"])
@@ -396,7 +404,7 @@ def sid_kept(ip, kind):
     listener = clients.make(kind, "U", 1)
     try:
         linked(ip, listener, talker)
-        frames = signals.prng_frames(kind, 30, seed="b10")
+        frames = signals.prng_frames(kind, NORMAL, seed="b10")
         sid = clients.talk(talker, kind, frames, tail=1.0)
         listener.client.pump(0.5)
         if kind == "dstar":
@@ -437,7 +445,7 @@ def sid_cross(ip, src, dst):
     listener = clients.make(dst, "V", 1)
     try:
         linked(ip, listener, talker)
-        sid = clients.talk(talker, src, signals.prng_frames(src, 30, seed="b10x"), tail=1.0)
+        sid = clients.talk(talker, src, signals.prng_frames(src, NORMAL, seed="b10x"), tail=1.0)
         listener.client.pump(0.5)
         if dst == "dstar":
             seen = {v[0] for v in map(dextra.parse_voice, listener.client.inbox) if v}
@@ -494,11 +502,13 @@ def rptcl_close(ip, size):
     try:
         linked(ip, listener, a, b)
         sid_a, sid_b = clients.fresh_stream_id("dmr"), clients.fresh_stream_id("dstar")
-        bursts, _seq = dmr.voice_packets(signals.prng_frames("dmr", 60, seed="b15a"), a.id, a.tg, sid_a)
+        bursts, _seq = dmr.voice_packets(signals.prng_frames("dmr", 90, seed="b15a"), a.id, a.tg, sid_a)
         sync = dmr.data_sync_payload()
         a.client.send(a.dest, dmr.packet(0, a.id, a.tg, a.id, 0xA1, sid_a, sync))
         start = time.monotonic() + 0.1
-        for tick in range(10):
+        # NORMAL frames before the close: xlxd ignores RPTCL, so A's stream
+        # ends by timeout and must not count as a short one
+        for tick in range(NORMAL // 3):
             pace(start, tick, 0.060)
             a.client.send(a.dest, bursts[tick])
             listener.client.drain()
@@ -507,7 +517,7 @@ def rptcl_close(ip, size):
         closed = time.monotonic()
         a.client.inbox.clear()
         a.client.inbox_times.clear()
-        frames_b = signals.prng_frames("dstar", 50, seed="b15b")
+        frames_b = signals.prng_frames("dstar", NORMAL, seed="b15b")
         b.client.send(b.dest, b.header(sid_b))
         b.client.paced(b.dest, dstar_stream_packets(sid_b, frames_b), 0.020, listener.client, a.client)
         listener.client.pump(1.0)
@@ -532,7 +542,7 @@ def test_dmr_rptcl_closes_session(rig, size, behaviour_spec):
     print("RPTCL %d B:" % size, got)
     if (behaviour_spec or {}).get("rptcl") == "close":
         assert got["sut"]["a_after_close"] == 0, "sut sent %d frames after RPTCL" % got["sut"]["a_after_close"]
-        assert got["sut"]["b_heard"] >= 40, "next talker heard %d frames: floor not released" % got["sut"]["b_heard"]
+        assert got["sut"]["b_heard"] >= NORMAL * 0.8, "next talker heard %d frames: floor not released" % got["sut"]["b_heard"]
     else:
         for key in ("a_after_close", "b_heard"):
             assert (got["sut"][key] > 0) == (got["ref"][key] > 0), "%s: sut %s, ref %s" % (key, got["sut"], got["ref"])
@@ -673,7 +683,7 @@ def m17_fn0(ip):
     listener = clients.make("m17", "Y", 1)
     try:
         linked(ip, listener, talker)
-        frames = signals.prng_frames("m17", 40, seed="b17")
+        frames = signals.prng_frames("m17", NORMAL + 1, seed="b17")     # whole M17 packets
         clients.talk(talker, "m17", frames, tail=1.0)
         got = listener.collect(settle=0.5)
         sent = [f for p in m17.voice_packets(frames, 1, "N0CALL") for f in m17.parse(p)["frames"]]

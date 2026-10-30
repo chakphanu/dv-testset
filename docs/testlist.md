@@ -830,5 +830,5 @@ Also measured on xlxd: after RPTCL (13 B or 9 B) the floor stays held by the
 closed stream (next talker hears 0 frames); a promoted late D-STAR entrant
 reaches D-STAR listeners with 80-81 voice packets and no header, and is echoed
 back to its sender (71 frames) in some runs only (timing-dependent); M17 egress
-carries 42 of 44 frames (both frames of packet 0 dropped); added forwarding
+carries all but the two frames of packet 0 (measured 42 of 44 with a 40-frame over; the case now sends 64); added forwarding
 latency p50 171-222 ms at 26 modules.
