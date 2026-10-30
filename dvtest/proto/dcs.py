@@ -95,6 +95,7 @@ NOTICE_SIZE = 19
 # last-packet payloads: (AMBE 9, slow data 3)
 END_JARL = (b"\x55\x55\x55\x55\xc8\x7a\x00\x00\x00", b"\x55\x55\x55")    # IG
 END_XLXD = (b"\x55\xc8\x7a\x00\x00\x00\x00\x00\x00", b"\x25\x1a\xc6")    # xlxd
+END_DROIDSTAR = (b"\xdc\x8e\x0a\x40\xad\xed\xad\x39\x6e", dextra.SLOW_DATA)  # a plain AMBE frame
 HTML = (b"<table border=\"0\" width=\"95%\"><tr><td width=\"4%\"><img border=\"0\" "
         b"src=hotspot.jpg></td><td width=\"96%\"><font size=\"2\"><b>HOTSPOT</b> dvtest"
         b"</font></td></tr></table>")

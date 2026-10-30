@@ -131,7 +131,20 @@ parallel; the Judged column of the testlist rows says how:
 - **spec (Bn)**: judged by the DV-Router behaviour spec (testlist B rows).
 
 Egress counter, sync position and last frame are also checked passively
-by dvcheck (`dvtest/check/dcs.py`).
+by dvcheck (`dvtest/check/dcs.py`); deliberately malformed tester traffic
+is bracketed with control-channel marks, so dvcheck reports it as a
+warning and a run ends with exit 0 unless the system under test itself
+sent something wrong.
+
+xlxd guards against loops on every protocol: a MY callsign that opens
+three short overs in a row (under 50 frames each, each within 2 s of the
+previous end) gets its transmissions blocked for 3 s, 10 s, then 300 s,
+and at the third strike its links are refused. The cases therefore talk
+63 frames (three superframes) and give every short or malformed over its
+own callsign (STRnnn from `rig/config/dmrid.dat`). xlxd also ignores a
+source IP for 5, 30, then 60 min after three malformed links, so the suite
+sends at most two per run (P-DCS-05). Each case waits 1.2 s after a link
+before it talks (xlxd refreshes its per-module client list once a second).
 
 Conventions: offsets are into the UDP payload, 0-based. "RPT2" is the
 destination field (voice offset 7), "RPT1" the departure field (offset
@@ -158,7 +171,7 @@ space in IG-S) + `ACK` / `NAK` + 0x00.
 | P-DCS-02 | ACK latency | disputed | not stated | DS sends its link once and never retries; IG, DSG resend after 1 s, backing off to 60 s; QN sends once but also takes the first 22 B poll as a link confirmation | URFd, IG-S answer at once | code: random 0-2 s; measured: 1.26 and 1.7 s (ref), 0.21 and 0.67 s (sut) (061551Z) | at once |
 | P-DCS-03 | Bytes 10-518 of the link are not required: any byte 10, any or no reflector name, any text | convention (XLX family) | not stated | DS sends byte 10 = 0x0B and leaves 11-518 unset; IG, DSG, QN send a name and HTML | URFd ignores bytes 10-518; IG-S reads the target repeater from bytes 11-17 and NAKs without it | measured: DroidStar form ACKed (061551Z) | ignore bytes 10-518 (DS must link) |
 | P-DCS-04 | A link to a module the reflector does not serve gets NAK and no link | convention (impl, agreed) | not stated | IG stops linking on NAK; QN clears the link; DS ignores NAK (stays "connecting") | URFd NAK; IG-S NAK for an unknown repeater or a full table | measured: module Z ACKed; every module A-Z is served on the rig, so no unserved module to probe (061551Z) | NAK at once |
-| P-DCS-05 | A link with an invalid callsign or a non-letter module never links; reply | disputed | not stated | no client sends one | URFd: not a link (dropped as unknown); IG-S: NAK | measured: NAK for the invalid callsign and for module `1` (one try each; the progressive ignore was not triggered) (061551Z) | no link; NAK or silence; no IP-wide ban (gateways behind one NAT) |
+| P-DCS-05 | A link with an invalid callsign or a non-letter module never links; reply | disputed | not stated | no client sends one | URFd: not a link (dropped as unknown); IG-S: NAK | measured: NAK for the invalid callsign and for module `1` (one try each) (061551Z); code: NAK for the first 3 per source IP, then that IP is ignored for 5, 30, 60 min, so the suite sends at most 2 per run | no link; NAK or silence; no IP-wide ban (gateways behind one NAT) |
 | P-DCS-06 | A repeated link (same callsign, module, address): ACK again, one client, traffic once | disputed | not stated | IG resends its link after 1 s while xlxd's ACK may still be pending; QN, DS once | URFd re-ACKs, no duplicate; IG-S ignores the copy silently | measured: a second copy 50 ms after the first got no ACK of its own (1 ACK); one client, traffic once (061551Z) | ACK every copy, one client |
 | P-DCS-07 | No registration is required by default; an operator list may refuse a callsign (NAK) | disputed | CCS7 (2015: a CCS7 id "will be required"; refusal form not stated); OS ("usually do not need a valid registration") | no client sends a registration token; the link carries only the callsign | URFd: operator white/black list; IG-S: none | measured: N0TEST (no registration) ACKed (061551Z) | open by default; an operator list refuses with NAK |
 | P-DCS-08 | A link packet of another size (for example an 11 B DExtra-style link) does not link | convention (XLX family) | not stated | every client links with 519 B | URFd: exactly 519 B; IG-S: 519 B | measured: 11 B link not answered (061551Z) | as all |
@@ -189,7 +202,7 @@ callsign (7) + client module + 0x00 + reflector name (7) + reflector module.
 | P-DCS-13 | The reflector sends each linked client the 22 B poll, at 5 s or faster | convention (impl, agreed) | not stated | IG, DSG never send a keepalive of their own on an outgoing link: they answer each matching poll with 17 B and restart their 60 s timer, so without polls they drop the link after 60 s; QN resets its ~50 s countdown on a poll; DS only counts it | URFd every 1 s; IG-S every 5 s | measured: a poll every 5.0 s, the first 6-7 s after the link (061551Z) | every 5 s or faster |
 | P-DCS-14 | Poll fields: bytes 0-6 = `DCS` + number, byte 7 = the client's linked module, 9-15 the client callsign, 17 the client module | convention (impl, agreed) | not stated | IG, DSG need bytes 0-7 = the linked target (an `XLXnnn` target compared as `DCSnnn`) and 9-15 + 17 = their repeater; QN needs 0-6 = the reflector, 7 = linked module, 9-15 = owner, 17 its module (A-C); DS any 22 B | URFd and IG-S send the same fields | measured: `DCS999 ` + J + space + `N0TEST ` + J + J + 0A 00 20 20 (061551Z) | `DCSnnn` + linked module, client callsign + module |
 | P-DCS-15 | The extra 9 B packet (reflector name + 0x00) before each poll | convention (XLX family) | not stated | IG, QN, DS drop it as an unknown size (harmless) | URFd sends it; IG-S does not | measured: one 9 B packet with every poll (061551Z) | optional; omit or keep |
-| P-DCS-16 | A client keepalive (17 B) refreshes its link; the reflector does not reply to it | convention (impl, agreed) | not stated | QN, g2 send 17 B every 1 s unsolicited; DS every 2 s (its 17 B carries `name` + 0x00 + module, so byte 15 is 0x00 for a 6-character name); IG, DSG only in reply to a poll | URFd: callsign (first 7) + ip:port, no reply; IG-S: callsign + ip:port | measured: the gateway and the DroidStar 17 B forms kept the link past 70 s; no reply to them (061551Z) | refresh on callsign + ip:port; do not require bytes 9-16 to match exactly (DS) |
+| P-DCS-16 | A client keepalive (17 B) refreshes its link; the reflector does not reply to it | convention (impl, agreed) | not stated | QN, g2 send 17 B every 1 s unsolicited, already before the ACK, and take a 22 B poll as the ACK; DS every 2 s (its 17 B carries `name` + 0x00 + module, so byte 15 is 0x00 for a 6-character name); IG, DSG only in reply to a poll | URFd: callsign (first 7) + ip:port, no reply; IG-S: callsign + ip:port | measured: the gateway and the DroidStar 17 B forms kept the link past 70 s; no reply to them (061551Z) | refresh on callsign + ip:port; do not require bytes 9-16 to match exactly (DS) |
 | P-DCS-17 | Keepalive sizes other than 17 B (9, 15, 19, 22 B) | disputed | not stated | no client sends them (DS sends 11 + name length bytes, 17 B for a 6-character name) | URFd takes 15, 17, 22; IG-S 17 only | measured: 9, 19 and 22 B forms also kept the link past 70 s (061551Z) | accept 17 B; other sizes optional |
 | P-DCS-18 | A silent client is dropped after the timeout; what it is sent | drop: convention (impl, agreed); timeout and notice: disputed | not stated | IG, DSG drop the link after 60 s without a poll; QN after about 50 s; DS never; no client acts on a server's 19 B notice (IG accepts a 19 B unlink only when it names the reflector at 0-6 + 8) | URFd 30 s, sends a 19 B notice; IG-S 60 s, silent | measured: a silent client dropped within 70 s; no notice reached it (061551Z) | 60 s or more; notice optional (clients ignore it) |
 | P-DCS-19 | A dropped client gets no further voice; a talking client is never dropped | convention (impl, agreed) | not stated | IG and QN count received voice as life | URFd, IG-S keep the talker; remove the silent client | measured: the dropped client heard nothing; a client talking for 70 s was not dropped (061551Z) | as all |
@@ -218,7 +231,7 @@ text area (IG: 0x21 at 63 and a 20-character text at 64-83; others zero).
 | P-DCS-26 | Egress sequence: 0..20 in order, wrapping, 0x40 on the last packet; a stream sent to a listener starts at sequence 0 | counter: MUST (JARL7 5.1 (3) c); start at 0: convention (IG) | JARL7 5.1 (3) c (sequence numbers), 4.1.2 c | IG, DSG accept a new stream only on a packet with sequence 0 (a listener joining mid-superframe waits for the next 0); QN drops repeated sequence values; DS shows it | URFd writes its counter mod 21; IG-S passes it | measured: egress starts at 0, counts 0..20 twice, last packet 0x40 (061551Z) | as JARL; pass the source sequence |
 | P-DCS-27 | Egress sequence 0 carries the sync 55 2D 16 in the slow-data bytes, no other packet does | MUST (JARL7 4.1.2 c/d) | JARL7 4.1.2 c/d (resync every 21 frames) | DS checks sequence 0 + sync to decode its text; IG passes the bytes to its radio | URFd, IG-S pass the ingress bytes | measured: sync at sequence 0 only (061551Z) | pass on same-mode; write on cross-mode |
 | P-DCS-28 | AMBE (9 B) and slow data (3 B, scrambled) relayed unchanged on same-mode egress | convention (impl, agreed) | JARL7 4.1.2 b/e (data frame passed as given), Ap1.3 | DS decodes its 20-character text from frames 1-8; IG passes the bytes | URFd, IG-S pass them | measured: AMBE byte exact; the slow data of the final voice frame (before the last packet) replaced by 55 55 55 (061551Z) | as all |
-| P-DCS-29 | A last packet (0x40) ends the stream and reaches the listeners | MUST (JARL7 4.1.2 g, 5.1 (3) c) | JARL7 4.1.2 g/h, 5.1 (3) c | IG, QN, DS end RX on 0x40 | agreed | measured: exactly one last packet, at the end (061551Z) | as all |
+| P-DCS-29 | A last packet (0x40) in any client's form ends the stream at once and reaches the listeners | MUST (JARL7 4.1.2 g, 5.1 (3) c) | JARL7 4.1.2 g/h, 5.1 (3) c | IG, QN, DS end RX on 0x40; the payload differs: IG 55 55 55 55 C8 7A + zeros with slow data 55 55 55, DS a plain AMBE frame (dc 8e 0a 40 ad ed ad 39 6e), xlxd's own 55 C8 7A + zeros / 25 1A C6 | agreed | measured: exactly one last packet, at the end (061551Z) | as all |
 | P-DCS-30 | Payload of the egress last packet | disputed | JARL7 4.1.2 h (RF end pattern: 55 55 55 55 C8 7A) | IG sends 55 55 55 55 C8 7A + zeros as AMBE and 55 55 55 as slow data; DS a fixed non-pattern frame; all key on 0x40 only | URFd passes the ingress payload | measured: the JARL end pattern sent was replaced by 55 C8 7A + zeros / 25 1A C6 (061551Z) | pass the ingress payload; the JARL end pattern when the server synthesizes the end |
 | P-DCS-31 | Packet counter (58-60) and text area (61-99) on egress | disputed | not stated | no client reads bytes 58-99; IG writes 0x21 + text at 63-83; QN, DS write zeros (DS no 0x21) | URFd: own counter from 0 per stream, 0x01 at 61, zeros after; IG-S writes 0x21 + text | measured: the source's bytes 61-99 passed through; the counter is not renumbered (first egress value 8, steps 0-2: copied from the module's latest received packet) (061551Z) | own counter from 0 per stream, 0x01 at 61, rest free (text optional) |
 | P-DCS-32 | Header fields in a voice packet with characters outside A-Z, 0-9, space in MY, RPT1 or RPT2 | disputed | JARL7 4.1.1 (ASCII callsign fields, space padded) | real callsigns only | URFd drops the packet; IG-S applies its MY white/black list | measured: an invalid MY, RPT1 or RPT2 drops the packet (nothing relayed) (061551Z) | drop invalid MY; RPT1/RPT2 are rewritten anyway |
@@ -302,7 +315,7 @@ New K-subsection "DCS" for `docs/testlist.md` (the lead numbers it).
 | P-DCS-26 | Egress sequence from 0, 0..20, 0x40 last | test_dcs::test_dcs_egress_sequence | hb | probe + dvcheck | covered |
 | P-DCS-27 | Egress sync at sequence 0 only | test_dcs::test_dcs_egress_sequence | hb | probe + dvcheck | covered |
 | P-DCS-28 | AMBE byte exact; changed slow data recorded | test_dcs::test_dcs_passthrough_exact | diff | probe | covered |
-| P-DCS-29 | One last packet ends the stream | test_dcs::test_dcs_last_packet | hb | probe + dvcheck | covered |
+| P-DCS-29 | Last packet in each client form ends the stream at once | test_dcs::test_dcs_last_packet, ::test_dcs_end_forms[ircddb\|droidstar\|xlxd] | hb | probe + dvcheck | covered |
 | P-DCS-30 | Egress last-packet payload | test_dcs::test_dcs_last_packet_payload | dev | probe | covered |
 | P-DCS-31 | Egress counter and text area | test_dcs::test_dcs_counter_and_text | dev | probe | covered |
 | P-DCS-32 | Invalid MY / RPT1 / RPT2 | test_dcs::test_dcs_invalid_callsign[my\|rpt1\|rpt2] | dev | probe | covered |
@@ -324,7 +337,7 @@ New K-subsection "DCS" for `docs/testlist.md` (the lead numbers it).
 
 ## Cases and builders
 
-Cases: `cases/proto/test_dcs.py` (43 cases), markers `proto` and `rig`;
+Cases: `cases/proto/test_dcs.py` (46 cases), markers `proto` and `rig`;
 `test_dcs_keepalive_forms` is also `slow` (one 70 s window covers
 P-DCS-16..19 for every keepalive form at once). Client forms in
 `dvtest/proto/dcs.py` (the older compact functions are unchanged):
@@ -332,5 +345,6 @@ P-DCS-16..19 for every keepalive form at once). Client forms in
 `keepalive17(form="gateway" | "droidstar")`, `parse_reply` (ACK, NAK,
 22 B poll, 9 B packet, 19 B notice, voice), `voice_packet` and
 `parse_raw` (every field raw), `stream_packets` (start sequence, last
-packet payload) and the last-packet payloads `END_JARL` / `END_XLXD`.
+packet payload) and the last-packet payloads `END_JARL` / `END_XLXD` /
+`END_DROIDSTAR`.
 Unit round trips: `cases/unit/test_dcs_conf.py`.

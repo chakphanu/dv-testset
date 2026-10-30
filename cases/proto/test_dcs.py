@@ -10,8 +10,11 @@ the xlxd profile, else the profile's "dcs" spec entry {"P-DCS-NN":
 {observed key: value}} (skip "spec pending" without one); diff = sut ==
 ref. Every case prints what both sides did.
 """
+import contextlib
+import os
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -25,7 +28,8 @@ pytestmark = [pytest.mark.proto, pytest.mark.rig]
 MOD, OTHER = "J", "K"
 REFL = dcs.REFLECTOR                        # xlxd's DCS name for XLX999
 TALKER, LISTENER, THIRD = "N0CALL", "N0TEST", "STR001"
-FRAMES = 42                                 # two superframes
+FRAMES = 63                                 # three superframes: xlxd's loop guard
+                                            # strikes a callsign for overs under 50 frames
 GAP = 0.020
 ACK_WAIT = 3.0                              # xlxd delays an ACK by up to 2 s
 CACHE = 1.2                                 # xlxd refreshes its module client list once per second
@@ -71,6 +75,31 @@ def judge_dev(rig, nn, got, *keys):
 def same(got, *keys):
     for key in keys:
         assert got["sut"][key] == got["ref"][key], "%s: sut %r, ref %r" % (key, got["sut"][key], got["ref"][key])
+
+
+@contextlib.contextmanager
+def marked(rig, tag):
+    """Control channel "mark begin|end <tag>" around deliberately
+    malformed tester traffic, so dvcheck reports it as a warning (no-op
+    without the control channel)."""
+    _mark(rig, "begin", tag)
+    try:
+        yield
+    finally:
+        _mark(rig, "end", tag)
+
+
+def _mark(rig, phase, tag):
+    if os.environ.get("DVT_RIG_CONTROL") != "1":
+        return
+    directory = Path(rig.out) / "control"
+    directory.mkdir(parents=True, exist_ok=True)
+    name = "dcs-mark-%d-%d" % (os.getpid(), time.monotonic_ns())
+    (directory / (name + ".tmp")).write_text("mark %s %s\n" % (phase, tag))
+    (directory / (name + ".tmp")).rename(directory / (name + ".req"))
+    deadline = time.monotonic() + 5
+    while not (directory / (name + ".ack")).exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
 
 
 def frames(n=FRAMES, seed="dcs"):
@@ -326,7 +355,8 @@ def test_dcs_link_invalid(rig, what):
         finally:
             gw.dest = None
             done(gw)
-    got = both(rig, probe)
+    with marked(rig, "dcs-link-invalid"):
+        got = both(rig, probe)
     print("P-DCS-05 invalid %s:" % what, got)
     for name, r in got.items():
         assert r["reply"] != "ack", "%s: invalid link ACKed" % name
@@ -356,7 +386,8 @@ def relink_probe(ip):
 def test_dcs_relink_single_client(rig):
     """P-DCS-06 (dev): a second link copy: ACKs counted; one client
     (traffic once) is required on both sides."""
-    got = both(rig, relink_probe)
+    with marked(rig, "dcs-relink"):
+        got = both(rig, relink_probe)
     print("P-DCS-06 repeated link:", got)
     for name, r in got.items():
         assert r["acks"] >= 1 and r["copies"] == 1.0, "%s: %s" % (name, r)
@@ -376,7 +407,8 @@ def wrong_size_probe(ip):
 def test_dcs_link_wrong_size(rig):
     """P-DCS-08 (diff): an 11 B link form (DExtra-style, module byte not a
     space) does not link."""
-    got = both(rig, wrong_size_probe)
+    with marked(rig, "dcs-link-11b"):
+        got = both(rig, wrong_size_probe)
     print("P-DCS-08 11 B link:", got)
     assert got["ref"]["reply"] != "ack"
     same(got, "reply")
@@ -413,13 +445,13 @@ def test_dcs_unlink_nak(rig, size):
 
 
 def unlink_talking_probe(ip):
-    talker, listener = Gw(TALKER), Gw(LISTENER)
+    talker, listener = Gw("STR010"), Gw(LISTENER)
     third = Gw(THIRD)
     try:
         ready(ip, talker, listener, third)
         voice = frames()
         sid = clients.fresh_stream_id("dstar")
-        packets = dcs.stream_packets(sid, voice, last=False, callsign=TALKER, module=MOD)
+        packets = dcs.stream_packets(sid, voice, last=False, callsign="STR010", module=MOD)
         send(talker, packets[:20], listener, wait=0.0)
         talker.send(dcs.unlink19(talker.callsign, talker.own))
         reply = wait_for(talker, kind_is("nak"), 1.0)
@@ -436,7 +468,8 @@ def unlink_talking_probe(ip):
 def test_dcs_unlink_while_talking(rig):
     """P-DCS-11 (dev): the talker unlinks mid-stream; is it removed
     (hears nothing of the next stream) and is the module free?"""
-    got = both(rig, unlink_talking_probe)
+    with marked(rig, "dcs-unlink-talking"):
+        got = both(rig, unlink_talking_probe)
     print("P-DCS-11 unlink while talking:", got)
     for name, r in got.items():
         assert r["listener_hears_next"], "%s: module not free after the talker left" % name
@@ -457,7 +490,8 @@ def unlink_unknown_probe(ip):
 def test_dcs_unlink_not_linked(rig):
     """P-DCS-12 (dev): an unlink from an address that is not linked; the
     reply (silence or NAK) is recorded."""
-    got = both(rig, unlink_unknown_probe)
+    with marked(rig, "dcs-unlink-unknown"):
+        got = both(rig, unlink_unknown_probe)
     print("P-DCS-12 unlink, not linked:", got)
     judge_dev(rig, "P-DCS-12", got, "reply")
 
@@ -560,7 +594,8 @@ def test_dcs_keepalive_forms(rig):
     or DroidStar form) still hears its module, a silent one does not (its
     notice is recorded), the other sizes are recorded, and a client that
     talks the whole time is never dropped."""
-    got = both(rig, keepalive_probe)
+    with marked(rig, "dcs-keepalive-forms"):
+        got = both(rig, keepalive_probe)
     print("P-DCS-16..19 keepalive forms:", got)
     for name, r in got.items():
         assert r["gateway17"] and r["droidstar17"], "%s: 17 B keepalive did not keep the link: %s" % (name, r)
@@ -620,7 +655,8 @@ def test_dcs_garbage_ignored(rig, name):
                     "link_after": after["kind"] if after else "none"}
         finally:
             done(gw)
-    got = both(rig, probe)
+    with marked(rig, "dcs-garbage"):
+        got = both(rig, probe)
     print("P-DCS-21 %s:" % name, got)
     for side, r in got.items():
         assert r["reply"] == "none" and r["link_after"] == "ack", "%s: %s" % (side, r)
@@ -641,7 +677,8 @@ def test_dcs_voice_size(rig, size):
             return {"heard": len(voice_frames(listener))}
         finally:
             done(talker, listener)
-    got = both(rig, probe)
+    with marked(rig, "dcs-voice-size"):
+        got = both(rig, probe)
     print("P-DCS-22 voice %d B:" % size, got)
     if size == 99:
         for side, r in got.items():
@@ -664,7 +701,8 @@ def not_linked_probe(ip):
 def test_dcs_voice_not_linked(rig):
     """P-DCS-23 (diff): voice from an address that is not linked is not
     relayed."""
-    got = both(rig, not_linked_probe)
+    with marked(rig, "dcs-voice-unlinked"):
+        got = both(rig, not_linked_probe)
     print("P-DCS-23 voice, not linked:", got)
     for side, r in got.items():
         assert r["heard"] == 0, "%s: %s" % (side, r)
@@ -687,7 +725,8 @@ def stream_probe(ip, start=0, **fields):
 def test_dcs_stream_opens_mid_superframe(rig):
     """P-DCS-24 (diff): a stream whose first packet has sequence 7 (no
     separate header in DCS) is relayed from its first frame."""
-    got = both(rig, stream_probe, 7)
+    with marked(rig, "dcs-mid-superframe"):
+        got = both(rig, stream_probe, 7)
     rows = {k: {"heard": len([p for p in v["rx"] if not p["last"]]), "sent": len(v["sent"])} for k, v in got.items()}
     print("P-DCS-24 mid-superframe start:", rows)
     assert rows["ref"]["heard"] > 0
@@ -770,6 +809,32 @@ def test_dcs_last_packet_payload(rig):
     judge_dev(rig, "P-DCS-30", rows, "ambe", "slow")
 
 
+def end_form_probe(ip, end):
+    first, second, listener = Gw("STR012"), Gw("STR013"), Gw(LISTENER)
+    try:
+        ready(ip, first, second, listener)
+        voice, _sid = talk(first, listener, end=end, wait=0.5)
+        lasts = len([p for p in heard(listener) if p["last"]])
+        clear(listener)
+        talk(second, listener)
+        return {"last_relayed": lasts, "next_heard": len(voice_frames(listener)) == FRAMES}
+    finally:
+        done(first, second, listener)
+
+
+@pytest.mark.parametrize("form", ["ircddb", "droidstar", "xlxd"])
+def test_dcs_end_forms(rig, form):
+    """P-DCS-29 (hb): each client's last-packet form (ircDDBGateway JARL
+    pattern, DroidStar plain AMBE frame, xlxd's own) closes the stream at
+    once: one last packet reaches the listener, a second talker 0.5 s
+    later is heard in full."""
+    end = {"ircddb": dcs.END_JARL, "droidstar": dcs.END_DROIDSTAR, "xlxd": dcs.END_XLXD}[form]
+    got = both(rig, end_form_probe, end)
+    print("P-DCS-29 end form %s:" % form, got)
+    for name, r in got.items():
+        assert r == {"last_relayed": 1, "next_heard": True}, "%s: %s" % (name, r)
+
+
 def test_dcs_counter_and_text(rig):
     """P-DCS-31 (dev): the talker sends a counter from 0 and a text area
     (0x01, 0x00, 0x21 + 20 characters); the egress counter start and the
@@ -793,7 +858,8 @@ def test_dcs_invalid_callsign(rig, field):
     """P-DCS-32 (dev): a header field with characters outside A-Z, 0-9,
     space: frames heard recorded."""
     bad = {field: b"N0#CALL" + (MOD.encode() if field != "my" else b" ")}
-    got = both(rig, stream_probe, 0, **bad)
+    with marked(rig, "dcs-bad-callsign"):
+        got = both(rig, stream_probe, 0, **bad)
     key = "heard_" + field
     rows = {k: {key: len([p for p in v["rx"] if not p["last"]])} for k, v in got.items()}
     print("P-DCS-32 invalid %s:" % field, rows)
@@ -802,7 +868,8 @@ def test_dcs_invalid_callsign(rig, field):
 
 def test_dcs_stream_id_zero(rig):
     """P-DCS-46 (dev): an over with stream id 0 (DroidStar can draw it)."""
-    got = both(rig, stream_probe, 0, sid=None, sid_bytes=b"\x00\x00")
+    with marked(rig, "dcs-sid0"):
+        got = both(rig, stream_probe, 0, sid=None, sid_bytes=b"\x00\x00")
     rows = {k: {"heard": len([p for p in v["rx"] if not p["last"]])} for k, v in got.items()}
     print("P-DCS-46 stream id 0:", rows)
     judge_dev(rig, "P-DCS-46", rows, "heard")
@@ -867,7 +934,8 @@ def test_dcs_stream_timeout(rig):
     """P-DCS-39 (B3): a stream without a last packet ends after the
     silence timeout and the module is free; a synthesized last packet is
     recorded (B3 asks for one)."""
-    got = both(rig, timeout_probe)
+    with marked(rig, "dcs-no-last"):
+        got = both(rig, timeout_probe)
     print("P-DCS-39 lost last packet:", got)
     for name, r in got.items():
         assert r["free"], "%s: module not free 2.5 s after the stream stopped" % name
@@ -881,13 +949,13 @@ def test_dcs_stream_timeout(rig):
 
 
 def after_last_probe(ip):
-    talker, listener = Gw(TALKER), Gw(LISTENER)
+    talker, listener = Gw("STR011"), Gw(LISTENER)
     try:
         ready(ip, talker, listener)
         voice, sid = talk(talker, listener, wait=0.2)
         clear(listener)
         extra = dcs.stream_packets(sid, frames(10, seed="after"), start=len(voice) + 1, last=False,
-                                   callsign=TALKER, module=MOD)
+                                   callsign="STR011", module=MOD)
         send(talker, extra, listener)
         return {"heard_after_last": len(voice_frames(listener))}
     finally:
@@ -897,7 +965,8 @@ def after_last_probe(ip):
 def test_dcs_voice_after_last(rig):
     """P-DCS-40 (dev): packets with the id of a stream that just ended:
     frames heard recorded."""
-    got = both(rig, after_last_probe)
+    with marked(rig, "dcs-after-last"):
+        got = both(rig, after_last_probe)
     print("P-DCS-40 voice after last:", got)
     judge_dev(rig, "P-DCS-40", got, "heard_after_last")
 
@@ -990,6 +1059,7 @@ def test_dcs_two_modules_one_port(rig):
     """P-DCS-43 (dev): two modules linked from one ip:port; traffic per
     module and the effect of unlinking one are recorded (recommended:
     J and K heard, after unlinking B only J)."""
-    got = both(rig, two_modules_probe)
+    with marked(rig, "dcs-two-modules"):
+        got = both(rig, two_modules_probe)
     print("P-DCS-43 two modules, one port:", got)
     judge_dev(rig, "P-DCS-43", got, "second_ack", "hears_j", "hears_k", "j_after_unlink_b", "k_after_unlink_b")
