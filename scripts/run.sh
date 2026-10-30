@@ -106,6 +106,11 @@ case "${DVT_NO_RADIO_ID:-}" in
   ''|drop|fallback|local) ;;
   *) echo "run.sh: DVT_NO_RADIO_ID must be drop, fallback or local" >&2; exit 2 ;;
 esac
+# DVT_USRP_DYNAMIC=1: a prebuilt sut runs its dynamic USRP hub (DV_USRP_DYNAMIC)
+case "${DVT_USRP_DYNAMIC:-}" in
+  ''|1) ;;
+  *) echo "run.sh: DVT_USRP_DYNAMIC must be 1 or unset" >&2; exit 2 ;;
+esac
 # DVT_SUT_LAUNCH: how a prebuilt xlxd-sut image starts. direct = its own
 # entrypoint with "CALLSIGN OWN_IP TRANSCODER_IP"; import = through the
 # converter shim dv-xlxd-import --exec (DV-Router), same three words.
@@ -381,6 +386,8 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
     # DVT_USRP_IDLE_TIMEOUT_S: dynamic USRP idle timeout of the sut (unset = not written; xlxd ignores it)
     [ "$svc" != xlxd-sut ] || [ -z "${DVT_USRP_IDLE_TIMEOUT_S:-}" ] ||
       printf '      DV_USRP_IDLE_TIMEOUT_S: "%s"\n' "$DVT_USRP_IDLE_TIMEOUT_S"
+    # DVT_USRP_DYNAMIC=1: the sut runs its dynamic USRP hub (unset = not written; xlxd ignores it)
+    [ "$svc" != xlxd-sut ] || [ "${DVT_USRP_DYNAMIC:-}" != 1 ] || printf '      DV_USRP_DYNAMIC: "1"\n'
     # DVT_UNSERVED_MODULE: the sut serves every module but that one (xlxd ignores DV_ROOMS)
     [ "$svc" != xlxd-sut ] || [ -z "${DVT_UNSERVED_MODULE:-}" ] ||
       printf '      DV_ROOMS: "%s"\n' "$(dvt_rooms_without "$DVT_UNSERVED_MODULE")"

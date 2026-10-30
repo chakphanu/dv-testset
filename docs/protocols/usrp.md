@@ -84,7 +84,11 @@ Dynamic clients (section 5, `cases/proto/test_usrp_dynamic.py`): no
 server in the rig admits them. xlxd does not, and URFd does not either.
 Under the `xlxd` profile these cases skip with "xlxd has no dynamic USRP".
 Under another profile they run only when its `"usrp"` spec entry has
-`"dynamic_server": True`. Until then they skip with "edge not ready". Their
+`"dynamic_server": True`. Until then they skip with "edge not ready". They
+then talk to xlxd-sut on `SPEC["usrp"]["dynamic_port"]`, default 34001/udp.
+DVSwitch's own hub default, 12345 (Analog_Reflector `mobilePort`), is not
+used: it is Icom G3's fixed configuration port. On the rig a prebuilt sut
+runs the hub only with `DVT_USRP_DYNAMIC=1` (sets `DV_USRP_DYNAMIC`). Their
 dev items read `SPEC["usrp"]["P-USR-NN"]` as above. `DVT_USRP_DYNAMIC_HUB=<ip:port>` points the
 cases at any hub, and its dev items are then judged by
 `dvtest/usrp_hub.SPEC`. The unit test `cases/unit/test_usrp_dynamic_hub.py`

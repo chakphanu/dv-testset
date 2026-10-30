@@ -8,7 +8,7 @@ judges the dev items by dvtest/usrp_hub.SPEC (the fake hub the unit tests
 start). Otherwise the system under test: under the xlxd profile everything
 skips ("xlxd has no dynamic USRP"); under another profile the cases run
 only when its "usrp" spec has "dynamic_server": True ("edge not ready"
-until then), at xlxd-sut:<"dynamic_port", default 12345>, and the dev
+until then), at xlxd-sut:<"dynamic_port", default 34001>, and the dev
 items follow SPEC["usrp"]["P-USR-NN"]. conv items are asserted for every
 target.
 
@@ -63,7 +63,8 @@ def dyn(target):
                     % target.sut_profile)
     if not target.is_given("xlxd_sut"):
         pytest.skip("no system under test address (DVT_XLXD_SUT)")
-    return Dyn((target.xlxd_sut, int(rules.get("dynamic_port", 12345))), rules)
+    # 34001/udp: DV-Router's hub port (12345, DVSwitch's mobilePort, is Icom G3's fixed config port)
+    return Dyn((target.xlxd_sut, int(rules.get("dynamic_port", 34001))), rules)
 
 
 def judge_dev(dyn, nn, observed):
