@@ -1,21 +1,28 @@
 <!-- SPDX-License-Identifier: MIT -->
-# NXDN reflector network: obligations of a reflector peer (the NXDN edge)
+# NXDN reflector network: obligations of a peer and of a server
 
-What a system owes when it joins an NXDNReflector talkgroup as a peer
-over UDP (port 41400 by convention). This is how xlxd and DV-Router's
-`dv-edge-nxdn` speak NXDN: they poll an NXDNReflector like a repeater
-would, and the reflector relays between them and the real clients
-(NXDNGateway behind MMDVMHost, DroidStar, MMDVM_CM NXDN2DMR). Neither
-xlxd nor DV-Router serves NXDN clients directly (DV-Router
-`docs/design/deployment.md`, "Ports and edges"). So the "client side"
-contract is in two parts:
-- what the reflector accepts from a peer;
-- what the gateways and radios behind it accept in the payload the peer
-  originates (an NXDN air-interface call carried in 33 bytes).
+NXDN reflectors talk UDP (port 41400 by convention). A system can take
+part in two ways:
+
+- **Peer** (sections 1-3): it joins an NXDNReflector talkgroup and polls
+  it like a repeater would. The reflector relays between the peer and the
+  real clients (NXDNGateway behind MMDVMHost, DroidStar, MMDVM_CM
+  NXDN2DMR). xlxd works only this way, and so does DV-Router's
+  `dv-edge-nxdn` today. Here the "client side" contract has two parts:
+  - what the reflector accepts from a peer;
+  - what the gateways and radios behind it accept in the payload the peer
+    originates (an NXDN air-interface call carried in 33 bytes).
+- **Server** (section 4): it is the reflector, and NXDNGateway and
+  DroidStar link to it directly, as NXDNReflector and URFd do. DV-Router
+  will also serve this way (owner decision 2026-10-30). xlxd has no
+  server, so section 4 compares against NXDNReflector as the reference.
 
 Each item is numbered `P-NXD-NN`. The cases are in
-`cases/proto/test_nxdn_peer.py` (not `test_nxdn.py`: that basename is taken by `cases/test_nxdn.py`, and pytest without `__init__.py` cannot collect two); their testlist rows are at the end of this
-file.
+`cases/proto/test_nxdn_peer.py` (sections 1-3) and
+`cases/proto/test_nxdn_server.py` (section 4). They are not named
+`test_nxdn.py`: that basename is taken by `cases/test_nxdn.py`, and
+pytest cannot collect two files of the same name without
+`__init__.py`. Their testlist rows are at the end of this file.
 
 Every row says where an obligation comes from, in separate columns:
 - the spec text (version and section);
@@ -23,9 +30,11 @@ Every row says where an obligation comes from, in separate columns:
   commit, behaviour in our own words, no code copied);
 - what xlxd-ref does.
 
-The xlxd column was measured on the rig on 2026-10-30
-(`20261030T060312Z-i8`, all 32 cases passed, sut == ref on every row,
-both built from LX3JL xlxd `a978f03`).
+Measured on the rig on 2026-10-30:
+- the xlxd column: run `20261030T062727Z-i8`, all 45 cases passed, sut ==
+  ref on every row, both xlxd built from LX3JL xlxd `a978f03`;
+- section 4: the same run, NXDNReflector on both sides;
+- dvcheck: 0 errors (the probes run inside dvcheck mark windows).
 
 **Level** follows the same rules as `mmdvm.md`:
 - MUST / SHOULD only where a spec says so;
@@ -157,6 +166,43 @@ after the 10-byte NXDND header:
 | P-NXD-28 | A call whose trailer is lost ends after the silence timeout; the module is free and every egress gets a terminator | convention; timeout judged by B3 | [1-B] 4.1.3 (TX_REL); REF watchdog 1.5 s | MH network watchdog 1.5 s; DS 0.5 s | URFd ends by the 1.6 s stream timeout | measured: DMR terminator 0.7-0.8 s after the last voice; the next call routed | per B3 (spec) |
 | P-NXD-29 | The src id of an ingress call maps to a callsign from the NXDN id table for the other modes (D-STAR MY, DMR src); an unknown id gets a stable fallback | convention (impl, agreed for lookup) | none | GW and REF look up NXDN.csv for logs only | URFd uses its NXDN id database; CM maps to DMR ids | measured: 1001 -> MY N0CALL, DMR src 1023007; unknown 4242 -> MY N04242, DMR src 0 | as xlxd (diff) |
 
+## 4. Server: obligations toward gateways (NXDNGateway, DroidStar)
+
+The server is the reflector itself. Clients poll it, it relays between
+them on a talkgroup, and its egress payload follows section 2 (P-NXD-05
+to P-NXD-11, P-NXD-14 to P-NXD-16).
+
+`cases/proto/test_nxdn_server.py` plays several gateways against
+`DVT_NXDN_SUT` (the sut's server endpoint) and against `DVT_NXDN_REF`.
+`DVT_NXDN_REF` is an NXDNReflector, the reference server; xlxd has no
+server. Under the `xlxd` profile both addresses are the rig's
+NXDNReflectors, so the REF column was measured on a G4KLX reflector
+(nostar/DVReflectors behaviour) against itself.
+
+Judging:
+- **hb**: what every client needs; asserted on both sides.
+- **conv**: the clients' convention; asserted on the sut, ref recorded.
+- **dev**: disputed; under another profile, `SPEC["nxdn"]` decides.
+
+Under any profile other than `xlxd`, every server case skips with "edge
+not ready" until `SPEC["nxdn"]["server"]` is True.
+
+| # | Obligation | Level | Spec / paper | Clients (send / expect / tolerate) | Other servers | xlxd-ref observed | Recommended for DV-Router |
+|---|---|---|---|---|---|---|---|
+| P-NXD-31 | A poll `NXDNP` + callsign + TG (17 B) for a TG the server carries gets the identical 17 bytes back, once per poll; this registers the gateway (keyed by IP and port) | convention (impl, agreed); the echo: needed by DS | none | GW and CM poll every 5 s and ignore the echo; DS treats the first 17 B reply as "connected" and polls every 1 s after it (no reply: never connects) | REF echoes only its TG and keys by IP and port; URFd echoes any TG | n/a (no server); REF measured: identical echo, one reply | echo identically (hb) |
+| P-NXD-32 | A poll for a TG the server does not carry | disputed | none | GW finds the server through a hosts entry "TG host port", so one port may serve many TGs; DS shows "connecting" with no reply | REF: no reply, not registered; URFd: echo, and every TG goes to its auto-link module | n/a; REF measured: no reply | one TG per room from the config; an unknown TG gets no reply (dev) |
+| P-NXD-33 | A group call (dst = TG) from a registered gateway reaches every other gateway on that TG: header, all frames, trailer; dst = the TG that gateway linked to, group set, src kept | convention (impl: REF relays unchanged); dst = linked TG: needed by GW | [1-B] 4.1.3 (call sequence) | GW forwards to MMDVMHost only group packets with dst == its TG from the linked reflector's address; DS accepts any 43 B | REF relays the bytes unchanged; URFd rebuilds the packets with dst = its ReflectorID (GW drops them unless the TG equals that id) | n/a; REF measured: two listeners got header, 40/40 frames exact, trailer, dst TG, src kept | as REF; same-mode frames unchanged (hb) |
+| P-NXD-34 | `NXDNU` + callsign + TG removes the gateway at once; no reply | convention (impl, agreed) | none | GW sends 3 on TG change and hang expiry; DS 1 on disconnect | REF removes by address and TG; URFd by IP only | n/a; REF measured: no reply, 0 packets after the unlink | as REF (conv) |
+| P-NXD-35 | NXDND from an address that never polled is not relayed | convention (impl, agreed) | none | - | REF drops it and logs "unknown source"; URFd needs a client entry | n/a; REF measured: 0 packets relayed | as REF (hb) |
+| P-NXD-36 | The talking gateway gets nothing of its own call back | convention (impl, agreed) | none | GW and DS would replay it | REF skips the sender address; URFd skips the streaming client | n/a; REF measured: 0 | as REF (hb, in P-NXD-33) |
+| P-NXD-37 | Individual calls, and group calls to another TG, from a registered gateway are not relayed | convention (REF) | [1-A] 6.5.12 | GW sends whatever its RF side sends; GW drops dst != TG on receive | REF drops both; URFd checks neither | n/a; REF measured: not relayed | as REF (conv) |
+| P-NXD-38 | Two gateways talk at once: one winner, no mixing | disputed; judged by B1 | none | MH plays the first call and drops VCALL during it, but takes voice from both | REF relays both (it does not enforce one source among repeaters); URFd shares one stream id for all NXDN clients | n/a; REF measured: listener got both talkers' voice (mixed) | B1: first talker wins (dev) |
+| P-NXD-39 | A call without a trailer ends after a silence timeout; listeners get a trailer; the next call is relayed | trailer: disputed; judged by B3 | [1-B] 4.1.3 | MH watchdog 1.5 s, DS 0.5 s (both cope without a trailer) | REF: watchdog 1.5 s, sends nothing; URFd: stream timeout 1.6 s | n/a; REF measured: no trailer; next call relayed | synthesize TX_REL at the timeout (B3, dev) |
+| P-NXD-40 | Non-NXDN, short, long and unknown-tag packets get no reply; the gateway stays registered | convention (impl, agreed) | none | - | REF reads only "NXDN" + 17 or 43 B; URFd similar | n/a; REF measured: no reply, still relayed | as REF (conv) |
+| P-NXD-41 | The server sends no polls of its own and does not relay one gateway's polls to another | convention (impl, agreed) | none | GW and DS poll; neither expects server polls | REF, URFd: none | n/a; REF measured: 0 packets to an idle gateway in 11 s | as REF (conv) |
+| P-NXD-42 | Data frames (flags 0x02, LICH 0x9X) from a gateway | disputed | [1-A] 5.2.1 (UDCH) | MH sends and plays NXDN data; GW forwards it | REF relays it unchanged (group, dst = TG); URFd parses it as voice | n/a; REF measured: relayed | relay NXDN-to-NXDN unchanged, never into other modes (dev) |
+| P-NXD-43 | A gateway that stops polling is dropped after a timeout, and then gets no traffic | timeout: disputed | none | GW polls every 5 s, CM every 5 s, DS every 1 s | REF 120 s; URFd 30 s | n/a; REF measured: still served after 35 s, dropped by 130 s | 120 s, as REF (dev) |
+
 ## Recommendations that differ from xlxd
 
 | # | xlxd | Recommended | Why |
@@ -219,3 +265,16 @@ The rig has it (profile nxdn): `NX31673 <tester>:41410 I` on xlxd-ref and
 | P-NXD-27 | Two talkers through the reflector: one winner, no mixing | test_nxdn_peer::test_nxdn_two_talkers | spec (B1) | probe | covered |
 | P-NXD-28 | Lost trailer: timeout frees the module, terminators sent | test_nxdn_peer::test_nxdn_lost_trailer_timeout | spec (B3) | probe | covered |
 | P-NXD-29 | Ingress src id -> callsign for other modes | test_nxdn_peer::test_nxdn_ingress_src_mapping | diff | probe | covered |
+| P-NXD-31 | Poll echoed identically; registers the gateway | test_nxdn_server::test_nxdn_server_poll_echo | hb | probe | covered |
+| P-NXD-32 | Poll for a TG the server does not carry | test_nxdn_server::test_nxdn_server_poll_other_tg | dev | probe | covered |
+| P-NXD-33 | Group call relayed to every other gateway; dst = TG, frames unchanged; no echo (P-NXD-36) | test_nxdn_server::test_nxdn_server_relay | hb | probe + dvcheck | covered |
+| P-NXD-34 | NXDNU removes the gateway, no reply | test_nxdn_server::test_nxdn_server_unlink | conv | probe | covered |
+| P-NXD-35 | NXDND from an unregistered address not relayed | test_nxdn_server::test_nxdn_server_unknown_source | hb | probe | covered |
+| P-NXD-36 | No echo to the talking gateway | test_nxdn_server::test_nxdn_server_relay | hb | probe | covered |
+| P-NXD-37 | Individual / other-TG calls not relayed | test_nxdn_server::test_nxdn_server_private_or_other_tg[private\|other_tg] | conv | probe | covered |
+| P-NXD-38 | Two talkers: one winner, no mixing | test_nxdn_server::test_nxdn_server_two_talkers | spec (B1) | probe | covered |
+| P-NXD-39 | Lost trailer: trailer synthesized, next call relayed | test_nxdn_server::test_nxdn_server_lost_trailer | spec (B3) | probe | covered |
+| P-NXD-40 | Garbage ignored, gateway stays | test_nxdn_server::test_nxdn_server_garbage_ignored | conv | probe | covered |
+| P-NXD-41 | No server polls, polls not relayed | test_nxdn_server::test_nxdn_server_no_unsolicited | conv | probe | covered |
+| P-NXD-42 | Data frames relayed or dropped | test_nxdn_server::test_nxdn_server_data_frames | dev | probe | covered |
+| P-NXD-43 | Silent gateway dropped after the timeout | test_nxdn_server::test_nxdn_server_client_expiry | dev | probe | covered (slow) |

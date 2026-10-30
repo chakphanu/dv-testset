@@ -195,6 +195,9 @@ SPEC = {
     # NXDN peer dev items (docs/protocols/nxdn.md), DV-Router choices
     # 2026-10-30. Client-serving NXDN (UDP 41400) is not built yet.
     "nxdn": {
+        # client-serving NXDN (UDP 41400) not built yet: server cases skip
+        # "edge not ready" until this is True
+        "server": False,
         "P-NXD-03": {"keeps_polling": True, "routed_during_loss": False, "resumed": True},
         # NXDNU x3 on peer removal and shutdown
         "P-NXD-04": {"unlink": True},

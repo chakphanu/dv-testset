@@ -22,6 +22,7 @@ import json
 import os
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -112,6 +113,29 @@ def judge_dev(rig, nn, got, *keys):
     pending = [key for key in keys if key not in entry]
     if pending:
         pytest.skip("spec pending: no nxdn %s %s entry in dvtest/specs/%s.py" % (nn, pending, rig.sut_profile))
+
+
+def mark(rig, phase, tag):
+    """dvcheck mark window around deliberate probe traffic (no-op without
+    the control channel)."""
+    if os.environ.get("DVT_RIG_CONTROL") != "1":
+        return
+    directory = Path(rig.out) / "control"
+    name = "nxdn-mark-%d-%d" % (os.getpid(), time.monotonic_ns())
+    (directory / (name + ".tmp")).write_text("mark %s %s\n" % (phase, tag))
+    (directory / (name + ".tmp")).rename(directory / (name + ".req"))
+    deadline = time.monotonic() + 5
+    while not (directory / (name + ".ack")).exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+
+def marked(rig, tag, sides, func, *args):
+    """both() inside a dvcheck mark window."""
+    mark(rig, "begin", tag)
+    try:
+        return both(sides, func, *args)
+    finally:
+        mark(rig, "end", tag)
 
 
 def same(got, *keys):
@@ -544,7 +568,7 @@ def test_nxdn_garbage_ignored(peer):
         got = ingress(side, nxdn.stream_packets(sent, GW_IDS[0], side.probe_tg), via="probe")
         return {"frames": len(got["_frames"])}
 
-    got = both(peer["sides"], run)
+    got = marked(peer["rig"], "nxdn-garbage", peer["sides"], run)
     same(got, "frames")
 
 
@@ -573,7 +597,7 @@ def test_nxdn_ingress_late_entry(peer):
         got = ingress(side, nxdn.stream_packets(sent, GW_IDS[0], side.tg, header=False))
         return {"late_entry": len(got["_frames"]) > 0, "frames": len(got["_frames"])}
 
-    judge_dev(peer["rig"], "P-NXD-20", both(peer["sides"], run), "late_entry")
+    judge_dev(peer["rig"], "P-NXD-20", marked(peer["rig"], "nxdn-late-entry", peer["sides"], run), "late_entry")
 
 
 def test_nxdn_ingress_repeated_header(peer):
@@ -589,7 +613,7 @@ def test_nxdn_ingress_repeated_header(peer):
         return {"whole": len(got["_frames"]) == FRAMES, "frames": len(got["_frames"]),
                 "headers": sum(k == "header" for _, k, _ in rx)}
 
-    got = both(peer["sides"], run)
+    got = marked(peer["rig"], "nxdn-repeated-header", peer["sides"], run)
     same(got, "whole", "headers")
     assert got["sut"]["whole"], got
 
@@ -607,7 +631,7 @@ def test_nxdn_ingress_repeated_trailer(peer):
         return {"frames": len(got["_frames"]), "headers": sum(k == "header" for _, k, _ in rx),
                 "terminators": sum(k == "terminator" for _, k, _ in rx)}
 
-    got = both(peer["sides"], run)
+    got = marked(peer["rig"], "nxdn-repeated-trailer", peer["sides"], run)
     same(got, "frames", "headers", "terminators")
 
 
@@ -629,7 +653,7 @@ def test_nxdn_ingress_steal(peer):
         return {"frames": len(heard), "facch_as_voice": any(nxdn.without_gain(f) in
                                                           {nxdn.without_gain(s) for s in stolen} for f in heard)}
 
-    judge_dev(peer["rig"], "P-NXD-23", both(peer["sides"], run), "facch_as_voice", "frames")
+    judge_dev(peer["rig"], "P-NXD-23", marked(peer["rig"], "nxdn-steal", peer["sides"], run), "facch_as_voice", "frames")
 
 
 def test_nxdn_ingress_data(peer):
@@ -639,7 +663,7 @@ def test_nxdn_ingress_data(peer):
         got = ingress(side, packets)
         return {"dmr_packets": len(got["_rx"])}
 
-    got = both(peer["sides"], run)
+    got = marked(peer["rig"], "nxdn-data", peer["sides"], run)
     for name in ("ref", "sut"):
         assert got[name]["dmr_packets"] == 0, (name, got[name])
 
@@ -659,7 +683,7 @@ def test_nxdn_ingress_private_or_other_tg(peer, what):
         got = ingress(side, packets, via="probe")
         return {"routed": len(got["_frames"]) > 0, "frames": len(got["_frames"])}
 
-    judge_dev(peer["rig"], "P-NXD-25", both(peer["sides"], run), "routed")
+    judge_dev(peer["rig"], "P-NXD-25", marked(peer["rig"], "nxdn-private-other-tg", peer["sides"], run), "routed")
 
 
 def test_nxdn_ingress_encrypted(peer):
@@ -670,7 +694,7 @@ def test_nxdn_ingress_encrypted(peer):
         got = ingress(side, nxdn.stream_packets(sent, GW_IDS[0], side.tg, cipher=1, key=1))
         return {"routed": len(got["_frames"]) > 0, "frames": len(got["_frames"])}
 
-    judge_dev(peer["rig"], "P-NXD-26", both(peer["sides"], run), "routed")
+    judge_dev(peer["rig"], "P-NXD-26", marked(peer["rig"], "nxdn-encrypted", peer["sides"], run), "routed")
 
 
 def test_nxdn_two_talkers(peer):
@@ -703,7 +727,7 @@ def test_nxdn_two_talkers(peer):
         finally:
             close(ga, gb, listener)
 
-    judge_dev(peer["rig"], "P-NXD-27", both(peer["sides"], run), "mixed")
+    judge_dev(peer["rig"], "P-NXD-27", marked(peer["rig"], "nxdn-two-talkers", peer["sides"], run), "mixed")
 
 
 def test_nxdn_lost_trailer_timeout(peer):
@@ -729,7 +753,7 @@ def test_nxdn_lost_trailer_timeout(peer):
         finally:
             close(g1, g2, listener)
 
-    judge_dev(peer["rig"], "P-NXD-28", both(peer["sides"], run), "terminator", "freed")
+    judge_dev(peer["rig"], "P-NXD-28", marked(peer["rig"], "nxdn-lost-trailer", peer["sides"], run), "terminator", "freed")
 
 
 def test_nxdn_ingress_src_mapping(peer):
@@ -790,7 +814,7 @@ def test_nxdn_reflector_loss_relink(peer):
         return {"keeps_polling": polls >= 6, "polls": polls, "routed_during_loss": during > 0,
                 "resumed": resumed_s is not None, "resumed_s": resumed_s}
 
-    judge_dev(peer["rig"], "P-NXD-03", both(peer["sides"], run), "keeps_polling", "routed_during_loss", "resumed")
+    judge_dev(peer["rig"], "P-NXD-03", marked(peer["rig"], "nxdn-reflector-loss", peer["sides"], run), "keeps_polling", "routed_during_loss", "resumed")
 
 
 @pytest.mark.slow
