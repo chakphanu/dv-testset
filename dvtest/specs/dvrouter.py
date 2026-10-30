@@ -275,6 +275,46 @@ SPEC = {
         # no M17 interlink / peer CONN support for now
         "P-M17-44": {"reply": "none"},
     },
+    # DExtra dev items (docs/protocols/dextra.md), DV-Router choices
+    # 2026-10-30. Reflector name "XRF" + the callsign digits (XRF999 in the
+    # rig, as on ref: P-DXT-07 / P-DXT-37 compare bytes with xlxd). No
+    # DExtra / XRF peer links in this version (P-DXT-50/51).
+    "dextra": {
+        # DroidStar links once and never retries: ACK at once
+        "P-DXT-02": {"acked": True, "delayed": False},
+        "P-DXT-04": {"reply": "nak", "linked": False},
+        # IG / DStarGateway send each link twice, QnetGateway 5x
+        "P-DXT-06": {"second_reply": "ack", "once": True},
+        "P-DXT-07": {"period": 10},
+        "P-DXT-08": {"echo_kept": False, "own_kept": True},
+        # URFd-form unlink notice on the timeout (IG / QnetGateway ignore it)
+        "P-DXT-09": {"dropped": True, "notice": "unlink"},
+        # the talker's unlink mid-stream ends the stream and removes it
+        "P-DXT-14": {"end_marker": True, "still_linked": False, "next_heard": True},
+        "P-DXT-17": {"relayed_byte8": False, "relayed_byte14": True, "relayed_ids": True},
+        "P-DXT-21": {"relayed_my": False, "relayed_rpt1": True, "relayed_rpt2": True},
+        "P-DXT-22": {"flags": "400102"},
+        "P-DXT-26": {"relayed": True},
+        # same-mode: the received counter is passed unchanged
+        "P-DXT-31": {"exact": True, "egress_mod21": False},
+        "P-DXT-33": {"passed": True, "jarl_end": False, "pre_last_kept": True},
+        "P-DXT-36": {"linked_heard": True, "rpt2_heard": False},
+        "P-DXT-37": {"rpt1": "N0CALL P", "ur": "CQCQCQ  ", "my": "N0CALL  ", "suffix": "    "},
+        # a second link from the same address is a module change
+        "P-DXT-39": {"second_reply": "ack", "hears_first": False, "hears_second": True,
+                     "after_unlink": [False, False]},
+        "P-DXT-42": {"relayed": False},
+        # a late joiner gets the running header first
+        "P-DXT-44": {"header_first": True, "got_voice": True},
+        "P-DXT-45": {"copies": 5, "later": 0},
+        "P-DXT-48": {"first_once": True, "second_once": True},
+        "P-DXT-50": {"reply": "nak", "unlink_reply": None},
+        "P-DXT-51": {"linked_heard": False, "rpt2_heard": False},
+        "P-DXT-52": {"reply": None, "heard": False},
+        # unlink with the client's own stream open: revoke at once (B5)
+        "P-DXT-54": {"keepalives_after_unlink": 0, "new_stream_heard": False, "header_heard": False,
+                     "voice_heard": 0},
+    },
 }
 
 # B12: header fields DV-Router does not verify, because the tester (like
