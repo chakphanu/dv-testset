@@ -42,6 +42,7 @@ keepalive timeout through the control channel and started again. With
 --capture, xlxd-sut.pcapng holds the CAPS requests of both connections.
 """
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -121,7 +122,9 @@ def _inside(spec, run_dir):
 
     fake = start_fake(spec["mode"])
     log = open(run_dir / "xlxd.log", "wb")
+    # DV_RUN_DIR: a DV-Router keeps its run state here (xlxd ignores it)
     xlxd = subprocess.Popen([spec["bin"], "XLX999", XLXD_IP, AMBED_IP], cwd=run_dir,
+                            env=dict(os.environ, DV_RUN_DIR=str(run_dir)),
                             stdout=log, stderr=subprocess.STDOUT, preexec_fn=die_with_parent)
     result = {"phases": [], "usrp_rx": [], "dextra_ack": [], "up_pinged": [],
               "listen_ack": [], "dstar_rx": []}

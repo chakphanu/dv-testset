@@ -13,6 +13,7 @@ DVT_XLXD_REF_BIN (e.g. upstream master, same patch) adds a byte-equality
 check of the transcoder link without xlxd.usrp.
 """
 import json
+import os
 import subprocess
 import sys
 import time
@@ -67,7 +68,9 @@ def _inside(spec, run_dir):
     fake = ambed.FakeAmbed(AMBED_IP, mode=spec["mode"], max_outputs=spec["max_outputs"],
                            open_delay=spec["open_delay"])
     log = open(run_dir / "xlxd.log", "wb")
+    # DV_RUN_DIR: a DV-Router keeps its run state here (xlxd ignores it)
     xlxd = subprocess.Popen([spec["bin"], "XLX999", XLXD_IP, AMBED_IP], cwd=run_dir,
+                            env=dict(os.environ, DV_RUN_DIR=str(run_dir)),
                             stdout=log, stderr=subprocess.STDOUT, preexec_fn=die_with_parent)
     result = {"phases": [], "usrp_rx": [], "dextra_ack": []}
     lock = threading.Lock()
