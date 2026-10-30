@@ -340,3 +340,36 @@ def test_run_setting(tmp_path):
     assert check.run_setting(str(tmp_path), "ref_kind") == "urfd"
     assert check.run_setting(str(tmp_path), "nope") is None
     assert check.run_setting(str(tmp_path / "missing"), "ref_kind") is None
+
+
+def ipv6_mdns(payload=b"mdns"):
+    """Ethernet + IPv6 + UDP link-local mDNS datagram (fe80::1 -> ff02::fb)."""
+    import struct
+    udp = struct.pack(">HHHH", 5353, 5353, 8 + len(payload), 0) + payload
+    src, dst = bytes.fromhex("fe800000000000000000000000000001"), bytes.fromhex("ff0200000000000000000000000000fb")
+    ip = struct.pack(">IHBB", 6 << 28, len(udp), 17, 255) + src + dst + udp
+    return b"\x33\x33\x00\x00\x00\xfb\x02\x00\x00\x00\x00\x01\x86\xdd" + ip
+
+
+def test_idle_segment_is_not_a_wrong_subnet(tmp_path):
+    """A numbered segment of a freshly restarted service may hold only IPv6
+    link-local or loopback noise: idle, no error. IPv4 traffic with none of
+    it in the rig subnet is still the wrong-subnet error."""
+    rig = check.rig_config("172.30.0.0/24")
+    v6 = tmp_path / "transcoder-sut.3.pcapng"
+    pcap.write(v6, [(1000.0 + i, ipv6_mdns()) for i in range(15)])
+    result = check.check_file(str(v6), rig)
+    assert result["idle"] and result["errors"] == 0 and result["read"]["udp"] == 15
+    assert "idle (no routable IPv4 traffic" in check.summary_lines(result)[0]
+    lo = Wire()
+    lo.send("127.0.0.1", 40000, "127.0.0.1", 40001, b"local")
+    result = check.check_file(lo.save(tmp_path / "transcoder-sut.4.pcapng"), rig)
+    assert result["idle"] and result["errors"] == 0
+    foreign = Wire()
+    foreign.send("192.0.2.5", 10100, "192.0.2.6", 10100, b"AMBEDPINGXLX999  ")
+    with pytest.raises(pcap.CaptureError):
+        check.check_file(foreign.save(tmp_path / "transcoder-sut.5.pcapng"), rig)
+    busy = Wire()
+    busy.send("172.30.0.11", 10100, "172.30.0.21", 10100, b"AMBEDPINGXLX999  ")
+    busy.rows.append((busy.t + 0.1, ipv6_mdns()))
+    assert "idle" not in check.check_file(busy.save(tmp_path / "transcoder-sut.pcapng"), rig)

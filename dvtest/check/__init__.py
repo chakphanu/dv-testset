@@ -264,6 +264,16 @@ def share_passthrough(results):
                 f["message"] += " " + tag
 
 
+def _routable_v4(ip):
+    """An IPv4 address that is not loopback (multicast and broadcast count:
+    their sender is a rig host)."""
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return a.version == 4 and not a.is_loopback
+
+
 def _in(ip, net):
     try:
         return ipaddress.ip_address(ip) in net
@@ -286,12 +296,17 @@ def check_file(path, rig=None, jitter_ms=None, windows=()):
     datagrams = list(pcap.udp_datagrams(path, stats))
     stem = os.path.basename(path).split(".")[0]
     own = None
+    idle = False
     if rig and rig["hosts"].get(RIG_FILES.get(stem)):
         own = rig["hosts"][RIG_FILES[stem]]
         net = ipaddress.ip_network(rig["subnet"])
-        if datagrams and not any(_in(a, net) for d in datagrams for a in (d.src, d.dst)):
-            # an idle service only sees bridge noise, but some of it is
-            # from the rig subnet; none at all means the subnet is wrong
+        # an idle service only sees bridge noise, some of it from the rig
+        # subnet; IPv4 traffic with none of it in the subnet means the subnet
+        # is wrong. No routable IPv4 at all (a fresh namespace sends only
+        # IPv6 link-local or loopback noise) is an idle segment, not an error.
+        v4 = [a for d in datagrams for a in (d.src, d.dst) if _routable_v4(a)]
+        idle = not v4
+        if v4 and not any(_in(a, net) for a in v4):
             raise pcap.CaptureError("no datagram of %s touches the rig subnet %s; wrong DVT_SUBNET?" % (
                 stem, rig["subnet"]))
     if own is None:
@@ -349,11 +364,14 @@ def check_file(path, rig=None, jitter_ms=None, windows=()):
         out["flows"] = dict(p["flows"])
         out["kinds"] = dict(p["kinds"])
         protocols[name] = out
-    return {"file": path, "own": own, "read": stats, "foreign": foreign, "multicast": multicast,
-            "other": dict(other), "protocols": protocols,
-            "errors": sum(1 for f in report.findings if f.severity == ERROR),
-            "warnings": sum(1 for f in report.findings if f.severity == WARN),
-            "findings": [f._asdict() for f in report.findings]}
+    result = {"file": path, "own": own, "read": stats, "foreign": foreign, "multicast": multicast,
+              "other": dict(other), "protocols": protocols,
+              "errors": sum(1 for f in report.findings if f.severity == ERROR),
+              "warnings": sum(1 for f in report.findings if f.severity == WARN),
+              "findings": [f._asdict() for f in report.findings]}
+    if idle:
+        result["idle"] = True
+    return result
 
 
 # Codes whose sut-only occurrence needs a precondition on the reference
@@ -578,7 +596,8 @@ def summary_lines(result, per_code=3):
     lines.append("%s: %d packets, %d udp, own %s, foreign %d, multicast %d, unclassified %d%s" % (
         os.path.basename(result["file"]), read.get("packets", 0), read.get("udp", 0), result["own"],
         result["foreign"], result["multicast"], sum(result["other"].values()),
-        "".join(", %s %d" % (k, v) for k, v in sorted(read.items()) if k not in ("packets", "udp", "non_udp", "non_ip"))))
+        "".join(", %s %d" % (k, v) for k, v in sorted(read.items()) if k not in ("packets", "udp", "non_udp", "non_ip"))
+        + (", idle (no routable IPv4 traffic: nothing to check)" if result.get("idle") else "")))
     by_proto = Counter()
     for f in result["findings"]:
         by_proto[(f["protocol"], f["severity"])] += 1
