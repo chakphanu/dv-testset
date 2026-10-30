@@ -32,6 +32,22 @@ GAP = 0.040                                     # one packet per 40 ms
 CACHE = 1.2                                     # xlxd refreshes its module client list once per second
 TAIL = 0.8
 DESIGNATION = "M17-DVT"                         # a reflector designation as M17Gateway hosts files write it
+# Destination of the relay probes: broadcast (the spec's form, accepted by
+# xlxd and mrefd). URFd routes by the destination's module letter and drops
+# destinations that are not a callsign (broadcast, M17-xxx): with
+# DVT_REF_KIND=urfd the probes address "XLX999 <module>" (module at
+# position 8) so the other rows can be compared at all; P-M17-24/36 still
+# probe every form.
+STREAM_DST = {"urfd": False}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _ref_kind(rig):
+    STREAM_DST["urfd"] = rig.ref_kind == "urfd"
+
+
+def default_dst(module):
+    return "XLX999 " + module if STREAM_DST["urfd"] else None
 
 
 def both(rig, func, *args):
@@ -201,6 +217,7 @@ def stream(c, sid=None, n=FRAMES, fn0=0, last=True, seed=None, **fields):
     are PRNG bytes unique to the stream id unless seed is given."""
     sid = sid or clients.fresh_stream_id("m17")
     fields.setdefault("src", c.callsign)
+    fields.setdefault("dst", default_dst(c.module))
     data = payloads(n, seed or "m17conf-%d" % sid)
     return [m17.stream_packet(sid, fn0 + i, data[i], last=last and i == n - 1, **fields) for i in range(n)]
 
@@ -724,6 +741,7 @@ DESTINATIONS = {
     "designation": DESIGNATION + " " + MOD,
     "designation_other_module": DESIGNATION + " " + OTHER,
     "reflector": "XLX999  " + MOD,
+    "reflector8": "XLX999 " + MOD,
     "callsign": "N0TEST",
 }
 
