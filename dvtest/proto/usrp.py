@@ -129,3 +129,33 @@ def text_set_info(seq, callsign, pad=True, **ids):
 def ping(seq, pad=False):
     """PING (type 3, payload "PING"): pyUC sends it unpadded as a NAT keepalive."""
     return frame_le(seq, TYPE_PING, b"PING", pad=pad)
+
+
+# ---- DVSwitch client session (dynamic clients, docs/protocols/usrp.md section 5)
+
+REG = b"REG:DVSWITCH"
+REG_OK = b"REG:OK"
+REG_UNREG = b"REG:UNREG"
+INFO = b"INFO:"
+
+
+def text(seq, payload, pad=False):
+    """TEXT frame (type 2 in host order); pyUC sends its REG/INFO texts unpadded."""
+    return frame_le(seq, TYPE_TEXT, payload, pad=pad)
+
+
+def text_payload(data):
+    """Payload of a TEXT frame up to the first NUL, or None for any other frame."""
+    if len(data) < HEADER_SIZE or not data.startswith(b"USRP") or type_le(data) != TYPE_TEXT:
+        return None
+    return data[HEADER_SIZE:].split(b"\0", 1)[0]
+
+
+def dtmf(seq, digits):
+    """DTMF frame (type 1) carrying a dial string, as pyUC tunes a TG."""
+    return frame_le(seq, TYPE_DTMF, digits.encode())
+
+
+def remote_cmd(seq, command):
+    """TLV frame (type 4) with REMOTE_CMD, e.g. "tgs=4001"."""
+    return frame_le(seq, TYPE_TLV, tlv(TLV_REMOTE_CMD, command.encode()))

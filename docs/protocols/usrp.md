@@ -80,6 +80,18 @@ types change:
   (`asterisk -rx "usrp show"` frame counters via the control channel), not
   against the tester.
 
+Dynamic clients (section 5, `cases/proto/test_usrp_dynamic.py`): no
+server in the rig admits them. xlxd does not, and URFd does not either.
+Under the `xlxd` profile these cases skip with "xlxd has no dynamic USRP".
+Under another profile they run only when its `"usrp"` spec entry has
+`"dynamic_server": True`. Until then they skip with "edge not ready". Their
+dev items read `SPEC["usrp"]["P-USR-NN"]` as above. `DVT_USRP_DYNAMIC_HUB=<ip:port>` points the
+cases at any hub, and its dev items are then judged by
+`dvtest/usrp_hub.SPEC`. The unit test `cases/unit/test_usrp_dynamic_hub.py`
+starts `dvtest.usrp_hub.FakeHub`, a hub that does what this section
+recommends, and runs all 15 cases against it end to end. That proves the
+cases before a real dynamic server exists.
+
 Conventions: "USRP" (4 bytes) followed by seven 32-bit fields: seq, memory,
 keyup, talkgroup, type, mpxid, reserved (32-byte header). seq and keyup are
 big endian everywhere. `type` is written in host order (little endian) by
@@ -132,6 +144,49 @@ every implementation that sends a non-zero type (so TEXT = bytes 20-23
 |---|---|---|---|---|---|---|---|
 | P-USR-25 | An over from a digital client reaches app_rpt: chan_usrp's read counter rises by the frames sent, and it reports no wrong-size frames | convention (client) | [ASLDOC] rxchannel = USRP/ip:port:port | ASL3 (the rig node) | - | measured 2026-10-30 (i2): 50 frames sent -> chan_usrp Read +51 (incl. unkey) | as stated |
 | P-USR-26 | An over from app_rpt (localplay on node 1901) opens a stream on module A and ends with the single unkey | convention (client) | [ASLDOC] | ASL3 (the rig node) | - | measured 2026-10-30 (i2): chan_usrp Write +71 -> one D-STAR stream of 71 frames, ended | as stated |
+
+## 5. Dynamic clients (no configured row)
+
+A dynamic client is a USRP client the server has no configured row for:
+DVSwitch Mobile (DVSM, Android), pyUC and qtUC. These clients were built
+to talk to a DVSwitch hub, Analog_Bridge or, since 2021, Analog_Reflector.
+They open the session themselves from wherever they are, often from
+behind NAT. No document specifies this exchange. pyUC's source is the
+only open description. DVSM is closed source, and its two guides describe
+only its settings. Of the reflectors, URFd admits no dynamic client:
+its USRP clients come only from configuration and must match ip:TxPort
+exactly. xlxd has none either (column "n/a"). The one open reflector
+found that admits unknown senders is rusrp, which takes them on their
+first packet with no reply.
+
+Additional sources for this section:
+
+| Key | Source (version / commit, date) | Role |
+|---|---|---|
+| QTUC | https://github.com/greythane/qtUC @ `79461d0` (2021-08-20) | client: pyUC-derived; corroborates pyUC's exchange |
+| DVSMG | "DVSM DVSwitch Mobile Installation and Setup", revised 2020-02-17 (app v1.53), https://dvswitch.org/Documents/DVSM_02_17_2020.pdf | official DVSM guide (USRP account fields) |
+| DVSIG | "DVSwitch Installation and User Guide" v1.61 (2020-11-14), https://dvswitch.org/Documents/DVSwitch%20Installation%20and%20User%20Guide%20v1.61.pdf, appendix A (DVSM) and B (pyUC) | official guide |
+| ARDOC | "The DVSwitch Analog_Reflector and DVSwitch HTML Client (hUC)", document version 0.13, https://dvswitch.org/Analog%20Reflector/Analog_Reflector.html; config https://github.com/DVSwitch/Analog_Reflector @ `b63717b` | official hub doc: AR took over "servicing analog clients" from Analog_Bridge |
+| PLAY | Google Play listing `org.dvswitch` "DVSwitch Mobile" (updated 2026-09-04) | app description: IAX and USRP accounts, registration tones, automatic reconnect |
+| RUSRP | https://github.com/n0mjs710/rusrp @ `2af46444` (2026-08-06), `src/reflector.c` | other server: open USRP reflector, admits on first packet |
+| SVXU | https://github.com/dl1hrc/svxlink branch svxlink-usrp @ `769d39b`, `usrp_protocol.txt` | third party: notes made from Analog_Bridge 1.6.2 packet dumps (not normative) |
+
+| # | Obligation | Level | Spec / paper | Clients (send / expect / tolerate) | Other servers | xlxd | Recommended for DV-Router |
+|---|---|---|---|---|---|---|---|
+| P-USR-27 | A new sender that registers with TEXT "REG:DVSWITCH" is admitted and gets TEXT "REG:OK" back | convention (DVSwitch clients) | none | PYUC/QTUC send "REG:DVSWITCH" (TEXT, unpadded) at start and keep their Transmit button disabled until "REG:OK" arrives (PYUC L462-470, L1257); without it a user cannot talk; no retry timer (re-sent on Connect); DVSM: wire exchange not documented, the guides show a "registration" status and tone | URFd, rusrp: never answer (URFd ignores unknown senders; rusrp admits silently) | n/a | admit and answer "REG:OK" (TEXT, type 2 in host order) |
+| P-USR-28 | Everything for a dynamic client goes to the source ip:port of its datagrams | convention (client constraint) | none | PYUC with equal rx/tx ports (the default) sends from an ephemeral port and binds nothing (L325-337), so only replies to the source port arrive; DVSM is used behind carrier NAT (guides forward only the server port); PYUC and QTUC also adopt the source IP of anything they receive | rusrp replies to the source ip:port; URFd sends to the configured ip:TxPort only | n/a | source ip:port, learned per datagram from a registered client |
+| P-USR-29 | Voice from an unknown address that never registered | disputed | none | PYUC in `aslMode` skips REG (meant for chan_usrp peers); ASL3 never registers (it needs a configured row) | rusrp admits it; URFd, XPR drop it; AR has `disallowUnknownClients` (unknown clients then receive only, or are disconnected) [ARDOC] | n/a (unknown senders dropped) | ignore (no stream) unless a row is configured; spec item |
+| P-USR-30 | "REG:UNREG" from a client ends its session (no further traffic to it) | convention (DVSwitch clients) | none | PYUC/QTUC send it on exit (L1471-1478) and treat a "REG:UNREG" from the hub as disconnected | rusrp: no such message (TTL only) | n/a | remove the client; send nothing more |
+| P-USR-31 | A registered client that goes silent is dropped after a timeout; it can register again at once | disputed (timeout) | none | PYUC sends PING (type 3, "PING") every 20 s only if `pingTimer` > 0 (default off, L245-248); otherwise an idle registered pyUC sends nothing; DVSM reconnects automatically (PLAY); on server exit AR sends every client an unregister and DVSM/hUC reconnect [ARDOC] | rusrp 30 s after the last packet; URFd never drops | n/a | drop after a long silence (spec item; must outlast a PING-less idle client, e.g. minutes), send "REG:UNREG" when dropping and on shutdown |
+| P-USR-32 | A PING from a registered client keeps it registered and gets no reply | convention (impl) | none | PYUC expects nothing back; it reads a hub PING whose seq follows the last voice seq as "missed end of transmission" (L558-564) | rusrp: any packet refreshes the TTL | n/a | refresh, no reply |
+| P-USR-33 | The client picks its module: DTMF dial string (and TLV REMOTE_CMD "tgs=" / "txTg=") | disputed (encoding) | none | PYUC sends REMOTE_CMD "tgs=<tg>" plus a DTMF packet carrying the dial string (TG digits, "<id>#" private, D-STAR "REF030CL"); mode change "*<MODE>" (DTMF) | URFd one fixed module for all USRP clients; rusrp one conference | n/a | dial string = module letter or 4001..4026 (A..Z, as the XLX DMR convention); confirm with "INFO:MSG:<text>"; spec item |
+| P-USR-34 | Module of a new client before it selects one | disputed | none | PYUC sends no selection until the user picks a TG | URFd: its configured module | n/a | none (receive nothing until a module is picked) or a configured default; spec item |
+| P-USR-35 | The client's SET_INFO (sent after "REG:OK") names it as talker | convention (DVSwitch clients) | none | PYUC/QTUC send SET_INFO (own DMR id + callsign, unpadded TEXT) once after REG:OK | URFd accepts SET_INFO from its configured client (callsign) | n/a | use its callsign (same as P-USR-18) |
+| P-USR-36 | Each call to a dynamic client starts with SET_INFO (talker callsign / ids) | convention (DVSwitch clients) | none | PYUC shows "call -> TG" from it and blocks its own TX until the call ends (a keyup-0 frame, or the PING rule), i.e. half duplex (L517-547); DVSM shows caller id | URFd sends a 352-byte SET_INFO before each stream (configured clients) | n/a | send SET_INFO (TEXT, padded to 352 B) before each call to a dynamic client; not to static ASL rows (P-USR-09) |
+| P-USR-37 | "INFO:" request | disputed (optional) | none | PYUC asks once after REG:OK and fills its mode box and "Connected to" from the JSON reply (keys `tlv.ambe_mode`, `last_tune`); it works without a reply | none answer | n/a | answer with a small JSON (current module); optional, spec item |
+| P-USR-38 | Several dynamic clients: each gets its module's streams once, never its own; one talker per module | convention (impl) | none | PYUC is half duplex and expects the hub to arbitrate | rusrp: first keyed sender holds the floor, no echo; AR: many clients share one resource | n/a | as stated (floor rules B1/B3, echo B9) |
+| P-USR-39 | Audio to a dynamic client is SLIN (type 0, 320 B) unless it asked otherwise | convention (impl) | none | PYUC plays only type 0 / 320 B; types 5/6 are defined but never played; DVSM "Codec Types" must stay "Server Selected" [DVSMG p.13] | URFd, rusrp SLIN (rusrp adds its own Opus type 7) | n/a | SLIN; ADPCM/ULAW only on request (out of scope) |
+| P-USR-40 | Admission limits: no authentication exists on the wire; a server bounds the client table and can refuse | disputed | none (XPR `docs/usrp.md`: "no login and no authentication") | identity is self-declared (SET_INFO); AR's user/password list covers hUC; how DVSM sends credentials over UDP is undocumented | rusrp 16 slots, full table blocks newcomers until TTL; AR rights mask (transmit, tune) | n/a | bounded table; refuse with "REG:UNREG" when full; optional callsign allow-list; spec item |
 
 ## Differences from xlxd (PR tree)
 
@@ -325,3 +380,17 @@ xlxd nor the rig AllStar node sends them; xlxd drops them on receive).
 | P-USR-24 | No fabricated PCM without a transcoder | test_backend_loss::test_usrp_pcm_not_fabricated (existing) | spec (B6) | probe | covered |
 | P-USR-25 | Digital over reaches app_rpt (chan_usrp read counter) | test_usrp::test_usrp_real_asl_receives | real | probe (control channel `asl usrp-show`) | covered |
 | P-USR-26 | app_rpt over opens and closes a stream on module A | test_usrp::test_usrp_real_asl_sends | real | probe (control channel `asl play-1901`) | covered |
+| P-USR-27 | REG:DVSWITCH admitted, REG:OK to the source | test_usrp_dynamic::test_usrp_dyn_register | conv | probe | covered (fake hub) |
+| P-USR-28 | Replies to the source ip:port (ephemeral port) | test_usrp_dynamic::test_usrp_dyn_reply_to_source | conv | probe | covered (fake hub) |
+| P-USR-29 | Unregistered voice from an unknown address | test_usrp_dynamic::test_usrp_dyn_unregistered_voice | dev | probe | covered (fake hub) |
+| P-USR-30 | REG:UNREG ends the session | test_usrp_dynamic::test_usrp_dyn_unregister | conv | probe | covered (fake hub) |
+| P-USR-31 | Silent registered client dropped after the timeout; re-register works | test_usrp_dynamic::test_usrp_dyn_idle_timeout | dev | probe | covered (fake hub; slow) |
+| P-USR-32 | PING keeps the client, no reply | test_usrp_dynamic::test_usrp_dyn_ping_keeps | conv | probe | covered (fake hub; slow) |
+| P-USR-33 | Module selection by dial string | test_usrp_dynamic::test_usrp_dyn_select_module[letter\|tg] | dev | probe | covered (fake hub) |
+| P-USR-34 | Module before any selection | test_usrp_dynamic::test_usrp_dyn_default_module | dev | probe | covered (fake hub) |
+| P-USR-35 | Client SET_INFO names the talker | test_usrp_dynamic::test_usrp_dyn_set_info_in | conv | probe | covered (fake hub) |
+| P-USR-36 | SET_INFO before each call to the client | test_usrp_dynamic::test_usrp_dyn_set_info_out | conv | probe | covered (fake hub) |
+| P-USR-37 | INFO: request | test_usrp_dynamic::test_usrp_dyn_info | dev | probe | covered (fake hub) |
+| P-USR-38 | Several dynamic clients: once each, no echo, one talker | test_usrp_dynamic::test_usrp_dyn_two_clients | conv | probe | covered (fake hub) |
+| P-USR-39 | SLIN to dynamic clients | test_usrp_dynamic::test_usrp_dyn_slin | conv | probe | covered (fake hub) |
+| P-USR-40 | Table bound: refusal when full | test_usrp_dynamic::test_usrp_dyn_table_full | dev | probe | covered (fake hub) |
