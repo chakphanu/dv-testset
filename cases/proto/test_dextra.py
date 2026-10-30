@@ -790,8 +790,11 @@ def test_dextra_header_prefix(rig, name):
     """P-DXT-17 (dev): header with byte 8 = 0x21, byte 14 = 0x00, or trunk
     ids 00 02 01 (IG default), voice unchanged: relayed or not."""
     got = both(rig, variant_probe, None, False, PREFIX[name], (rig, "p17-" + name))
-    print("P-DXT-17 %s:" % name, {n: {"relayed": r["relayed"]} for n, r in got.items()})
-    judge_dev(rig, "P-DXT-17", got, "relayed")
+    # one spec entry for all params: key per param (relayed_<name>)
+    key = "relayed_" + name
+    got = {n: dict(r, **{key: r["relayed"]}) for n, r in got.items()}
+    print("P-DXT-17 %s:" % name, {n: {key: r[key]} for n, r in got.items()})
+    judge_dev(rig, "P-DXT-17", got, key)
 
 
 # ---------------------------------------------------------------- standard stream (P-DXT-18, 20, 29, 30, 32, 35, 37, 43, 45-47)
@@ -987,8 +990,11 @@ INVALID_FIELDS = {"my": {"my": "n0call"}, "rpt1": {"rpt1": b"n0call P"}, "rpt2":
 def test_dextra_header_invalid_callsign(rig, name):
     """P-DXT-21 (dev): a header with lower-case MY, RPT1 or RPT2."""
     got = both(rig, variant_probe, INVALID_FIELDS[name], False, None, (rig, "p21-" + name))
-    print("P-DXT-21 %s:" % name, {n: {"relayed": r["relayed"]} for n, r in got.items()})
-    judge_dev(rig, "P-DXT-21", got, "relayed")
+    # one spec entry for all params: key per param (relayed_<name>)
+    key = "relayed_" + name
+    got = {n: dict(r, **{key: r["relayed"]}) for n, r in got.items()}
+    print("P-DXT-21 %s:" % name, {n: {key: r[key]} for n, r in got.items()})
+    judge_dev(rig, "P-DXT-21", got, key)
 
 
 def test_dextra_header_flags_passed(rig):
