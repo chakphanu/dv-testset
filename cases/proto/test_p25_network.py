@@ -645,7 +645,7 @@ def test_p25_egress_record_layout(chain, egress):
         "bad": sum(1 for d in e["call"]["raw"] if p25.parse(d) is None), "records": len(e["call"]["raw"])})
     print(got)
     assert got["ref"]["bad"] == 0
-    same(got, "bad", "records")
+    judge_dev(chain, "P-P25-20", got, "bad", "records")      # a sut may pad to whole LDUs (P-P25-24)
 
 
 def test_p25_egress_lcf(chain, egress):

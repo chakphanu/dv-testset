@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from dvtest import clients
+from dvtest import clients, specs
 from dvtest.audio import score, signals, tandem
 from dvtest.proto import ambed, dextra, dmr, iax2, m17, p25
 
@@ -249,9 +249,22 @@ def test_digital_to_p25(p25rig, tones, kind):
     for name in ("ref", "sut"):
         assert not row[name]["lifecycle"], "%s lifecycle: %s" % (name, row[name]["lifecycle"])
         assert row[name]["dst"] == [setup["tg"]], "%s: destination TG %s" % (name, row[name]["dst"])
-    keys = ("received", "sha256", "records", "whole_ldu", "src", "dst")
-    assert {k: row["sut"][k] for k in keys} == {k: row["ref"][k] for k in keys}, \
-        "sut differs from ref: %s" % row
+    if rig.sut_profile == specs.DEFAULT:
+        keys = ("received", "sha256", "records", "whole_ldu", "src", "dst")
+        assert {k: row["sut"][k] for k in keys} == {k: row["ref"][k] for k in keys}, \
+            "sut differs from ref: %s" % row
+        return
+    # a sut that pads to whole LDUs (P-P25-24) differs from xlxd by design:
+    # src/dst against the reference, the frame count and LDU shape by spec
+    assert (row["sut"]["src"], row["sut"]["dst"]) == (row["ref"]["src"], row["ref"]["dst"]), row
+    entry = specs.rule(rig, "test_digital_to_p25")
+    if entry is None or kind not in entry.get("received", {}):
+        pytest.skip("spec pending: no test_digital_to_p25 received[%s] entry in dvtest/specs/%s.py"
+                    % (kind, rig.sut_profile))
+    assert row["sut"]["received"] == entry["received"][kind], "sut received %d, spec %d" % (
+        row["sut"]["received"], entry["received"][kind])
+    assert row["sut"]["whole_ldu"] == entry["whole_ldu"], "sut whole_ldu %s, spec %s" % (
+        row["sut"]["whole_ldu"], entry["whole_ldu"])
 
 
 # ---------------------------------------------------------------- morse

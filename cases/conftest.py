@@ -274,6 +274,7 @@ BEHAVIOUR = {
     "test_short_stream_guard.py::test_short_stream_guard_decay",  # B18
     "test_short_stream_guard.py::test_short_stream_guard_third_strike_protocols",  # B18
     "test_dmrplus.py::test_dmp_busy_module_no_mix",                  # P-DMP-35 (B1)
+    "test_p25.py::test_digital_to_p25",                              # F5 (P-P25-24 padding)
 }
 SYSTEM_MARKERS = {"rig", "netns", "allstar", "nxdn", "p25", "load", "interlink"}
 

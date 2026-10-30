@@ -68,6 +68,8 @@ SPEC = {
         "new_link_by_protocol": {"dextra": "NAK", "dplus": "BUSY", "dcs": "NAK", "dmr": "MSTNAK", "m17": "NACK",
                                  "ysf": "none"},
         "ysf_existing_poll_ack": True},
+    # F5 digital -> P25: padded to whole LDUs (P-P25-24); 63 tone frames in
+    "test_digital_to_p25": {"received": {"dstar": 63, "dmr": 63, "m17": 72}, "whole_ldu": True},
     # B13 no frame loss under load (C9 path)
     "test_no_load_loss_passthrough": {"loss": 0},
     "test_no_load_loss_cross": {"loss": 0},
@@ -192,6 +194,8 @@ SPEC = {
         # id is not sent into the edge; "@fallback" = the placeholder id
         "P-P25-23": {"src_is_talker": True, "src": []},
         "P-P25-23@fallback": {"src_is_talker": True, "src": [1023000]},
+        # egress record layout: 40 frames padded to 45 + 0x80 (as P-P25-24)
+        "P-P25-20": {"bad": 0, "records": 46},
         "P-P25-24": {"terminated": True, "whole_ldu": True, "records": 46},
         "P-P25-25": {"lone": 0, "voice": 0},
         "P-P25-26": {"has_0x73": True, "records": 19},
