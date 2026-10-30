@@ -81,7 +81,28 @@ SPEC = {
     # items where xlxd deviates (RPTCL and stream id use the B15/B10 keys)
     "test_mmdvm_lost_terminator_timeout": {"terminator": "all_egress", "timeout_s": 1.6},
     "test_mmdvm_busy_module_no_mix": {"late_entry": "deny"},
-    "mmdvm": {"P-DMR-04": {"auth": "lenient"}},
+    # dev items (docs/protocols/mmdvm.md), DV-Router choices 2026-10-30.
+    # Unknown id: id 0 and ids without a dmrid.dat callsign are refused
+    # silently (9-digit hotspot ids fall back to id/100); with no dmrid.dat
+    # every non-zero id is accepted. P-DMR-25 (egress dst TG 9) is a diff
+    # item: DV-Router writes TG 9 on every MMDVM egress, as xlxd does.
+    "mmdvm": {
+        "P-DMR-03": {"reply": "none"},
+        "P-DMR-04": {"auth": "lenient"},
+        "P-DMR-05": {"reply": "RPTACK", "pong": True},
+        # RPTC of 302 B or longer is acked (BrandMeister 306 B form)
+        "P-DMR-07": {"ack_301": False, "ack_303": True, "pong": True},
+        "P-DMR-08": {"routed": True},
+        "P-DMR-11": {"order": "be"},
+        "P-DMR-13": {"mstcl": True},
+        "P-DMR-18": {"relayed": False},
+        "P-DMR-22": {"voice_sync_header_relayed": False},
+        "P-DMR-27": {"repeater_is": "login"},
+        # headerless voice is dropped silently (no voice before a header)
+        "P-DMR-36": {"relayed": False},
+        "P-DMR-39": {"first_once": True, "second_once": True},
+        "P-DMR-41": {"relayed": False},
+    },
 }
 
 # B12: header fields DV-Router does not verify, because the tester (like
