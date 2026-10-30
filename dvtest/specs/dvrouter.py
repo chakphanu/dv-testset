@@ -212,6 +212,41 @@ SPEC = {
         # a DMR join (empty stream) is not sent to NXDN as an empty over
         "P-NXD-30": {"relayed": False},
     },
+    # M17 dev items (docs/protocols/m17.md), DV-Router choices 2026-10-30.
+    # Cross-mode: only unencrypted voice 3200 (any CAN / signed) is
+    # transcoded; 1600, data-only and encrypted streams stay M17-only;
+    # other-mode origin gets TYPE 0x0005 and zero META. Ingress CRC is never
+    # checked; ACKN is exactly 4 B; egress datagrams never exceed 100 B.
+    "m17": {
+        # NACK for a module outside the served rooms (run with DV_ROOMS=A-Y)
+        "P-M17-03": {"module": "Z", "reply": "NACK 4"},
+        "P-M17-04": {"reply_module_digit": "NACK 4", "reply_module_lower": "NACK 4", "reply_callsign_zero": "none"},
+        "P-M17-06": {"reply": "ACKN 4", "hears": True},
+        # a repeated CONN is ACKed again (mrefd's NACK breaks M17Gateway's retry)
+        "P-M17-07": {"same_module": "ACKN 4", "other_module": "ACKN 4", "hears_old": False, "hears_new": True},
+        "P-M17-09": {"interval_s": 3},
+        "P-M17-12": {"silent_disc": "DISC 10"},
+        "P-M17-16": {"repeat": "DISC 4"},
+        "P-M17-18": {"disc": "DISC 10"},
+        "P-M17-21": {"relayed": True},
+        "P-M17-24": {"relayed": True, "other_module": False},
+        # same-mode relay of every stream TYPE, encrypted included (packets
+        # forwarded as received; never transcoded or sent cross-mode)
+        "P-M17-26": {"relayed_voice3200": True, "relayed_voice_data1600": True, "relayed_can1": True,
+                     "relayed_can5": True, "relayed_signed": True, "relayed_scrambler": True,
+                     "relayed_data": True},
+        "P-M17-30": {"relayed": False},
+        "P-M17-36": {"egress_broadcast": "@ALL", "egress_designation": "@ALL",
+                     "egress_designation_other_module": "@ALL", "egress_reflector": "@ALL",
+                     "egress_callsign": "N0TEST"},
+        "P-M17-37": {"crc_ok": True},
+        "P-M17-38": {"meta_kept": True, "type_1600_kept": True},
+        "P-M17-40": {"within_200ms": True},
+        "P-M17-41": {"forwarded": True, "unchanged": True},
+        "P-M17-42": {"echo": False},
+        # no M17 interlink / peer CONN support for now
+        "P-M17-44": {"reply": "none"},
+    },
 }
 
 # B12: header fields DV-Router does not verify, because the tester (like
