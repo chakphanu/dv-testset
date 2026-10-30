@@ -492,15 +492,28 @@ def listen_probe(name, ip, term):
 def test_g3_listen(server, term):
     """P-G3-15 (diff), P-G3-16 (hb), P-G3-17 (dev), P-G3-20 (diff): a DExtra
     over on J reaches the terminal at IP:40000: AMBE exact, headers 56 B
-    with RPT2 = XLX999 J, sequence 0..20, one last frame; header copies and
-    the last payload recorded."""
+    with RPT2 = XLX999 J, sequence 0..20, one last frame. P-G3-17: under
+    xlxd header copies and last payload sut == ref; else the spec's
+    "min_headers" and "last_payload" ("pass" = the payload the talker sent)."""
     got = each(server, listen_probe, term)
     print("P-G3-15/16/17 listen:", got)
     for name, r in got.items():
         assert r["exact"] and r["header_sizes_ok"] and r["seq_ok"] and r["last_flag"] and r["lasts"] == 1, \
             "%s: %s" % (name, r)
         assert r["rpt2"] == rpt2().encode(), "%s: RPT2 %r" % (name, r["rpt2"])
-    judge_dev(server, "P-G3-17", got, "headers", "last_payload")
+    if server.sut_profile == specs.DEFAULT:
+        same(got, "headers", "last_payload")
+        return
+    entry = (specs.rule(server, "g3") or {}).get("P-G3-17")
+    if not entry:
+        pytest.skip("spec pending: no g3 P-G3-17 entry in dvtest/specs/%s.py" % server.sut_profile)
+    assert got["sut"]["headers"] >= entry["min_headers"], "sut: %d header copies" % got["sut"]["headers"]
+    if entry["last_payload"] == "pass":
+        # DstarClient.talk ends with a last frame of zero AMBE and its default slow data
+        sent = (bytes(9) + dextra.SLOW_DATA).hex()
+        assert got["sut"]["last_payload"] == sent, "sut last payload %s, sent %s" % (got["sut"]["last_payload"], sent)
+    else:
+        assert got["sut"]["last_payload"] == entry["last_payload"], "sut last payload %s" % got["sut"]["last_payload"]
 
 
 def lost_last_probe(name, ip, term):

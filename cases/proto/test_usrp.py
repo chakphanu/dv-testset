@@ -419,16 +419,22 @@ def test_usrp_ingress_unkey_ends_stream(rig_usrp):
 
 
 def test_usrp_ingress_keyup0_voice(rig_usrp):
-    """P-USR-12 (dev, key "keyup0_voice"): frame 25 of 50 sent as a 352 B
-    keyup-0 frame (pyUC's unkey). Two streams = taken as unkey; one stream
-    = dropped (49 frames) or played (50)."""
+    """P-USR-12 (dev, keys "keyup0_voice", "keyup0_payload"): frame 25 of
+    50 sent as a 352 B keyup-0 frame carrying tone audio (pyUC's unkey).
+    keyup0_voice: two streams = taken as unkey; one stream = dropped (49
+    frames) or played (50). keyup0_payload: does that frame's audio reach
+    the listener as the last audio frame of the first stream
+    ("played_if_nonzero", 26 frames before the split) or not ("dropped",
+    25; one stream: 49 of 50)."""
     mark(rig_usrp, "begin", "usrp-keyup0")
     streams, _, _ = ingress(rig_usrp, lambda s, d: usrp_over(s, d, tone_pcm(), keyup0_at=25))
     mark(rig_usrp, "end", "usrp-keyup0")
-    counts = sorted(v["frames"] for v in streams.values())
-    mode = "unkey" if len(streams) >= 2 else ("played" if counts and counts[0] >= FRAMES else "dropped")
-    print("streams %d, frames %s" % (len(streams), counts))
-    judge_dev(rig_usrp, "P-USR-12", {"keyup0_voice": mode})
+    ordered = [v["frames"] for v in streams.values()]          # in arrival order
+    mode = "unkey" if len(streams) >= 2 else ("played" if ordered and ordered[0] >= FRAMES else "dropped")
+    needed = 26 if len(streams) >= 2 else FRAMES                # keyed frames before it + the keyup-0 one
+    payload = "played_if_nonzero" if ordered and ordered[0] >= needed else "dropped"
+    print("streams %d, frames per stream %s" % (len(streams), ordered))
+    judge_dev(rig_usrp, "P-USR-12", {"keyup0_voice": mode, "keyup0_payload": payload})
 
 
 @pytest.mark.parametrize("case", ["gap", "start", "reorder"])

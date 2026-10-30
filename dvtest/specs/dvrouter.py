@@ -165,7 +165,7 @@ SPEC = {
         # SET_INFO egress off by default (opt-in per DVSwitch endpoint later)
         "P-USR-09": {"set_info_egress": False},
         # pyUC's 352 B keyup-0 frame ends the over
-        "P-USR-12": {"keyup0_voice": "unkey"},
+        "P-USR-12": {"keyup0_voice": "unkey", "keyup0_payload": "played_if_nonzero"},
         # ingress SET_INFO callsign is the talker of the over
         "P-USR-18": {"set_info_talker": "use"},
     },
