@@ -10,9 +10,11 @@ labelled by its ref_kind (and run id). A cell says how the system under
 test did against that reference: "same" (passed: the sut behaves like the
 reference), "differs" (failed), "skip", "error"; "n/a" for files that need
 an xlxd-only feature (interlink, USRP rows, transcoder link) when the
-reference is not xlxd. A last column flags cases whose verdict changes
-between references.
+reference is not xlxd, and for the cross-mode cases (the CROSSMODE table in
+cases/conftest.py) when the reference has no transcoder (URFd in the rig).
+A last column flags cases whose verdict changes between references.
 """
+import ast
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -22,6 +24,29 @@ XLXD_ONLY = ("test_xlx.py", "test_xlxd_interlink.py", "test_usrp.py", "test_usrp
              "test_xlxd_usrp_netns.py", "test_ambed_wire.py", "test_xlxd_matrix.py",
              "test_nxdn_peer.py", "test_p25_network.py", "test_backend_loss.py",
              "test_xlxd_transcoder_lifecycle.py", "test_allstar.py")
+
+
+# references that run without a transcoder: cross-mode cases are n/a there
+NO_TRANSCODER = ("urfd",)
+CONFTEST = Path(__file__).resolve().parents[1] / "cases" / "conftest.py"
+
+
+def crossmode_table():
+    """CROSSMODE from cases/conftest.py, read (not imported): {"file::case": True or {param, ...}}."""
+    tree = ast.parse(CONFTEST.read_text())
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "CROSSMODE" for t in node.targets):
+            return ast.literal_eval(node.value)
+    return {}
+
+
+def is_crossmode(table, name):
+    """name = "file.py::case[param-param]" as in the table rows."""
+    base, _, params = name.partition("[")
+    rule = table.get(base)
+    if rule is True:
+        return True
+    return bool(rule and params and set(params.rstrip("]").split("-")) & rule)
 
 
 def run_info(directory):
@@ -59,6 +84,7 @@ def main(argv):
         info = run_info(directory)
         runs.append(("%s-ref (%s)" % (info.get("ref_kind", "xlxd"), directory.name), info, verdicts(directory)))
     cases = sorted({name for _, _, v in runs for name in v})
+    crossmode = crossmode_table()
     sut = runs[0][1].get("xlxd_sut", "sut")
     print("Compatibility: system under test %s, profile %s" % (sut, runs[0][1].get("sut_profile", "xlxd")))
     print()
@@ -69,7 +95,10 @@ def main(argv):
         cells = []
         for index, (_, info, result) in enumerate(runs):
             cell = result.get(name, "-")
-            if info.get("ref_kind", "xlxd") != "xlxd" and name.split("::")[0] in XLXD_ONLY:
+            kind = info.get("ref_kind", "xlxd")
+            if kind != "xlxd" and name.split("::")[0] in XLXD_ONLY:
+                cell = "n/a"
+            elif kind in NO_TRANSCODER and is_crossmode(crossmode, name):
                 cell = "n/a"
             counts[index][cell] = counts[index].get(cell, 0) + 1
             cells.append(cell)
