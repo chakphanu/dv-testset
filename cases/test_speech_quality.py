@@ -96,7 +96,7 @@ def measure(addr, codecs, corpus):
             lag, utts = scored[codec, voice]
             rows += utts
             voices[voice] = {"delay_ms": lag / 8.0, "output_sha256": hashlib.sha256(outputs[codec, voice]).hexdigest(),
-                             "utterances": [[u, round(s, 4), round(l, 3), round(m, 3)] for u, s, l, m in utts]}
+                             "utterances": [[u, round(s, 4), round(lsd, 3), round(m, 3)] for u, s, lsd, m in utts]}
         out[codec] = {"stoi": sum(r[1] for r in rows) / len(rows), "lsd": sum(r[2] for r in rows) / len(rows),
                       "mcd": sum(r[3] for r in rows) / len(rows), "voices": voices}
     return out
