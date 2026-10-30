@@ -265,6 +265,12 @@ SPEC = {
         "P-NXD-42": {"relayed": 6},
         "P-NXD-43": {"after_35s": False, "after_130s": False},
     },
+    # Icom G3 terminal / access point (docs/protocols/g3.md): the DV-Router
+    # edge is not built yet; the cases skip "edge not ready" until True.
+    # Dev values follow when dv-router chooses.
+    "g3": {
+        "server": False,
+    },
     # M17 dev items (docs/protocols/m17.md), DV-Router choices 2026-10-30.
     # Cross-mode: only unencrypted voice 3200 (any CAN / signed) is
     # transcoded; 1600, data-only and encrypted streams stay M17-only;
