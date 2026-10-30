@@ -279,3 +279,64 @@ def test_gap_across_a_mark_window(tmp_path):
     assert loss(1000.5, 1002.0) == ["warn"]          # window inside the gap
     assert loss(1003.0, 1004.0) == ["warn"]          # window still open where it shows
     assert loss(999.0, 1000.1) == ["error"]          # window closed before the gap opened
+
+
+def test_urfd_is_a_reference_host(tmp_path):
+    """urfd.pcapng (DVT_REF_KIND=urfd) is a reference capture: its own
+    address is the urfd rig host, its errors are warnings, and it is the
+    reference side the sut is compared with."""
+    rig = check.rig_config("172.30.0.0/24")
+    rig["hosts"].setdefault("urfd", "172.30.0.70")
+    usrp = __import__("dvtest.proto.usrp", fromlist=["usrp"])
+
+    def wire(host):
+        w = Wire()
+        w.send("172.30.0.30", 30001, host, 30001, b"N0TEST  \x00")
+        w.send(host, 30001, "172.30.0.30", 30001, b"x" * 13, 0.01)      # unparseable DExtra from the reflector
+        w.send("172.30.0.30", 32003, host, 34003, usrp.header(0, 1), 0.01)
+        return w
+    urfd = check.check_file(wire("172.30.0.70").save(tmp_path / "urfd.pcapng"), rig)
+    sut = check.check_file(wire("172.30.0.11").save(tmp_path / "xlxd-sut.pcapng"), rig)
+    assert urfd["own"] == "172.30.0.70" and urfd["errors"] > 0
+    check.differential([urfd, sut])
+    assert urfd["errors"] == 0 and all("reference urfd" in f["message"] for f in urfd["findings"])
+    unparseable = [f for f in sut["findings"] if f["code"] == "dextra.unparseable"][0]
+    assert unparseable["severity"] == "warn" and "also on reference" in unparseable["message"]
+
+
+def test_urfd_reference_is_a_compat_run(tmp_path):
+    """With ref_kind urfd a sut-only behavioural error (here ambed.no_reply)
+    becomes a warning tagged as a compat run, while a malformed packet the
+    sut sends (usrp.bad_length) stays an error; with ref_kind xlxd both
+    keep today's severity."""
+    rig = check.rig_config("172.30.0.0/24")
+    usrp = __import__("dvtest.proto.usrp", fromlist=["usrp"])
+
+    def sut():
+        w = Wire()
+        w.send("172.30.0.11", 10100, "172.30.0.21", 10100, b"AMBEDPINGXLX999  ")
+        w.send("172.30.0.11", 34003, "172.30.0.30", 32003, usrp.header(0, 1), 0.01)
+        w.send("172.30.0.11", 10100, "172.30.0.21", 10100, b"AMBEDPINGXLX999  ", 3.0)
+        w.send("172.30.0.21", 10100, "172.30.0.11", 10100, b"AMBEDPONG", 0.001)
+        return check.check_file(w.save(tmp_path / "xlxd-sut.pcapng"), rig)
+
+    def ref(name, host):
+        w = Wire()
+        w.send("172.30.0.30", 30001, host, 30001, b"N0TEST  \x00")
+        return check.check_file(w.save(tmp_path / ("%s.pcapng" % name)), rig)
+
+    def severities(result):
+        return {f["code"]: (f["severity"], "compat run" in f["message"]) for f in result["findings"]}
+    compat = sut()
+    check.differential([ref("urfd", "172.30.0.70"), compat], "urfd")
+    assert severities(compat) == {"ambed.no_reply": ("warn", True), "usrp.bad_length": ("error", False)}
+    gate = sut()
+    check.differential([ref("xlxd-ref", "172.30.0.10"), gate], "xlxd")
+    assert severities(gate) == {"ambed.no_reply": ("error", False), "usrp.bad_length": ("error", False)}
+
+
+def test_run_setting(tmp_path):
+    (tmp_path / "run.txt").write_text("markers=proto profile=core sut_profile=xlxd ref_kind=urfd\nhttps://x y z\n")
+    assert check.run_setting(str(tmp_path), "ref_kind") == "urfd"
+    assert check.run_setting(str(tmp_path), "nope") is None
+    assert check.run_setting(str(tmp_path / "missing"), "ref_kind") is None

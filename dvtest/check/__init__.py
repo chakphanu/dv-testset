@@ -29,7 +29,11 @@ RIG_FILES = {"xlxd-ref": "xlxd_ref", "xlxd-sut": "xlxd_sut", "transcoder-ref": "
              "transcoder-sut": "ambed_sut", "tester": "tester", "allstar": "allstar",
              "nxdn-ref": "nxdn_ref", "nxdn-sut": "nxdn_sut", "p25-ref": "p25_ref", "p25-sut": "p25_sut",
              "xlxd-peer-ref": "xlxd_peer_ref", "xlxd-peer-sut": "xlxd_peer_sut",
-             "xlxd-peer2-ref": "xlxd_peer2_ref", "xlxd-peer2-sut": "xlxd_peer2_sut"}
+             "xlxd-peer2-ref": "xlxd_peer2_ref", "xlxd-peer2-sut": "xlxd_peer2_sut",
+             "urfd": "urfd"}
+# reference-class captures outside the <name>-ref naming: they join the
+# reference side of a pair (DVT_REF_KIND=urfd runs URFd as the reference)
+REFERENCES = {"urfd": "xlxd"}
 
 
 def rig_config(subnet=None):
@@ -381,18 +385,50 @@ def _mark(result, finding, severity, note):
     finding["message"] += " " + note
 
 
-def differential(results):
+# errors that hold whatever the reference does: malformed packets the sut
+# sends (sizes, CRCs, field layout) and sequence faults
+ABSOLUTE = re.compile(r"\.((\w+_)?(loss|dup|reorder)|bad_\w+|unparseable|\w*crc|lich_\w+|flags_lich|facch_\w+"
+                      r"|field_changed|eot_bit|burst_\w+|m17p_\w+|request_bad|reply_bad|std_codecs)$")
+COMPAT = "(compat run: reference %s does not show it)"
+
+
+def run_setting(run_dir, key):
+    """A key=value setting from the first line of <run>/run.txt, or None."""
+    try:
+        with open(os.path.join(run_dir, "run.txt")) as fh:
+            line = fh.readline()
+    except OSError:
+        return None
+    for token in line.split():
+        if token.startswith(key + "="):
+            return token.split("=", 1)[1]
+    return None
+
+
+def differential(results, ref_kind="xlxd"):
     """Severity across a reference/system-under-test pair of captures
     (<name>-ref vs <name>-sut, every .N part of each): a code seen on both
     sides is upstream behaviour (warn); a code seen only on the sut is a
     regression (error) when the reference had its precondition (COMPARABLE),
     else a warning; errors only on the reference are warnings. Captures
-    without a partner keep their severities."""
+    without a partner keep their severities. With ref_kind "urfd" (a
+    compatibility run, not a gate) a sut-only finding is never escalated,
+    and a sut-only error that is not ABSOLUTE becomes a warning (COMPAT)."""
     sides = {}
     for r in results:
         name, _, side = _stem(r).rpartition("-")
+        if _stem(r) in REFERENCES:
+            name, side = REFERENCES[_stem(r)], "ref"
         if side in ("ref", "sut") and name:
             sides.setdefault(name, {"ref": [], "sut": []})[side].append(r)
+    for r in results:
+        if _stem(r) in REFERENCES:
+            # a reference host is not the system under test
+            for f in r["findings"]:
+                if f["severity"] == ERROR:
+                    _mark(r, f, WARN, "(reference %s, not the system under test)" % _stem(r))
+            r["errors"] = 0
+            r["warnings"] = len(r["findings"])
     for name, pair in sides.items():
         if not pair["ref"] or not pair["sut"]:
             continue
@@ -416,6 +452,9 @@ def differential(results):
                     _mark(r, f, WARN, "(also on reference: upstream behaviour)")
                 elif f["code"] in COMPARABLE and not any(COMPARABLE[f["code"]][0](x) for x in pair["ref"]):
                     _mark(r, f, WARN, "(not comparable on reference: %s)" % COMPARABLE[f["code"]][1])
+                elif ref_kind == "urfd":
+                    if f["severity"] == ERROR and not ABSOLUTE.search(f["code"]):
+                        _mark(r, f, WARN, COMPAT % ref_kind)
                 elif f["code"] in UPSTREAM_CODES:
                     _mark(r, f, ERROR, "[sut only: not seen on %s-ref, differential regression]" % name)
         for r in pair["ref"]:
@@ -592,7 +631,9 @@ def main(argv=None):
         except (OSError, pcap.CaptureError) as exc:
             print("dvcheck: %s: %s" % (path, exc), file=sys.stderr)
             return 2
-    differential(results)
+    ref_kind = (run_setting(args.target, "ref_kind") if os.path.isdir(args.target) else None) \
+        or os.environ.get("DVT_REF_KIND") or "xlxd"
+    differential(results, ref_kind)
     try:
         names = declared() if args.divergences is None else divergences.parse(args.divergences)
     except ValueError as exc:
