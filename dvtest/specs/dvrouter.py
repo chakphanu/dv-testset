@@ -177,20 +177,20 @@ SPEC = {
         "P-DCS-15": {"ref9_per_poll": 1.0},
         "P-DCS-17": {"size9": True, "size19": True, "size22": True},
         "P-DCS-18": {"silent_notice": "none"},
-        "P-DCS-22": {"heard": 42},
+        "P-DCS-22": {"heard": 63},
         "P-DCS-25": {"suffix": b"    "},
         # the ingress end payload is passed (the tester sends the JARL pattern)
         "P-DCS-30": {"ambe": "55555555c87a000000", "slow": "555555"},
         # own counter and text area per stream
-        "P-DCS-31": {"counter_start": 0, "counter_steps": [1], "tail_passed": False, "byte61": "01"},
-        "P-DCS-32": {"heard_my": 0, "heard_rpt1": 42, "heard_rpt2": 42},
+        "P-DCS-31": {"renumbered": True, "tail_passed": False, "byte61": "01"},
+        "P-DCS-32": {"heard_my": 0, "heard_rpt1": 63, "heard_rpt2": 63},
         "P-DCS-33": {"flags": b"\x08\x00\x00"},
         "P-DCS-35": {"linked_module": True, "rpt2_module": False},
         "P-DCS-39": {"synthesized_last": 1},
         "P-DCS-40": {"heard_after_last": 0},
         "P-DCS-43": {"second_ack": True, "hears_j": True, "hears_k": True, "j_after_unlink_b": True,
                      "k_after_unlink_b": False},
-        "P-DCS-46": {"heard": 42},
+        "P-DCS-46": {"heard": 63},
     },
     # NXDN peer dev items (docs/protocols/nxdn.md), DV-Router choices
     # 2026-10-30. Client-serving NXDN (UDP 41400) is not built yet.

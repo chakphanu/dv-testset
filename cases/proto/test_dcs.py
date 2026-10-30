@@ -845,12 +845,14 @@ def test_dcs_counter_and_text(rig):
     for name, r in got.items():
         body = [p for p in r["rx"] if not p["last"]]
         counters = [p["counter"] for p in body]
-        rows[name] = {"counter_start": counters[0] if counters else None,
-                      "counter_steps": sorted({b - a for a, b in zip(counters, counters[1:])}),
+        rows[name] = {"renumbered": counters == list(range(len(counters))),
                       "tail_passed": bool(body) and body[0]["tail"] == tail,
-                      "byte61": body[0]["tail"][:1].hex() if body else None}
+                      "byte61": body[0]["tail"][:1].hex() if body else None,
+                      "counters": counters[:5]}
     print("P-DCS-31 counter/text:", rows)
-    judge_dev(rig, "P-DCS-31", rows, "counter_start", "counter_steps", "tail_passed", "byte61")
+    # the counter values themselves are timing dependent on xlxd (copied
+    # from the latest received packet): only whether it is renumbered counts
+    judge_dev(rig, "P-DCS-31", rows, "renumbered", "tail_passed", "byte61")
 
 
 @pytest.mark.parametrize("field", ["my", "rpt1", "rpt2"])
