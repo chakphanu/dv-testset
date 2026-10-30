@@ -272,6 +272,7 @@ BEHAVIOUR = {
     "test_short_stream_guard.py::test_short_stream_guard_cross_protocol_strikes",  # B18
     "test_short_stream_guard.py::test_short_stream_guard_third_strike",  # B18
     "test_short_stream_guard.py::test_short_stream_guard_decay",  # B18
+    "test_short_stream_guard.py::test_short_stream_guard_third_strike_protocols",  # B18
 }
 SYSTEM_MARKERS = {"rig", "netns", "allstar", "nxdn", "p25", "load", "interlink"}
 

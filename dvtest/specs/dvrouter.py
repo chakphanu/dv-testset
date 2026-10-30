@@ -64,6 +64,10 @@ SPEC = {
     "test_short_stream_guard_cross_protocol_strikes": {"struck": True},
     "test_short_stream_guard_third_strike": {"new_link": "refused", "existing_kept": True, "third_blocks_tx": True},
     "test_short_stream_guard_decay": {"block_after_decay_s": 3},
+    "test_short_stream_guard_third_strike_protocols": {
+        "new_link_by_protocol": {"dextra": "NAK", "dplus": "BUSY", "dcs": "NAK", "dmr": "MSTNAK", "m17": "NACK",
+                                 "ysf": "none"},
+        "ysf_existing_poll_ack": True},
     # B13 no frame loss under load (C9 path)
     "test_no_load_loss_passthrough": {"loss": 0},
     "test_no_load_loss_cross": {"loss": 0},
