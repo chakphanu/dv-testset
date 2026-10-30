@@ -11,6 +11,9 @@
 #                      xlxd-ref/xlxd-sut (DVT_NXDN=on); combine: allstar,nxdn
 #   --profile p25      core plus P25Reflectors p25-ref/p25-sut peered with
 #                      xlxd-ref/xlxd-sut (DVT_P25=on); e.g. allstar,nxdn,p25
+#   --profile urfd     URFd (.70, no transcoder); DVT_REF_KIND=urfd also makes it
+#                      the reference the cases compare with (compat data,
+#                      xlxd profile only; scripts/compat-table.py)
 #   --profile interlink  XLX998 peers xlxd-peer-sut/-ref interlinked with
 #                      xlxd-sut/-ref on DVT_INTERLINK_MODULES (default DE)
 #   --profile load     DVT_LOAD_MODULES (1..26) modules, DVT_LOAD_NODES (0..26,
@@ -86,7 +89,7 @@ while [ "$#" -gt 0 ]; do
     --netem) [ "$#" -ge 2 ] || { echo "run.sh: --netem needs a preset or netem arguments" >&2; exit 2; }; netem_cli="$2"; netem_set=1; shift 2 ;;
     --down) down_only=1; shift ;;
     --) shift; break ;;
-    -h|--help) sed -n '3,66p' "$0"; exit 0 ;;
+    -h|--help) sed -n '3,69p' "$0"; exit 0 ;;
     *) echo "run.sh: unknown argument '$1' (see --help)" >&2; exit 2 ;;
   esac
 done
@@ -141,7 +144,8 @@ fi
 compose_all=(docker compose -p "${COMPOSE_PROJECT_NAME:-dvt}" "${compose_files[@]}" "${DVT_ENV_FILES[@]}"
   --profile core --profile allstar --profile nxdn --profile capture --profile capture-allstar
   --profile capture-nxdn --profile p25 --profile capture-p25 --profile interlink
-  --profile capture-interlink --profile load --profile netem --profile g3)
+  --profile capture-interlink --profile load --profile netem --profile g3
+  --profile urfd --profile capture-urfd)
 
 if [ "$down_only" = 1 ]; then
   take_lock
@@ -154,6 +158,7 @@ has_allstar=0
 has_nxdn=0
 has_p25=0
 has_interlink=0
+has_urfd=0
 has_load=0
 IFS=, read -r -a wanted <<< "$profile"
 for p in "${wanted[@]}"; do
@@ -204,9 +209,29 @@ for p in "${wanted[@]}"; do
       profiles+=(--profile g3)
       export DVT_G3=on
       ;;
-    *) echo "run.sh: --profile takes core, allstar, nxdn, p25, interlink, load, g3 or a comma list" >&2; exit 2 ;;
+    urfd)
+      has_urfd=1
+      ;;
+    *) echo "run.sh: --profile takes core, allstar, nxdn, p25, interlink, load, g3, urfd or a comma list" >&2; exit 2 ;;
   esac
 done
+# DVT_REF_KIND=urfd: URFd (.70) becomes the reference the cases compare the
+# sut with. Such runs are compatibility data, judged as differential only,
+# so they are held to the xlxd profile.
+case "${DVT_REF_KIND:-xlxd}" in
+  xlxd) export DVT_REF_OCTET=10 ;;
+  urfd)
+    has_urfd=1
+    export DVT_REF_OCTET=70
+    [ "${DVT_SUT_PROFILE:-xlxd}" = xlxd ] \
+      || { echo "run.sh: DVT_REF_KIND=urfd runs are compatibility data: use DVT_SUT_PROFILE=xlxd" >&2; exit 2; }
+    ;;
+  *) echo "run.sh: DVT_REF_KIND must be xlxd or urfd" >&2; exit 2 ;;
+esac
+if [ "$has_urfd" = 1 ]; then
+  profiles+=(--profile urfd)
+  [ -f .cache/urfd/reflector/Makefile ] || { echo "run.sh: .cache/urfd missing; run scripts/pre-fetch-urfd.sh" >&2; exit 2; }
+fi
 # netem: a preset name (NETEM_PRESET_<NAME>), "off", or netem arguments
 netem_args() {
   local spec="$1" var
@@ -247,6 +272,10 @@ if [ "$capture" = 1 ]; then
   if [ "$has_interlink" = 1 ]; then
     profiles+=(--profile capture-interlink)
     capture_svcs+=(capture-xlxd-peer-sut)
+  fi
+  if [ "$has_urfd" = 1 ]; then
+    profiles+=(--profile capture-urfd)
+    capture_svcs+=(capture-urfd)
   fi
 fi
 
@@ -503,9 +532,9 @@ collect() {
 }
 trap collect EXIT
 
-printf 'markers=%s profile=%s xlxd_ref=%s xlxd_sut=%s transcoder=%s sut_divergences=%s sut_name=%s sut_profile=%s no_radio_id=%s\n' \
+printf 'markers=%s profile=%s xlxd_ref=%s xlxd_sut=%s transcoder=%s sut_divergences=%s sut_name=%s sut_profile=%s no_radio_id=%s ref_kind=%s\n' \
   "$markers" "$profile" "${XLXD_REF_IMAGE:-${XLXD_REF_DIR:-ref}}" "${XLXD_SUT_IMAGE:-${XLXD_SUT_DIR:-sut}}" "$TRANSCODER_IMAGE" \
-  "${DVT_SUT_DIVERGENCES:-}" "${DVT_SUT_NAME:-}" "${DVT_SUT_PROFILE:-xlxd}" "${DVT_NO_RADIO_ID:-}" \
+  "${DVT_SUT_DIVERGENCES:-}" "${DVT_SUT_NAME:-}" "${DVT_SUT_PROFILE:-xlxd}" "${DVT_NO_RADIO_ID:-}" "${DVT_REF_KIND:-xlxd}" \
   > "$out/run.txt"
 cat ".cache/xlxd/${XLXD_REF_DIR:-ref}.fetched" ".cache/xlxd/${XLXD_SUT_DIR:-sut}.fetched" >> "$out/run.txt" 2>/dev/null || true
 

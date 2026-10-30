@@ -1,0 +1,94 @@
+# SPDX-License-Identifier: MIT
+# URFd config for the dv-testset rig (profile urfd). @IP@ = own address,
+# @YSF_MODULE@ = YSF auto-link module (xlxd's default B). No transcoder
+# (passthrough only), no DHT, ID databases from the rig's synthetic files.
+[Names]
+Callsign = URF999
+SysopEmail = sysop@example.org
+Country = US
+Sponsor = dv-testset rig
+DashboardUrl = http://192.0.2.1/
+Bootstrap = 192.0.2.1
+
+[IP Addresses]
+IPv4Binding = @IP@
+# the rig has no internet: give the address instead of letting urfd look it up
+IPv4External = @IP@
+
+[Modules]
+Modules = ABCDEFGHIJKLMNOPQRSTUVWXYZ
+
+[Transcoder]
+Port = 0
+
+[Brandmeister]
+Enable = false
+
+[DCS]
+Port = 30051
+
+[DExtra]
+Port = 30001
+
+[DPlus]
+Port = 20001
+
+[G3]
+Enable = true
+
+[DMRPlus]
+Port = 8880
+
+[M17]
+Port = 17000
+
+[MMDVM]
+Port = 62030
+DefaultId = 0
+
+[NXDN]
+Port = 41400
+ReflectorID = @NXDN_TG@
+
+[P25]
+Port = 41000
+ReflectorID = @P25_TG@
+
+[URF]
+Port = 10017
+
+[USRP]
+Enable = false
+
+[YSF]
+Port = 42000
+AutoLinkModule = @YSF_MODULE@
+DefaultTxFreq = 437000000
+DefaultRxFreq = 437000000
+RegistrationID = 12345
+RegistrationName = URF999
+RegistrationDescription = dv-testset
+EnableDGID = false
+
+[DMR ID DB]
+Mode = file
+FilePath = /urfd/dmrid.dat
+RefreshMin = 179
+
+[NXDN ID DB]
+Mode = file
+FilePath = /urfd/nxdn.csv
+RefreshMin = 1440
+
+[YSF TX/RX DB]
+Mode = file
+FilePath = /urfd/ysfnode.dat
+RefreshMin = 191
+
+[Files]
+PidPath = /tmp/urfd.pid
+XmlPath = /tmp/urfd.xml
+WhitelistPath = /urfd/urfd.whitelist
+BlacklistPath = /urfd/urfd.blacklist
+InterlinkPath = /urfd/urfd.interlink
+G3TerminalPath = /urfd/urfd.terminal

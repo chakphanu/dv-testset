@@ -24,6 +24,8 @@
 #   load     DVT_LOAD_MODULES load-node replicas (dvt-tester image, addresses
 #            from <net>.128/25) each running DVT_LOAD_CMD against xlxd-sut
 #   netem    tc netem sidecars on tester, xlxd-ref and xlxd-sut (egress)
+#   urfd     URFd (.70, URF999, modules A-Z, no transcoder); DVT_REF_KIND=urfd
+#            points the tester's reference (DVT_XLXD_REF) at it (capture-urfd)
 #   capture  sniffers on xlxd-ref, xlxd-sut, transcoder-sut (capture-allstar: on
 #            allstar, capture-nxdn: on nxdn-*, capture-p25: on p25-*)
 #
@@ -213,7 +215,10 @@ services:
         codec2: ../.cache/codec2
     user: "${DVT_UID:-1000}:${DVT_GID:-1000}"
     environment:
-      DVT_XLXD_REF: ${DVT_NET:-172.30.0}.10
+      # the reference reflector: xlxd-ref (.10), or URFd (.70) when DVT_REF_KIND=urfd
+      DVT_XLXD_REF: ${DVT_NET:-172.30.0}.${DVT_REF_OCTET:-10}
+      DVT_REF_KIND: ${DVT_REF_KIND:-xlxd}
+      DVT_URFD: ${DVT_NET:-172.30.0}.70
       DVT_XLXD_SUT: ${DVT_NET:-172.30.0}.11
       DVT_AMBED_REF: ${DVT_NET:-172.30.0}.20
       DVT_AMBED_SUT: ${DVT_NET:-172.30.0}.21
@@ -398,6 +403,36 @@ services:
     depends_on:
       p25-sut: {condition: service_started, restart: false}
     command: ["p25-sut"]
+
+  # ---- URFd (profile urfd): a second reference reflector for compatibility
+  # runs (DVT_REF_KIND=urfd). No transcoder: same-codec passthrough only.
+  urfd:
+    profiles: [urfd]
+    init: true
+    image: dvt-urfd:local
+    build:
+      context: .
+      dockerfile: Dockerfile.urfd
+      args:
+        URFD_BASE_IMAGE: ${URFD_BASE_IMAGE:-error-set-urfd-base-image-see-env-example}
+      additional_contexts:
+        src: ../.cache/urfd
+    environment:
+      DVT_IP: ${DVT_NET:-172.30.0}.70
+      DVT_NXDN_TG: ${DVT_NXDN_TG:-31672}
+      DVT_P25_TG: ${DVT_P25_TG:-31672}
+      DVT_BLACKLIST: ${DVT_XLXD_BLACKLIST:-}
+      DVT_START_DELAY: ${DVT_START_DELAY:-0}
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.70"}
+
+  capture-urfd:
+    <<: *capture
+    profiles: [capture-urfd]
+    network_mode: "service:urfd"
+    depends_on:
+      urfd: {condition: service_started, restart: false}
+    command: ["urfd"]
 
   # ---- XLX interlink peers (profile interlink) ----
   xlxd-peer-sut:

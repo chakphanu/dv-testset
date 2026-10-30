@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# URFd (n7tae/urfd, GPL-3.0) built from fetched source (scripts/pre-fetch-urfd.sh),
+# passed in as the named build context "src" (.cache/urfd). Built without
+# DHT (no OpenDHT) and run without a transcoder: passthrough only. The rig's
+# synthetic ID files are used, never the network databases.
+# Build arg URFD_BASE_IMAGE from .env.example.
+ARG URFD_BASE_IMAGE
+FROM ${URFD_BASE_IMAGE} AS build
+RUN apt-get update && apt-get install -y --no-install-recommends g++ make libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends libcurl4-openssl-dev nlohmann-json3-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=src reflector/ /src/
+COPY --from=src config/urfd.mk /src/urfd.mk
+RUN make -C /src -j"$(nproc)" DHT=false urfd inicheck
+
+FROM ${URFD_BASE_IMAGE}
+RUN apt-get update && apt-get install -y --no-install-recommends libcurl4 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /src/urfd /src/inicheck /urfd/
+COPY config/dmrid.dat config/nxdn.csv /urfd/
+COPY config/urfd/urfd.ini.in /urfd/urfd.ini.in
+COPY urfd-entry.sh /urfd/entry.sh
+RUN touch /urfd/ysfnode.dat /urfd/urfd.whitelist /urfd/urfd.blacklist /urfd/urfd.interlink /urfd/urfd.terminal \
+    && chmod 755 /urfd/entry.sh
+ENTRYPOINT ["/urfd/entry.sh"]
