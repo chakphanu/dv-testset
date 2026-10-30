@@ -945,6 +945,53 @@ def test_mmdvm_join_by_empty_stream(rig):
     same(got, "joined", "join_voice")
 
 
+def gateway_burst(client, tg, src):
+    """DMRGateway's link / unlink form, back to back on a new stream id."""
+    for data in dmr.gateway_link(src, tg, client.id, clients.fresh_stream_id("dmr")):
+        client.client.send(client.dest, data)
+
+
+def gateway_link_probe(ip, rf_src):
+    """The joiner (unlinked) links to MOD with the private-call burst, a
+    talker on MOD talks; the joiner unlinks with the private TG 4000
+    burst, the talker talks again (a linked control must hear it). src =
+    the gateway's login id (startup / relink form) or an RF user's id
+    (user-control form)."""
+    joiner, control, talker = new(LISTENER), new(EXTRA[0]), new(TALKER)
+    src = EXTRA[1] if rf_src else LISTENER
+    try:
+        ready(ip, control, talker)
+        login(ip, joiner, join=False)
+        clear(control, talker)
+        gateway_burst(joiner, dmr.module_tg(MOD), src)
+        time.sleep(CACHE)
+        link_dmrd = len(received(control)) + len(received(talker))
+        clear(joiner, control, talker)
+        voice, _ = talk(talker, joiner, control)
+        linked = heard(joiner) == voice
+        gateway_burst(joiner, 4000, src)
+        time.sleep(1.5)                     # past xlxd's 1 s client cache
+        clear(joiner, control, talker)
+        talk(talker, joiner, control, voice=frames(seed="p43u"))
+        return {"linked": linked, "link_dmrd": link_dmrd, "after_unlink": len(heard(joiner)),
+                "control_heard": len(heard(control)) > 0}
+    finally:
+        done(joiner, control, talker)
+
+
+@pytest.mark.parametrize("src", ["login_id", "rf_id"])
+def test_mmdvm_gateway_private_link(rig, src):
+    """P-DMR-43 (diff): DMRGateway's XLX link / unlink form (3 private-call
+    headers + 2 terminators, one stream id, no voice) to TG 4001+ links
+    the module, to TG 4000 unlinks; nothing of the burst reaches the
+    module's listeners."""
+    got = both(rig, gateway_link_probe, src == "rf_id")
+    print("P-DMR-43 gateway private link (%s):" % src, got)
+    for name, r in got.items():
+        assert r["control_heard"], "%s: linked control listener heard nothing" % name
+    same(got, "linked", "after_unlink", "link_dmrd")
+
+
 # ---------------------------------------------------------------- 6 stream lifetime
 
 def lost_terminator_probe(ip):

@@ -31,7 +31,8 @@ TABLE = {
         "xlxd has no time-out timer"),
     "synthesized_terminator": (
         "a stream closed by the 1.6 s silence timeout gets a terminator / last frame on egress",
-        "no last frame: cpacketstream.h:38, cprotocol.cpp:391-404"),
+        "timeout path cpacketstream.h:38, cprotocol.cpp:391-404; measured: end markers on every egress "
+        "in the rig (C8, P-DMR-34), none within 2.5 s in netns without a transcoder"),
     "ambed_extended_open_always": (
         "24 B extended OPEN for every stream once CAPS was answered",
         "extended OPEN for PCM streams only: ctranscoder (PR #272)"),

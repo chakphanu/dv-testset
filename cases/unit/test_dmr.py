@@ -71,3 +71,14 @@ def test_sync_payloads():
     assert default[13] == 0x0D and default[14:19] == bytes(dmr.DATA_SYNC) and default[19] == 0xD0
     assert dmr.data_sync_payload(dmr.MS_DATA)[13:20] == bytes.fromhex("0D5D7F77FD7570")
     assert dmr.data_sync_payload(dmr.BS_VOICE)[13:20] == bytes.fromhex("0755FD7DF75F70")
+
+
+def test_gateway_link_burst():
+    burst = dmr.gateway_link(ID, 4001, 1023008, 0x01020304)
+    assert len(burst) == 5 and all(len(p) == dmr.PACKET_SIZE for p in burst)
+    fields = [dmr.parse(p) for p in burst]
+    assert [f["seq"] for f in fields] == [0, 1, 2, 3, 4]
+    assert [f["bitfield"] for f in fields] == [0xE1] * 3 + [0xE2] * 2
+    assert {(f["src"], f["dst"], f["repeater"], f["stream"]) for f in fields} == {(ID, 4001, 1023008, 0x01020304)}
+    assert all(f["payload"] == dmr.data_sync_payload() for f in fields)
+    assert [dmr.parse(p)["bitfield"] for p in dmr.gateway_link(ID, 4000, ID, 1, 1, 1)] == [0xE1, 0xE2]

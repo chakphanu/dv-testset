@@ -11,7 +11,7 @@ Every row says where the obligation comes from, in separate columns:
 the spec text (with version and section), what the other masters and the
 client do (project at a commit, behaviour in our own words, no code
 copied), and what xlxd-ref did on the rig (measured 2026-10-30; all 51
-cases passed with sut == ref).
+cases passed with sut == ref; P-DMR-43 added later that day, 2 cases passed).
 
 **Level**: MUST / SHOULD only where a spec says so; `convention (impl)`
 where only implementations back it, naming the ones that agree;
@@ -151,7 +151,8 @@ wire layout above, which follows MMDVMHost/DMRGateway.
 ## 5. Talkgroup routing
 
 No spec covers module selection; these are the XLX conventions DMRGateway's
-XLX mode is built on (unlink 4000, modules 4001-4026, voice on slot 2 TG 9).
+XLX mode is built on (unlink 4000, modules 4001-4026, voice on slot 2 TG 9;
+P-DMR-43 is the private-call form DMRGateway actually sends).
 
 | # | Obligation | Level | Spec / paper (document, version, section; URL) | Implementations (project @ version or commit: behaviour) | xlxd-ref observed |
 |---|---|---|---|---|---|
@@ -160,6 +161,7 @@ XLX mode is built on (unlink 4000, modules 4001-4026, voice on slot 2 TG 9).
 | P-DMR-31 | A linked client talking to another module's TG stays on its module; a module change needs 4000 first | convention (XLX family) | not stated | xlxd, URFd; GW sends 4000 before a new 400x | measured: own module hears it, the other module does not |
 | P-DMR-32 | TG 9 (or any TG that maps to no module) from a linked client goes to its module; from an unlinked client it is ignored | convention (XLX family) | not stated | xlxd, URFd; GW sends its XLX voice as TG 9 slot 2 | measured: linked heard, unlinked not |
 | P-DMR-33 | A header links; an empty stream (header + terminator) is enough to join and is not relayed as voice | convention (XLX family) | not stated | xlxd; URFd acts on the header (private headers never open a stream); GW's link bursts are header + terminator only | measured: joined; listeners got 0 packets of the join |
+| P-DMR-43 | DMRGateway's XLX link form is honoured: 3 private-call voice LC headers + 2 terminators (one stream id, no voice) to TG 4001..4026 link the module, to TG 4000 unlink; nothing of the burst is relayed | convention (XLX family) | not stated: ETSI-2 5.2.2 defines the individual (private) call and ETSI-1 9.3.11 its FLCO, nothing on using it as a network command; HB15 and BMW: no link commands | GW (DMRGateway.cpp writeXLXLink) sends slot 2, private-call flag, BS data sync, headers seq 0-2 then terminators seq 3-4, back to back, one random stream id, repeater id = its login id, src = its login id (startup link, relink) or the RF user's id (user control, private call to the XLX base + 0..26), 4000 first when already linked; xlxd (cdmrmmdvmprotocol.cpp IsValidDvHeaderPacket / OnDvHeaderPacketIn) and URFd (DMRMMDVMProtocol.cpp, same functions) derive link/unlink from the header's TG whatever the call type (link only while unlinked, 4000 only while linked), open no stream for a private header and ignore the terminators (no stream); later headers of the burst change nothing | measured: linked (36/36 frames heard) and unlinked (0 frames, linked control heard), with src = login id and src = another radio id; listeners got 0 packets of the burst |
 
 ## 6. Stream lifetime
 

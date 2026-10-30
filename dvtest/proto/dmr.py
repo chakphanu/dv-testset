@@ -190,6 +190,20 @@ def voice_packets(frames, src, dst, stream_id):
     return packets, seq
 
 
+def gateway_link(src, dst, repeater, stream_id, headers=3, terminators=2):
+    """The link / unlink burst of DMRGateway's XLX mode: private-call
+    voice LC headers, then terminators with LC, to dst (4001..4026 link a
+    module, 4000 unlinks), slot 2, one stream id, sequence 0, 1, ...,
+    BS data sync; meant to be sent back to back. The LC bits stay zero
+    (the XLX masters read the ids from the DMRD fields, not the LC)."""
+    packets = []
+    for index in range(headers + terminators):
+        dtype = HEADER if index < headers else TERMINATOR
+        packets.append(packet(index, src, dst, repeater, bitfield(2, True, DATA, dtype), stream_id,
+                              data_sync_payload()))
+    return packets
+
+
 class DmrClient:
     def __init__(self, bind_ip, dmrid=DMR_ID, module="B"):
         self.client = UdpClient(bind_ip)

@@ -204,6 +204,7 @@ sync patterns: dvcheck H3. "probe" = an active case drives the packets;
 | P-DMR-31 | Talk to another module's TG while linked stays on the linked module | test_mmdvm::test_mmdvm_other_tg_stays_on_module | diff | probe | covered |
 | P-DMR-32 | TG 9 / unmapped TG: linked -> own module, unlinked -> ignored | test_mmdvm::test_mmdvm_tg9_routing[linked\|unlinked] | diff | probe | covered |
 | P-DMR-33 | Join by an empty stream; join not relayed as voice | test_mmdvm::test_mmdvm_join_by_empty_stream | diff | probe | covered |
+| P-DMR-43 | DMRGateway form: 3 private headers + 2 terminators link 400x / unlink 4000, burst not relayed | test_mmdvm::test_mmdvm_gateway_private_link[login_id\|rf_id] | diff | probe | covered |
 | P-DMR-34 | Lost terminator: stream ends after the silence timeout, module free | test_mmdvm::test_mmdvm_lost_terminator_timeout | spec (B3) | probe | covered |
 | P-DMR-35 | Second header on a busy module not mixed in | test_mmdvm::test_mmdvm_busy_module_no_mix | spec (B1/B2) | probe | covered |
 | P-DMR-36 | Voice without a header not relayed | test_mmdvm::test_mmdvm_voice_without_header | dev | probe | covered |
@@ -214,13 +215,70 @@ sync patterns: dvcheck H3. "probe" = an active case drives the packets;
 | P-DMR-39 | Same id from two ports: traffic exactly once per port | test_mmdvm::test_mmdvm_same_id_two_ports | dev | probe | covered |
 | P-DMR-40 | Keepalive of one client does not refresh another | test_mmdvm::test_mmdvm_keepalive_isolated | diff | probe | covered (slow) |
 
+### K2. DExtra / D-STAR (`docs/protocols/dextra.md`)
+
+| # | Obligation | Case | Judged | How | Status |
+|---|---|---|---|---|---|
+| P-DXT-01 | Link to a served module -> 14 B ACK (bytes 0-9 + ACK 0x00) | test_dextra::test_dextra_link_ack | diff | probe + dvcheck | planned |
+| P-DXT-02 | ACK latency recorded (xlxd: random 0-2 s) | test_dextra::test_dextra_ack_latency | dev | probe | planned |
+| P-DXT-03 | Link to a module not served -> NAK, no link | test_dextra::test_dextra_link_unserved_module_nak | diff | probe | planned |
+| P-DXT-04 | Link with invalid callsign / non-letter module: no link; reply (NAK or silence) recorded | test_dextra::test_dextra_link_invalid[callsign\|module] | dev | probe | planned |
+| P-DXT-05 | Link with last byte 11 (revision 1) ACKed; unlink answered DISCONNECTED | test_dextra::test_dextra_link_rev1 | diff | probe | planned |
+| P-DXT-06 | Repeated link while linked: re-ACK, one client, traffic once | test_dextra::test_dextra_relink_single_client | dev | probe | planned |
+| P-DXT-07 | Reflector keepalive: 9 B callsign + 0x00; period recorded | test_dextra::test_dextra_reflector_keepalive | diff + dev | probe + dvcheck | planned |
+| P-DXT-08 | Own-callsign keepalive refreshes; echo of the reflector keepalive does not | test_dextra::test_dextra_keepalive_echo_not_refresh | dev (slow) | probe | planned |
+| P-DXT-09 | Silent client dropped after the timeout; notice recorded | test_dextra::test_dextra_silent_client_dropped | dev (slow) | probe | planned |
+| P-DXT-10 | Dropped client gets no further voice | test_dextra::test_dextra_dropped_client_no_voice | diff (slow) | probe | planned |
+| P-DXT-11 | Talking client not dropped past the keepalive timeout | test_dextra::test_dextra_talker_not_dropped | diff (slow) | probe | planned |
+| P-DXT-12 | Unlink removes the client, no reply | test_dextra::test_dextra_unlink_no_reply | diff | probe + dvcheck | planned |
+| P-DXT-13 | No voice after unlink (tail) | test_xlxd_clients::test_leave_mid_stream_tail[dstar] | spec (B5) | probe | covered (C7b) |
+| P-DXT-14 | Unlink by the talker ends its stream, frees the module | test_dextra::test_dextra_unlink_while_talking | dev | probe | planned |
+| P-DXT-15 | Unknown / wrong-size packets ignored, reflector keeps serving | test_dextra::test_dextra_garbage_ignored[short3\|link10\|oversize\|dsvt55\|dsvt57\|voice26\|voice28] | diff | probe | planned |
+| P-DXT-16 | DSVT from a non-linked address not relayed | test_dextra::test_dextra_dsvt_not_linked | diff | probe | planned |
+| P-DXT-17 | Header prefix variants (byte 8, byte 14, bytes 9-11) | test_dextra::test_dextra_header_prefix[byte8\|byte14\|ids] | dev | probe | planned |
+| P-DXT-18 | 56 B JARL-layout header opens a stream | test_dextra::test_dextra_header_opens_stream | hb | probe | planned |
+| P-DXT-19 | Ingress header CRC not required (spaces / wrong / valid) | test_dextra::test_dextra_header_crc_ingress[spaces\|wrong\|valid] | diff (B12) | probe | planned |
+| P-DXT-20 | Egress header P_FCS valid | test_dextra::test_dextra_egress_header_crc | hb | probe + dvcheck | planned |
+| P-DXT-21 | Header with invalid MY / RPT1 / RPT2 characters | test_dextra::test_dextra_header_invalid_callsign[my\|rpt1\|rpt2] | dev | probe | planned |
+| P-DXT-22 | Flag bytes reach egress unchanged | test_dextra::test_dextra_header_flags_passed | dev | probe | planned |
+| P-DXT-23 | Stream id 0 opens no stream | test_floor::test_admission_sid_zero | spec (B8) | probe | covered (B8) |
+| P-DXT-24 | Repeated header with the same id mid-stream: no second stream, no restart | test_dextra::test_dextra_header_repeat_discarded | hb | probe | planned |
+| P-DXT-25 | Id already open on another module dropped | test_floor::test_admission_same_sid_two_rooms | spec (B8) | probe | covered (B8) |
+| P-DXT-26 | Reuse of a module's last outbound id from another address | test_dextra::test_dextra_outbound_id_echo | dev | probe | planned |
+| P-DXT-27 | AMBE relayed byte exact | test_xlxd_matrix::test_passthrough_exact | diff | probe | covered (C1) |
+| P-DXT-28 | Slow data (text, header resend, filler) relayed unchanged | test_dextra::test_dextra_slow_data_passthrough[text\|header\|filler] | diff | probe | planned |
+| P-DXT-29 | Egress counter 0..20, 0x80 header, 0x40 last | test_dextra::test_dextra_egress_counter | hb | probe + dvcheck | planned |
+| P-DXT-30 | Egress sync 55 2D 16 in frame 0 only | test_dextra::test_dextra_egress_sync | hb | probe + dvcheck | planned |
+| P-DXT-31 | Voice with counter > 20 or bit 0x80 | test_dextra::test_dextra_counter_out_of_range | dev | probe | planned |
+| P-DXT-32 | Last frame ends the stream and reaches listeners | test_dextra::test_dextra_last_frame_ends_stream | hb | probe + dvcheck | planned |
+| P-DXT-33 | Egress last-frame payload recorded | test_dextra::test_dextra_last_frame_payload | dev | probe | planned |
+| P-DXT-34 | Voice after the last frame (same id) not relayed | test_dextra::test_dextra_voice_after_last | diff | probe + dvcheck | planned |
+| P-DXT-35 | Header to the linked module reaches every other client once | test_dextra::test_dextra_module_fanout | diff | probe | planned |
+| P-DXT-36 | RPT2 module differs from the linked module | test_dextra::test_dextra_rpt2_other_module | dev | probe | planned |
+| P-DXT-37 | Egress RPT2 / RPT1 / UR / MY / suffix recorded | test_dextra::test_dextra_egress_rpt_fields | diff + dev | probe | planned |
+| P-DXT-38 | Module change via unlink + relink | test_xlxd_clients::test_module_change_follows_talker[dstar] | diff | probe | covered (C7) |
+| P-DXT-39 | Link to a second module without unlink | test_dextra::test_dextra_second_module_link | dev | probe | planned |
+| P-DXT-40 | Lost last frame: stream ends after the timeout, module free | test_xlxd_clients::test_stream_timeout_frees_module | spec (B3) | probe | covered (C8) |
+| P-DXT-41 | Second header on a busy module not mixed in | test_floor::test_first_talker_wins, ::test_late_entry_denied | spec (B1/B2) | probe | covered (B1/B2) |
+| P-DXT-42 | Voice without a header not relayed | test_dextra::test_dextra_voice_without_header | dev | probe | planned |
+| P-DXT-43 | Talker never gets its own stream back | test_dextra::test_dextra_no_self_echo | diff | probe | planned |
+| P-DXT-44 | Listener linking mid-stream gets the header first | test_dextra::test_dextra_late_listener_header | dev | probe | planned |
+| P-DXT-45 | Egress header copies counted | test_dextra::test_dextra_egress_header_copies | dev | probe + dvcheck | planned |
+| P-DXT-46 | One stream id per transmission on egress; equal to ingress | test_dextra::test_dextra_egress_stream_id | hb + spec (B10) | probe + dvcheck | planned |
+| P-DXT-47 | Two callsigns from one IP: two clients, traffic once each | test_dextra::test_dextra_two_callsigns_one_ip | diff | probe | planned |
+| P-DXT-48 | Same callsign from two ports | test_dextra::test_dextra_same_callsign_two_ports | dev | probe | planned |
+| P-DXT-49 | Keepalive of one client does not refresh another | test_dextra::test_dextra_keepalive_isolated | diff (slow) | probe | planned |
+| P-DXT-50 | Link from an XRF callsign: reply form | test_dextra::test_dextra_xrf_peer_link | dev | probe | planned |
+| P-DXT-51 | Stream from an XRF peer routed to the linked local module | test_dextra::test_dextra_xrf_peer_routing | dev | probe | planned |
+
 ## Upstream behaviour the cases accept
 
 Known xlxd behaviour that is not a defect of the build under test; cases and
 dvcheck report it as a warning with a note:
 
 - M17 -> D-STAR drops the two Codec2 frames of M17 frame 0.
-- A stream that times out is closed without a last frame.
+- A talker that stops without a last frame: its stream times out after 1.6 s and
+  every egress still gets an end marker (D-STAR last frame, DMR terminator, M17 EOT; C8, P-DMR-34).
 - After MSTCL a DMR peer can still receive up to 1 s of stream (client cache).
 - A 9-byte RPTCL is ignored by xlxd.
 - With the transcoder down, cross-mode frames are all zero and D-STAR frame 0 has no sync.
