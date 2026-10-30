@@ -137,9 +137,11 @@ def record(key, value):
 
 def _probe(side):
     """True when a short DMR talk on the module reaches an NXDN listener
-    (xlxd has peered with the reflector)."""
+    (xlxd has peered with the reflector). Deterministic non-zero frames
+    (valid DMR codewords): an all-zero stream reads as zero fill."""
+    frames = [nxdn.to_dmr(nxdn.from_dmr(f)) for f in signals.prng_frames("dmr", 12, seed="nxdn-probe")]
     try:
-        result = run_cell(side, "dmr", "nxdn", [nxdn.to_dmr(bytes(7))] * 12)
+        result = run_cell(side, "dmr", "nxdn", frames)
     except AssertionError:
         return False
     return any(p["kind"] == "voice" for p in result["packets"])
