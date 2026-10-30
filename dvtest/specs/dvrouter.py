@@ -185,7 +185,10 @@ SPEC = {
         "P-P25-22": {"dst_is_tg": True},
         # unknown talker -> the configured gateway id (rig value 1023000,
         # not in the rig dmrid.dat); no callsign hash
-        "P-P25-23": {"src_is_talker": True, "src": [1023000]},
+        # no_radio_id policy (default drop): a talker without a real radio
+        # id is not sent into the edge; "@fallback" = the placeholder id
+        "P-P25-23": {"src_is_talker": True, "src": []},
+        "P-P25-23@fallback": {"src_is_talker": True, "src": [1023000]},
         "P-P25-24": {"terminated": True, "whole_ldu": True, "records": 46},
         "P-P25-25": {"lone": 0, "voice": 0},
         "P-P25-26": {"has_0x73": True, "records": 19},
@@ -194,7 +197,8 @@ SPEC = {
                                 "72": ["9bdc75"]}, "lsd": ["0000"]},
         "P-P25-30": {"received": 36},
         "P-P25-31": {"received": 34},
-        "P-P25-33": {"my": ["P31672"], "received": 36},
+        "P-P25-33": {"received": 0, "my": []},
+        "P-P25-33@fallback": {"received": 36, "my": ["P31672"]},
         # encrypted calls are dropped (records are rebuilt; ciphertext must
         # not be relabelled clear)
         "P-P25-35": {"transcoded": False},
@@ -262,6 +266,11 @@ SPEC = {
         "P-NXD-28": {"terminator": True, "freed": True},
         # a DMR join (empty stream) is not sent to NXDN as an empty over
         "P-NXD-30": {"relayed": False},
+        # no_radio_id policy (default drop), "@fallback" = placeholders
+        "P-NXD-16": {"src": []},
+        "P-NXD-16@fallback": {"src": [9999]},
+        "P-NXD-29": {"my_unknown": [], "dmr_src_unknown": []},
+        "P-NXD-29@fallback": {"my_unknown": ["N04242"], "dmr_src_unknown": [0]},
         # server section (applies once "server" is True): no echo for an
         # unknown TG, one winner (B1), synthesized TX_REL at the timeout (B3),
         # NXDN data NXDN-to-NXDN only, 30 s client timeout as the YSF and P25
@@ -279,12 +288,15 @@ SPEC = {
         "P-DMP-04": {"replies": [b"NAK OK\n\x00"], "heard": False},
         "P-DMP-06": {"hears_new": True, "hears_old": False},
         "P-DMP-15": {"on_linked": True, "on_header_tg": False},
-        "P-DMP-16": {"relayed": True},
+        # no_radio_id policy (default drop), "@fallback" = placeholders
+        "P-DMP-16": {"relayed": False},
+        "P-DMP-16@fallback": {"relayed": True},
         "P-DMP-17": {"exact": True, "c_last_lost": 0},
         "P-DMP-18": {"frames": 0},
         "P-DMP-19": {"second_heard": True, "terminator_within_0.3s": True},
         # unknown talker: the configured gateway id (as P25)
-        "P-DMP-22": {"src_known": 1023007, "src_unknown": 1023000},
+        "P-DMP-22": {"src_known": 1023007, "src_unknown": None},
+        "P-DMP-22@fallback": {"src_known": 1023007, "src_unknown": 1023000},
     },
     # Yaesu IMRS (UDP 21110, docs/protocols/imrs.md): the edge is not built
     # yet; every IMRS case skips "edge not ready" until server is True.

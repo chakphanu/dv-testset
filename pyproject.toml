@@ -33,5 +33,6 @@ markers = [
     "interop: protocol interop, always judged against xlxd-ref",
     "behaviour: reflector behaviour, follows DVT_SUT_PROFILE (dvtest/specs)",
     "crossmode: needs cross-mode audio through the system under test's transcoding",
+    "radio_id: the sut expectation depends on DVT_NO_RADIO_ID (talker without a real radio id)",
     "proto: per-protocol conformance case (docs/protocols/<protocol>.md, testlist K)",
 ]

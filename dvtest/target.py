@@ -30,6 +30,8 @@ allstar .40.
   DVT_REFLECTOR      reflector callsign (XLX999)
   DVT_IAX_SECRET     IAX2 secret of the AllStar node (rig: .local/rig.env)
   DVT_OUT            results directory (out)
+  DVT_NO_RADIO_ID    drop | fallback | local: how the sut's id-based edges
+                     treat a talker without a real radio id (unset = drop)
   DVT_SUT_PROFILE    behaviour rule for the sut: xlxd (default, sut == ref) or a
                      dvtest/specs/<name>.py spec
   DVT_SUT_DIVERGENCES  legacy: declared divergences of the sut (dvtest/divergences.py)
@@ -51,7 +53,7 @@ KEYS = ("subnet", "xlxd_ref", "xlxd_sut", "xlxd_peer_sut", "xlxd_peer_ref", "xlx
         "ambed_ref", "ambed_sut", "tester", "allstar",
         "nxdn_ref", "nxdn_sut", "p25_ref", "p25_sut",
         "ambed_addr", "ambed_port", "ambed_stream_cap", "xlxd_bin", "xlxd_ref_bin", "reflector", "iax_secret",
-        "sut_profile", "out")
+        "sut_profile", "no_radio_id", "out")
 
 
 @dataclass
@@ -78,6 +80,7 @@ class Target:
     xlxd_ref_bin: str = ""
     reflector: str = "XLX999"
     sut_profile: str = "xlxd"
+    no_radio_id: str = ""
     iax_secret: str = field(default="", repr=False)
     out: str = "out"
     # keys set explicitly by env or TOML (rig host defaults are not)

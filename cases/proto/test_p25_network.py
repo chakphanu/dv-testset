@@ -148,7 +148,7 @@ def judge_dev(rig, nn, got, *keys):
     if rig.sut_profile == specs.DEFAULT:
         same(got, *keys)
         return
-    entry = (specs.rule(rig, "p25") or {}).get(nn) or {}
+    entry = specs.rule_mode(rig, "p25", nn) or {}
     pending = [key for key in keys if key not in entry]
     for key in keys:
         if key in entry:

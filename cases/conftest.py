@@ -353,6 +353,28 @@ CROSSMODE = {
 }
 
 
+# Cases whose talker has no real radio id on (or into) an id-based edge
+# (MMDVM, DMR+, NXDN, P25): their sut expectation depends on
+# DVT_NO_RADIO_ID (specs.rule_mode); a second dvrouter pass with
+# DVT_NO_RADIO_ID=fallback runs -m radio_id. Same value form as CROSSMODE.
+RADIO_ID = {
+    "test_p25_network.py::test_p25_egress_src_id": {"unknown"},
+    "test_p25_network.py::test_p25_ingress_unknown_src": True,
+    "test_nxdn_peer.py::test_nxdn_egress_src_id": {"unknown"},
+    "test_nxdn_peer.py::test_nxdn_ingress_src_mapping": True,
+    "test_dmrplus.py::test_dmp_egress_header_fields": {"unknown"},
+    "test_dmrplus.py::test_dmp_unknown_source": True,
+}
+
+
+def _in_table(table, key, item):
+    rule = table.get(key)
+    if rule is True:
+        return True
+    callspec = getattr(item, "callspec", None)
+    return bool(rule and callspec and set(callspec.id.split("-")) & rule)
+
+
 def _crossmode(key, item):
     rule = CROSSMODE.get(key)
     if rule is True:
@@ -369,6 +391,8 @@ def pytest_collection_modifyitems(items):
         item.add_marker(pytest.mark.behaviour if key in BEHAVIOUR else pytest.mark.interop)
         if _crossmode(key, item):
             item.add_marker(pytest.mark.crossmode)
+        if _in_table(RADIO_ID, key, item):
+            item.add_marker(pytest.mark.radio_id)
 
 
 @pytest.fixture

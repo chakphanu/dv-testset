@@ -106,7 +106,7 @@ def judge_dev(rig, nn, got, *keys):
     if rig.sut_profile == specs.DEFAULT:
         same(got, *keys)
         return
-    entry = (specs.rule(rig, "nxdn") or {}).get(nn) or {}
+    entry = specs.rule_mode(rig, "nxdn", nn) or {}
     for key in keys:
         if key in entry:
             assert got["sut"][key] == entry[key], "%s %s: sut %r, spec %r" % (nn, key, got["sut"][key], entry[key])
@@ -524,9 +524,12 @@ def test_nxdn_egress_src_id(peer, eg, who):
         return {"src": sorted({p["src"] for p in pk})}
 
     got = both(peer["sides"], run)
-    same(got, "src")
     if who == "known":
+        same(got, "src")
         assert got["sut"]["src"] == [GW_IDS[0]], got
+    else:
+        # no NXDN id for the talker: DVT_NO_RADIO_ID decides (specs.rule_mode)
+        judge_dev(peer["rig"], "P-NXD-16", got, "src")
 
 
 def test_nxdn_no_echo(peer, ig):
@@ -785,7 +788,9 @@ def test_nxdn_ingress_src_mapping(peer):
         return {"my_known": my_k, "dmr_src_known": src_k, "my_unknown": my_u, "dmr_src_unknown": src_u}
 
     got = both(peer["sides"], run)
-    same(got, "my_known", "dmr_src_known", "my_unknown", "dmr_src_unknown")
+    same(got, "my_known", "dmr_src_known")
+    # unknown NXDN id: DVT_NO_RADIO_ID decides (specs.rule_mode)
+    judge_dev(peer["rig"], "P-NXD-29", got, "my_unknown", "dmr_src_unknown")
 
 
 # ---------------------------------------------------------------- 1b. loss and leave (slow, last)

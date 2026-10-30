@@ -71,3 +71,22 @@ def test_profile_implies_divergences():
         target.load(env={"DVT_SUT_PROFILE": "nosuch"})
     t = target.load(env={})
     assert (t.xlxd_peer2_sut, t.xlxd_peer2_ref) == ("172.30.0.14", "172.30.0.15")
+
+
+def test_no_radio_id_rule_mode(monkeypatch):
+    import pytest
+    from dvtest import specs
+    table = {"p25": {"P-P25-23": {"src": []}, "P-P25-23@fallback": {"src": [1023000]},
+                     "P-P25-01": {"x": 1}}}
+    monkeypatch.setattr(specs, "rule", lambda t, key: table.get(key))
+    t = target.load(env={"DVT_SUT_PROFILE": "dvrouter"})
+    assert t.no_radio_id == "" and specs.rule_mode(t, "p25", "P-P25-23") == {"src": []}
+    t = target.load(env={"DVT_SUT_PROFILE": "dvrouter", "DVT_NO_RADIO_ID": "fallback"})
+    assert specs.rule_mode(t, "p25", "P-P25-23") == {"src": [1023000]}
+    assert specs.rule_mode(t, "p25", "P-P25-01") == {"x": 1}          # no @fallback variant
+    assert specs.rule_mode(t, "p25", "P-P25-99") is None
+    t = target.load(env={"DVT_SUT_PROFILE": "dvrouter", "DVT_NO_RADIO_ID": "local"})
+    assert specs.rule_mode(t, "p25", "P-P25-23") == {"src": []}       # no @local variant: plain entry
+    t = target.load(env={"DVT_NO_RADIO_ID": "bogus"})
+    with pytest.raises(ValueError, match="DVT_NO_RADIO_ID"):
+        specs.rule_mode(t, "p25", "P-P25-23")

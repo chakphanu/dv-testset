@@ -84,7 +84,7 @@ def judge_dev(rig, nn, got, *keys):
     if rig.sut_profile == specs.DEFAULT:
         same(got, *keys)
         return
-    entry = (specs.rule(rig, "dmrplus") or {}).get(nn) or {}
+    entry = specs.rule_mode(rig, "dmrplus", nn) or {}
     pending = [key for key in keys if key not in entry]
     for key in keys:
         if key in entry:
@@ -663,7 +663,10 @@ def test_dmp_egress_header_fields(dmp, egress, who):
     assert got["ref"]["header"]
     for side in ("ref", "sut"):
         got[side]["src_" + who] = got[side].get("src")
-    if who == "known":
+    # unknown talker: the sut's header (if any) must match ref's fields;
+    # whether it sends one is DVT_NO_RADIO_ID's (P-DMP-22 src_unknown,
+    # None = no header) under a non-xlxd profile
+    if who == "known" or dmp.sut_profile == specs.DEFAULT or got["sut"]["header"]:
         same(got, "header", "slot", "cc", "call", "dst")
     judge_dev(dmp, "P-DMP-22", got, "src_" + who)
 

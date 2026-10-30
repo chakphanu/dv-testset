@@ -555,7 +555,7 @@ test, "dev" rows are recorded under the `xlxd` profile.
 | P-M17-45 | No datagram to a client above 100 B | test_m17::test_m17_egress_max_size | hb | probe | covered |
 
 K9 (YSF, `docs/protocols/ysf.md`) is reserved for that suite when it
-lands; K12 onward for DMR+, IMRS and USRP dynamic clients.
+lands; K14 onward for USRP dynamic clients.
 
 ### K10. XLX interlink (`docs/protocols/xlx.md`)
 
@@ -638,6 +638,80 @@ P-G3-27 needs `--profile g3` (second terminal `g3-term2`).
 | P-G3-26 | HPCH from the terminal: reply recorded | test_g3::test_g3_hpch | dev | probe | covered |
 | P-G3-27 | Two terminals on one module | test_g3::test_g3_two_terminals | diff | probe (--profile g3) | covered |
 | P-G3-28 | G3 failure does not stop the reflector | - | dev | code only (no NET_RAW-less xlxd) | code only |
+
+### K12. DMRplus dongle (`docs/protocols/dmrplus.md`)
+
+Under a non-xlxd profile the suite skips "edge not ready" until
+`SPEC["dmrplus"]["server"]` is True. P-DMP-03 runs in its own pass with
+`DVT_XLXD_BLACKLIST=N0DMP`. Measured on xlxd: all sut == ref
+(out/20261030T083029Z-i10, out/20261030T083817Z-i10).
+
+| # | Obligation | Case | Judged | How | Status |
+|---|---|---|---|---|---|
+| P-DMP-01 | Connect -> ACK, linked to 4001 + n | test_dmrplus::test_dmp_connect_ack | diff | probe | covered |
+| P-DMP-02 | Connect from an unknown id: no reply | test_dmrplus::test_dmp_connect_unknown_id | diff | probe | covered |
+| P-DMP-03 | Refused connect -> NAK | test_dmrplus::test_dmp_connect_refused | diff | probe (needs `DVT_XLXD_BLACKLIST=N0DMP`, see Rig needs) | covered |
+| P-DMP-04 | Connect to an unmapped reflector number | test_dmrplus::test_dmp_connect_no_module[4000\|4500] | dev | probe | covered |
+| P-DMP-05 | Keepalive ACKed, no server keepalive | test_dmrplus::test_dmp_keepalive_ack | diff | probe | covered |
+| P-DMP-06 | Keepalive with another reflector number | test_dmrplus::test_dmp_keepalive_other_module | dev | probe | covered |
+| P-DMP-07 | Silent client dropped after 10 s, nothing sent | test_dmrplus::test_dmp_silent_client_dropped | diff | probe | covered |
+| P-DMP-08 | Dropped client gets no voice | test_dmrplus::test_dmp_dropped_client_no_voice | diff | probe | covered |
+| P-DMP-09 | Disconnect unlinks, no reply | test_dmrplus::test_dmp_disconnect | diff | probe | covered |
+| P-DMP-10 | Disconnect from an unknown address ignored | test_dmrplus::test_dmp_disconnect_unknown | diff | probe | covered |
+| P-DMP-11 | Header opens a stream (DMR+ -> MMDVM listener) | test_dmrplus::test_dmp_header_opens_stream | hb | probe | covered |
+| P-DMP-12 | Slot 1 ignored | test_dmrplus::test_dmp_ingress_filtered[slot1] | diff | probe | covered |
+| P-DMP-13 | Colour code other than 1 ignored | test_dmrplus::test_dmp_ingress_filtered[cc2] | diff | probe | covered |
+| P-DMP-14 | Private-call voice not relayed | test_dmrplus::test_dmp_ingress_filtered[private] | diff | probe | covered |
+| P-DMP-15 | Header TG of another module | test_dmrplus::test_dmp_header_other_module | dev | probe | covered |
+| P-DMP-16 | Header with an unknown source id | test_dmrplus::test_dmp_unknown_source | dev | probe | covered |
+| P-DMP-17 | AMBE+2 frames unchanged, DMR+ -> MMDVM (last byte of frame C recorded) | test_dmrplus::test_dmp_frames_exact_to_mmdvm | dev | probe | covered |
+| P-DMP-18 | Voice without header not relayed | test_dmrplus::test_dmp_no_header_not_relayed | dev | probe | covered |
+| P-DMP-19 | Terminator ends the stream at once | test_dmrplus::test_dmp_terminator_frees_module | dev | probe | covered |
+| P-DMP-20 | Repeated header keeps the stream | test_dmrplus::test_dmp_repeated_header | diff | probe | covered |
+| P-DMP-21 | No echo to the talker | test_dmrplus::test_dmp_no_echo | diff | probe | covered |
+| P-DMP-22 | Egress header fields (TS2, CC1, group, 4001 + n, source id) | test_dmrplus::test_dmp_egress_header_fields[known\|unknown] | diff + dev (src) | probe | covered |
+| P-DMP-23 | Egress header burst is a real voice LC header | test_dmrplus::test_dmp_egress_lc_header | hb (xlxd recorded) | probe | covered |
+| P-DMP-24 | Egress A sync, B-F EMB + embedded LC | test_dmrplus::test_dmp_egress_embedded_lc | hb (xlxd recorded) | probe | covered |
+| P-DMP-25 | Egress terminator with LC | test_dmrplus::test_dmp_egress_terminator | hb (xlxd recorded) | probe | covered |
+| P-DMP-26 | Egress pacing and sequence | test_dmrplus::test_dmp_egress_sequence | diff | probe | covered |
+| P-DMP-27 | Egress burst layout, MMDVM -> DMR+ frames exact | test_dmrplus::test_dmp_frames_exact_from_mmdvm | diff | probe | covered |
+| P-DMP-28 | Wrong-size datagrams ignored | test_dmrplus::test_dmp_garbage_ignored[short\|30\|73\|oversize] | diff | probe | covered |
+| P-DMP-29 | Unknown 72-byte type ignored | test_dmrplus::test_dmp_unknown_type | diff | probe | covered |
+| P-DMP-30 | Voice from an unlinked address not relayed | test_dmrplus::test_dmp_unlinked_sender | diff | probe | covered |
+| P-DMP-31 | Two ports on one IP: two sessions | test_dmrplus::test_dmp_two_clients[two_ports] | diff | probe | covered |
+| P-DMP-32 | Same id from two addresses | test_dmrplus::test_dmp_two_clients[same_id] | diff | probe | covered |
+| P-DMP-33 | DMR+ <-> MMDVM passthrough | test_dmrplus::test_dmp_frames_exact_to_mmdvm, ::test_dmp_frames_exact_from_mmdvm | dev / diff | probe | covered |
+| P-DMP-34 | DMR+ <-> D-STAR / M17 cross-mode | test_dmrplus::test_dmp_cross_mode[dstar\|m17] | diff | probe | covered |
+| P-DMP-35 | Second header on a busy module not mixed | test_dmrplus::test_dmp_busy_module_no_mix | spec (B1) | probe | covered |
+
+### K13. Yaesu IMRS (`docs/protocols/imrs.md`)
+
+| # | Obligation | Case | Judged | How | Status |
+|---|---|---|---|---|---|
+| P-IMR-01 | UDP 21110 both ways | test_imrs::test_imrs_port_21110 | hb | probe | covered |
+| P-IMR-02 | One session per IP vs per (callsign, IP) | test_imrs::test_imrs_two_callsigns_one_ip | dev | probe | covered |
+| P-IMR-03 | Ping -> info + ping | test_imrs::test_imrs_ping_answer | diff | probe | covered |
+| P-IMR-04 | Ping from a non-peer | test_imrs::test_imrs_ping_from_stranger | dev | probe | covered |
+| P-IMR-05 | Info content: callsign, DG-ID bitmap | test_imrs::test_imrs_info_content | dev | probe | covered |
+| P-IMR-06 | Info registers the repeater; 7 / 8-character callsign | test_imrs::test_imrs_register[7\|8] | diff + dev | probe | covered |
+| P-IMR-07 | Silent peer dropped; isolation | test_imrs::test_imrs_peer_timeout | dev | probe | covered (slow) |
+| P-IMR-08 | Header DG-ID selects the room; unmapped DG-ID | test_imrs::test_imrs_dgid_room[mapped\|unmapped] | diff + dev | probe | covered |
+| P-IMR-09 | Egress DG-ID = room | test_imrs::test_imrs_egress_dgid | diff | probe | covered |
+| P-IMR-10 | Egress only to the room's peers | test_imrs::test_imrs_egress_room_only | diff | probe | covered |
+| P-IMR-11 | Header frame structure | test_imrs::test_imrs_egress_header | hb + diff | probe | covered |
+| P-IMR-12 | Voice frames: VD2, five per packet, AMBE+2 unchanged | test_imrs::test_imrs_voice_passthrough | hb + diff | probe | covered |
+| P-IMR-13 | Terminator FI = 2 | test_imrs::test_imrs_egress_terminator | hb | probe | covered |
+| P-IMR-14 | Last partial group sent | test_imrs::test_imrs_partial_group | dev | probe | covered |
+| P-IMR-15 | Terminator adds no audio | test_imrs::test_imrs_terminator_no_audio | dev | probe | covered |
+| P-IMR-16 | Missing slot not replayed | - | dev | needs a lossy path (netem) | not covered |
+| P-IMR-17 | Stream id per over | test_imrs::test_imrs_stream_id | dev | probe | covered |
+| P-IMR-18 | No echo to the talking repeater (tail included) | test_imrs::test_imrs_no_echo | dev | probe | covered |
+| P-IMR-19 | Header without info dropped | test_imrs::test_imrs_peer_timeout | diff | probe | covered (slow) |
+| P-IMR-20 | Lower-case / NUL callsigns | test_imrs::test_imrs_callsign_case | dev | probe (D-STAR listener) | covered |
+| P-IMR-21 | Lost terminator: timeout, terminators | test_imrs::test_imrs_lost_terminator | spec (B3) | probe | covered |
+| P-IMR-22 | Two repeaters at once: one winner | test_imrs::test_imrs_two_talkers | spec (B1) | probe | covered |
+| P-IMR-23 | IMRS <-> DMR passthrough (P-IMR-12); D-STAR / M17 differential | test_imrs::test_imrs_cross_mode[dstar\|m17] | diff | probe | covered |
+| P-IMR-24 | Empty call from another mode not sent to IMRS | test_imrs::test_imrs_empty_stream_not_relayed | dev | probe | covered |
 
 ## Upstream behaviour the cases accept
 

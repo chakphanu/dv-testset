@@ -41,6 +41,23 @@ def m17_fn0_relayed(target):
     return (rule(target, "test_m17_frame0_relayed") or {}).get("fn0") == "relay"
 
 
+RADIO_ID_MODES = ("drop", "fallback", "local")
+
+
+def rule_mode(target, proto, nn):
+    """The profile's spec entry for item nn of a protocol dict (e.g.
+    "mmdvm", "P-DMR-03"), honouring DVT_NO_RADIO_ID: under "fallback" or
+    "local" the entry "<nn>@<mode>" wins when present; "drop" (the default)
+    uses "<nn>". None under the xlxd profile or when absent."""
+    mode = target.no_radio_id or "drop"
+    if mode not in RADIO_ID_MODES:
+        raise ValueError("DVT_NO_RADIO_ID=%r; known: %s" % (mode, ", ".join(RADIO_ID_MODES)))
+    entry = rule(target, proto) or {}
+    if mode != "drop" and "%s@%s" % (nn, mode) in entry:
+        return entry["%s@%s" % (nn, mode)]
+    return entry.get(nn)
+
+
 def rule(target, case):
     """Expectation of the target's profile for a behaviour case: None under
     the xlxd profile (differential against xlxd-ref), else the spec entry
