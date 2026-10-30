@@ -52,6 +52,18 @@ SPEC = {
     # under the old sid is dropped until a new header after the relink),
     # and clients that did not relink get nothing
     "test_restart_no_stale_stream": {"stale": "none", "old_links": "none"},
+    # B18 short-stream guard: xlxd-compatible ladder (3 short streams < 50
+    # frames, each within 2 s -> TX refused silently 3 s / 10 s / 300 s;
+    # strikes decay after 300 s), per callsign, across protocols and rooms;
+    # the third strike refuses new links of local clients (NAK / BUSY /
+    # MSTNAK / NACK, or no poll reply on YSF / NXDN / P25), sessions kept
+    "test_short_stream_guard_first_block": {"block_s": 3, "reply_while_blocked": 0},
+    "test_short_stream_guard_second_block": {"block_s": 10},
+    "test_short_stream_guard_per_callsign": {"other_heard": True},
+    "test_short_stream_guard_cross_protocol_block": {"dmr_heard": False, "m17_heard": False},
+    "test_short_stream_guard_cross_protocol_strikes": {"struck": True},
+    "test_short_stream_guard_third_strike": {"new_link": "refused", "existing_kept": True, "third_blocks_tx": True},
+    "test_short_stream_guard_decay": {"block_after_decay_s": 3},
     # B13 no frame loss under load (C9 path)
     "test_no_load_loss_passthrough": {"loss": 0},
     "test_no_load_loss_cross": {"loss": 0},

@@ -265,6 +265,13 @@ BEHAVIOUR = {
     "test_mmdvm.py::test_mmdvm_busy_module_no_mix",                  # P-DMR-35 (B1/B2)
     "test_p25_network.py::test_p25_second_talker_dropped",          # P-P25-13 (B1)
     "test_p25_network.py::test_p25_stream_timeout",                 # P-P25-15 (B3)
+    "test_short_stream_guard.py::test_short_stream_guard_first_block",  # B18
+    "test_short_stream_guard.py::test_short_stream_guard_second_block",  # B18
+    "test_short_stream_guard.py::test_short_stream_guard_per_callsign",  # B18
+    "test_short_stream_guard.py::test_short_stream_guard_cross_protocol_block",  # B18
+    "test_short_stream_guard.py::test_short_stream_guard_cross_protocol_strikes",  # B18
+    "test_short_stream_guard.py::test_short_stream_guard_third_strike",  # B18
+    "test_short_stream_guard.py::test_short_stream_guard_decay",  # B18
 }
 SYSTEM_MARKERS = {"rig", "netns", "allstar", "nxdn", "p25", "load", "interlink"}
 
@@ -333,6 +340,8 @@ CROSSMODE = {
     "test_p25_network.py::test_p25_ingress_unknown_src": True,
     "test_p25_network.py::test_p25_ingress_record_loss": True,
     "test_p25_network.py::test_p25_ingress_encrypted": True,
+    # B18: a DMR / M17 over is seen only through transcoding to the DExtra listener
+    "test_short_stream_guard.py::test_short_stream_guard_cross_protocol_block": True,
 }
 
 
