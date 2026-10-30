@@ -87,6 +87,34 @@ NETEM_HOSTS = {"tester": ("tester",), "xlxd": ("xlxd_ref", "xlxd_sut"),
 SETTLE = 2.0
 
 
+MARK_SETTLE = 1.0
+
+
+def marks(run_dir, hosts):
+    """[(tester ip, t0, t1, "mark <tag>")] from control.log "mark begin
+    <tag>" / "mark end <tag>" lines: a case brackets traffic it makes
+    malformed on purpose. A window runs from the begin request to 1 s after
+    the completed end (to the capture end without one)."""
+    path = os.path.join(run_dir, "control", "control.log")
+    ip = hosts.get("tester")
+    if not ip or not os.path.isfile(path):
+        return []
+    begun, out = {}, []
+    with open(path) as fh:
+        for line in fh:
+            m = re.match(r"^(\S+Z) (?:(request) )?mark (begin|end) ([A-Za-z0-9._-]+)(?: -> (\S+))?$", line.strip())
+            if not m or (m.group(2) is None) == (m.group(5) is None):
+                continue
+            ts = datetime.fromisoformat(m.group(1).replace("Z", "+00:00")).timestamp()
+            edge, tag = m.group(3), m.group(4)
+            if edge == "begin" and m.group(2):
+                begun.setdefault(tag, ts)
+            elif edge == "end" and m.group(5) == "0" and tag in begun:
+                out.append((ip, begun.pop(tag), ts + MARK_SETTLE, "mark " + tag))
+    out += [(ip, t0, float("inf"), "mark " + tag) for tag, t0 in begun.items()]
+    return out
+
+
 def impairments(run_dir, hosts):
     """[(ip, t0, t1, label)] of netem windows (run.sh --netem): impaired from
     the start when netem.txt's start block shows a netem qdisc on a host,
@@ -144,15 +172,22 @@ def _excuse(report, frame_ts, windows):
     """Errors on flows of a service the control channel had stopped become
     warnings tagged "[during control stop of X]"; inside a netem window only
     loss/dup/reorder/jitter findings on flows of the impaired host do, tagged
-    "(netem: <args>)". All stay listed."""
+    "[during netem ...]"; inside a mark window errors on flows the tester
+    sends do, tagged "[during mark <tag>]". All stay listed."""
     for index, f in enumerate(report.findings):
         ts = frame_ts.get(f.frame)
         if f.severity != ERROR or ts is None:
             continue
+        # a sequence gap spans from the packet before it to where it showed
+        start = report.gap_start.get(f.frame) or ts
         for ip, t0, t1, svc in windows:
-            if not (t0 <= ts <= t1 and re.search(r"(^|[<>])%s[:<]" % re.escape(ip), f.flow)):
+            if not (start <= t1 and ts >= t0 and re.search(r"(^|[<>])%s[:<]" % re.escape(ip), f.flow)):
                 continue
-            if svc.startswith("netem "):
+            if svc.startswith("mark "):
+                if not f.flow.startswith(ip + ":"):
+                    continue
+                note = " [during %s]" % svc
+            elif svc.startswith("netem "):
                 if not NETEM_CODES.search(f.code):
                     continue
                 note = " [during %s]" % svc
@@ -516,7 +551,8 @@ def main(argv=None):
     rig = rig_config() if args.ports_from == "rig" else None
     windows = []
     if rig and os.path.isdir(args.target):
-        windows = outages(args.target, rig["hosts"]) + impairments(args.target, rig["hosts"])
+        windows = (outages(args.target, rig["hosts"]) + impairments(args.target, rig["hosts"])
+                   + marks(args.target, rig["hosts"]))
     results = []
     for path in files:
         try:

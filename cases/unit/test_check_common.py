@@ -217,3 +217,57 @@ def test_netem_differential_tolerance(tmp_path):
     assert pair({2}, ()) == {"warn"}                   # 1 <= 3
     assert pair(five, {30}) == {"warn"}                # 5 <= 2 x 1 + 3
     assert pair(five, (), ref_stream=False) == {"warn"}     # not comparable
+
+
+def test_mark_windows(tmp_path):
+    """control.log mark begin/end brackets deliberate malformed traffic:
+    errors on flows the tester sends inside it become warnings; the sut's
+    own errors, and the tester's outside the window, stay errors."""
+    (tmp_path / "control").mkdir()
+    (tmp_path / "control" / "control.log").write_text(
+        "2026-10-30T06:05:35.613Z request mark begin usrp-keyup0\n"
+        "2026-10-30T06:05:35.614Z mark begin usrp-keyup0 -> 0\n"
+        "2026-10-30T06:05:36.000Z request asl usrp-show\n"
+        "2026-10-30T06:05:40.933Z request mark end usrp-keyup0\n"
+        "2026-10-30T06:05:40.936Z mark end usrp-keyup0 -> 0\n"
+        "2026-10-30T06:05:41.146Z request mark begin open-ended\n")
+    hosts = check.rig_config("172.30.0.0/24")["hosts"]
+    got = check.marks(str(tmp_path), hosts)
+    assert [(ip, round(t1 - t0, 3), label) for ip, t0, t1, label in got][0] == (
+        "172.30.0.30", round(40.936 + 1.0 - 35.613, 3), "mark usrp-keyup0")
+    assert got[1][2] == float("inf") and got[1][3] == "mark open-ended"
+    usrp = __import__("dvtest.proto.usrp", fromlist=["usrp"])
+    w = Wire(t0=1000.0)
+    w.send("172.30.0.30", 32003, "172.30.0.11", 34003, usrp.header(0, 1))            # keyed, 32 B: bad_length
+    w.send("172.30.0.11", 34003, "172.30.0.30", 32003, usrp.header(0, 1), 0.02)      # same from the sut
+    w.send("172.30.0.30", 32003, "172.30.0.11", 34003, usrp.header(1, 1), 10.0)      # outside the window
+    rig = check.rig_config("172.30.0.0/24")
+    windows = [("172.30.0.30", 999.0, 1001.0, "mark usrp-keyup0")]
+    result = check.check_file(w.save(tmp_path / "xlxd-sut.pcapng"), rig, windows=windows)
+    bad = [(f["frame"], f["severity"]) for f in result["findings"] if f["code"] == "usrp.bad_length"]
+    assert bad == [(1, "warn"), (2, "error"), (3, "error")]
+    assert result["findings"][0]["message"].endswith("[during mark usrp-keyup0]")
+
+
+def test_gap_across_a_mark_window(tmp_path):
+    """A sequence gap that shows on the first good frame after a mark window,
+    but opened before its end, belongs to the window; a gap outside stays."""
+    usrp = __import__("dvtest.proto.usrp", fromlist=["usrp"])
+    pcm = b"\x01\x00" * 160
+    rig = check.rig_config("172.30.0.0/24")
+
+    def loss(window_start, window_end):
+        w = Wire(t0=1000.0)
+        for seq in range(10):
+            w.send("172.30.0.30", 32003, "172.30.0.11", 34003, usrp.voice(seq, pcm), 0.02)
+        w.wait(3.0)                       # frames 10..59 went out on another port in the window
+        for seq in range(60, 70):
+            w.send("172.30.0.30", 32003, "172.30.0.11", 34003, usrp.voice(seq, pcm), 0.02)
+        w.send("172.30.0.30", 32003, "172.30.0.11", 34003, usrp.unkey(70), 0.02)
+        windows = [("172.30.0.30", window_start, window_end, "mark usrp-foreign")]
+        result = check.check_file(w.save(tmp_path / "xlxd-sut.pcapng"), rig, windows=windows)
+        return [f["severity"] for f in result["findings"] if f["code"] == "usrp.seq_loss"]
+    # the gap opens after frame 9 (t 1000.2) and shows at frame 10 (t ~1003.2)
+    assert loss(1000.5, 1002.0) == ["warn"]          # window inside the gap
+    assert loss(1003.0, 1004.0) == ["warn"]          # window still open where it shows
+    assert loss(999.0, 1000.1) == ["error"]          # window closed before the gap opened

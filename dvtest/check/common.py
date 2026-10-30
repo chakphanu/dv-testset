@@ -81,6 +81,7 @@ class Report:
         self.findings = []
         self.protocols = {}
         self.spans = []           # finished streams: protocol, flow, times, codec zero counts
+        self.gap_start = {}       # frame where a sequence gap showed -> ts of the packet before it
         self.jitter_warn_ms = jitter_warn_ms
 
     def proto(self, name):
@@ -138,6 +139,7 @@ class Stream:
         self.codecs = {}         # codec family -> [voice packets, packets with non-zero data]
         self.expect = expect     # sequence number the first packet must carry
         self.missing = {}        # absolute index -> frame where its gap showed
+        self.gaps = {}           # frame where a gap showed -> ts of the packet before the gap
         self.prefix = "seq"      # finding code prefix (seq_loss, pid_loss, ...)
         self.warn_ms = None      # jitter warning threshold, default one period
 
@@ -156,6 +158,7 @@ class Stream:
     def add(self, d, seq):
         self.frames += 1
         self.last_frame = d.frame
+        before = self.t1
         if d.ts is not None:
             self.t1 = d.ts
         if self.ext is None:
@@ -181,6 +184,7 @@ class Stream:
             if ext > self.ext + 1:
                 self.loss += ext - self.ext - 1
                 result = ("loss", ext - self.ext - 1)
+                self.gaps[d.frame] = before
                 if ext - self.ext - 1 <= WINDOW:
                     for gap in range(self.ext + 1, ext):
                         self.missing[gap] = d.frame
@@ -221,6 +225,7 @@ def seq_finding(report, protocol, d, stream, result, code_prefix="seq"):
     they are older than LOSS_HORIZON."""
     stream.prefix = code_prefix
     if result is not None and result[0] == "loss" and result[1] > WINDOW:
+        report.gap_start[d.frame] = stream.gaps.get(d.frame)
         report.error(protocol, d, code_prefix + "_loss", "sequence jump, %d frame(s) missing in %s" % (
             result[1], stream.name))
     elif result is not None and result[0] != "loss":
@@ -239,6 +244,7 @@ def flush_loss(report, stream, below=None):
         if below is None or max(indices) < below:
             for index in indices:
                 del stream.missing[index]
+            report.gap_start[frame] = stream.gaps.get(frame)
             report.add(stream.protocol, stream.flow, frame, ERROR, stream.prefix + "_loss",
                        "sequence jump, %d frame(s) missing in %s" % (len(indices), stream.name))
 
