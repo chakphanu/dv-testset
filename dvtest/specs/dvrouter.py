@@ -163,6 +163,35 @@ SPEC = {
         "P-DPL-30": {"heard": True},
         "P-DPL-36": {"heard": False},
     },
+    # DCS dev items (docs/protocols/dcs.md), DV-Router choices 2026-10-30.
+    # Stream id 0 is accepted on DCS ingress only (DroidStar can send it):
+    # the over gets a substitute non-zero sid derived from the over, never
+    # colliding with an open stream - the one exception to "sid preserved";
+    # B8 admit_sid_zero False stays for every other protocol.
+    "dcs": {
+        "P-DCS-02": {"max_s": 0.5},
+        "P-DCS-05": {"reply": "nak"},
+        "P-DCS-06": {"acks": 2},
+        "P-DCS-11": {"nak": True, "talker_hears_after": False},
+        "P-DCS-12": {"reply": "nak"},
+        "P-DCS-15": {"ref9_per_poll": 1.0},
+        "P-DCS-17": {"size9": True, "size19": True, "size22": True},
+        "P-DCS-18": {"silent_notice": "none"},
+        "P-DCS-22": {"heard": 42},
+        "P-DCS-25": {"suffix": b"    "},
+        # the ingress end payload is passed (the tester sends the JARL pattern)
+        "P-DCS-30": {"ambe": "55555555c87a000000", "slow": "555555"},
+        # own counter and text area per stream
+        "P-DCS-31": {"counter_start": 0, "counter_steps": [1], "tail_passed": False, "byte61": "01"},
+        "P-DCS-32": {"heard_my": 0, "heard_rpt1": 42, "heard_rpt2": 42},
+        "P-DCS-33": {"flags": b"\x08\x00\x00"},
+        "P-DCS-35": {"linked_module": True, "rpt2_module": False},
+        "P-DCS-39": {"synthesized_last": 1},
+        "P-DCS-40": {"heard_after_last": 0},
+        "P-DCS-43": {"second_ack": True, "hears_j": True, "hears_k": True, "j_after_unlink_b": True,
+                     "k_after_unlink_b": False},
+        "P-DCS-46": {"heard": 42},
+    },
 }
 
 # B12: header fields DV-Router does not verify, because the tester (like
