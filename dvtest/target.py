@@ -5,10 +5,12 @@ prefix, lower case, top level or under [target]). Environment wins.
 
 Rig defaults (DVT_SUBNET, default 172.30.0.0/24): xlxd-ref .10,
 xlxd-sut .11, transcoder-ref .20, transcoder-sut .21, tester .30,
-allstar .40.
+allstar .40, urfd .70.
 
   DVT_SUBNET         rig subnet
-  DVT_XLXD_REF       reference xlxd address
+  DVT_XLXD_REF       reference reflector address (xlxd-ref .10; with
+                     DVT_REF_KIND=urfd and no DVT_XLXD_REF: the URFd host)
+  DVT_REF_KIND       reference reflector kind: xlxd (default) or urfd
   DVT_XLXD_SUT       xlxd under test
   DVT_XLXD_PEER_SUT  XLX998 interlink peer of xlxd-sut (.12, profile interlink)
   DVT_XLXD_PEER_REF  XLX998 interlink peer of xlxd-ref (.13, profile interlink)
@@ -22,6 +24,7 @@ allstar .40.
   DVT_NXDN_SUT       NXDN reflector under test (.51)
   DVT_P25_REF        reference P25 reflector (.60)
   DVT_P25_SUT        P25 reflector under test (.61)
+  DVT_URFD           URFd reflector (.70, profile urfd)
   DVT_AMBED_ADDR     single transcoder for the wire case (no default)
   DVT_AMBED_PORT     transcoder control port (10100)
   DVT_AMBED_STREAM_CAP  optional stream limit the wire case checks
@@ -43,15 +46,16 @@ from dataclasses import dataclass, field
 
 from . import divergences
 
+REF_KINDS = ("xlxd", "urfd")
 DEFAULT_SUBNET = "172.30.0.0/24"
 HOST_OFFSETS = {"xlxd_ref": 10, "xlxd_sut": 11, "xlxd_peer_sut": 12, "xlxd_peer_ref": 13,
                 "xlxd_peer2_sut": 14, "xlxd_peer2_ref": 15,
                 "ambed_ref": 20, "ambed_sut": 21,
                 "tester": 30, "allstar": 40, "nxdn_ref": 50, "nxdn_sut": 51,
-                "p25_ref": 60, "p25_sut": 61}
+                "p25_ref": 60, "p25_sut": 61, "urfd": 70}
 KEYS = ("subnet", "xlxd_ref", "xlxd_sut", "xlxd_peer_sut", "xlxd_peer_ref", "xlxd_peer2_sut", "xlxd_peer2_ref",
         "ambed_ref", "ambed_sut", "tester", "allstar",
-        "nxdn_ref", "nxdn_sut", "p25_ref", "p25_sut",
+        "nxdn_ref", "nxdn_sut", "p25_ref", "p25_sut", "urfd", "ref_kind",
         "ambed_addr", "ambed_port", "ambed_stream_cap", "xlxd_bin", "xlxd_ref_bin", "reflector", "iax_secret",
         "sut_profile", "no_radio_id", "out")
 
@@ -73,6 +77,8 @@ class Target:
     nxdn_sut: str = ""
     p25_ref: str = ""
     p25_sut: str = ""
+    urfd: str = ""
+    ref_kind: str = "xlxd"
     ambed_addr: str = ""
     ambed_port: int = 10100
     ambed_stream_cap: int = 0
@@ -125,8 +131,13 @@ def load(env=None, path=None):
                     divergences=frozenset(declared | divergences.implied(values.get("sut_profile") or "xlxd")))
     for key, value in values.items():
         setattr(target, key, int(value) if key in ("ambed_port", "ambed_stream_cap") else str(value))
+    if target.ref_kind not in REF_KINDS:
+        raise ValueError("DVT_REF_KIND must be one of %s, got %r" % ("/".join(REF_KINDS), target.ref_kind))
     for key, offset in HOST_OFFSETS.items():
         if not getattr(target, key):
             setattr(target, key, target.host(offset))
+    # a URFd reference without an explicit DVT_XLXD_REF is the URFd host
+    if target.ref_kind == "urfd" and not target.is_given("xlxd_ref"):
+        target.xlxd_ref = target.urfd
     return target
 

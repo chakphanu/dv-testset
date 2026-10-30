@@ -90,3 +90,21 @@ def test_no_radio_id_rule_mode(monkeypatch):
     t = target.load(env={"DVT_NO_RADIO_ID": "bogus"})
     with pytest.raises(ValueError, match="DVT_NO_RADIO_ID"):
         specs.rule_mode(t, "p25", "P-P25-23")
+
+
+def test_urfd_reference():
+    import pytest
+    t = target.load(env={})
+    assert (t.urfd, t.ref_kind, t.xlxd_ref) == ("172.30.0.70", "xlxd", "172.30.0.10")
+    # rig: run.sh passes DVT_XLXD_REF=<net>.70 with DVT_REF_KIND=urfd
+    t = target.load(env={"DVT_SUBNET": "172.30.7.0/24", "DVT_REF_KIND": "urfd",
+                         "DVT_XLXD_REF": "172.30.7.70", "DVT_URFD": "172.30.7.70"})
+    assert (t.xlxd_ref, t.urfd, t.ref_kind) == ("172.30.7.70", "172.30.7.70", "urfd")
+    # no DVT_XLXD_REF: the reference follows the URFd host
+    t = target.load(env={"DVT_REF_KIND": "urfd", "DVT_URFD": "192.0.2.70"})
+    assert t.xlxd_ref == "192.0.2.70" and not t.is_given("xlxd_ref")
+    assert target.load(env={"DVT_REF_KIND": "urfd"}).xlxd_ref == "172.30.0.70"
+    # explicit DVT_XLXD_REF wins
+    assert target.load(env={"DVT_REF_KIND": "urfd", "DVT_XLXD_REF": "192.0.2.10"}).xlxd_ref == "192.0.2.10"
+    with pytest.raises(ValueError, match="DVT_REF_KIND"):
+        target.load(env={"DVT_REF_KIND": "urf"})
