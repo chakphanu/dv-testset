@@ -2,7 +2,7 @@
 """DMR over MMDVM/Homebrew (UDP 62030): login/keepalive packets and DMRD
 streams (voice LC header, bursts A..F with sync on A, terminator)."""
 from ..proto import dmr as M
-from .common import ERROR, WARN, Departures, Live, Stream, finish_stream, flow_of, seq_finding, voice_frames
+from .common import ERROR, WARN, Departures, Live, Stream, dmr_form, finish_stream, flow_of, seq_finding, voice_frames
 
 NAME = "dmr"
 # control packets: tag -> allowed sizes (None = any size)
@@ -130,7 +130,9 @@ class Checker:
             self.streams.terminate(key, d)
             return
         st.notes["voice"] += 1
-        voice_frames(st, M.extract(p[20:53]))
+        frames = M.extract(p[20:53])
+        voice_frames(st, frames)
+        dmr_form(st, frames)
         vseq = bits & 0x0F
         if vseq > 5 or (kind == "voice_sync") != (vseq == 0):
             r.error(NAME, d, "burst_type", "burst %s marked %s" % (

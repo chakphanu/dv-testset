@@ -2,7 +2,7 @@
 """D-STAR over DExtra (UDP 30001): link/keepalive packets and DSVT
 streams (header, voice frames 0..20, last frame with bit 0x40)."""
 from ..proto import dextra as D
-from .common import ERROR, WARN, Live, Stream, finish_stream, flow_of, seq_finding, touches, voice_frames, Departures
+from .common import ERROR, WARN, Live, Stream, finish_stream, flow_of, seq_finding, touches, voice_frames, Departures, dmr_form
 
 NAME = "dextra"
 FRAME_TIME = 0.020
@@ -109,6 +109,11 @@ class Checker:
         seq_finding(r, self.name, d, st, st.add(d, seq))
         if not last:
             voice_frames(st, [p[15:24]])
+            if len(p) >= 45:          # XLX revision 2/3: DMR AMBE+2 slot, then Codec2
+                voice_frames(st, [p[29:38]], "ambe+2")
+                dmr_form(st, [p[29:38]])
+            if len(p) >= 53:
+                voice_frames(st, [p[45:53]], "codec2")
         sync = p[24:27] == D.SYNC_DATA
         if seq == 0 and not sync and not last:
             st.notes["sync_missing"] += 1

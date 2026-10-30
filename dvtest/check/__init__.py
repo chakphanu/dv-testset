@@ -21,7 +21,7 @@ from datetime import datetime
 from .. import divergences, pcap, target
 from ..target import DEFAULT_SUBNET, HOST_OFFSETS
 from . import ambed, dcs, dextra, dmr, dplus, iax2, m17, nxdn, p25, usrp, xlx, ysf
-from .common import ERROR, WARN, Report, flow_of
+from .common import ERROR, FAMILY, WARN, Report, flow_of
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # capture file stem -> rig host key (dvtest.target.HOST_OFFSETS)
@@ -162,6 +162,61 @@ def _excuse(report, frame_ts, windows):
             break
 
 
+PASSTHROUGH = "(passthrough: "
+# an egress stream relays an ingress stream that starts up to this much
+# earlier or ends up to this much later
+RELAY_LEAD, RELAY_TAIL = 0.5, 1.0
+
+
+def _ends(flow):
+    """(sender ip, receiver ip) of a flow_of() name."""
+    a, b = flow.split(">")
+    return a.rsplit(":", 1)[0], b.rsplit(":", 1)[0]
+
+
+def _passthrough(report, own):
+    """A zero_fill stream sent by the capture host whose codec data arrived
+    all zero in an overlapping ingress stream (same codec family, e.g. the
+    DMR AMBE+2 slot of an XLX frame) is passthrough, not fill: the finding
+    stays a warning and is tagged, so no_zero_fill does not raise it."""
+    ingress = [s for s in report.spans if s["t0"] is not None and "<>" not in s["flow"]
+               and _ends(s["flow"])[1] == own and _ends(s["flow"])[0] != own]
+    for index, f in enumerate(report.findings):
+        if not f.code.endswith(".zero_fill") or "<>" in f.flow or _ends(f.flow)[0] != own:
+            continue
+        span = next((s for s in report.spans if s["protocol"] == f.protocol and s["first_frame"] == f.frame
+                     and s["flow"] == f.flow), None)
+        family = FAMILY.get(f.protocol)
+        if span is None or span["t0"] is None:
+            continue
+        for s in ingress:
+            counts = s["codecs"].get(family)
+            if counts and counts[0] and not counts[1] and \
+                    s["t0"] - RELAY_LEAD <= span["t0"] <= (s["t1"] or s["t0"]) + RELAY_TAIL:
+                source = _ends(s["flow"])[0]
+                why = ("relayed from XLX peer %s, which sent the %s data all zero" % (source, family)
+                       if s["protocol"] == "xlx" else
+                       "its %s source %s sent the %s data all zero" % (s["protocol"], source, family))
+                report.findings[index] = f._replace(message=f.message + " " + PASSTHROUGH + why + ")")
+                break
+
+
+def share_passthrough(results):
+    """The same egress stream seen in another capture of the set (e.g. the
+    sut's NXDN stream in nxdn-sut.pcapng, where its source is not visible)
+    gets the passthrough tag its sender's capture found."""
+    tags = {}
+    for r in results:
+        for f in r["findings"]:
+            if f["code"].endswith(".zero_fill") and PASSTHROUGH in f["message"]:
+                tags[(f["code"], f["flow"])] = f["message"][f["message"].index(PASSTHROUGH):].split(")")[0] + ")"
+    for r in results:
+        for f in r["findings"]:
+            tag = tags.get((f["code"], f["flow"]))
+            if tag and PASSTHROUGH not in f["message"]:
+                f["message"] += " " + tag
+
+
 def _in(ip, net):
     try:
         return ipaddress.ip_address(ip) in net
@@ -235,6 +290,7 @@ def check_file(path, rig=None, jitter_ms=None, windows=()):
                 report.warn("other", d, "unclassified", "%d B datagram no protocol claims" % len(d.payload))
     for checker in checkers:
         checker.finish(end_ts)
+    _passthrough(report, own)
     if windows:
         _excuse(report, {d.frame: d.ts for d in datagrams}, windows)
     report.findings.sort(key=lambda f: (f.frame, f.code))
@@ -344,7 +400,8 @@ DIVERGENCES = {
     # the sut revokes a closed peer at once: no upstream client-cache excuse
     "immediate_revoke": (("dmr.after_close", "dmr.after_close_cache", "dmr.after_unlink", "m17.after_disc")
                          + tuple(p + ".after_unlink" for p in ("dextra", "dplus", "dcs", "xlx")), None, ERROR),
-    # the sut never zero-fills cross-mode codec frames
+    # the sut never zero-fills cross-mode codec frames (zero data its source
+    # already sent is passthrough, see _passthrough)
     "no_zero_fill": (ZERO_FILL, None, ERROR),
     # the sut ends a stream that goes silent with a synthesized terminator
     "synthesized_terminator": (END_CODES, "ended by timeout", ERROR),
@@ -382,6 +439,8 @@ def apply_divergences(results, names, sut_hosts=()):
             for name, (codes, condition, severity) in DIVERGENCES.items():
                 if f["code"] not in codes or (condition and condition not in f["message"]):
                     continue
+                if f["code"] in ZERO_FILL and PASSTHROUGH in f["message"]:
+                    continue
                 if name in names:
                     _mark(r, f, severity, "(declared divergence %s)" % name)
                 elif name in UNDECLARED_ERROR:
@@ -390,14 +449,20 @@ def apply_divergences(results, names, sut_hosts=()):
         r["warnings"] = sum(1 for f in r["findings"] if f["severity"] == WARN)
 
 
+def _part(name):
+    """Sort key: <svc>.pcapng, then <svc>.2.pcapng, <svc>.3.pcapng, ..."""
+    stem, rest = name.split(".", 1)
+    number = rest.split(".", 1)[0]
+    return stem, int(number) if number.isdigit() else 1
+
+
 def captures(target):
     if os.path.isdir(target):
         sub = os.path.join(target, "capture")
         base = sub if os.path.isdir(sub) else target
         names = [n for n in os.listdir(base) if n.endswith((".pcap", ".pcapng", ".cap"))]
         # run.sh restarts a sniffer as <svc>.2.pcapng, <svc>.3.pcapng, ...
-        part = lambda n: (n.split(".")[0], int(n.split(".")[1]) if n.split(".")[1].isdigit() else 1)
-        return [os.path.join(base, n) for n in sorted(names, key=part)]
+        return [os.path.join(base, n) for n in sorted(names, key=_part)]
     return [target]
 
 
@@ -466,6 +531,7 @@ def main(argv=None):
         print("dvcheck: %s" % exc, file=sys.stderr)
         return 2
     sut_hosts = {rig["hosts"][key] for key in SUT_HOSTS if key in rig["hosts"]} if rig else ()
+    share_passthrough(results)
     apply_divergences(results, names, sut_hosts)
     for result in results:
         print("\n".join(summary_lines(result, args.per_code)))

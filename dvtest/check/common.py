@@ -3,6 +3,8 @@
 protocol checkers."""
 from collections import Counter, namedtuple
 
+from ..proto.nxdn import from_dmr
+
 Finding = namedtuple("Finding", "protocol flow frame severity code message")
 ERROR, WARN = "error", "warn"
 # a stream with no packet for this long has ended (terminator or not)
@@ -76,6 +78,7 @@ class Report:
     def __init__(self, jitter_warn_ms=None):
         self.findings = []
         self.protocols = {}
+        self.spans = []           # finished streams: protocol, flow, times, codec zero counts
         self.jitter_warn_ms = jitter_warn_ms
 
     def proto(self, name):
@@ -130,6 +133,7 @@ class Stream:
         self.prev = None         # (ts, ext) of the previous packet
         self.end = None          # "terminated", "timeout", "capture end", ...
         self.notes = Counter()
+        self.codecs = {}         # codec family -> [voice packets, packets with non-zero data]
         self.expect = expect     # sequence number the first packet must carry
         self.missing = {}        # absolute index -> frame where its gap showed
         self.prefix = "seq"      # finding code prefix (seq_loss, pid_loss, ...)
@@ -237,17 +241,38 @@ def flush_loss(report, stream, below=None):
                        "sequence jump, %d frame(s) missing in %s" % (len(indices), stream.name))
 
 
-def voice_frames(stream, frames):
-    """Count one voice packet of codec frames; all-zero packets are fill."""
-    stream.notes["voice_packets"] += 1
-    if any(any(f) for f in frames):
-        stream.notes["voice_nonzero"] += 1
+# codec family each protocol's voice frames carry (an XLX frame carries
+# several: D-STAR AMBE, DMR AMBE+2 and, from revision 3, Codec2). "ambe+2"
+# is the 72-bit DMR form with FEC; "ambe+2 bits" the 49 data bits NXDN
+# carries, which streams with the DMR form also record (dvtest.proto.nxdn
+# from_dmr) so a zero NXDN frame can be traced to its DMR source.
+FAMILY = {"dextra": "ambe", "dplus": "ambe", "dcs": "ambe", "xlx": "ambe", "dmr": "ambe+2",
+          "ysf": "ambe+2", "nxdn": "ambe+2 bits", "m17": "codec2", "p25": "imbe"}
+
+
+def dmr_form(stream, frames):
+    """Count 72-bit DMR-form AMBE+2 frames as their 49 data bits too."""
+    voice_frames(stream, [from_dmr(f) for f in frames], "ambe+2 bits")
+
+
+def voice_frames(stream, frames, family=None):
+    """Count one voice packet of codec frames of a codec family (default:
+    the protocol's own, which also drives zero_fill)."""
+    nonzero = any(any(f) for f in frames)
+    counts = stream.codecs.setdefault(family or FAMILY.get(stream.protocol), [0, 0])
+    counts[0] += 1
+    counts[1] += nonzero
+    if family is None:
+        stream.notes["voice_packets"] += 1
+        stream.notes["voice_nonzero"] += nonzero
 
 
 def finish_stream(report, stream):
     """Record a stream summary, warn on jitter over the threshold and on a
     stream whose voice packets all carry all-zero codec frames."""
     flush_loss(report, stream)
+    report.spans.append({"protocol": stream.protocol, "flow": stream.flow, "first_frame": stream.first_frame,
+                         "t0": stream.t0, "t1": stream.t1, "codecs": dict(stream.codecs)})
     if stream.notes["voice_packets"] and not stream.notes["voice_nonzero"]:
         report.add(stream.protocol, stream.flow, stream.first_frame, WARN, "zero_fill",
                    "%s: all %d voice packets carry all-zero codec frames (upstream: zero fill"
