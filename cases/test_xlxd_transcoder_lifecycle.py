@@ -20,7 +20,11 @@ to legacy opens for digital input. That case is xfail(strict) until fixed.
 netns cases (marker netns): xlxd XLX999 on 127.0.0.1, FakeAmbed on
 127.0.0.2 (stopped and started again by the scenario), DExtra talker on
 127.0.0.3, USRP peer on 127.0.0.4, module B bridged to the peer. Needs
-DVT_XLXD_BIN (scripts/build-xlxd-netns.sh).
+DVT_XLXD_BIN (scripts/build-xlxd-netns.sh). Under DVT_SUT_PROFILE xlxd the
+netns cases keep the xlxd assertions above; under another profile they read
+the profile spec "netns_lifecycle" (dvtest/specs/<profile>.py, e.g. DV-Router:
+outputs opened on demand, extended OPEN only) and skip "spec pending" without
+it. The xfail of the PR edge case applies only under the xlxd profile.
 
 rig case (marker rig, profile allstar for the USRP endpoint): the tester
 is the USRP peer of module C; transcoder-sut is stopped for longer than the
@@ -264,42 +268,81 @@ def check_dstar_requests(fake, port):
     assert all(len(r) == 11 and r[0] == 1 and r[2:] == VOICE_FRAME for r in reqs), reqs[:1]
 
 
+def keyed_usrp(run, start, end):
+    return [r for r in run["usrp_rx"] if start <= r[0] < end and r[1] == 352]
+
+
+def lifecycle_spec(target):
+    """None under the xlxd profile (xlxd assertions); else the profile's
+    "netns_lifecycle" dict, or skip "spec pending" without one."""
+    from dvtest import specs
+    if target.sut_profile == specs.DEFAULT:
+        return None
+    spec = specs.rule(target, "netns_lifecycle")
+    if spec is None:
+        pytest.skip("spec pending: no netns_lifecycle entry in dvtest/specs/%s.py" % target.sut_profile)
+    return spec
+
+
+def spec_key(spec, key):
+    """One value of the profile spec; skip "spec pending" while it is
+    missing or None (an open question for the sut)."""
+    if spec.get(key) is None:
+        pytest.skip("spec pending: netns_lifecycle[%r] not decided for this profile" % key)
+    return spec[key]
+
+
 # B13: lost > 30 s and back
 
 @pytest.mark.netns
-def test_lost_transcoder_caps_probed_again(runs):
+def test_lost_transcoder_caps_probed_again(runs, target):
+    """xlxd: one CAPS per connection. Profile spec: caps_per_connection."""
+    spec = lifecycle_spec(target)
     run = get(runs, "lost_and_back")
     first, second = run["fakes"]
     assert run["up_pinged"] == [True], "xlxd did not ping the restarted transcoder"
-    assert len(caps_times(first)) == 1, "first connection: CAPS %d times" % len(caps_times(first))
-    assert len(caps_times(second)) == 1, "second connection: CAPS %d times" % len(caps_times(second))
+    want = [1, 1] if spec is None else spec_key(spec, "caps_per_connection")
+    counts = [len(caps_times(first)), len(caps_times(second))]
+    assert counts == want, "CAPS per connection %s, expected %s" % (counts, want)
     start, end = phase(run, 2)
     assert start <= caps_times(second)[0] < end, "CAPS not probed right after the reconnect"
 
 
 @pytest.mark.netns
-def test_lost_transcoder_pcm_resumes(runs):
+def test_lost_transcoder_pcm_resumes(runs, target):
+    """xlxd: the PCM stream opens [1, 2] before the loss and after the
+    reconnect. Profile spec: pcm_opens (no D-STAR listener is linked
+    during the USRP steps; an empty list means no OPEN at all)."""
+    spec = lifecycle_spec(target)
     run = get(runs, "lost_and_back")
     first, second = run["fakes"]
+    want = [[24, 5, [1, 2]]] if spec is None else spec_key(spec, "pcm_opens")
     before = opens_in(first, *phase(run, 0))
-    assert [o[1:4] for o in before] == [[24, 5, [1, 2]]], before
-    check_pcm_requests(first, before[0][5])
+    assert [o[1:4] for o in before] == want, before
     after = opens_in(second, *phase(run, 3))
-    assert [o[1:4] for o in after] == [[24, 5, [1, 2]]], "PCM open after the reconnect: %s" % after
-    check_pcm_requests(second, after[0][5])
-    txs = [o[4] for o in before + after]
-    assert all(txs) and len(set(txs)) == 2, "transactions %s" % txs
+    assert [o[1:4] for o in after] == want, "PCM open after the reconnect: %s" % after
+    for fake, opens in ((first, before), (second, after)):
+        for o in opens:
+            check_pcm_requests(fake, o[5])
+    if want:
+        txs = [o[4] for o in before + after]
+        assert all(txs) and len(set(txs)) == len(txs), "transactions %s" % txs
 
 
 @pytest.mark.netns
-def test_lost_transcoder_dstar_to_usrp_resumes(runs):
+def test_lost_transcoder_dstar_to_usrp_resumes(runs, target):
+    """xlxd: D-STAR opens [2, 5]. Profile spec: dstar_opens (the USRP peer
+    is the only listener in another profile)."""
+    spec = lifecycle_spec(target)
     run = get(runs, "lost_and_back")
     second = run["fakes"][1]
     start, end = phase(run, 4)
     opens = opens_in(second, start, end)
-    assert [o[1:4] for o in opens] == [[24, 1, [2, 5]]], opens
+    want = [[24, 1, [2, 5]]] if spec is None else spec_key(spec, "dstar_opens")
+    assert want, "dstar_opens must name the open that feeds the USRP peer"
+    assert [o[1:4] for o in opens] == want, opens
     check_dstar_requests(second, opens[0][5])
-    keyed = [r for r in run["usrp_rx"] if start <= r[0] < end and r[1] == 352]
+    keyed = keyed_usrp(run, start, end)
     assert len(keyed) >= 45, "USRP voice frames %d after the reconnect" % len(keyed)
     assert all(r[3] == 1 and r[4] for r in keyed), "keyed frames must carry the transcoder PCM"
 
@@ -307,21 +350,33 @@ def test_lost_transcoder_dstar_to_usrp_resumes(runs):
 # B14: replaced within the keepalive window by a legacy transcoder
 
 @pytest.mark.netns
-def test_fast_swap_no_disconnect(runs):
+def test_fast_swap_no_disconnect(runs, target):
     """The swap is inside the keepalive window: the new transcoder is
-    pinged within seconds, the old one served the PCM stream before."""
+    pinged within seconds, the old one served the PCM stream before
+    (profile spec: pcm_opens, as in lost_and_back)."""
+    spec = lifecycle_spec(target)
     run = get(runs, "fast_swap")
     first, second = run["fakes"]
     assert (first["mode"], second["mode"]) == ("extended", "legacy")
     assert run["up_pinged"] == [True], "xlxd did not ping the new transcoder within 10 s"
+    want = [[24, 5, [1, 2]]] if spec is None else spec_key(spec, "pcm_opens")
     before = opens_in(first, *phase(run, 0))
-    assert [o[1:4] for o in before] == [[24, 5, [1, 2]]], before
-    check_pcm_requests(first, before[0][5])
+    assert [o[1:4] for o in before] == want, before
+    for o in before:
+        check_pcm_requests(first, o[5])
 
 
 @pytest.mark.netns
-@pytest.mark.xfail(strict=True, reason="xlxd PR #272 edge case: stale CAPS after fast transcoder swap")
-def test_fast_swap_caps_probed_after_failed_open(runs):
+def test_fast_swap_caps_probed_after_failed_open(runs, target, request):
+    """xlxd (xfail strict, PR #272 edge case): CAPS probed again after the
+    failed open, then a legacy open for D-STAR. Profile spec: see
+    fast_swap_profile()."""
+    spec = lifecycle_spec(target)
+    if spec is not None:
+        fast_swap_profile(get(runs, "fast_swap"), spec)
+        return
+    request.applymarker(pytest.mark.xfail(
+        strict=True, reason="xlxd PR #272 edge case: stale CAPS after fast transcoder swap"))
     run = get(runs, "fast_swap")
     second = run["fakes"][1]
     swapped = run["phases"][1][2]
@@ -334,6 +389,32 @@ def test_fast_swap_caps_probed_after_failed_open(runs):
     assert [o[1:4] for o in digital] == [[19, 1, [2, 3, 4]]], \
         "D-STAR after the swap must use a legacy open: %s" % digital
     check_dstar_requests(second, digital[0][5])
+
+
+def fast_swap_profile(run, spec):
+    """Profile spec for the D-STAR step after the swap (the old CAPS is
+    kept): swap_ignored_opens = extended OPENs the legacy transcoder
+    ignored; swap_dstar_opens = opens it accepted (with none, the USRP peer
+    gets no voice); swap_caps_reprobe = CAPS probed again after the ignored
+    open (True / False)."""
+    second = run["fakes"][1]
+    start, end = phase(run, 3)
+    ignored = [t for t, e in second["events"] if e == "ignored extended open"]
+    want_ignored = spec_key(spec, "swap_ignored_opens")
+    assert len([t for t in ignored if start <= t < end]) == want_ignored == len(ignored), \
+        "ignored extended opens %s (D-STAR step %.1f-%.1f s), expected %d" % (ignored, start, end, want_ignored)
+    want_opens = spec_key(spec, "swap_dstar_opens")
+    accepted = opens_in(second, start, end)
+    assert [o[1:4] for o in accepted] == want_opens, accepted
+    for o in accepted:
+        check_dstar_requests(second, o[5])
+    keyed = keyed_usrp(run, start, end)
+    if not want_opens:
+        assert not keyed, "%d USRP voice frames without an open transcoder stream" % len(keyed)
+    reprobe = spec_key(spec, "swap_caps_reprobe")
+    probes = [t for t in caps_times(second) if ignored and t >= ignored[0]]
+    assert bool(probes) == reprobe, "CAPS after the ignored open at %s: %s, expected re-probe %s" % (
+        ignored[:1], probes, reprobe)
 
 
 # ---------------------------------------------------------------- rig

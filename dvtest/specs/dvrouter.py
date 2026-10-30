@@ -85,6 +85,18 @@ SPEC = {
         "one_output_opens": [[24, 1, [5]], [24, 1, [5]]],       # B11
         "slow_open_opens": [],                      # B12: no digital listener
     },
+    # netns transcoder-lifecycle cases (test_xlxd_transcoder_lifecycle, B13/B14);
+    # DV-Router docs/design/transcoding.md: one CAPS per connection, opens on
+    # demand only, extended AMBEd only (no legacy 19 B OPEN)
+    "netns_lifecycle": {
+        "caps_per_connection": [1, 1],
+        "pcm_opens": [],
+        "dstar_opens": [[24, 1, [5]]],
+        "swap_ignored_opens": 1,
+        "swap_dstar_opens": [],
+        # open question to dv-router: CAPS re-probe after an unanswered OPEN
+        "swap_caps_reprobe": None,
+    },
     # B10 stream ids: same-protocol egress carries the exact ingress sid on
     # every protocol (test_sid_preserved); cross-protocol egress carries the
     # canonical id in the target width: low 16 bits for D-STAR/M17, zero

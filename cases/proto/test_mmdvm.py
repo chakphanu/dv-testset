@@ -26,7 +26,16 @@ MOD, OTHER = "L", "O"
 TALKER, LISTENER = 1023007, 1023008             # N0CALL, N0TEST
 EXTRA = (1023101, 1023102)                      # STR001, STR002
 UNKNOWN_ID = 0                                  # in no dmrid.dat
-FRAMES = 36                                     # 12 bursts, two superframes
+# P-DMR-43 only (rig/config/dmrid.dat, unused elsewhere): talker, gateway
+# login id, RF user id behind the gateway
+GW_TALKER, GW_LOGIN, GW_RF = 1023205, 1023206, 1023207  # STR105, STR106, STR107
+# 18 bursts, three superframes. xlxd's short-stream guard (B18,
+# cases/test_short_stream_guard.py) strikes a callsign after three short
+# streams (< 50 frames) in a row on a module, each closing within 2 s of
+# the previous one, and once it has a strike any three in a row do (300 s);
+# strike 3 refuses its logins. The empty join streams of each probe are
+# short already, so a talk of FRAMES must not be.
+FRAMES = 54
 GAP = 0.060                                     # one burst per 60 ms
 CACHE = 1.2                                     # xlxd refreshes its module client list once per second
 TAIL = 0.8
@@ -1016,9 +1025,10 @@ def gateway_link_probe(ip, rf_src):
     talker on MOD talks; the joiner unlinks with the private TG 4000
     burst, the talker talks again (a linked control must hear it). src =
     the gateway's login id (startup / relink form) or an RF user's id
-    (user-control form)."""
-    joiner, control, talker = new(LISTENER), new(EXTRA[0]), new(TALKER)
-    src = EXTRA[1] if rf_src else LISTENER
+    (user-control form). The talker and the gateway have their own ids
+    (GW_*), so the strike state of TALKER / LISTENER never reaches them."""
+    joiner, control, talker = new(GW_LOGIN), new(EXTRA[0]), new(GW_TALKER)
+    src = GW_RF if rf_src else GW_LOGIN
     try:
         ready(ip, control, talker)
         login(ip, joiner, join=False)
