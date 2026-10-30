@@ -499,6 +499,30 @@ def _part(name):
     return stem, int(number) if number.isdigit() else 1
 
 
+# findings that are known, timing dependent xlxd behaviour: a warning
+# whichever side shows them, except under a profile whose sut never does it
+PROFILE_EXCUSED = {"m17.after_eot": m17.REPLAY_TAG}
+STRICT_PROFILES = ("dvrouter",)
+
+
+def apply_profile(results, profile):
+    """Under a strict profile (dvrouter: a correct router never replays a
+    stream), PROFILE_EXCUSED findings on -sut captures are errors; under
+    the xlxd profile they stay warnings, after the differential too."""
+    for r in results:
+        sut = _stem(r).endswith("-sut")
+        for f in r["findings"]:
+            tag = PROFILE_EXCUSED.get(f["code"])
+            if not tag or tag not in f["message"]:
+                continue
+            if profile in STRICT_PROFILES and sut:
+                _mark(r, f, ERROR, "(profile %s: never expected)" % profile)
+            elif f["severity"] == ERROR:
+                _mark(r, f, WARN, "(profile %s)" % profile)
+        r["errors"] = sum(1 for f in r["findings"] if f["severity"] == ERROR)
+        r["warnings"] = sum(1 for f in r["findings"] if f["severity"] == WARN)
+
+
 def captures(target):
     if os.path.isdir(target):
         sub = os.path.join(target, "capture")
@@ -577,6 +601,11 @@ def main(argv=None):
     sut_hosts = {rig["hosts"][key] for key in SUT_HOSTS if key in rig["hosts"]} if rig else ()
     share_passthrough(results)
     apply_divergences(results, names, sut_hosts)
+    try:
+        profile = target.load().sut_profile or "xlxd"
+    except ValueError:
+        profile = "xlxd"
+    apply_profile(results, profile)
     for result in results:
         print("\n".join(summary_lines(result, args.per_code)))
     errors = sum(r["errors"] for r in results)

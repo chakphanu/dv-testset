@@ -525,3 +525,35 @@ def test_m17_only_the_10_byte_disc_is_an_unlink(tmp_path):
         assert codes(result, "error") == want_error, len(disc)
         kinds = result["protocols"]["m17"]["kinds"]
         assert kinds.get("disc_ack", 0) == (len(disc) == 4) and kinds.get("disc", 0) == (len(disc) == 10)
+
+
+def test_m17_late_entrant_replay(tmp_path):
+    """xlxd's late-entrant replay (fn 0, fn 1 + EOT, then fn 0..38 in a
+    burst and EOT at fn 39, ~0.8 s after the stream's EOT) is one warning
+    under the xlxd profile and an error under dvrouter; any other frame
+    after the EOT stays an error per packet."""
+    def wire(replay_fn=0, delay=0.8):
+        w = Wire()
+        w.send(R, m17.PORT, T, 40003, b"PING" + bytes(6))
+        for fn in range(52):
+            w.send(R, m17.PORT, T, 40003, m17.packet(0x607a, fn, "N0TEST", FRAME[:8] * 2, eot=fn == 51), 0.04)
+        w.send(R, m17.PORT, T, 40003, m17.packet(0x607a, replay_fn, "N0TEST", FRAME[:8] * 2), delay)
+        w.send(R, m17.PORT, T, 40003, m17.packet(0x607a, replay_fn + 1, "N0TEST", FRAME[:8] * 2, eot=True), 0.0001)
+        for fn in range(39):
+            w.send(R, m17.PORT, T, 40003, m17.packet(0x607a, fn, "N0TEST", FRAME[:8] * 2), 0.003 if fn == 0 else 0.00001)
+        w.send(R, m17.PORT, T, 40003, m17.packet(0x607a, 39, "N0TEST", FRAME[:8] * 2, eot=True), 0.5)
+        w.send(T, 40004, R, m17.PORT, m17.pong_packet("N0X"), 6.0)
+        return w.save(tmp_path / "xlxd-sut.pcapng")
+
+    def run(path, profile):
+        result = check.check_file(path)
+        check.apply_profile([result], profile)
+        return [(f["severity"], "late-entrant replay" in f["message"]) for f in result["findings"]
+                if f["code"] == "m17.after_eot"]
+    path = wire()
+    assert run(path, "xlxd") == [("warn", True)]
+    assert run(path, "dvrouter") == [("error", True)]
+    late = wire(delay=2.5)                      # outside the 2 s window
+    assert {s for s, _ in run(late, "xlxd")} == {"error"}
+    other = run(wire(replay_fn=5), "xlxd")     # fn 5, 6 after the EOT: errors (the burst from fn 0 is the replay)
+    assert [s for s, _ in other[:2]] == ["error", "error"]

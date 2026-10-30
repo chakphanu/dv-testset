@@ -6,6 +6,13 @@ from ..proto import m17 as M
 from .common import ERROR, WARN, Live, Stream, finish_stream, flow_of, seq_finding, touches, voice_frames, Departures
 
 NAME = "m17"
+# xlxd's late-entrant promotion can replay an ended stream from fn 0 (two
+# packets with EOT, then fn 0.. in a ~1 ms burst) about 0.8 s after the EOT.
+# Timing dependent, so it shows on ref or sut alone; a warning under the
+# xlxd profile, an error under dvrouter (dvtest.check.apply_profile).
+REPLAY_WINDOW = 2.0
+REPLAY_TAG = "(late-entrant replay: xlxd, timing dependent)"
+REPLAY_SEVERITY = "warn"
 # M17P datagram: "M17P" + LSD + LSF CRC + protocol + data + CRC (m17.md)
 M17P_SIZES = (38, 859)
 DISC_ACK_SIZE = 4
@@ -73,14 +80,25 @@ class Checker:
             self.starts.append(d.ts)
         key = (flow_of(d), stream_id)
         st = self.streams.live.get(key)
+        replay = False
         if st is None:
             old = self.streams.after_end(key)
             if old is not None:
-                r.error(NAME, d, "after_eot", "frame %d of stream %04x after its EOT (frame %d)" % (
-                    fn, stream_id, old.last_frame))
-                return
+                since = None if d.ts is None or old.t1 is None else d.ts - old.t1
+                replay = fn == 0 and since is not None and since <= REPLAY_WINDOW
+                if not replay:
+                    r.error(NAME, d, "after_eot", "frame %d of stream %04x after its EOT (frame %d)" % (
+                        fn, stream_id, old.last_frame))
+                    return
+                if not old.notes["replay"]:
+                    # one finding per replay: the replayed stream is tracked again
+                    r.add(NAME, flow_of(d), d.frame, REPLAY_SEVERITY, "after_eot",
+                          "stream %04x replayed from fn 0, %.2f s after its EOT (frame %d) %s" % (
+                              stream_id, since, old.last_frame, REPLAY_TAG))
             st = Stream(NAME, key[0], "stream %04x" % stream_id, 0x8000, 0.040, d)
             st.lich = p[6:34]
+            if replay:
+                st.notes["replay"] += 1
             self.streams.live[key] = st
             if fn != 0:
                 st.notes["late_entry_fn"] = fn
