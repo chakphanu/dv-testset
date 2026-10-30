@@ -263,6 +263,8 @@ BEHAVIOUR = {
     "test_xlxd_interlink.py::test_interlink_missing_output_slot_zeroed",  # B6b
     "test_mmdvm.py::test_mmdvm_lost_terminator_timeout",             # P-DMR-34 (B3)
     "test_mmdvm.py::test_mmdvm_busy_module_no_mix",                  # P-DMR-35 (B1/B2)
+    "test_p25_network.py::test_p25_second_talker_dropped",          # P-P25-13 (B1)
+    "test_p25_network.py::test_p25_stream_timeout",                 # P-P25-15 (B3)
 }
 SYSTEM_MARKERS = {"rig", "netns", "allstar", "nxdn", "p25", "load", "interlink"}
 
@@ -313,6 +315,24 @@ CROSSMODE = {
     "test_load.py::test_no_load_loss_cross": True,
     "test_load.py::test_loss_not_worse_than_ref": {"cross"},
     "test_load.py::test_loss_not_systematically_worse": {"cross"},
+    # P25 sections 4-5 (egress / ingress through the IMBE transcoder)
+    "test_p25_network.py::test_p25_egress_superframe": True,
+    "test_p25_network.py::test_p25_egress_record_layout": True,
+    "test_p25_network.py::test_p25_egress_lcf": True,
+    "test_p25_network.py::test_p25_egress_dst_tg": True,
+    "test_p25_network.py::test_p25_egress_src_id": True,
+    "test_p25_network.py::test_p25_egress_terminator_ldu_boundary": True,
+    "test_p25_network.py::test_p25_no_lone_terminator": True,
+    "test_p25_network.py::test_p25_short_call_padded": True,
+    "test_p25_network.py::test_p25_egress_clear_es": True,
+    "test_p25_network.py::test_p25_egress_parity_recorded": True,
+    "test_p25_network.py::test_p25_egress_pacing": True,
+    "test_p25_network.py::test_p25_ingress_no_frame_loss": True,
+    "test_p25_network.py::test_p25_ingress_late_start": True,
+    "test_p25_network.py::test_p25_ingress_other_tg": True,
+    "test_p25_network.py::test_p25_ingress_unknown_src": True,
+    "test_p25_network.py::test_p25_ingress_record_loss": True,
+    "test_p25_network.py::test_p25_ingress_encrypted": True,
 }
 
 

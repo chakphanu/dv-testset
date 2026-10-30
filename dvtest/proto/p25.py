@@ -41,7 +41,11 @@ SLOT_LAYOUT = ((22, 10), (14, 1)) + ((17, 5),) * 6 + ((16, 4),)
 SILENCE = bytes((0x04, 0x0C, 0xFD, 0x7B, 0xFB, 0x7D, 0xF2, 0x7B, 0x3D, 0x9E, 0x44))
 
 LCF_GROUP = 0x00
+LCF_PROTECTED = 0x80                  # P bit of the LCF octet
 ALGID_CLEAR = 0x80
+MI_TYPES = (0x6D, 0x6E, 0x6F)         # message indicator, 3 bytes each
+PARITY_TYPES = (0x67, 0x68, 0x69, 0x71, 0x72)   # LC / ES Reed-Solomon parity bytes 1..3
+LSD_TYPES = (0x6A, 0x73)              # low speed data bytes 1..2
 
 
 def callsign10(text):
@@ -78,7 +82,11 @@ def record_type(index):
     return LDU1[step] if step < FRAMES_PER_LDU else LDU2[step - FRAMES_PER_LDU]
 
 
-def record(rtype, imbe, src=0, dst=0, lcf=LCF_GROUP):
+def record(rtype, imbe, src=0, dst=0, lcf=LCF_GROUP, mfid=0, algid=ALGID_CLEAR, kid=0, mi=bytes(9)):
+    """One voice record. LDU1 0x64 carries LCF/MFID, 0x65 the destination,
+    0x66 the source; LDU2 0x6D..0x6F carry the 72-bit message indicator
+    (three bytes each), 0x70 ALGID and KID. Parity, low speed data and
+    status bytes stay zero."""
     if len(imbe) != IMBE_SIZE:
         raise ValueError("IMBE frame must be %d bytes" % IMBE_SIZE)
     size, offset = layout(rtype)
@@ -86,13 +94,18 @@ def record(rtype, imbe, src=0, dst=0, lcf=LCF_GROUP):
     out[0] = rtype
     out[offset:offset + IMBE_SIZE] = imbe
     if rtype == 0x64:
-        out[1] = lcf                      # LCF; MFID (2) and service options (3) zero
+        out[1] = lcf                      # service options (3) zero
+        out[2] = mfid
     elif rtype == 0x65:
         out[1:4] = dst.to_bytes(3, "big")
     elif rtype == 0x66:
         out[1:4] = src.to_bytes(3, "big")
+    elif rtype in MI_TYPES:
+        part = MI_TYPES.index(rtype) * 3
+        out[1:4] = mi[part:part + 3]
     elif rtype == 0x70:
-        out[1] = ALGID_CLEAR              # key id (2..3) zero
+        out[1] = algid
+        out[2:4] = kid.to_bytes(2, "big")
     return bytes(out)
 
 
@@ -110,9 +123,24 @@ def pad(frames):
 
 def voice_records(frames, src, dst):
     """Records of a call: frames padded to whole LDUs, then the terminator."""
-    out = [record(record_type(i), f, src=src, dst=dst) for i, f in enumerate(pad(frames))]
-    out.append(terminator())
+    return call_records(frames, src, dst)
+
+
+def call_records(frames, src, dst, start=0, padded=True, end=True, **fields):
+    """Records of a call with control over the shape: start = index of the
+    first record in the superframe (0 = 0x62), padded = complete the last
+    LDU with SILENCE, end = append the terminator; fields go to record()
+    (lcf, mfid, algid, kid, mi)."""
+    frames = pad(frames) if padded else list(frames)
+    out = [record(record_type(start + i), f, src=src, dst=dst, **fields) for i, f in enumerate(frames)]
+    if end:
+        out.append(terminator())
     return out
+
+
+def resized(data, delta):
+    """data with delta bytes appended (zeros) or cut from the end."""
+    return bytes(data) + bytes(delta) if delta >= 0 else bytes(data[:delta])
 
 
 def parse(data):
@@ -134,8 +162,33 @@ def parse(data):
         out["dst"] = int.from_bytes(data[1:4], "big")
     elif rtype == 0x66:
         out["src"] = int.from_bytes(data[1:4], "big")
+    elif rtype in MI_TYPES:
+        out["mi"] = bytes(data[1:4])
     elif rtype == 0x70:
         out["algid"] = data[1]
+        out["kid"] = int.from_bytes(data[2:4], "big")
+    elif rtype in PARITY_TYPES:
+        out["parity"] = bytes(data[1:4])
+    elif rtype in LSD_TYPES:
+        out["lsd"] = bytes(data[1:3])
+    if rtype == 0x64:
+        out["mfid"] = data[2]
+        out["svc"] = data[3]
+    return out
+
+
+def call_fields(records):
+    """Summary of parsed records (parse() dicts) of one or more calls: the
+    distinct values of every control field, the MI in record order and the
+    parity bytes per type."""
+    out = {"lcf": set(), "mfid": set(), "svc": set(), "dst": set(), "src": set(), "algid": set(),
+           "kid": set(), "lsd": set(), "mi": set(), "parity": {}}
+    for rec in records:
+        for key in ("lcf", "mfid", "svc", "dst", "src", "algid", "kid", "lsd", "mi"):
+            if key in rec:
+                out[key].add(rec[key])
+        if "parity" in rec:
+            out["parity"].setdefault(rec["type"], set()).add(rec["parity"])
     return out
 
 
@@ -220,12 +273,19 @@ class P25Client:
         if time.monotonic() - self.last_poll >= POLL_PERIOD:
             self.keepalive()
         self.pump(settle)
+        self.send(voice_records(frames, self.src_id, self.tg), gap)
+        self.pump(tail)
+
+    def send(self, records, gap=GAP, *others):
+        """Send datagrams one per gap (monotonic schedule), draining this
+        client and the other P25Clients after each one."""
         start = time.monotonic()
-        for index, data in enumerate(voice_records(frames, self.src_id, self.tg)):
+        for index, data in enumerate(records):
             pace(start, index, gap)
             self.client.send(self.dest, data)
             self.client.drain()
-        self.pump(tail)
+            for other in others:
+                other.client.drain()
 
     def records(self):
         """Parsed voice records and terminators received, in order."""
