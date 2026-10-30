@@ -106,6 +106,15 @@ case "${DVT_NO_RADIO_ID:-}" in
   ''|drop|fallback|local) ;;
   *) echo "run.sh: DVT_NO_RADIO_ID must be drop, fallback or local" >&2; exit 2 ;;
 esac
+# DVT_SUT_LAUNCH: how a prebuilt xlxd-sut image starts. direct = its own
+# entrypoint with "CALLSIGN OWN_IP TRANSCODER_IP"; import = through the
+# converter shim dv-xlxd-import --exec (DV-Router), same three words.
+case "${DVT_SUT_LAUNCH:-direct}" in
+  direct) ;;
+  import) [ -n "${XLXD_SUT_IMAGE:-}" ] \
+            || { echo "run.sh: DVT_SUT_LAUNCH=import needs XLXD_SUT_IMAGE (a prebuilt image with the shim)" >&2; exit 2; } ;;
+  *) echo "run.sh: DVT_SUT_LAUNCH must be direct or import" >&2; exit 2 ;;
+esac
 instance="${DVT_INSTANCE:-0}"
 [[ "$instance" =~ ^([0-9]|[1-9][0-9])$ ]] || { echo "run.sh: DVT_INSTANCE must be 0..99" >&2; exit 2; }
 lock=".cache/rig.lock"
@@ -351,7 +360,14 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
   for f in xlxd.whitelist xlxd.blacklist xlxd.terminal ysfnode.dat; do : > "$cfg/$f"; done
   [ -z "${DVT_XLXD_BLACKLIST:-}" ] || printf '%s\n' $DVT_XLXD_BLACKLIST > "$cfg/xlxd.blacklist"
   {
-    printf '  %s:\n    image: "%s"\n    command: ["XLX999", "%s.%s", "%s.%s"]\n' "$svc" "$img" "$net" "$3" "$net" "$4"
+    if [ "$svc" = xlxd-sut ] && [ "${DVT_SUT_LAUNCH:-direct}" = import ]; then
+      # the shim converts the mounted /xlxd files, then execs dv-router (same three words)
+      printf '  %s:\n    image: "%s"\n    entrypoint: ["/usr/local/bin/dv-xlxd-import"]\n' "$svc" "$img"
+      printf '    command: ["--exec", "--dir", "/xlxd", "XLX999", "%s.%s", "%s.%s", "--", "/usr/local/bin/dv-router"]\n' \
+        "$net" "$3" "$net" "$4"
+    else
+      printf '  %s:\n    image: "%s"\n    command: ["XLX999", "%s.%s", "%s.%s"]\n' "$svc" "$img" "$net" "$3" "$net" "$4"
+    fi
     # the image is used as it is: no build section, never pulled
     printf '    build: !reset null\n    pull_policy: never\n'
     printf '    environment:\n      DVT_CONFIG_MOUNTED: "1"\n'
@@ -532,9 +548,9 @@ collect() {
 }
 trap collect EXIT
 
-printf 'markers=%s profile=%s xlxd_ref=%s xlxd_sut=%s transcoder=%s sut_divergences=%s sut_name=%s sut_profile=%s no_radio_id=%s ref_kind=%s\n' \
+printf 'markers=%s profile=%s xlxd_ref=%s xlxd_sut=%s transcoder=%s sut_divergences=%s sut_name=%s sut_profile=%s no_radio_id=%s ref_kind=%s sut_launch=%s\n' \
   "$markers" "$profile" "${XLXD_REF_IMAGE:-${XLXD_REF_DIR:-ref}}" "${XLXD_SUT_IMAGE:-${XLXD_SUT_DIR:-sut}}" "$TRANSCODER_IMAGE" \
-  "${DVT_SUT_DIVERGENCES:-}" "${DVT_SUT_NAME:-}" "${DVT_SUT_PROFILE:-xlxd}" "${DVT_NO_RADIO_ID:-}" "${DVT_REF_KIND:-xlxd}" \
+  "${DVT_SUT_DIVERGENCES:-}" "${DVT_SUT_NAME:-}" "${DVT_SUT_PROFILE:-xlxd}" "${DVT_NO_RADIO_ID:-}" "${DVT_REF_KIND:-xlxd}" "${DVT_SUT_LAUNCH:-direct}" \
   > "$out/run.txt"
 cat ".cache/xlxd/${XLXD_REF_DIR:-ref}.fetched" ".cache/xlxd/${XLXD_SUT_DIR:-sut}.fetched" >> "$out/run.txt" 2>/dev/null || true
 
