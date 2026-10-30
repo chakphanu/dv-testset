@@ -19,4 +19,7 @@ case "$dir" in /*) ;; *) dir="$(cd "$(dirname "$0")/.." && pwd)/$dir" ;; esac
 # /run/dv-router, /dev/shm/dv-router and $XDG_RUNTIME_DIR/dv-router): point it
 # at the working directory, the netns scenarios run in parallel and must not
 # share it
-DV_RUN_DIR="$PWD" exec "$dir/dv-xlxd-import" --exec --dir "$PWD" "$@" -- "$dir/dv-router"
+# the converter is dv-tool-xlxd-import in newer images (dv-xlxd-import is then a symlink to it)
+shim="$dir/dv-tool-xlxd-import"
+[ -x "$shim" ] || shim="$dir/dv-xlxd-import"
+DV_RUN_DIR="$PWD" exec "$shim" --exec --dir "$PWD" "$@" -- "$dir/dv-router"
