@@ -86,7 +86,7 @@ while [ "$#" -gt 0 ]; do
     --netem) [ "$#" -ge 2 ] || { echo "run.sh: --netem needs a preset or netem arguments" >&2; exit 2; }; netem_cli="$2"; netem_set=1; shift 2 ;;
     --down) down_only=1; shift ;;
     --) shift; break ;;
-    -h|--help) sed -n '3,63p' "$0"; exit 0 ;;
+    -h|--help) sed -n '3,66p' "$0"; exit 0 ;;
     *) echo "run.sh: unknown argument '$1' (see --help)" >&2; exit 2 ;;
   esac
 done
@@ -136,7 +136,7 @@ fi
 compose_all=(docker compose -p "${COMPOSE_PROJECT_NAME:-dvt}" "${compose_files[@]}" "${DVT_ENV_FILES[@]}"
   --profile core --profile allstar --profile nxdn --profile capture --profile capture-allstar
   --profile capture-nxdn --profile p25 --profile capture-p25 --profile interlink
-  --profile capture-interlink --profile load --profile netem)
+  --profile capture-interlink --profile load --profile netem --profile g3)
 
 if [ "$down_only" = 1 ]; then
   take_lock
