@@ -214,6 +214,15 @@ SPEC = {
         "P-NXD-28": {"terminator": True, "freed": True},
         # a DMR join (empty stream) is not sent to NXDN as an empty over
         "P-NXD-30": {"relayed": False},
+        # server section (applies once "server" is True): no echo for an
+        # unknown TG, one winner (B1), synthesized TX_REL at the timeout (B3),
+        # NXDN data NXDN-to-NXDN only, 30 s client timeout as the YSF and P25
+        # client modes (gateways poll every 5 s)
+        "P-NXD-32": {"echo": False},
+        "P-NXD-38": {"mixed": False},
+        "P-NXD-39": {"trailer": True},
+        "P-NXD-42": {"relayed": 6},
+        "P-NXD-43": {"after_35s": False, "after_130s": False},
     },
     # M17 dev items (docs/protocols/m17.md), DV-Router choices 2026-10-30.
     # Cross-mode: only unencrypted voice 3200 (any CAN / signed) is
