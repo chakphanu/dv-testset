@@ -26,6 +26,9 @@
 #   netem    tc netem sidecars on tester, xlxd-ref and xlxd-sut (egress)
 #   urfd     URFd (.70, URF999, modules A-Z, no transcoder); DVT_REF_KIND=urfd
 #            points the tester's reference (DVT_XLXD_REF) at it (capture-urfd)
+#   mrefd    mrefd (.80, M17-REF, the M17 Project reflector) with configured
+#            interlink peers M17-DVT / M17-DVU at the tester; DVT_REF_KIND=mrefd
+#            points the tester's reference at it (capture-mrefd)
 #   capture  sniffers on xlxd-ref, xlxd-sut, transcoder-sut (capture-allstar: on
 #            allstar, capture-nxdn: on nxdn-*, capture-p25: on p25-*)
 #
@@ -56,7 +59,7 @@ name: dvt
 # rig in which a service lacks them (dvtest/limits.py). Sizes are settings in
 # .env.example (DVT_MEM_*, DVT_CPUS_*, DVT_PIDS_*); README, "Resource limits".
 #   small   sniffers, netem sidecars, NXDN/P25 reflectors, G3 relay, load nodes
-#   medium  xlxd, transcoders, URFd, AllStarLink (the systems under test)
+#   medium  xlxd, transcoders, URFd, mrefd, AllStarLink (the systems under test)
 #   tester  the pytest runner
 x-limits-small: &limits-small
   mem_limit: ${DVT_MEM_SMALL:-256m}
@@ -251,10 +254,25 @@ services:
         codec2: ../.cache/codec2
     user: "${DVT_UID:-1000}:${DVT_GID:-1000}"
     environment:
-      # the reference reflector: xlxd-ref (.10), or URFd (.70) when DVT_REF_KIND=urfd
+      # the reference reflector: xlxd-ref (.10), URFd (.70) when DVT_REF_KIND=urfd,
+      # mrefd (.80) when DVT_REF_KIND=mrefd
       DVT_XLXD_REF: ${DVT_NET:-172.30.0}.${DVT_REF_OCTET:-10}
       DVT_REF_KIND: ${DVT_REF_KIND:-xlxd}
       DVT_URFD: ${DVT_NET:-172.30.0}.70
+      DVT_MREFD: ${DVT_NET:-172.30.0}.80
+      # mrefd profile: reflector modules and the interlink peers the tester plays
+      DVT_M17_MODULES: ${DVT_M17_MODULES:-MNOP}
+      DVT_MREFD_CALLSIGN: ${DVT_MREFD_CALLSIGN:-M17-REF}
+      DVT_M17_PEER_DVT_PORT: ${DVT_M17_PEER_DVT_PORT:-17011}
+      DVT_M17_PEER_DVT_MODULES: ${DVT_M17_PEER_DVT_MODULES:-M}
+      DVT_M17_PEER_DVU_PORT: ${DVT_M17_PEER_DVU_PORT:-17012}
+      DVT_M17_PEER_DVU_MODULES: ${DVT_M17_PEER_DVU_MODULES:-MN}
+      # mrefd keys peers by IP only: its M17-DVT peer is the tester address, its
+      # M17-DVU peer an extra tester address added by the tester-addr sidecar
+      DVT_M17_PEER_DVT_HOST: ${DVT_M17_PEER_DVT_HOST:-${DVT_NET:-172.30.0}.30}
+      DVT_M17_PEER_DVU_HOST: ${DVT_M17_PEER_DVU_HOST:-${DVT_NET:-172.30.0}.32}
+      # how xlxd-sut starts (direct | import); the M17 peer cases skip with import
+      DVT_SUT_LAUNCH: ${DVT_SUT_LAUNCH:-direct}
       DVT_XLXD_SUT: ${DVT_NET:-172.30.0}.11
       DVT_AMBED_REF: ${DVT_NET:-172.30.0}.20
       DVT_AMBED_SUT: ${DVT_NET:-172.30.0}.21
@@ -476,6 +494,64 @@ services:
     depends_on:
       urfd: {condition: service_started, restart: false}
     command: ["urfd"]
+
+  # ---- mrefd (profile mrefd): the M17 Project reflector, an extra reference
+  # for the M17 cases (DVT_REF_KIND=mrefd). Interlink peers M17-DVT and
+  # M17-DVU are configured at the tester, which plays them.
+  mrefd:
+    <<: *limits-medium
+    profiles: [mrefd]
+    init: true
+    restart: "no"
+    image: dvt-mrefd:local
+    build:
+      context: .
+      dockerfile: Dockerfile.mrefd
+      args:
+        <<: *build-jobs
+        MREFD_BASE_IMAGE: ${MREFD_BASE_IMAGE:-error-set-mrefd-base-image-see-env-example}
+      additional_contexts:
+        src: ../.cache/mrefd
+    environment:
+      DVT_IP: ${DVT_NET:-172.30.0}.80
+      DVT_MREFD_CALLSIGN: ${DVT_MREFD_CALLSIGN:-M17-REF}
+      DVT_M17_MODULES: ${DVT_M17_MODULES:-MNOP}
+      DVT_M17_PEER_IP: ${DVT_NET:-172.30.0}.30
+      DVT_M17_PEER_DVT_PORT: ${DVT_M17_PEER_DVT_PORT:-17011}
+      DVT_M17_PEER_DVT_MODULES: ${DVT_M17_PEER_DVT_MODULES:-M}
+      DVT_M17_PEER_DVU_PORT: ${DVT_M17_PEER_DVU_PORT:-17012}
+      DVT_M17_PEER_DVU_MODULES: ${DVT_M17_PEER_DVU_MODULES:-MN}
+      DVT_M17_PEER_DVU_HOST: ${DVT_M17_PEER_DVU_HOST:-${DVT_NET:-172.30.0}.32}
+      DVT_BLACKLIST: ${DVT_XLXD_BLACKLIST:-}
+      DVT_START_DELAY: ${DVT_START_DELAY:-0}
+    depends_on:
+      tester-addr: {condition: service_started, restart: false}
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.80"}
+
+  # Sidecar of the tester (profile mrefd): adds the second tester address
+  # mrefd's M17-DVU peer is configured with (mrefd tells peers apart by IP
+  # only). The tester has no NET_ADMIN; the image is the netem one (iproute2).
+  tester-addr:
+    <<: *netem
+    profiles: [mrefd]
+    network_mode: "service:tester"
+    depends_on:
+      tester: {condition: service_started, restart: false}
+    environment:
+      DVT_ADDR: ${DVT_M17_PEER_DVU_HOST:-${DVT_NET:-172.30.0}.32}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - ip addr show dev eth0 | grep -q "inet $$DVT_ADDR/" || ip addr add "$$DVT_ADDR/24" dev eth0; exec sleep infinity
+
+  capture-mrefd:
+    <<: *capture
+    profiles: [capture-mrefd]
+    network_mode: "service:mrefd"
+    depends_on:
+      mrefd: {condition: service_started, restart: false}
+    command: ["mrefd"]
 
   # ---- XLX interlink peers (profile interlink) ----
   xlxd-peer-sut:

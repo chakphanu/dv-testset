@@ -396,3 +396,17 @@ def test_cut_stream_mark_covers_peer_flows(tmp_path):
     check._excuse(report, {5: ts, 6: ts}, got)
     sev = {f.code: f.severity for f in report.findings}
     assert sev["xlx.no_last"] == check.WARN and sev["xlx.bad_other"] == check.ERROR
+
+
+def test_mrefd_is_a_reference_host(tmp_path):
+    """mrefd.pcapng (DVT_REF_KIND=mrefd) is a reference capture like urfd.pcapng:
+    its own address is the mrefd rig host and its errors are warnings."""
+    rig = check.rig_config("172.30.0.0/24")
+    assert rig["hosts"]["mrefd"] == "172.30.0.80"
+    w = Wire()
+    w.send("172.30.0.30", 30001, "172.30.0.80", 30001, b"N0TEST  \x00")
+    w.send("172.30.0.80", 30001, "172.30.0.30", 30001, b"x" * 13, 0.01)      # unparseable DExtra
+    mrefd = check.check_file(w.save(tmp_path / "mrefd.pcapng"), rig)
+    assert mrefd["own"] == "172.30.0.80" and mrefd["errors"] > 0
+    check.differential([mrefd], "mrefd")
+    assert mrefd["errors"] == 0 and all("reference mrefd" in f["message"] for f in mrefd["findings"])

@@ -30,10 +30,10 @@ RIG_FILES = {"xlxd-ref": "xlxd_ref", "xlxd-sut": "xlxd_sut", "transcoder-ref": "
              "nxdn-ref": "nxdn_ref", "nxdn-sut": "nxdn_sut", "p25-ref": "p25_ref", "p25-sut": "p25_sut",
              "xlxd-peer-ref": "xlxd_peer_ref", "xlxd-peer-sut": "xlxd_peer_sut",
              "xlxd-peer2-ref": "xlxd_peer2_ref", "xlxd-peer2-sut": "xlxd_peer2_sut",
-             "urfd": "urfd"}
+             "urfd": "urfd", "mrefd": "mrefd"}
 # reference-class captures outside the <name>-ref naming: they join the
-# reference side of a pair (DVT_REF_KIND=urfd runs URFd as the reference)
-REFERENCES = {"urfd": "xlxd"}
+# reference side of a pair (DVT_REF_KIND=urfd / mrefd runs that reflector as the reference)
+REFERENCES = {"urfd": "xlxd", "mrefd": "xlxd"}
 
 
 def rig_config(subnet=None):
@@ -443,7 +443,7 @@ def differential(results, ref_kind="xlxd"):
     sides is upstream behaviour (warn); a code seen only on the sut is a
     regression (error) when the reference had its precondition (COMPARABLE),
     else a warning; errors only on the reference are warnings. Captures
-    without a partner keep their severities. With ref_kind "urfd" (a
+    without a partner keep their severities. With ref_kind "urfd" or "mrefd" (a
     compatibility run, not a gate) a sut-only finding is never escalated,
     and a sut-only error that is not ABSOLUTE becomes a warning (COMPAT)."""
     sides = {}
@@ -484,7 +484,7 @@ def differential(results, ref_kind="xlxd"):
                     _mark(r, f, WARN, "(also on reference: upstream behaviour)")
                 elif f["code"] in COMPARABLE and not any(COMPARABLE[f["code"]][0](x) for x in pair["ref"]):
                     _mark(r, f, WARN, "(not comparable on reference: %s)" % COMPARABLE[f["code"]][1])
-                elif ref_kind == "urfd":
+                elif ref_kind in ("urfd", "mrefd"):
                     if f["severity"] == ERROR and not ABSOLUTE.search(f["code"]):
                         _mark(r, f, WARN, COMPAT % ref_kind)
                 elif f["code"] in UPSTREAM_CODES:

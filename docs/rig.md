@@ -46,8 +46,9 @@ internet, and every address is fixed.
 | p25-ref / p25-sut | 172.30.0.60 / .61 | p25 | P25Reflector peered with xlxd-ref / xlxd-sut (module `DVT_P25_MODULE`) |
 | xlxd-peer-sut / xlxd-peer-ref | 172.30.0.12 / .13 | interlink | XLX998, interlinked with xlxd-sut / xlxd-ref on `DVT_INTERLINK_MODULES` |
 | urfd | 172.30.0.70 | urfd | URFd (`URF999`, modules A-Z), a second reference reflector; see "URFd as the reference" |
+| mrefd | 172.30.0.80 | mrefd | mrefd (`M17-REF`, modules `MNOP`), the M17 Project reflector, with interlink peers M17-DVT / M17-DVU at the tester; see "mrefd as an extra reference" |
 | load nodes | 172.30.0.128/25 | load | `DVT_LOAD_MODULES` tester replicas running `DVT_LOAD_CMD` against xlxd-sut |
-| capture-* | (shares the netns) | capture | dumpcap on xlxd-ref, xlxd-sut, transcoder-sut, allstar, nxdn-*, p25-*, urfd |
+| capture-* | (shares the netns) | capture | dumpcap on xlxd-ref, xlxd-sut, transcoder-sut, allstar, nxdn-*, p25-*, urfd, mrefd |
 
 | Port | Protocol | Where |
 |------|----------|-------|
@@ -152,6 +153,49 @@ one row per case with its result per reference kind: same, differs, skip,
 error, or n/a for suites that need xlxd itself as the reference
 (interlink, USRP, netns, AMBEd wire, matrix, NXDN/P25 peer, backend loss,
 transcoder lifecycle, AllStar).
+
+## mrefd as an extra reference
+
+mrefd (https://github.com/n7tae/mrefd, GPL-3.0) is the M17 Project reflector.
+It is the real implementation the M17 cases (stage 2: configured reflector
+peers, one-hop module trailer, M17P) can be judged against, since xlxd has no
+M17 peering and drops M17P. `scripts/pre-fetch-mrefd.sh` puts the pinned
+`MREFD_COMMIT` into `.cache/mrefd`, and `rig/Dockerfile.mrefd` builds it
+without DHT (no OpenDHT, no libcurl, no network lookup) as `dvt-mrefd:local`.
+Service `mrefd`, profile `mrefd`, address `.80`, UDP 17000; the container has
+the medium resource limits and no restart. Log: `out/<run>/logs/mrefd.log`.
+
+Configuration (rendered by `rig/mrefd-entry.sh` into `/tmp/mrefd/` at start;
+unit-tested in `cases/unit/test_mrefd_entry.py`):
+
+- designation `M17-REF`, modules `DVT_M17_MODULES` (default `MNOP`: the cases'
+  `MOD` and `OTHER` plus two more), bound to the rig address; no IPv6, no
+  dashboard, no ID database, no MQTT; blacklist from `DVT_XLXD_BLACKLIST`;
+- two configured interlink peers at the tester, which plays them: `M17-DVT`
+  at `<net>.30` on UDP `DVT_M17_PEER_DVT_PORT` (17011) sharing
+  `DVT_M17_PEER_DVT_MODULES` (`M`), and `M17-DVU` at `DVT_M17_PEER_DVU_HOST`
+  (default `<net>.32`) on `DVT_M17_PEER_DVU_PORT` (17012) sharing
+  `DVT_M17_PEER_DVU_MODULES` (`MN`). Why a second address: mrefd identifies a
+  peer by IP only (its address compare ignores the port), so two peers on one
+  IP merge and a DISC or PING of one removes or refreshes the other (DVU was
+  dropped every ~35-40 s). The sut is not affected (it keys peers by ip:port)
+  and keeps `<net>.30`:17011 / :17012. The sidecar `tester-addr` (profile
+  `mrefd`, netem image, `NET_ADMIN` only, shares the tester namespace) adds
+  the address with `ip addr add` and sleeps; the tester has no `NET_ADMIN`
+  itself. The `m17_peers` fixture binds the "ref" hubs accordingly
+  (`dvtest.m17_peer.peer_binds`; "sut" hubs stay on 0.0.0.0, or on `<net>.30`
+  when both sides are judged). A bind before the address exists is retried
+  for 15 s. mrefd connects out: it
+  sends a 37-byte reflector `CONN` (designation, module list) to each port,
+  so a case that plays a peer listens on that port. The tester container gets
+  the same `DVT_M17_*` values.
+
+Start it with `scripts/run.sh --profile mrefd -m rig` (tester reaches it as
+`DVT_MREFD`), or make it the reference with `DVT_REF_KIND=mrefd`: `run.sh`
+starts the profile and points `DVT_XLXD_REF` at `.80`, as for URFd (compat
+data, `DVT_SUT_PROFILE=xlxd` only; `run.txt` records `ref_kind=mrefd`).
+`--capture` adds `capture/mrefd.pcapng`. Only the M17 cases mean anything
+against it (no other protocol is served), see `docs/compat-mrefd.md`.
 
 ## Prebuilt reflector image
 

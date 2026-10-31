@@ -160,18 +160,32 @@ def _dextra_ack(ip, seconds=3.0):
         client.close()
 
 
+def _m17_ack(ip, seconds=3.0):
+    """mrefd speaks M17 only: a client CONN on its first module is ACKed."""
+    from dvtest.proto import m17
+    client = m17.M17Client("0.0.0.0", callsign="N0TEST", module=(os.environ.get("DVT_M17_MODULES") or "MNOP")[0])
+    try:
+        return client.link(ip, timeout=seconds)
+    finally:
+        if client.dest:
+            client.unlink()
+        client.close()
+
+
 @pytest.fixture(scope="session")
 def rig(target):
     """xlxd-ref and xlxd-sut of the docker rig (scripts/run.sh sets the
-    DVT_XLXD_* addresses in the tester), both answering a DExtra link."""
+    DVT_XLXD_* addresses in the tester), both answering a DExtra link (an
+    mrefd reference, DVT_REF_KIND=mrefd, an M17 link)."""
     if not (target.is_given("xlxd_ref") and target.is_given("xlxd_sut")):
         pytest.skip("no rig: run inside the tester via scripts/run.sh (DVT_XLXD_REF/DVT_XLXD_SUT unset)")
     for name in ("xlxd_ref", "xlxd_sut"):
         ip = getattr(target, name)
+        mrefd = name == "xlxd_ref" and target.ref_kind == "mrefd"
         deadline = time.monotonic() + 30
-        while not _dextra_ack(ip):
+        while not (_m17_ack(ip) if mrefd else _dextra_ack(ip)):
             if time.monotonic() > deadline:
-                pytest.fail("%s %s does not ACK a DExtra link" % (name, ip))
+                pytest.fail("%s %s does not ACK %s" % (name, ip, "an M17 link" if mrefd else "a DExtra link"))
     return target
 
 

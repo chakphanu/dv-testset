@@ -14,6 +14,9 @@
 #   --profile urfd     URFd (.70, no transcoder); DVT_REF_KIND=urfd also makes it
 #                      the reference the cases compare with (compat data,
 #                      xlxd profile only; scripts/compat-table.py)
+#   --profile mrefd    mrefd (.80, M17-REF, interlink peers M17-DVT/M17-DVU at
+#                      the tester); DVT_REF_KIND=mrefd makes it the reference
+#                      the M17 cases compare with (compat data, xlxd profile only)
 #   --profile interlink  XLX998 peers xlxd-peer-sut/-ref interlinked with
 #                      xlxd-sut/-ref on DVT_INTERLINK_MODULES (default DE)
 #   --profile load     DVT_LOAD_MODULES (1..26) modules, DVT_LOAD_NODES (0..26,
@@ -184,7 +187,7 @@ compose_all=(docker compose -p "${COMPOSE_PROJECT_NAME:-dvt}" "${compose_files[@
   --profile core --profile allstar --profile nxdn --profile capture --profile capture-allstar
   --profile capture-nxdn --profile p25 --profile capture-p25 --profile interlink
   --profile capture-interlink --profile load --profile netem --profile g3
-  --profile urfd --profile capture-urfd)
+  --profile urfd --profile capture-urfd --profile mrefd --profile capture-mrefd)
 
 if [ "$down_only" = 1 ]; then
   take_lock
@@ -198,6 +201,7 @@ has_nxdn=0
 has_p25=0
 has_interlink=0
 has_urfd=0
+has_mrefd=0
 has_load=0
 IFS=, read -r -a wanted <<< "$profile"
 for p in "${wanted[@]}"; do
@@ -251,12 +255,15 @@ for p in "${wanted[@]}"; do
     urfd)
       has_urfd=1
       ;;
-    *) echo "run.sh: --profile takes core, allstar, nxdn, p25, interlink, load, g3, urfd or a comma list" >&2; exit 2 ;;
+    mrefd)
+      has_mrefd=1
+      ;;
+    *) echo "run.sh: --profile takes core, allstar, nxdn, p25, interlink, load, g3, urfd, mrefd or a comma list" >&2; exit 2 ;;
   esac
 done
-# DVT_REF_KIND=urfd: URFd (.70) becomes the reference the cases compare the
-# sut with. Such runs are compatibility data, judged as differential only,
-# so they are held to the xlxd profile.
+# DVT_REF_KIND=urfd / mrefd: URFd (.70) or mrefd (.80) becomes the reference
+# the cases compare the sut with. Such runs are compatibility data, judged as
+# differential only, so they are held to the xlxd profile.
 case "${DVT_REF_KIND:-xlxd}" in
   xlxd) export DVT_REF_OCTET=10 ;;
   urfd)
@@ -265,11 +272,21 @@ case "${DVT_REF_KIND:-xlxd}" in
     [ "${DVT_SUT_PROFILE:-xlxd}" = xlxd ] \
       || { echo "run.sh: DVT_REF_KIND=urfd runs are compatibility data: use DVT_SUT_PROFILE=xlxd" >&2; exit 2; }
     ;;
-  *) echo "run.sh: DVT_REF_KIND must be xlxd or urfd" >&2; exit 2 ;;
+  mrefd)
+    has_mrefd=1
+    export DVT_REF_OCTET=80
+    [ "${DVT_SUT_PROFILE:-xlxd}" = xlxd ] \
+      || { echo "run.sh: DVT_REF_KIND=mrefd runs are compatibility data: use DVT_SUT_PROFILE=xlxd" >&2; exit 2; }
+    ;;
+  *) echo "run.sh: DVT_REF_KIND must be xlxd, urfd or mrefd" >&2; exit 2 ;;
 esac
 if [ "$has_urfd" = 1 ]; then
   profiles+=(--profile urfd)
   [ -f .cache/urfd/reflector/Makefile ] || { echo "run.sh: .cache/urfd missing; run scripts/pre-fetch-urfd.sh" >&2; exit 2; }
+fi
+if [ "$has_mrefd" = 1 ]; then
+  profiles+=(--profile mrefd)
+  [ -f .cache/mrefd/Makefile ] || { echo "run.sh: .cache/mrefd missing; run scripts/pre-fetch-mrefd.sh" >&2; exit 2; }
 fi
 # netem: a preset name (NETEM_PRESET_<NAME>), "off", or netem arguments
 netem_args() {
@@ -315,6 +332,10 @@ if [ "$capture" = 1 ]; then
   if [ "$has_urfd" = 1 ]; then
     profiles+=(--profile capture-urfd)
     capture_svcs+=(capture-urfd)
+  fi
+  if [ "$has_mrefd" = 1 ]; then
+    profiles+=(--profile capture-mrefd)
+    capture_svcs+=(capture-mrefd)
   fi
 fi
 

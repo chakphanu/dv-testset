@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
 """Compatibility table from rig runs of the same cases against different
-reference reflectors (scripts/run.sh with DVT_REF_KIND=xlxd and =urfd):
+reference reflectors (scripts/run.sh with DVT_REF_KIND=xlxd, =urfd or =mrefd):
 
     scripts/compat-table.py out/<run-a> out/<run-b> [...] > compat.md
 
@@ -11,7 +11,7 @@ test did against that reference: "same" (passed: the sut behaves like the
 reference), "differs" (failed), "skip", "error"; "n/a" for files that need
 an xlxd-only feature (interlink, USRP rows, transcoder link) when the
 reference is not xlxd, and for the cross-mode cases (the CROSSMODE table in
-cases/conftest.py) when the reference has no transcoder (URFd in the rig).
+cases/conftest.py) when the reference has no transcoder (URFd and mrefd in the rig).
 A last column flags cases whose verdict changes between references.
 """
 import ast
@@ -27,7 +27,7 @@ XLXD_ONLY = ("test_xlx.py", "test_xlxd_interlink.py", "test_usrp.py", "test_usrp
 
 
 # references that run without a transcoder: cross-mode cases are n/a there
-NO_TRANSCODER = ("urfd",)
+NO_TRANSCODER = ("urfd", "mrefd")
 CONFTEST = Path(__file__).resolve().parents[1] / "cases" / "conftest.py"
 
 

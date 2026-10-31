@@ -434,12 +434,19 @@ SPEC = {
         "P-G3-24": {"period_10s": True},
         "P-G3-26": {"reply": 0},
     },
+    # M17 stage 2: the sut takes configured reflector peers (cases/proto
+    # conftest m17_peers; dvtest.specs.m17_peering)
+    "m17_peering": True,
     # M17 dev items (docs/protocols/m17.md), DV-Router choices 2026-10-30.
     # Cross-mode: only unencrypted voice 3200 (any CAN / signed) is
     # transcoded; 1600, data-only and encrypted streams stay M17-only;
     # other-mode origin gets TYPE 0x0005 and zero META. Ingress CRC is never
     # checked; ACKN is exactly 4 B; egress datagrams never exceed 100 B.
     "m17": {
+        # the designation the sut presents in its reflector CONN / ACKN / PING /
+        # PONG / DISC (edges.m17.designation); a placeholder until DV-Router
+        # fixes the rig value, the native config gets the same string
+        "designation": "M17-DVR",
         # NACK for a module outside the served rooms (run with DV_ROOMS=A-Y)
         "P-M17-03": {"module": "Z", "reply": "NACK 4"},
         "P-M17-04": {"reply_module_digit": "NACK 4", "reply_module_lower": "NACK 4", "reply_callsign_zero": "none"},
@@ -452,11 +459,14 @@ SPEC = {
         "P-M17-18": {"disc": "DISC 10"},
         "P-M17-21": {"relayed": True},
         "P-M17-24": {"relayed": True, "other_module": False},
-        # same-mode relay of every stream TYPE, encrypted included (packets
-        # forwarded as received; never transcoded or sent cross-mode)
+        # same-mode relay of every unencrypted stream TYPE (packets forwarded
+        # as received; never transcoded or sent cross-mode); encrypted streams
+        # are dropped at ingress by default (owner decision, P-M17-86)
         "P-M17-26": {"relayed_voice3200": True, "relayed_voice_data1600": True, "relayed_can1": True,
-                     "relayed_can5": True, "relayed_signed": True, "relayed_scrambler": True,
+                     "relayed_can5": True, "relayed_signed": True, "relayed_scrambler": False,
                      "relayed_data": True},
+        # encrypted streams (scrambler, AES) relayed to nobody, clients or peers
+        "P-M17-86": {"encrypted_relayed": []},
         "P-M17-30": {"relayed": False},
         "P-M17-36": {"egress_broadcast": "@ALL", "egress_designation": "@ALL",
                      "egress_designation_other_module": "@ALL", "egress_reflector": "@ALL",
@@ -468,6 +478,51 @@ SPEC = {
         "P-M17-42": {"echo": False},
         # M17 interlink: a 37 B CONN from an unconfigured peer gets the 4 B NACK, never ACKN
         "P-M17-44": {"reply": "NACK 4"},
+        # stage 2 peer link (cases/proto/test_m17_peer_link.py), decisions Q1-Q6, Q15:
+        # an unlinked sut answers a peer CONN with ACKN and sends its own CONN
+        # at once; CONN retries after 3, 6, 12, 24 and then every 30 s (+- 1.5 s);
+        # a CONN with a wrong designation, endpoint or module set is refused with
+        # the 4 B NACK; an orderly stop sends one DISC 10 B per linked peer
+        "P-M17-47": {"own_conn_fast": True},
+        "P-M17-49": {"retry_s": [3, 6, 12, 24, 30, 30], "tol_s": 1.5},
+        "P-M17-54": {"disc": "DISC 10", "count": 1},
+        "P-M17-58": {"reply": "NACK 4"},
+        "P-M17-59": {"reply": "NACK 4"},
+        "P-M17-60": {"reply_refused": "NACK 4"},
+        # stage 2 relay (cases/proto/test_m17_relay.py), decisions Q7-Q10:
+        # a stream that times out gets one synthesised last packet to the
+        # clients and, when it came from a local client, to the linked peers
+        # (55 B); a peer's timed-out stream gives the other peers nothing
+        "P-M17-67": {"timeout_closing_to_peers": 1, "timeout_closing_to_clients": 1,
+                     "peer_timeout_closing_to_clients": 1, "peer_timeout_closing_to_peers": 0},
+        # destination rewrite to broadcast also for XLXnnn  C and URFnnn  C
+        "P-M17-69": {"state_xlx_module": "rewritten", "state_xlx_other": "rewritten",
+                     "state_urf_module": "rewritten"},
+        # a bare M17P from a one-module peer loses its last byte as the
+        # trailer and is dropped unless that byte is a served module letter
+        "P-M17-70": {"bare_m17p_delivered": 0},
+        # a trailer outside the peer's set, 0x00 or lower case: dropped, also
+        # for a one-module peer
+        "P-M17-73": {"delivered_dvt": []},
+        # M17P packet mode (cases/proto/test_m17_packet.py), decisions Q8, Q11-Q14:
+        # any TYPE with the stream bit clear is relayed natively to clients
+        # and peers unchanged (v3 layout, v3 with CAN 5, 0x1000), never
+        # SMS-ingested
+        "P-M17-75": {"v3_type": "relayed", "v3_type_can5": "relayed", "other_layout": "relayed"},
+        # a designation / XLXnnn  C / URFnnn  C destination becomes broadcast
+        # with the LSF CRC recomputed (client and peer copy, also from a peer);
+        # a callsign stays
+        "P-M17-79": {"designation": "@ALL", "designation_no_module": "@ALL", "reflector": "@ALL", "urf": "@ALL",
+                     "callsign": "N0TEST", "broadcast": "@ALL", "from_peer_designation": "@ALL"},
+        # no CRC check on the native relay; only the LSF CRC is recomputed
+        # after a destination rewrite, the payload CRC never
+        "P-M17-80": {"crc_lsf": "relayed", "crc_payload": "relayed", "crc_zero": "relayed",
+                     "crc_lsf_rewrite": "relayed", "crc_both_rewrite": "relayed"},
+        # Q13 revised: anything encrypted ends at the edge; an encrypted-TYPE
+        # M17P from a client or a peer is dropped at ingress, never relayed
+        "P-M17-81": {"encrypted_type": "dropped"},
+        # a client M17P is 38..859 B: 37 and 860 B are dropped without a reply
+        "P-M17-84": {"client_37": "dropped", "client_860": "dropped"},
     },
     # XLX interlink dev items (docs/protocols/xlx.md), DV-Router choices
     # 2026-10-30. Peer kind comes from the configured row (P-XLX-09; the

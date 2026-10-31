@@ -11,6 +11,7 @@ scripts/pre-fetch-*.sh scripts, into the gitignored .cache/ directory:
 - NXDNReflector from NXDNClients (GPL-2.0), https://github.com/g4klx/NXDNClients
 - P25Reflector from P25Clients (GPL-2.0), https://github.com/g4klx/P25Clients
 - URFd (GPL-3.0), https://github.com/n7tae/urfd
+- mrefd (GPL-3.0), https://github.com/n7tae/mrefd
 
 scripts/pre-fetch-speech.sh fetches speech input (not shipped) into
 .cache/speech/ and keeps 8 kHz resampled copies of 20 utterances per voice

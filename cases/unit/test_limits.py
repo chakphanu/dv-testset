@@ -69,8 +69,8 @@ def test_main_exit_status(monkeypatch, capsys):
 def test_shipped_compose_caps_every_service_of_every_profile():
     if not shutil.which("docker"):
         pytest.skip("docker is not installed")
-    profiles = ["core", "allstar", "nxdn", "p25", "interlink", "load", "g3", "urfd", "netem",
-                "capture", "capture-allstar", "capture-nxdn", "capture-p25", "capture-urfd",
+    profiles = ["core", "allstar", "nxdn", "p25", "interlink", "load", "g3", "urfd", "mrefd", "netem",
+                "capture", "capture-allstar", "capture-nxdn", "capture-p25", "capture-urfd", "capture-mrefd",
                 "capture-interlink"]
     cmd = ["docker", "compose", "-p", "dvtlimits", "-f", str(ROOT / "rig/compose.yml"),
            "--env-file", str(ROOT / ".env.example")]

@@ -108,3 +108,17 @@ def test_urfd_reference():
     assert target.load(env={"DVT_REF_KIND": "urfd", "DVT_XLXD_REF": "192.0.2.10"}).xlxd_ref == "192.0.2.10"
     with pytest.raises(ValueError, match="DVT_REF_KIND"):
         target.load(env={"DVT_REF_KIND": "urf"})
+
+
+def test_mrefd_reference():
+    t = target.load(env={})
+    assert (t.mrefd, t.ref_kind, t.xlxd_ref) == ("172.30.0.80", "xlxd", "172.30.0.10")
+    # rig: run.sh passes DVT_XLXD_REF=<net>.80 with DVT_REF_KIND=mrefd
+    t = target.load(env={"DVT_SUBNET": "172.30.7.0/24", "DVT_REF_KIND": "mrefd",
+                         "DVT_XLXD_REF": "172.30.7.80", "DVT_MREFD": "172.30.7.80"})
+    assert (t.xlxd_ref, t.mrefd, t.ref_kind) == ("172.30.7.80", "172.30.7.80", "mrefd")
+    # no DVT_XLXD_REF: the reference follows the mrefd host, not the URFd host
+    t = target.load(env={"DVT_REF_KIND": "mrefd", "DVT_MREFD": "192.0.2.80"})
+    assert t.xlxd_ref == "192.0.2.80" and t.urfd == "172.30.0.70"
+    assert target.load(env={"DVT_REF_KIND": "mrefd"}).xlxd_ref == "172.30.0.80"
+    assert target.load(env={"DVT_REF_KIND": "mrefd", "DVT_XLXD_REF": "192.0.2.10"}).xlxd_ref == "192.0.2.10"

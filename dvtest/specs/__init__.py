@@ -63,3 +63,11 @@ def rule(target, case):
     the xlxd profile (differential against xlxd-ref), else the spec entry
     (None while pending)."""
     return expectation(target.sut_profile, case)
+
+
+def m17_peering(target):
+    """Does the target's sut accept configured M17 reflector peers (an
+    interlink with CONN / ACKN / PING and the module trailer)? The profile's
+    SPEC["m17_peering"]; False under the xlxd profile (xlxd has no M17
+    peering) and for a profile that does not say."""
+    return bool(rule(target, "m17_peering"))

@@ -6,7 +6,9 @@ Conformance builders (docs/protocols/m17.md): crc16(), stream_packet()
 with every LSD field settable and a real or forced CRC, parse_stream(),
 the control packets of M17 Part II (CONN, LSTN, PING, PONG, DISC request
 and acknowledgement, the 37-byte reflector CONN) with parse_control(),
-and the packet-mode packet m17p_packet()."""
+the packet-mode packet m17p_packet() with parse_m17p(), and the
+reflector-to-reflector forms (peer CONN / ACKN / PING / PONG / DISC, the
+module trailer, classify(), parse_peer()) used by dvtest.m17_peer."""
 import time
 
 from ..net import UdpClient
@@ -240,12 +242,171 @@ def parse_control(data):
             "module": chr(data[10]) if len(data) == 11 else None}
 
 
-def m17p_packet(protocol, data, src="N0CALL", dst=None, can=0):
+def _crc_pair(crc, lsf, payload):
+    """(LSF CRC, payload CRC) for the crc argument of m17p_packet: True =
+    both valid, False = both 0x0000, (lsf, payload) = each None (valid) or
+    an int."""
+    if crc is True:
+        return lsf, payload
+    if crc is False:
+        return 0, 0
+    pair = tuple(crc)
+    return (lsf if pair[0] is None else pair[0]), (payload if pair[1] is None else pair[1])
+
+
+def m17p_packet(protocol, data, src="N0CALL", dst=None, can=0, type_=None, crc=True, meta=bytes(14)):
     """Packet-mode IP packet (Part II, Packet Mode IP Packet): "M17P",
     LSF (LSD + CRC16), then the type specifier, the user data and the
-    payload CRC16 over both."""
-    type_ = ((can >> 1) & 7) << 8 | (can & 1) << 7          # packet mode: bit 0 clear
-    lsd = address(dst) + address(src) + type_.to_bytes(2, "big") + bytes(14)
-    body = bytes([protocol]) + bytes(data)
-    return b"M17P" + lsd + crc16(lsd).to_bytes(2, "big") + body + crc16(body).to_bytes(2, "big")
+    payload CRC16 over both. protocol: the specifier, an int (one byte) or
+    bytes (1..4, e.g. b"\xc2\x80"). type_: the 16-bit TYPE field, default
+    the legacy layout from can (stream bit clear); see M17P_TYPES. crc:
+    True both valid, False both 0x0000, or (lsf, payload) where None is
+    valid and an int forces that value."""
+    if type_ is None:
+        type_ = ((can >> 1) & 7) << 8 | (can & 1) << 7          # packet mode: bit 0 clear
+    lsd = address(dst) + address(src) + type_.to_bytes(2, "big") + bytes(meta).ljust(14, b"\0")[:14]
+    body = (bytes([protocol]) if isinstance(protocol, int) else bytes(protocol)) + bytes(data)
+    lsf_crc, payload_crc = _crc_pair(crc, crc16(lsd), crc16(body))
+    return b"M17P" + lsd + lsf_crc.to_bytes(2, "big") + body + payload_crc.to_bytes(2, "big")
 
+
+M17P_HEADER = 34            # "M17P" + LSD (28) + LSF CRC (2)
+
+
+def m17p_size(data_len, specifier_len=1):
+    """Size of an M17P datagram: 34 + len(specifier + data) + 2 (Part II
+    allows a payload of 4..825 bytes, so 38..859 bytes)."""
+    return M17P_HEADER + specifier_len + data_len + 2
+
+
+def parse_m17p(data, trailer=None):
+    """Fields of an M17P datagram, or None (not M17P or shorter than 38 B).
+    trailer: True = the last byte is a module letter (reflector to reflector,
+    n+1 bytes), False = none, None = decide: a trailer when the payload CRC
+    is valid only without the last byte. Keys: size (as given), trailer
+    (the letter or None), dst_raw, dst, src, type, meta, lsf_crc_ok, payload
+    (specifier + data), payload_crc, payload_crc_ok."""
+    if len(data) < 38 or not data.startswith(b"M17P"):
+        return None
+    letter = None
+
+    def fields(body):
+        crc = int.from_bytes(body[-2:], "big")
+        return body[34:-2], crc, crc == crc16(body[34:-2])
+
+    if trailer is None:
+        trailer = not fields(data)[2] and fields(data[:-1])[2] and len(data) >= 39
+    body = data
+    if trailer:
+        letter, body = chr(data[-1]) if 0x20 <= data[-1] < 0x7F else data[-1], data[:-1]
+    payload, crc, crc_ok = fields(body)
+    lsf = int.from_bytes(body[32:34], "big")
+    return {"size": len(data), "trailer": letter, "dst_raw": body[4:10],
+            "dst": "@ALL" if body[4:10] == BROADCAST else decode_callsign(body[4:10]),
+            "src": decode_callsign(body[10:16]), "type": int.from_bytes(body[16:18], "big"),
+            "meta": body[18:32], "lsf_crc_ok": lsf == crc16(body[4:32]),
+            "payload": payload, "payload_crc": crc, "payload_crc_ok": crc_ok}
+
+
+# M17P TYPE values by class (docs/protocols/m17.md stage 2; the legacy / v3
+# split is the DV-Router layout rule, Part I only fixes the P/S bit and CAN)
+M17P_TYPES = {
+    "legacy": (0x0000, 0x0080, 0x0280),             # top nibble 0, stream bit 0, bits 3..4 0
+    "v3": (0xF000, 0xF005, 0xF030),                 # nibble 0xF, bits 11..9 0
+    "legacy_encrypted": (0x0008, 0x0010),           # bits 3..4 non-zero
+    "v3_encrypted": (0xF200, 0xF800),               # bits 11..9 non-zero
+    "stream_bit": (0x0001, 0xF001),                 # invalid in M17P
+    "other": (0x1000,),                             # top nibble neither 0 nor 0xF
+}
+M17P_TYPE_LEGACY, M17P_TYPE_V3 = 0x0000, 0xF000
+M17P_TYPE_LEGACY_ENCRYPTED, M17P_TYPE_V3_ENCRYPTED = 0x0008, 0xF200
+M17P_TYPE_STREAM_BIT, M17P_TYPE_OTHER = 0x0001, 0x1000
+
+
+# ---------------------------------------------------------------- reflector to reflector (stage 2)
+
+PEER_CONN_SIZE = 37
+PEER_CONTROL_SIZE = 10
+STREAM_TRAILER_SIZE = PACKET_SIZE + 1       # 55
+
+
+def peer_ackn_packet(designation, modules):
+    """37-byte reflector ACKN: the answering reflector's designation and the
+    linked modules, NUL padded."""
+    return b"ACKN" + encode_callsign(designation) + modules.encode().ljust(27, b"\0")[:27]
+
+
+def peer_ping_packet(designation):
+    return b"PING" + encode_callsign(designation)
+
+
+def peer_pong_packet(designation):
+    return b"PONG" + encode_callsign(designation)
+
+
+def peer_disc_packet(designation):
+    return b"DISC" + encode_callsign(designation)
+
+
+def with_trailer(packet_bytes, letter):
+    """The datagram sent between reflectors: the body plus the module letter
+    of the originating module (55 B stream, n+1 B M17P). letter: "M" or an
+    int byte value."""
+    return bytes(packet_bytes) + (bytes([letter]) if isinstance(letter, int) else letter.encode())
+
+
+def strip_trailer(packet_bytes):
+    """(body, letter): the datagram without its last byte and that byte as
+    a one-character string (a non-printable byte stays an int); (data, None)
+    for an empty datagram."""
+    if not packet_bytes:
+        return packet_bytes, None
+    last = packet_bytes[-1]
+    return bytes(packet_bytes[:-1]), (chr(last) if 0x20 <= last < 0x7F else last)
+
+
+def classify(data):
+    """Short name of a datagram between a tester and a reflector: CONN37,
+    CONN11 (client), ACKN37, ACKN4, NACK4, NACK10, PING10, PONG10, DISC10,
+    DISC4, LSTN11, STREAM54, STREAM55, M17P (size not part of the name), or
+    other (also a known tag with another size)."""
+    size = len(data)
+    tag = bytes(data[:4])
+    if tag == b"M17 " and size in (PACKET_SIZE, STREAM_TRAILER_SIZE):
+        return "STREAM%d" % size
+    if tag == b"M17P" and size >= 38:
+        return "M17P"
+    known = {b"CONN": (37, 11), b"ACKN": (37, 4), b"NACK": (4, 10), b"PING": (10,), b"PONG": (10,),
+             b"DISC": (10, 4), b"LSTN": (11,)}
+    if size in known.get(tag, ()):
+        return "%s%d" % (tag.decode(), size)
+    return "other"
+
+
+def kind_matches(kind, want):
+    """kind (classify()) against want: None matches all, a string matches
+    by prefix ("STREAM" both sizes, "PING" PING10), a tuple/list/set any of
+    its entries, a callable is called with the kind."""
+    if want is None:
+        return True
+    if callable(want):
+        return bool(want(kind))
+    if isinstance(want, str):
+        return kind.startswith(want)
+    return any(kind.startswith(item) for item in want)
+
+
+def parse_peer(data):
+    """Fields of a 37 B reflector CONN / ACKN or a 10 B PING / PONG / DISC /
+    NACK, or None. Keys: tag, size, designation, modules (the NUL
+    terminated list of a 37 B packet, '' for 10 B), nul_ok (a NUL ends the
+    list)."""
+    tag = bytes(data[:4]).decode("ascii", "replace")
+    if len(data) == PEER_CONN_SIZE and tag in ("CONN", "ACKN"):
+        raw = bytes(data[10:37])
+        end = raw.find(b"\0")
+        return {"tag": tag, "size": 37, "designation": decode_callsign(data[4:10]),
+                "modules": raw[:end if end >= 0 else None].decode("ascii", "replace"), "nul_ok": end >= 0}
+    if len(data) == PEER_CONTROL_SIZE and tag in ("PING", "PONG", "DISC", "NACK"):
+        return {"tag": tag, "size": 10, "designation": decode_callsign(data[4:10]), "modules": "", "nul_ok": True}
+    return None

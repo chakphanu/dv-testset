@@ -553,6 +553,47 @@ test, "dev" rows are recorded under the `xlxd` profile.
 | P-M17-43 | Unknown / short / oversize packets ignored | test_m17::test_m17_garbage_ignored | diff | probe | covered |
 | P-M17-44 | 37 B peer CONN not linked | test_m17::test_m17_peer_conn_unconfigured | dev | probe | covered (record) |
 | P-M17-45 | No datagram to a client above 100 B | test_m17::test_m17_egress_max_size | hb | probe | covered |
+| P-M17-46 | Reflector CONN to an unlinked peer | test_m17_peer_link::test_m17_peer_conn_sent | hb | probe (m17_peers) | covered |
+| P-M17-47 | Peer CONN -> ACKN 37 B, no link by itself, own CONN at once | test_m17_peer_link::test_m17_peer_conn_answered | dev | probe | covered |
+| P-M17-48 | Only a matching ACKN links | test_m17_peer_link::test_m17_peer_only_matching_ackn_links[..] | hb | probe | covered (slow) |
+| P-M17-49 | CONN retry schedule | test_m17_peer_link::test_m17_peer_conn_retry_schedule | dev | probe | covered (slow) |
+| P-M17-50 | PING every 3 s per peer | test_m17_peer_link::test_m17_peer_ping_cadence | hb | probe | covered |
+| P-M17-51 | PING-only / PONG-only peer stays linked | test_m17_peer_link::test_m17_peer_keepalive_ping_or_pong_only | hb | probe | covered (slow) |
+| P-M17-52 | Silent peer dropped at 30 s; traffic refreshes the timer | test_m17_peer_link::test_m17_peer_silent_is_dropped, ::test_m17_peer_traffic_refreshes_timer | hb | probe | covered (slow) |
+| P-M17-53 | Peer DISC removes every module session | test_m17_peer_link::test_m17_peer_disc_removes_all_modules | hb | probe | covered |
+| P-M17-54 | DISC 10 B to every peer on orderly stop | test_m17_peer_link::test_m17_peer_disc_on_stop | dev | probe (rig_control restart, last case; sut only) | covered (slow) |
+| P-M17-55 | Repeated CONN: ACKN, link kept, no duplicates | test_m17_peer_link::test_m17_peer_repeat_conn | hb | probe | covered |
+| P-M17-56 | Unlinked peer endpoint ingress dropped | test_m17_peer_link::test_m17_peer_unlinked_ingress_dropped | hb | probe | covered |
+| P-M17-57 | Foreign endpoint dropped | test_m17_peer_link::test_m17_peer_foreign_endpoint_dropped | hb (sut) | probe | covered |
+| P-M17-58 | CONN of a foreign identity: NACK, no link | test_m17_peer_link::test_m17_peer_conn_identity_foreign_endpoint, ::test_m17_peer_conn_identity_configured_endpoint | dev | probe | covered |
+| P-M17-59 | CONN with a wrong module set: NACK, no link; order irrelevant | test_m17_peer_link::test_m17_peer_conn_wrong_module_set | dev | probe | covered |
+| P-M17-60 | Malformed CONN: NACK / ignored, alive | test_m17_peer_link::test_m17_peer_conn_malformed | dev | probe | covered (slow) |
+| P-M17-61 | Local client stream to clients and peers | test_m17_relay::test_m17_relay_client_stream_to_all | hb | probe (sut + mrefd) | covered |
+| P-M17-62 | Peer routing by module | test_m17_relay::test_m17_relay_routes_by_module | hb | probe (sut + mrefd) | covered |
+| P-M17-63 | Peer stream to clients, 54 B | test_m17_relay::test_m17_relay_peer_stream_to_clients | hb | probe (sut + mrefd) | covered |
+| P-M17-64 | One hop, no echo | test_m17_relay::test_m17_relay_peer_one_hop | hb | probe (sut + mrefd); transit check vacuous while no module is shared by both peers | covered |
+| P-M17-65 | Listen-only stream not relayed | test_m17_relay::test_m17_relay_listen_only_not_relayed | hb | probe (sut + mrefd) | covered |
+| P-M17-66 | One stream per module across origins | test_m17_relay::test_m17_relay_floor_peer_first, ::test_m17_relay_floor_client_first | hb | probe (sut + mrefd) | covered |
+| P-M17-67 | Bit 15 frees the module; timeout closing packets | test_m17_relay::test_m17_relay_last_frame_frees_module, ::test_m17_relay_timeout_client_stream, ::test_m17_relay_timeout_peer_stream | hb / dev | probe; timeout: profile entry `P-M17-67` (sut), mrefd printed | covered |
+| P-M17-68 | 55 B with the module trailer | test_m17_relay::test_m17_relay_peer_egress_trailer | hb | probe (sut + mrefd) | covered |
+| P-M17-69 | Destination rewrite | test_m17_relay::test_m17_relay_destination_rewrite[..], ::test_m17_relay_destination_rewrite_xlx_urf[..] | hb / dev | probe; XLX / URF forms: profile entry `P-M17-69` | covered |
+| P-M17-70 | Bare 54 B from a one-module peer; bare M17P | test_m17_relay::test_m17_relay_bare_stream_one_module_peer, ::test_m17_relay_bare_m17p_one_module_peer | hb / dev | probe; bare M17P: profile entry `P-M17-70` | covered |
+| P-M17-71 | Bare 54 B from a two-module peer dropped | test_m17_relay::test_m17_relay_bare_stream_two_module_peer_dropped, ::test_m17_relay_bare_stream_two_module_peer_letter_crc | hb / record | probe; letter variant printed | covered |
+| P-M17-72 | Trailer routes a multi-module peer | test_m17_relay::test_m17_relay_trailer_routes_multi_module_peer | hb | probe (sut + mrefd) | covered |
+| P-M17-73 | Trailer outside the peer's set | test_m17_relay::test_m17_relay_trailer_outside_set_multi_module_peer, ::test_m17_relay_trailer_outside_set_one_module_peer | hb / dev | probe; one-module peer: profile entry `P-M17-73` | covered |
+| P-M17-74 | Legacy-TYPE SMS relayed to clients and peers | test_m17_packet::test_m17p_legacy_type (0x0000, 0x0080, 0x0280), ::test_m17p_legacy_type_second_module | hb | probe (sweep `relay`, markers in META) | covered |
+| P-M17-75 | v3 TYPE unchanged, 0x1000 relayed | test_m17_packet::test_m17p_v3_type (0xF000, 0xF030), ::test_m17p_v3_type_can5, ::test_m17p_other_layout | dev | probe (SPEC "P-M17-75"; mrefd: 0xF005 recorded) | covered |
+| P-M17-76 | Non-SMS specifiers relayed | test_m17_packet::test_m17p_specifier | hb | probe | covered |
+| P-M17-77 | Peer M17P to the trailer's module, trailer stripped, one hop | test_m17_packet::test_m17p_from_peer, ::test_m17p_from_peer_second_module | hb | probe | covered |
+| P-M17-78 | Listen-only sender relayed to nobody | test_m17_packet::test_m17p_listen_only_sender | hb | probe (3 s, marked) | covered |
+| P-M17-79 | DST rewrite for M17P, LSF CRC recomputed | test_m17_packet::test_m17p_dst_rewrite (6 forms), ::test_m17p_dst_rewrite_from_peer | dev | probe (SPEC "P-M17-79"; mrefd rewrites `M17-` only) | covered |
+| P-M17-80 | Bad CRC relayed unchanged, rewrite repairs the LSF CRC only | test_m17_packet::test_m17p_bad_crc_relayed | dev | probe (marked; SPEC "P-M17-80"; mrefd recomputes the payload CRC after a rewrite: recorded) | covered |
+| P-M17-81 | Encrypted-TYPE M17P dropped at ingress (client and peer origin), control relayed | test_m17_packet::test_m17p_encrypted_type | dev | probe (SPEC "P-M17-81" = dropped; mrefd relays: printed, not asserted) | covered |
+| P-M17-82 | Stream-bit TYPE M17P | test_m17_packet::test_m17p_stream_bit_type | record | probe (marked) | covered (record) |
+| P-M17-83 | M17P does not take the floor | test_m17_packet::test_m17p_does_not_take_the_floor | hb | probe | covered |
+| P-M17-84 | Sizes to clients 38 / 300 / 859 unchanged; 37 and 860 dropped | test_m17_packet::test_m17p_size_to_clients, ::test_m17p_size_37_dropped, ::test_m17p_size_860_from_client_dropped | hb / dev | probe (marked; SPEC "P-M17-84") | covered |
+| P-M17-85 | n+1 between reflectors; stream to clients 54 B | test_m17_packet::test_m17p_size_to_peer, ::test_m17p_size_from_peer, ::test_m17_stream_from_peer_to_clients_is_54_bytes, ::test_m17_stream_bare_from_peer_to_clients_is_54_bytes (sut only) | hb | probe | covered |
+| P-M17-86 | Encrypted streams not relayed (all four paths) | test_m17_relay::test_m17_relay_encrypted_stream_blocked | dev | probe (sut via `P-M17-86` entry, mrefd asserts the controls and prints the rest; both drop) | covered |
 
 ### K9. YSF reflector network (`docs/protocols/ysf.md`)
 
