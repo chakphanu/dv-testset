@@ -568,7 +568,10 @@ def test_xlx_garbage_ignored(xrig, linked):
         for data in GARBAGE.values():
             linked.send(ip, data)
         time.sleep(0.5)
-        replies = linked.packets(ip, start, lambda d: xlx.parse_link(d) or xlx.parse_short(d))
+        # an "L" is the server's own periodic link request to an unlinked
+        # row (every ~5 s, P-XLX-07), not a reply to the garbage: only A / N / U count
+        replies = linked.packets(ip, start, lambda d: (xlx.parse_link(d) or xlx.parse_short(d) or {}).get("tag") in
+                                 ("A", "N", "U"))
         out = ingress(linked, ip, dstar_frames(20, "garbage"), fresh(), kinds=("dstar",))
         return {"replies": len(replies), "still_linked": len(out["dstar"]) == 20}
     with marked(xrig, "garbage"):
