@@ -124,6 +124,10 @@ SPEC = {
     "test_mmdvm_busy_module_no_mix": {"late_entry": "deny"},
     # DMR+ header on a module busy with an MMDVM stream (P-DMP-35, B1): judged by test_first_talker_wins
     "test_dmp_busy_module_no_mix": {"late_entry": "deny"},
+    # P25 client-serving behaviour rows (P-P25-13 B1, P-P25-15 B3): judged by test_first_talker_wins /
+    # test_stream_timeout_frees_module; these entries only open the gate
+    "test_p25_second_talker_dropped": {"winners": 1},
+    "test_p25_stream_timeout": {"terminator": "all_egress", "timeout_s": 1.6},
     # dev items (docs/protocols/mmdvm.md), DV-Router choices 2026-10-30.
     # Unknown id: id 0 and ids without a dmrid.dat callsign are refused
     # with MSTNAK (9-digit hotspot ids fall back to id/100); with no
@@ -189,7 +193,7 @@ SPEC = {
     "p25": {
         # client-serving P25 edge (UDP 41000) not built yet: server-side
         # cases skip "edge not ready" until this is True
-        "server": False,
+        "server": True,
         "P-P25-03": {"reply": 0, "linked": False},
         # 30 s link timeout refreshed by polls and voice, nothing sent on drop
         "P-P25-08": {"heard": [False, False, False, False]},
@@ -265,7 +269,7 @@ SPEC = {
     "nxdn": {
         # client-serving NXDN (UDP 41400) not built yet: server cases skip
         # "edge not ready" until this is True
-        "server": False,
+        "server": True,
         "P-NXD-03": {"keeps_polling": True, "routed_during_loss": False, "resumed": True},
         # NXDNU x3 on peer removal and shutdown
         "P-NXD-04": {"unlink": True},

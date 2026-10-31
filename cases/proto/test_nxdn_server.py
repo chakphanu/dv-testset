@@ -146,7 +146,10 @@ def servers(rig):
     if rig.sut_profile != specs.DEFAULT and not (specs.rule(rig, "nxdn") or {}).get("server"):
         pytest.skip("edge not ready: SPEC['nxdn']['server'] is not True in dvtest/specs/%s.py" % rig.sut_profile)
     tg = int(os.environ["DVT_NXDN_TG"])
-    return [Server("ref", os.environ["DVT_NXDN_REF"], tg), Server("sut", os.environ["DVT_NXDN_SUT"], tg)]
+    # a non-xlxd sut serves NXDN clients itself on 41400 (TG -> module from its
+    # NXDN peer row, same TG as the reflector's); xlxd's sut is the NXDNReflector
+    sut = os.environ["DVT_NXDN_SUT"] if rig.sut_profile == specs.DEFAULT else rig.xlxd_sut
+    return [Server("ref", os.environ["DVT_NXDN_REF"], tg), Server("sut", sut, tg)]
 
 
 def test_nxdn_server_poll_echo(servers):
@@ -173,7 +176,9 @@ def test_nxdn_server_poll_other_tg(servers, rig):
     def run(srv):
         c = UdpClient("0.0.0.0")
         try:
-            poll = nxdn.poll_packet("N0CALL", srv.tg + 1)
+            # tg + 1 is the rig's NXDN probe row (DVT_NXDN_PROBE_TG), a TG a
+            # peering sut serves too: use one no row carries
+            poll = nxdn.poll_packet("N0CALL", srv.tg + 2)
             c.send((srv.addr, nxdn.PORT), poll)
             c.pump(1.0)
             return {"echo": poll in c.inbox}

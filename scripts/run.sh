@@ -388,6 +388,9 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
       printf '      DV_USRP_IDLE_TIMEOUT_S: "%s"\n' "$DVT_USRP_IDLE_TIMEOUT_S"
     # DVT_USRP_DYNAMIC=1: the sut runs its dynamic USRP hub (unset = not written; xlxd ignores it)
     [ "$svc" != xlxd-sut ] || [ "${DVT_USRP_DYNAMIC:-}" != 1 ] || printf '      DV_USRP_DYNAMIC: "1"\n'
+    # P25 clients of a DV-Router sut link to its one served module on the rig's TG (xlxd ignores these)
+    [ "$svc" != xlxd-sut ] || printf '      DV_P25_SERVER_MODULE: "%s"\n      DV_P25_SERVER_TG: "%s"\n' \
+      "${DVT_P25_MODULE:-G}" "${DVT_P25_TG:-31672}"
     # DVT_UNSERVED_MODULE: the sut serves every module but that one (xlxd ignores DV_ROOMS)
     [ "$svc" != xlxd-sut ] || [ -z "${DVT_UNSERVED_MODULE:-}" ] ||
       printf '      DV_ROOMS: "%s"\n' "$(dvt_rooms_without "$DVT_UNSERVED_MODULE")"

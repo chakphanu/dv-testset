@@ -20,9 +20,11 @@ else the profile's "p25" spec entry {"P-P25-NN": {observed key: value}}
 (skip "spec pending" without one); diff = sut == ref. B1/B3 rows read
 the profile's behaviour entries. Every case prints what both sides did.
 """
+import contextlib
 import os
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -60,6 +62,30 @@ def imbe_served(addr, port):
         client.close()
 
 
+@contextlib.contextmanager
+def marked(rig, tag):
+    """Control channel "mark begin|end <tag>" around a call the case leaves
+    without a terminator on purpose (no-op without the control channel)."""
+    _mark(rig, "begin", tag)
+    try:
+        yield
+    finally:
+        _mark(rig, "end", tag)
+
+
+def _mark(rig, phase, tag):
+    if os.environ.get("DVT_RIG_CONTROL") != "1":
+        return
+    directory = Path(rig.out) / "control"
+    directory.mkdir(parents=True, exist_ok=True)
+    name = "p25-mark-%d-%d" % (os.getpid(), time.monotonic_ns())
+    (directory / (name + ".tmp")).write_text("mark %s %s\n" % (phase, tag))
+    (directory / (name + ".tmp")).rename(directory / (name + ".req"))
+    deadline = time.monotonic() + 5
+    while not (directory / (name + ".ack")).exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+
 @pytest.fixture(scope="module")
 def ep(rig):
     """The P25 endpoints, talkgroup and module of the rig (profile p25).
@@ -69,7 +95,10 @@ def ep(rig):
     itself and also peers with a reflector)."""
     if os.environ.get("DVT_P25") != "on":
         pytest.skip("no P25 endpoints: run.sh --profile p25 (DVT_P25=on)")
-    rig.p25 = {"ref": rig.p25_ref, "sut": rig.p25_sut}
+    # a non-xlxd sut serves P25 clients itself (UDP 41000, one module, DV_P25_SERVER_*);
+    # xlxd's sut side is the P25Reflector. The peer socket always goes to the reflector.
+    serve = rig.p25_sut if rig.sut_profile == specs.DEFAULT else rig.xlxd_sut
+    rig.p25 = {"ref": rig.p25_ref, "sut": serve}
     rig.p25_peer = {"ref": rig.p25_ref, "sut": os.environ.get("DVT_P25_PEER_SUT") or rig.p25_sut}
     rig.p25_tg = int(os.environ.get("DVT_P25_TG", "31672"))
     rig.p25_module = os.environ.get("DVT_P25_MODULE", "G")
@@ -520,7 +549,8 @@ def test_p25_stream_timeout(server):
                     "late": "late" in won}
         finally:
             done(listener, a, b)
-    got = both(server, run)
+    with marked(server, "p25-stream-timeout"):
+        got = both(server, run)
     judge_behaviour(server, "test_stream_timeout_frees_module", got, ("terminator", "early", "late"),
                     lambda entry: {"terminator": entry.get("terminator") == "all_egress", "late": True})
 
