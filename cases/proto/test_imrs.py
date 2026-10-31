@@ -610,10 +610,17 @@ def test_imrs_cross_mode(peer, encoded, kind):
         back = egress(peer["hub"], ip, encoded[kind], kind=kind)
         out_frames = voice_frames(back)
         return {"to_" + kind: len(into["_frames"]), "to_sha": hashlib.sha256(b"".join(into["_frames"])).hexdigest()[:16],
-                "from_" + kind: len(out_frames), "from_sha": hashlib.sha256(b"".join(out_frames)).hexdigest()[:16]}
+                "from_" + kind: len(out_frames), "from_sha": hashlib.sha256(b"".join(out_frames)).hexdigest()[:16],
+                "from_head_sha": hashlib.sha256(b"".join(out_frames[:30])).hexdigest()[:16]}
 
     got = both(peer, run)
     assert got["ref"]["to_" + kind] >= FRAMES * 0.8, got
+    if kind == "m17" and peer["rig"].sut_profile != specs.DEFAULT:
+        # P-IMR-14: a partial last group is padded, not dropped as xlxd does:
+        # the first 30 units equal the reference, the count is the spec's
+        same(got, "to_m17", "to_sha", "from_head_sha")
+        judge_dev(peer["rig"], "P-IMR-23", got, "from_m17")
+        return
     same(got, "to_" + kind, "to_sha", "from_" + kind, "from_sha")
 
 

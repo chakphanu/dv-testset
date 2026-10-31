@@ -578,7 +578,7 @@ def test_dmp_repeated_header(dmp):
         res = to_mmdvm(rig, side, voice, packets=pkts)
         return {"frames": len(res["frames"]), "headers": res["headers"]}
     got = both(dmp, run)
-    same(got, "frames", "headers")
+    judge_dev(dmp, "P-DMP-20", got, "frames", "headers")
 
 
 def test_dmp_no_echo(dmp):
@@ -783,7 +783,9 @@ def test_dmp_unknown_type(dmp):
         pkts += dmrplus.stream(voice, TALKER, 4008, head=False)
         return {"frames": len(to_mmdvm(rig, side, voice, tag="dmp-type9", packets=pkts)["frames"])}
     got = both(dmp, run)
-    same(got, "frames")
+    # dev: the type-9 packets open nothing, then the headerless stream is a
+    # late entry behind a synthesized header (P-DMP-18); xlxd drops it all
+    judge_dev(dmp, "P-DMP-29", got, "frames")
 
 
 def test_dmp_unlinked_sender(dmp):
@@ -830,7 +832,8 @@ def test_dmp_two_clients(dmp, ids):
 
 @pytest.mark.parametrize("kind", ["dstar", "m17"])
 def test_dmp_cross_mode(dmp, kind):
-    """P-DMP-34: DMR+ -> D-STAR / M17 through the transcoder; sut == ref."""
+    """P-DMP-34: DMR+ -> D-STAR / M17 through the transcoder; sut == ref
+    (xlxd profile), else the received count of SPEC["dmrplus"]["P-DMP-34"][kind]."""
     pcm = signals.frames(signals.bursts(700, 3, on_ms=200, off_ms=200))[:FRAMES]
     voice = ambed.transcode(dmp.ambed_ref, ambed.PCM, [ambed.AMBE2PLUS], pcm, port=dmp.ambed_port,
                             transaction=0x444D5000)[ambed.AMBE2PLUS]
@@ -851,6 +854,14 @@ def test_dmp_cross_mode(dmp, kind):
             clients.close(listener)
     got = both(dmp, run)
     assert got["ref"]["received"] >= FRAMES * 0.8
+    if dmp.sut_profile != specs.DEFAULT:
+        # the end unit is not rendered as voice: 36 voice units (+ one last
+        # frame for D-STAR, + the EOT halves for M17), SPEC["dmrplus"]["P-DMP-34"][kind]
+        entry = (specs.rule_mode(dmp, "dmrplus", "P-DMP-34") or {}).get(kind)
+        if not entry:
+            pytest.skip("spec pending: no dmrplus P-DMP-34 %s entry in dvtest/specs/%s.py" % (kind, dmp.sut_profile))
+        assert got["sut"]["received"] == entry["received"], "sut %r, spec %r" % (got["sut"], entry)
+        return
     same(got, "received", "sha256")
 
 

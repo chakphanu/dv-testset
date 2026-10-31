@@ -523,6 +523,7 @@ def lost_last_probe(name, ip, term):
         term.clear()
         g3_talk(term, ip, listeners=(listener,), end=False)
         time.sleep(2.0)
+        listener.client.drain()                 # read what arrived while sleeping (the synthesized last comes at 1.6 s)
         lasts = sum(1 for p in listener.client.inbox if (dextra.parse_voice_raw(p) or {}).get("last"))
         listener.client.inbox.clear()
         third.talk(frames(seed="third"), clients.fresh_stream_id("dstar"), reflector=REFL, tail=0.3)

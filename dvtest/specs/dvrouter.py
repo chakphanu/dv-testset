@@ -159,10 +159,10 @@ SPEC = {
     "usrp": {
         # dynamic DVSwitch-style clients (REG:DVSWITCH / REG:OK) not built yet:
         # the dynamic-client cases skip "edge not ready" until this is True
-        "dynamic_server": False,
-        # UDP port of the dynamic-client hub: 34001 (12345 is Icom G3's fixed
-        # config port, urfd Defines.h G3_CONFIG_PORT)
-        "dynamic_port": 34001,
+        "dynamic_server": True,
+        # UDP port of the dynamic-client hub of the dv-router image (12345 is
+        # Icom G3's fixed config port, urfd Defines.h G3_CONFIG_PORT)
+        "dynamic_port": 34101,
         "P-USR-29": {"unregistered_voice": "ignored"},
         # 60 min idle timeout (refreshed by any packet), REG:UNREG on drop
         # and on permanent shutdown
@@ -293,10 +293,10 @@ SPEC = {
         "P-NXD-42": {"relayed": 6},
         "P-NXD-43": {"after_35s": False, "after_130s": False},
     },
-    # DMR+ dongle protocol (UDP 8880, docs/protocols/dmrplus.md): the edge is
-    # not built yet; client cases skip "edge not ready" until server is True.
+    # DMR+ dongle protocol (UDP 8880, docs/protocols/dmrplus.md); the client
+    # cases skip "edge not ready" while server is False.
     "dmrplus": {
-        "server": False,
+        "server": True,
         # connect with an id missing from the database: NAK (drop), ACK
         # (fallback / local accept it)
         "P-DMP-02": {"replies": [b"NAK OK\n\x00"]},
@@ -312,6 +312,12 @@ SPEC = {
         # voice without a header: late entry on burst A, relayed behind a
         # synthesized header (as MMDVM P-DMR-36; B16 judges the egress)
         "P-DMP-18": {"relayed": True, "header_first": True},
+        # a repeated header opens no second stream (36 voice units, one header)
+        "P-DMP-20": {"frames": 36, "headers": 1},
+        # type-9 packets open nothing; the headerless stream is a late entry (36 units)
+        "P-DMP-29": {"frames": 36},
+        # DMR+ -> D-STAR: 36 voice + one last frame; -> M17: 18 packets (36 units) + the EOT's 2 halves
+        "P-DMP-34": {"dstar": {"received": 36}, "m17": {"received": 38}},
         "P-DMP-19": {"second_heard": True, "terminator_within_0.3s": True},
         # unknown talker: the configured gateway id (as P25)
         "P-DMP-22": {"src_known": 1023007, "src_unknown": None},
@@ -368,7 +374,7 @@ SPEC = {
     # yet; every IMRS case skips "edge not ready" until server is True.
     # Dev values follow when dv-router chooses.
     "imrs": {
-        "server": False,
+        "server": True,
         "P-IMR-02": {"copies": 1},
         # unknown addresses get no ping answer (no amplifier)
         "P-IMR-04": {"answered": False},
@@ -383,6 +389,9 @@ SPEC = {
         "P-IMR-08": {"follows_or_linked": True},
         # pad to whole packets
         "P-IMR-14": {"frames": 10},
+        # M17 -> IMRS: the partial last group is padded (P-IMR-14), 35 units against the reference's 30
+        # (the first 30 are equal; the other 5 = one retained unit + 4 padding units)
+        "P-IMR-23": {"from_m17": 35, "from_m17_padding": 4},
         "P-IMR-15": {"frames": 15, "zero_frames": 0},
         "P-IMR-17": {"same_sid": False},
         "P-IMR-18": {"echo": 0},
@@ -396,7 +405,7 @@ SPEC = {
     # edge is not built yet; the cases skip "edge not ready" until True.
     # Dev values follow when dv-router chooses.
     "g3": {
-        "server": False,
+        "server": True,
         "P-G3-03": {"before_route_is_reflector": True},
         # presence is subject to the operator lists; a refused terminal gets
         # no terminal entry (status 1)

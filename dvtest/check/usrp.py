@@ -1,12 +1,22 @@
 # SPDX-License-Identifier: MIT
 """USRP (chan_usrp): seq +1 per frame and direction, overs of 352 B keyed
 voice frames each ended by a 32 B unkey."""
+import os
+
 from ..proto import usrp as U
 from .common import STREAM_TIMEOUT, Live, Stream, finish_stream, flow_of, flush_loss, seq_finding
 
 NAME = "usrp"
+# UDP ports of the dynamic-client hub (DVSwitch-style REG clients are not in
+# xlxd.usrp): 34001 is the default, DVT_USRP_DYNAMIC_PORT adds the SPEC's port
+DYNAMIC_PORTS = {34001, 34101}
 TYPES = {U.TYPE_VOICE: "voice", U.TYPE_DTMF: "dtmf", U.TYPE_TEXT: "text", 3: "ping", 4: "tlv",
          5: "voice_adpcm", 6: "voice_ulaw"}
+
+
+def dynamic_ports():
+    extra = os.environ.get("DVT_USRP_DYNAMIC_PORT", "")
+    return DYNAMIC_PORTS | ({int(extra)} if extra.isdigit() else set())
 
 
 class Checker:
@@ -34,7 +44,8 @@ class Checker:
         if f.type == U.TYPE_VOICE:
             kind = "keyed" if f.keyup else "unkey"
         r.count(NAME, d, kind)
-        if self.endpoints and frozenset(((d.src, d.sport), (d.dst, d.dport))) not in self.endpoints:
+        if self.endpoints and frozenset(((d.src, d.sport), (d.dst, d.dport))) not in self.endpoints and \
+                not ({d.sport, d.dport} & dynamic_ports()):
             r.error(NAME, d, "unknown_peer", "USRP between endpoints that no configured link names")
         flow = flow_of(d)
         old = self.seq.get(flow)
