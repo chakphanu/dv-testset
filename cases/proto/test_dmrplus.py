@@ -90,7 +90,8 @@ def judge_dev(rig, nn, got, *keys):
         if key in entry:
             assert got["sut"][key] == entry[key], "%s %s: sut %r, spec %r" % (nn, key, got["sut"][key], entry[key])
     if pending:
-        pytest.skip("spec pending: no dmrplus %s %s entry in dvtest/specs/%s.py" % (nn, pending, rig.sut_profile))
+        pytest.skip("spec pending: no dmrplus %s %s entry in dvtest/specs/%s.py; sut shows %s" % (
+            nn, pending, rig.sut_profile, {key: got["sut"].get(key) for key in pending}))
 
 
 def judge_spec(rig, nn, got, expected):
@@ -109,7 +110,7 @@ def judge_behaviour(rig, case, got, keys, expect):
         return
     entry = specs.rule(rig, case)
     if entry is None:
-        pytest.skip("spec pending: no %s entry in dvtest/specs/%s.py" % (case, rig.sut_profile))
+        pytest.skip("spec pending: no %s entry in dvtest/specs/%s.py; sut shows %s" % (case, rig.sut_profile, got["sut"]))
     for key, value in expect(entry).items():
         assert got["sut"][key] == value, "%s %s: sut %r, spec %r" % (case, key, got["sut"][key], value)
 

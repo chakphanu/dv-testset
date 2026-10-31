@@ -122,6 +122,8 @@ SPEC = {
     # items where xlxd deviates (RPTCL and stream id use the B15/B10 keys)
     "test_mmdvm_lost_terminator_timeout": {"terminator": "all_egress", "timeout_s": 1.6},
     "test_mmdvm_busy_module_no_mix": {"late_entry": "deny"},
+    # DMR+ header on a module busy with an MMDVM stream (P-DMP-35, B1): judged by test_first_talker_wins
+    "test_dmp_busy_module_no_mix": {"late_entry": "deny"},
     # dev items (docs/protocols/mmdvm.md), DV-Router choices 2026-10-30.
     # Unknown id: id 0 and ids without a dmrid.dat callsign are refused
     # with MSTNAK (9-digit hotspot ids fall back to id/100); with no
@@ -171,6 +173,8 @@ SPEC = {
         "P-USR-34": {"default_module": "none"},
         "P-USR-37": {"info_reply": "json"},
         "P-USR-40": {"max_clients": 64, "full_reply": "REG:UNREG"},
+        # a callsign on the server's deny list (run with DVT_XLXD_BLACKLIST=N0DENY): listen-only
+        "P-USR-41": {"denied_callsign": "N0DENY"},
         "P-USR-04": {"seq": "continuous"},
         # SET_INFO egress off by default (opt-in per DVSwitch endpoint later)
         "P-USR-09": {"set_info_egress": False},
@@ -308,7 +312,9 @@ SPEC = {
         # no_radio_id policy (default drop), "@fallback" = placeholders
         "P-DMP-16": {"relayed": False},
         "P-DMP-16@fallback": {"relayed": True},
-        "P-DMP-17": {"exact": True, "c_last_lost": 0},
+        # the burst is read with the layout the server writes (byte 32 at wire 59), so
+        # the other layout (xlxd's read side, wire 58) is not exact
+        "P-DMP-17": {"exact": True, "exact_pair33": False, "c_last_lost": 0},
         # voice without a header: late entry on burst A, relayed behind a
         # synthesized header (as MMDVM P-DMR-36; B16 judges the egress)
         "P-DMP-18": {"relayed": True, "header_first": True},
