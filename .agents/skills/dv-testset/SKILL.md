@@ -23,6 +23,23 @@ First time: `scripts/pre-fetch-xlxd.sh`, `scripts/pre-fetch-codec2.sh`,
 `scripts/gen-local.sh`. A skipped case prints what is missing; fix that rather
 than editing the case. `scripts/run.sh --help` lists its options.
 
+## Resource limits (mandatory)
+
+A host crashed (load 185, 40 GB swap) from unbounded parallel builds and
+tests, so everything heavy here is capped; keep it that way (README, "Resource
+limits"):
+
+- `scripts/run.sh` runs inside the scope `dvt-rig.scope` (12G, swap 0, 800% CPU,
+  1024 tasks) by re-executing itself through `scripts/contained.sh`; one rig at
+  a time, across `DVT_INSTANCE` values. Never bypass it (`DVT_UNCONTAINED=1`
+  only when something else caps the run).
+- Every compose service needs `mem_limit` = `memswap_limit`, `cpus`,
+  `pids_limit` (the `x-limits-*` sets); `run.sh` exits 4 otherwise. Host-side
+  `docker run` takes `dvtest.limits.docker_run_args()`.
+- `wire` / `netns` pytest, `build-xlxd-netns.sh` and any system-under-test
+  build: `scripts/contained.sh --name test|build -- <command>`.
+- Compiler jobs come from `DVT_BUILD_JOBS` (never `nproc`); no `pytest -n`.
+
 ## Settings
 
 - `.env.example` (tracked): every repo URL, commit, base image, package

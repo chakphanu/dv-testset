@@ -7,6 +7,7 @@
 # XLXD_BASE_IMAGE comes from .env.example (compose build arg).
 ARG XLXD_BASE_IMAGE
 FROM ${XLXD_BASE_IMAGE} AS build
+ARG MAKE_JOBS=4
 RUN apt-get update && apt-get install -y --no-install-recommends g++ make libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=src src/ /src/
@@ -16,7 +17,7 @@ RUN sed -i \
       /src/main.h \
     && ! grep -qE '^#define (RUN_AS_DAEMON|[A-Z]+_USE_RLX_SERVER[[:space:]]+1)' /src/main.h \
     && rm -f /src/xlxd /src/*.o \
-    && make -C /src -j"$(nproc)"
+    && make -C /src -j"${MAKE_JOBS}"
 
 FROM ${XLXD_BASE_IMAGE}
 COPY --from=build /src/xlxd /xlxd/xlxd

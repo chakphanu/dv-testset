@@ -95,6 +95,8 @@ cases read.
 
 ## Running
 
+The run is capped (scope, container limits, one rig at a time): README, "Resource limits".
+
 ```sh
 scripts/run.sh -m rig                                  # core profile
 scripts/run.sh -m "rig or allstar" --profile allstar   # + AllStar, USRP on

@@ -5,10 +5,11 @@
 # synthetic rig/config/p25/DMRIds.dat. Build arg P25_BASE_IMAGE from .env.example.
 ARG P25_BASE_IMAGE
 FROM ${P25_BASE_IMAGE} AS build
+ARG MAKE_JOBS=4
 RUN apt-get update && apt-get install -y --no-install-recommends g++ make libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=src P25Reflector/ /src/
-RUN make -C /src -j"$(nproc)" P25Reflector
+RUN make -C /src -j"${MAKE_JOBS}" P25Reflector
 
 FROM ${P25_BASE_IMAGE}
 COPY --from=build /src/P25Reflector /p25/P25Reflector

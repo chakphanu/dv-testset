@@ -7,6 +7,9 @@
 #
 #   scripts/build-xlxd-netns.sh [DIR...]     default: $XLXD_REF_DIR $XLXD_SUT_DIR
 #
+# Compiler jobs: DVT_BUILD_JOBS (default 4, never nproc). Run it inside the
+# scope: scripts/contained.sh --name build -- scripts/build-xlxd-netns.sh
+#
 # Prints one "DIR BINARY" line per build, e.g. for
 #   DVT_XLXD_BIN=.cache/netns/sut/src/xlxd DVT_XLXD_REF_BIN=.cache/netns/ref/src/xlxd
 set -euo pipefail
@@ -27,7 +30,7 @@ for name in "$@"; do
   git -C "$src" archive HEAD | tar -x -C "$dest"
   sed -i 's|^#define RUN_AS_DAEMON|//#define RUN_AS_DAEMON|; s|"/xlxd/|"./|g; s|"/var/log/|"./|g; s|_USE_RLX_SERVER\( *\)1|_USE_RLX_SERVER\10|' \
     "$dest/src/main.h"
-  make -C "$dest/src" -j"$(nproc)" > "$dest/build.log" 2>&1 \
+  make -C "$dest/src" -j"${DVT_BUILD_JOBS:-4}" > "$dest/build.log" 2>&1 \
     || { echo "build-xlxd-netns: make failed for $name, see $dest/build.log" >&2; exit 1; }
   echo "$name $dest/src/xlxd"
 done

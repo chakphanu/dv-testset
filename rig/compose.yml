@@ -51,7 +51,36 @@
 
 name: dvt
 
+# Resource limits: EVERY service carries one of these three sets (memory with
+# swap equal to it, so no swap; cpus quota; pids). run.sh refuses to start a
+# rig in which a service lacks them (dvtest/limits.py). Sizes are settings in
+# .env.example (DVT_MEM_*, DVT_CPUS_*, DVT_PIDS_*); README, "Resource limits".
+#   small   sniffers, netem sidecars, NXDN/P25 reflectors, G3 relay, load nodes
+#   medium  xlxd, transcoders, URFd, AllStarLink (the systems under test)
+#   tester  the pytest runner
+x-limits-small: &limits-small
+  mem_limit: ${DVT_MEM_SMALL:-256m}
+  memswap_limit: ${DVT_MEM_SMALL:-256m}
+  cpus: ${DVT_CPUS_SMALL:-0.5}
+  pids_limit: ${DVT_PIDS_SMALL:-128}
+x-limits-medium: &limits-medium
+  mem_limit: ${DVT_MEM_MEDIUM:-512m}
+  memswap_limit: ${DVT_MEM_MEDIUM:-512m}
+  cpus: ${DVT_CPUS_MEDIUM:-2}
+  pids_limit: ${DVT_PIDS_MEDIUM:-512}
+x-limits-tester: &limits-tester
+  mem_limit: ${DVT_MEM_TESTER:-2g}
+  memswap_limit: ${DVT_MEM_TESTER:-2g}
+  cpus: ${DVT_CPUS_TESTER:-2}
+  pids_limit: ${DVT_PIDS_TESTER:-512}
+
+# Compiler jobs inside image builds (never "$(nproc)": that is the host's
+# core count); scripts/contained.sh sets DVT_BUILD_JOBS for the whole run.
+x-build-jobs: &build-jobs
+  MAKE_JOBS: ${DVT_BUILD_JOBS:-4}
+
 x-xlxd: &xlxd
+  <<: *limits-medium
   profiles: [core]
   init: true
   restart: "no"
@@ -59,6 +88,7 @@ x-xlxd: &xlxd
 # netem sidecars (profile netem): each shares the namespace of its target and
 # shapes its eth0 egress; DVT_NETEM_ARGS_* are resolved by run.sh from presets.
 x-netem: &netem
+  <<: *limits-small
   profiles: [netem]
   init: true
   image: dvt-netem:local
@@ -74,6 +104,7 @@ x-netem: &netem
 # One sniffer per watched service: shares its network namespace and writes
 # out/<run>/capture/<service>.pcapng (dumpcap stops at CAPTURE_FILESIZE_KB).
 x-capture: &capture
+  <<: *limits-small
   profiles: [capture]
   init: true
   image: dvt-capture:local
@@ -106,6 +137,7 @@ services:
       context: .
       dockerfile: Dockerfile.xlxd
       args: &xlxd-args
+        <<: *build-jobs
         XLXD_BASE_IMAGE: ${XLXD_BASE_IMAGE:-error-set-xlxd-base-image-see-env-example}
       additional_contexts:
         src: ../.cache/xlxd/${XLXD_REF_DIR:-ref}
@@ -180,6 +212,7 @@ services:
       rig: {ipv4_address: "${DVT_NET:-172.30.0}.11"}
 
   transcoder-ref:
+    <<: *limits-medium
     profiles: [core]
     init: true
     image: ${TRANSCODER_REF_IMAGE:-${TRANSCODER_IMAGE:-error-set-transcoder-image-env}}
@@ -191,6 +224,7 @@ services:
       rig: {ipv4_address: "${DVT_NET:-172.30.0}.20"}
 
   transcoder-sut:
+    <<: *limits-medium
     profiles: [core]
     init: true
     image: ${TRANSCODER_SUT_IMAGE:-${TRANSCODER_IMAGE:-error-set-transcoder-image-env}}
@@ -202,6 +236,7 @@ services:
       rig: {ipv4_address: "${DVT_NET:-172.30.0}.21"}
 
   tester:
+    <<: *limits-tester
     profiles: [core]
     init: true
     image: dvt-tester:local
@@ -209,6 +244,7 @@ services:
       context: .
       dockerfile: Dockerfile.tester
       args:
+        <<: *build-jobs
         TESTER_BASE_IMAGE: ${TESTER_BASE_IMAGE:-error-set-tester-base-image-see-env-example}
         PYTEST_VERSION: ${PYTEST_VERSION:-}
       additional_contexts:
@@ -279,6 +315,7 @@ services:
       rig: {ipv4_address: "${DVT_NET:-172.30.0}.30"}
 
   allstar:
+    <<: *limits-medium
     profiles: [allstar]
     init: true
     image: dvt-allstar:local
@@ -331,6 +368,7 @@ services:
   # ---- NXDNReflector (profile nxdn) ----
   nxdn-ref:
     <<: &nxdn
+      <<: *limits-small
       profiles: [nxdn]
       init: true
       image: dvt-nxdnreflector:local
@@ -338,6 +376,7 @@ services:
         context: .
         dockerfile: Dockerfile.nxdnreflector
         args:
+          <<: *build-jobs
           NXDN_BASE_IMAGE: ${NXDN_BASE_IMAGE:-error-set-nxdn-base-image-see-env-example}
         additional_contexts:
           src: ../.cache/nxdnclients
@@ -370,6 +409,7 @@ services:
   # ---- P25Reflector (profile p25) ----
   p25-ref:
     <<: &p25
+      <<: *limits-small
       profiles: [p25]
       init: true
       image: dvt-p25reflector:local
@@ -377,6 +417,7 @@ services:
         context: .
         dockerfile: Dockerfile.p25reflector
         args:
+          <<: *build-jobs
           P25_BASE_IMAGE: ${P25_BASE_IMAGE:-error-set-p25-base-image-see-env-example}
         additional_contexts:
           src: ../.cache/p25clients
@@ -407,6 +448,7 @@ services:
   # ---- URFd (profile urfd): a second reference reflector for compatibility
   # runs (DVT_REF_KIND=urfd). No transcoder: same-codec passthrough only.
   urfd:
+    <<: *limits-medium
     profiles: [urfd]
     init: true
     image: dvt-urfd:local
@@ -414,6 +456,7 @@ services:
       context: .
       dockerfile: Dockerfile.urfd
       args:
+        <<: *build-jobs
         URFD_BASE_IMAGE: ${URFD_BASE_IMAGE:-error-set-urfd-base-image-see-env-example}
       additional_contexts:
         src: ../.cache/urfd
@@ -546,6 +589,7 @@ services:
   # Each replica gets a dynamic address from <net>.128/25; DVT_LOAD_CMD (run
   # from /dvt) derives its module from that address (last octet - 128).
   load-node:
+    <<: *limits-small
     profiles: [load]
     init: true
     image: dvt-tester:local
@@ -570,6 +614,7 @@ services:
   # G3 keys a terminal by IP: this relay gives the tester a second address.
   # The tester drives it over UDP 40100 (dvtest/proto/g3.py relay_main).
   g3-term2:
+    <<: *limits-small
     profiles: [g3]
     init: true
     image: dvt-tester:local

@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from dvtest import limits  # noqa: E402
 from dvtest import target as target_mod  # noqa: E402
 from dvtest.proto import ambed  # noqa: E402
 
@@ -64,7 +65,7 @@ def _start_transcoder_image(image):
     if not shutil.which("docker"):
         pytest.skip("TRANSCODER_IMAGE is set but docker is not installed")
     name = "dvt-wire-%d" % os.getpid()
-    cmd = ["docker", "run", "-d", "--rm", "--name", name]
+    cmd = ["docker", "run", "-d", "--rm", "--name", name] + limits.docker_run_args()
     for item in os.environ.get("DVT_TRANSCODER_ENV", "").split():
         cmd += ["-e", item]
     cmd.append(image)
@@ -382,6 +383,16 @@ def _crossmode(key, item):
         return True
     callspec = getattr(item, "callspec", None)
     return bool(rule and callspec and set(callspec.id.split("-")) & rule)
+
+
+def pytest_report_header(config):
+    """Say whether this run is inside the capped scope (scripts/contained.sh)."""
+    if os.environ.get("DVT_CONTAINED"):
+        return "resource scope: %s" % os.environ["DVT_CONTAINED"]
+    if os.environ.get("DVT_RIG_CONTROL") or os.path.exists("/.dockerenv"):
+        return "resource scope: container limits (rig/compose.yml)"
+    return ("resource scope: NONE - host-side wire/netns runs belong in "
+            "scripts/contained.sh --name test -- python3 -m pytest ... (README, 'Resource limits')")
 
 
 def pytest_collection_modifyitems(items):

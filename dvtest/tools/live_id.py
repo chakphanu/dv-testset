@@ -26,6 +26,7 @@ import subprocess
 import sys
 import time
 
+from .. import limits
 from ..audio import morse, signals
 from ..proto import ambed, dextra
 
@@ -97,7 +98,7 @@ class Transcoder:
     def __enter__(self):
         if self.addr is None:
             self.name = "dvt-live-%d" % os.getpid()
-            cmd = ["docker", "run", "-d", "--rm", "--name", self.name]
+            cmd = ["docker", "run", "-d", "--rm", "--name", self.name] + limits.docker_run_args()
             for item in os.environ.get("DVT_TRANSCODER_ENV", "").split():
                 cmd += ["-e", item]
             cmd += [self.spec] + os.environ.get("DVT_TRANSCODER_ARGS", "").split()

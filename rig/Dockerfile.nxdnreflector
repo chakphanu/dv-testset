@@ -5,10 +5,11 @@
 # synthetic rig/config/nxdn.csv. Build arg NXDN_BASE_IMAGE from .env.example.
 ARG NXDN_BASE_IMAGE
 FROM ${NXDN_BASE_IMAGE} AS build
+ARG MAKE_JOBS=4
 RUN apt-get update && apt-get install -y --no-install-recommends g++ make libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=src NXDNReflector/ /src/
-RUN make -C /src -j"$(nproc)" NXDNReflector
+RUN make -C /src -j"${MAKE_JOBS}" NXDNReflector
 
 FROM ${NXDN_BASE_IMAGE}
 COPY --from=build /src/NXDNReflector /nxdn/NXDNReflector

@@ -5,11 +5,12 @@
 # TESTER_BASE_IMAGE and PYTEST_VERSION come from .env.example (build args).
 ARG TESTER_BASE_IMAGE
 FROM ${TESTER_BASE_IMAGE} AS c2build
+ARG MAKE_JOBS=4
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev cmake make \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=codec2 . /codec2/
 RUN cmake -S /codec2 -B /build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DUNITTEST=OFF \
-    && make -C /build -j"$(nproc)" c2enc c2dec
+    && make -C /build -j"${MAKE_JOBS}" c2enc c2dec
 
 FROM ${TESTER_BASE_IMAGE}
 ARG PYTEST_VERSION

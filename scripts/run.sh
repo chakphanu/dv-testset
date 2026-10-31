@@ -34,10 +34,20 @@
 #   --down             take the lock, bring every profile down, exit (the only
 #                      cleanup for a --keep rig)
 #
-# Parallel rigs: DVT_INSTANCE=<n> (1..99; default 0 = project dvt, net DVT_NET)
+# Instances: DVT_INSTANCE=<n> (1..99; default 0 = project dvt, net DVT_NET)
 # uses project dvt<n>, network <a.b>.<n>.0/24 (first two octets of DVT_NET),
 # lock .cache/rig<n>.lock and out/<utc>-i<n>. Images are shared; builds are
-# serialized by .cache/build.lock.
+# serialized by .cache/build.lock. Instances take turns: the run holds the
+# scope dvt-rig.scope (below), so only ONE rig runs at a time on the host.
+#
+# Resource limits (README, "Resource limits"): run.sh re-executes itself inside
+# a capped systemd scope (scripts/contained.sh --name rig: DVT_RIG_MEM, default
+# 12G memory, swap 0, DVT_RIG_CPU percent CPU, 1024 tasks, DVT_BUILD_JOBS
+# compiler jobs) and waits while another rig or heavy job holds the host.
+# Every compose service carries mem/swap/cpus/pids limits; run.sh checks that
+# before "up" (dvtest/limits.py) and exits 4 for an uncapped service.
+# DVT_UNCONTAINED=1 skips the scope (only when something else already caps the
+# run, e.g. a CI runner without a user systemd bus).
 #
 # One run at a time per instance: the whole up..down span holds an flock on .cache/rig.lock;
 # a second caller waits. If project containers are already up (a --keep rig),
@@ -73,6 +83,7 @@ set -euo pipefail
 dvt_load_env
 cd "$DVT_ROOT"
 
+orig_args=("$@")
 markers="rig"
 profile="core"
 keep=0
@@ -89,10 +100,24 @@ while [ "$#" -gt 0 ]; do
     --netem) [ "$#" -ge 2 ] || { echo "run.sh: --netem needs a preset or netem arguments" >&2; exit 2; }; netem_cli="$2"; netem_set=1; shift 2 ;;
     --down) down_only=1; shift ;;
     --) shift; break ;;
-    -h|--help) sed -n '3,69p' "$0"; exit 0 ;;
+    -h|--help) sed -n '3,79p' "$0"; exit 0 ;;
     *) echo "run.sh: unknown argument '$1' (see --help)" >&2; exit 2 ;;
   esac
 done
+
+# Containment: the whole run (docker CLI, pytest pipe, watcher, sampler,
+# capture check) executes in the capped scope dvt-rig.scope. --down is only
+# cleanup and needs no scope. The docker daemon starts the containers, so their
+# caps are the per-service limits in rig/compose.yml.
+if [ "$down_only" != 1 ] && [ -z "${DVT_CONTAINED:-}" ]; then
+  if [ "${DVT_UNCONTAINED:-}" = 1 ]; then
+    echo "run.sh: warning: DVT_UNCONTAINED=1, running without the contained.sh scope" >&2
+  else
+    exec "$DVT_ROOT/scripts/contained.sh" --name rig --mem "${DVT_RIG_MEM:-12G}" \
+      --cpu "${DVT_RIG_CPU:-800}" --jobs "${DVT_BUILD_JOBS:-4}" -- \
+      "$DVT_ROOT/scripts/run.sh" "${orig_args[@]}"
+  fi
+fi
 
 # DVT_SUBNET (a /24), when set, wins over DVT_NET.
 if [ -n "${DVT_SUBNET:-}" ]; then
@@ -409,6 +434,10 @@ if [ -n "${XLXD_REF_IMAGE:-}${XLXD_SUT_IMAGE:-}" ]; then
 fi
 
 compose=(docker compose -p "${COMPOSE_PROJECT_NAME:-dvt}" "${compose_files[@]}" "${DVT_ENV_FILES[@]}" "${profiles[@]}")
+
+# Never start an uncapped service: the base file, the prebuilt-image override
+# and .local/compose.override.yml all have to leave mem/swap/cpus/pids set.
+"${compose[@]}" config --format json | python3 -m dvtest.limits || exit 4
 
 watcher_pid=""
 stats_pid=""

@@ -30,6 +30,8 @@ tty=()
 [ -t 0 ] && [ -t 1 ] && tty=(-t)
 # .local (secrets) is hidden behind an empty tmpfs
 exec docker run --rm -i "${tty[@]}" --network none \
+  --memory "${DVT_CTR_MEM:-1g}" --memory-swap "${DVT_CTR_MEM:-1g}" \
+  --cpus "${DVT_CTR_CPUS:-2}" --pids-limit "${DVT_CTR_PIDS:-512}" \
   --user "$(id -u):$(id -g)" \
   -v "$DVT_ROOT:/dvt:ro" -v "$DVT_ROOT/out:/dvt/out" --tmpfs /dvt/.local:ro \
   --entrypoint tshark "$image" "${lua[@]}" "$@"
