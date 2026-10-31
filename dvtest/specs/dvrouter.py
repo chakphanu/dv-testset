@@ -445,8 +445,8 @@ SPEC = {
         "P-M17-40": {"within_200ms": True},
         "P-M17-41": {"forwarded": True, "unchanged": True},
         "P-M17-42": {"echo": False},
-        # no M17 interlink / peer CONN support for now
-        "P-M17-44": {"reply": "none"},
+        # M17 interlink: a 37 B CONN from an unconfigured peer gets the 4 B NACK, never ACKN
+        "P-M17-44": {"reply": "NACK 4"},
     },
     # XLX interlink dev items (docs/protocols/xlx.md), DV-Router choices
     # 2026-10-30. Peer kind comes from the configured row (P-XLX-09; the
