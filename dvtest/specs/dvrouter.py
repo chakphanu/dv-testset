@@ -274,6 +274,8 @@ SPEC = {
         # NXDNU x3 on peer removal and shutdown
         "P-NXD-04": {"unlink": True},
         "P-NXD-07": {"sacch_type": 0x10},
+        # paced at the 80 ms frame rate (measured mean 80.2 ms)
+        "P-NXD-15": {"mean_ms": 80, "tol_ms": 10},
         # AMBE bits unchanged both ways (no xlxd gain-index step)
         "P-NXD-13": {"step_out": 0, "step_in": 0},
         "P-NXD-20": {"late_entry": True},
@@ -476,6 +478,8 @@ SPEC = {
         "P-XLX-02": {"reply": "A", "modules": "DE"},
         # peer address checked (as URFd)
         "P-XLX-05": {"reply": "N"},
+        # the L packets carry the module sets D and DE, as xlxd
+        "P-XLX-07": {"l_module_sets": ["D", "DE"]},
         "P-XLX-14": {"linked_after": True},
         "P-XLX-18": {"egress": "zero_slot"},
         # present slots decided by the received size
