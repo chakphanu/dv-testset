@@ -176,6 +176,11 @@ services:
 
   xlxd-sut:
     <<: *xlxd
+    # the system under test may run many processes (DV-Router: launcher plus
+    # about 25 children, 392 pids measured): own pids cap, still a cap
+    pids_limit: ${DVT_PIDS_SUT:-1024}
+    mem_limit: ${DVT_MEM_SUT:-1g}
+    memswap_limit: ${DVT_MEM_SUT:-1g}
     image: dvt-xlxd:${XLXD_SUT_DIR:-sut}
     build:
       context: .
@@ -271,7 +276,7 @@ services:
       # M17-DVU peer an extra tester address added by the tester-addr sidecar
       DVT_M17_PEER_DVT_HOST: ${DVT_M17_PEER_DVT_HOST:-${DVT_NET:-172.30.0}.30}
       DVT_M17_PEER_DVU_HOST: ${DVT_M17_PEER_DVU_HOST:-${DVT_NET:-172.30.0}.32}
-      # how xlxd-sut starts (direct | import); the M17 peer cases skip with import
+      # how xlxd-sut starts (direct | import | native); the M17 peer cases skip with import
       DVT_SUT_LAUNCH: ${DVT_SUT_LAUNCH:-direct}
       DVT_XLXD_SUT: ${DVT_NET:-172.30.0}.11
       DVT_AMBED_REF: ${DVT_NET:-172.30.0}.20

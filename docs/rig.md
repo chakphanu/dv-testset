@@ -229,6 +229,39 @@ Contract for such an image:
 5. No internet: the rig network is internal, so ID databases come from the
    mounted files.
 
+### Launch modes of the system under test (`DVT_SUT_LAUNCH`)
+
+| Value | xlxd-sut starts as |
+|-------|--------------------|
+| `direct` (default) | the image's own entrypoint with `XLX999 <net>.11 <net>.21` |
+| `import` | `dv-xlxd-import --exec --dir /xlxd ...` (legacy converter of DV-Router), same three words |
+| `native` | the image's own entrypoint with `--config /etc/dv-router/dv-router.toml XLX999 <net>.11 <net>.21` |
+
+`native` needs `XLXD_SUT_IMAGE` and `DVT_SUT_CONFIG=<path to a dv-router.toml
+TEMPLATE>` (exit 2 when either is missing or the file is not readable).
+`run.sh` renders the template on the host with `python3 -m dvtest.sut_config`
+into `out/<run>/xlxd-config/xlxd-sut/dv-router.toml` and mounts it read-only at
+`/etc/dv-router/dv-router.toml`. Plain text tokens:
+
+| Token | Becomes |
+|-------|---------|
+| `<OWN_IP>` | `<net>.11`, the SUT |
+| `<TRANSCODER_IP>` | `<net>.21`, the SUT's transcoder |
+| `<TESTER_IP>` | `<net>.30`, the tester (plays the peers) |
+| `<NET>` | the /24 prefix, e.g. `172.30.0` (rig peers are `<NET>.12` XLX, `<NET>.51` NXDN, `<NET>.61` P25) |
+
+Any other `<UPPER_CASE>` token left over is an error (exit 2, before anything
+starts). Everything else stays as in the other modes: the `/xlxd` file mounts
+(the template's `[ids]` reads `/xlxd/dmrid.dat` and `nxdn.csv`; the other files
+are unused with a config file but harmless), `DVT_CONFIG_MOUNTED=1` and the
+`DV_*` pins, which win over the file. With a file there is no importer, so
+the `xlxd.interlink` / `xlxd.usrp` / `xlxd.whitelist` / `xlxd.blacklist` /
+`xlxd.terminal` files are not read: the template itself must name the interlink,
+NXDN and P25 peers. `run.sh` warns when `DVT_NXDN`, `DVT_P25`, `DVT_INTERLINK`,
+`DVT_SUT_USRP` or `DVT_XLXD_BLACKLIST` is set in this mode and refuses
+`DVT_UNSERVED_MODULE=M|N` (exit 2). The tester sees the mode in
+`DVT_SUT_LAUNCH` (the M17 peer cases skip with `import` only).
+
 ## Control channel
 
 The tester has no docker socket. Cases that stop a backend write a request
@@ -247,6 +280,22 @@ Actions `stop`, `start`, `kill` (SIGKILL); services `transcoder-ref`,
 `transcoder-sut`, `allstar`. Anything else is refused and nothing runs.
 `control/control.log` gets `<utc> request <line>` before and
 `<utc> <line> -> <rc>` after each action.
+
+`kill-proc xlxd-sut <process> <signal>` signals one process inside the
+system-under-test container (the DV-Router image is `FROM scratch`: no shell,
+`ps` or `pkill`, and the host user may not signal root's processes). The host
+starts a throwaway container of the tester image that joins the target's pid
+namespace (`docker run --pid container:<id>`, `dvtest.limits.docker_run_args()`
+caps, no network, only CAP_KILL) and walks `/proc/<pid>/comm`: a process is
+signalled only when its comm equals `<process>` exactly and it is not a zombie.
+Allow-list: `dv-edge-xlx`, `dv-edge-nxdn`, `dv-edge-p25` with `KILL` or `USR1` (quiet restart: the edge saves its sessions, exits and the
+launcher respawns it); the launcher `dv-router` is never signalled (no handler, a
+stray signal kills the node); anything else
+is `error refused`. `<id>.out` has `pid=<n>` per process and `t_kill=<epoch s>`
+(taken in the container right after the signals); `error 3` = no such process.
+Tester side: `rig_control.kill_proc(service, process, signal)` returns the pids
+and `t_kill` (`dvtest/control.py`; `KILL_PROC_ALLOWED` mirrors
+`scripts/lib/killproc.sh`, a unit test checks both agree).
 
 ## Capture
 

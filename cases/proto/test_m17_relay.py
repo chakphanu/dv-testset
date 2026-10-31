@@ -16,7 +16,8 @@ the profile entry and the mrefd value is printed. Every egress datagram is
 compared byte for byte with what the tester sent (dvtest.m17_relay): size 54
 or 55, trailer byte, bytes 0..53, CRC over bytes 0..51, stream id and FN.
 Malformed traffic (bare 54 B from a peer, bad trailers, a listen-only
-client's stream) is bracketed with the control channel marks.
+client's stream, streams that stop without bit 15) is bracketed with the control
+channel marks.
 """
 import os
 import threading
@@ -559,7 +560,12 @@ def timeout_probe(ps, plan):
 
 @pytest.fixture(scope="module")
 def timeouts(rig, m17_peers, plan):
-    got = across(m17_peers, timeout_probe, plan)
+    # the streams stop without bit 15 on purpose: a dvcheck mark window
+    mark(rig, "begin", "m17-relay-timeout")
+    try:
+        got = across(m17_peers, timeout_probe, plan)
+    finally:
+        mark(rig, "end", "m17-relay-timeout")
     print("stream timeout closing packets:", got)
     return got
 

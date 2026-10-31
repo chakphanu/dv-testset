@@ -61,6 +61,22 @@
 # into .local/compose.override.yml (COMPOSE_OVERRIDE), added with -f if present.
 # Results: out/<utc>/ (pytest junit + log, compose ps/images, one log per service).
 #
+# DVT_SUT_LAUNCH selects how a prebuilt XLXD_SUT_IMAGE starts: direct (default,
+# its own entrypoint, argv "XLX999 OWN_IP TRANSCODER_IP"), import (through the
+# dv-xlxd-import shim) or native (DV-Router with its own TOML). native needs
+# DVT_SUT_CONFIG=<path to a dv-router.toml TEMPLATE> (exit 2 when missing or
+# unreadable). run.sh renders it into out/<utc>/xlxd-config/xlxd-sut/dv-router.toml
+# (python3 -m dvtest.sut_config), replacing <OWN_IP> (<net>.11), <TRANSCODER_IP>
+# (<net>.21), <TESTER_IP> (<net>.30) and <NET> (the /24 prefix, e.g. 172.30.0);
+# any other <UPPER_CASE> token left over is an error (exit 2). The file is
+# mounted read-only at /etc/dv-router/dv-router.toml and the image starts as
+# "--config /etc/dv-router/dv-router.toml XLX999 <net>.11 <net>.21" (no importer).
+# The /xlxd file mounts and the DV_* env stay (the template's [ids] reads
+# /xlxd/dmrid.dat and nxdn.csv; the env pins win over the file). The launcher
+# reads no other xlxd.* file: DVT_NXDN, DVT_P25, DVT_INTERLINK, DVT_SUT_USRP and
+# DVT_XLXD_BLACKLIST only draw a warning, and DVT_UNSERVED_MODULE=M|N is refused
+# (exit 2; a template may name peers on other modules too).
+#
 # Control channel for cases that stop a backend (tester has no docker socket):
 # while pytest runs, a host watcher polls out/<utc>/control/ ($DVT_OUT/control
 # in the tester, DVT_RIG_CONTROL=1). A request is a file <id>.req (write .tmp,
@@ -71,6 +87,11 @@
 # or, with the allstar profile: "asl usrp-show" (chan_usrp counters into
 # <id>.out) or "asl play-1901|play-1902" (app_rpt plays a short telemetry
 # file on that node, i.e. keys its USRP channel toward xlxd-sut).
+# or "kill-proc xlxd-sut <process> <signal>": signal one process INSIDE the sut
+# container by exact /proc comm (scripts/lib/killproc.sh): dv-edge-xlx,
+# dv-edge-nxdn, dv-edge-p25 with KILL or USR1 (quiet restart); never dv-router; anything
+# else is refused. <id>.out gets "pid=<n>" per process and "t_kill=<epoch s>";
+# exit 3 (error 3) when no process has that name.
 # "mark begin|end <tag>" only logs: a case brackets deliberately malformed
 # traffic so the capture check can tell it from a fault.
 # The answer is <id>.ack: "ok", "error <rc>" or "error refused" (anything else
@@ -83,6 +104,7 @@
 set -euo pipefail
 
 . "$(dirname "$0")/lib/env.sh"
+. "$(dirname "$0")/lib/killproc.sh"
 dvt_load_env
 cd "$DVT_ROOT"
 
@@ -103,7 +125,7 @@ while [ "$#" -gt 0 ]; do
     --netem) [ "$#" -ge 2 ] || { echo "run.sh: --netem needs a preset or netem arguments" >&2; exit 2; }; netem_cli="$2"; netem_set=1; shift 2 ;;
     --down) down_only=1; shift ;;
     --) shift; break ;;
-    -h|--help) sed -n '3,79p' "$0"; exit 0 ;;
+    -h|--help) sed -n '3,103p' "$0"; exit 0 ;;
     *) echo "run.sh: unknown argument '$1' (see --help)" >&2; exit 2 ;;
   esac
 done
@@ -141,12 +163,21 @@ case "${DVT_USRP_DYNAMIC:-}" in
 esac
 # DVT_SUT_LAUNCH: how a prebuilt xlxd-sut image starts. direct = its own
 # entrypoint with "CALLSIGN OWN_IP TRANSCODER_IP"; import = through the
-# converter shim dv-xlxd-import --exec (DV-Router), same three words.
+# converter shim dv-xlxd-import --exec (DV-Router), same three words;
+# native = "--config FILE XLX999 OWN_IP TRANSCODER_IP" with FILE rendered from
+# the template DVT_SUT_CONFIG (header; the render is checked after the subnet
+# is known, below).
 case "${DVT_SUT_LAUNCH:-direct}" in
   direct) ;;
   import) [ -n "${XLXD_SUT_IMAGE:-}" ] \
             || { echo "run.sh: DVT_SUT_LAUNCH=import needs XLXD_SUT_IMAGE (a prebuilt image with the shim)" >&2; exit 2; } ;;
-  *) echo "run.sh: DVT_SUT_LAUNCH must be direct or import" >&2; exit 2 ;;
+  native) [ -n "${XLXD_SUT_IMAGE:-}" ] \
+            || { echo "run.sh: DVT_SUT_LAUNCH=native needs XLXD_SUT_IMAGE (a prebuilt DV-Router image)" >&2; exit 2; }
+          [ -n "${DVT_SUT_CONFIG:-}" ] \
+            || { echo "run.sh: DVT_SUT_LAUNCH=native needs DVT_SUT_CONFIG=<path to a dv-router.toml template>" >&2; exit 2; }
+          [ -f "$DVT_SUT_CONFIG" ] && [ -r "$DVT_SUT_CONFIG" ] \
+            || { echo "run.sh: DVT_SUT_CONFIG '$DVT_SUT_CONFIG' is not a readable file" >&2; exit 2; } ;;
+  *) echo "run.sh: DVT_SUT_LAUNCH must be direct, import or native" >&2; exit 2 ;;
 esac
 instance="${DVT_INSTANCE:-0}"
 [[ "$instance" =~ ^([0-9]|[1-9][0-9])$ ]] || { echo "run.sh: DVT_INSTANCE must be 0..99" >&2; exit 2; }
@@ -160,6 +191,14 @@ if [ "$instance" != 0 ]; then
   suffix="-i$instance"
 fi
 export DVT_SUBNET="${DVT_NET:-172.30.0}.0/24"
+# native launch: refuse a template with an unknown token before anything starts
+if [ "${DVT_SUT_LAUNCH:-direct}" = native ]; then
+  python3 -m dvtest.sut_config "$DVT_SUT_CONFIG" - --net "${DVT_NET:-172.30.0}" || exit 2
+  # the template's M17 peer rows name modules M and N: the sut would exit 2 without them
+  case "${DVT_UNSERVED_MODULE:-}" in
+    M|N) echo "run.sh: DVT_UNSERVED_MODULE=$DVT_UNSERVED_MODULE is refused with DVT_SUT_LAUNCH=native (the peer rows need M and N)" >&2; exit 2 ;;
+  esac
+fi
 # DVT_UNSERVED_MODULE (P-M17-03, P-DXT-03, P-DCS-04): one module a prebuilt
 # xlxd-sut must not serve (DV_ROOMS); the tester gets the letter
 if [ -n "${DVT_UNSERVED_MODULE:-}" ] && ! [[ "$DVT_UNSERVED_MODULE" =~ ^[A-Z]$ ]]; then
@@ -261,6 +300,15 @@ for p in "${wanted[@]}"; do
     *) echo "run.sh: --profile takes core, allstar, nxdn, p25, interlink, load, g3, urfd, mrefd or a comma list" >&2; exit 2 ;;
   esac
 done
+# native launch reads no xlxd.* file: these settings only change the reference side
+if [ "${DVT_SUT_LAUNCH:-direct}" = native ]; then
+  for v in DVT_NXDN DVT_P25 DVT_INTERLINK DVT_SUT_USRP DVT_XLXD_BLACKLIST; do
+    case "${!v:-}" in
+      ''|off) ;;
+      *) echo "run.sh: warning: $v is set but DVT_SUT_LAUNCH=native ignores it for xlxd-sut (peers come from the template)" >&2 ;;
+    esac
+  done
+fi
 # DVT_REF_KIND=urfd / mrefd: URFd (.70) or mrefd (.80) becomes the reference
 # the cases compare the sut with. Such runs are compatibility data, judged as
 # differential only, so they are held to the xlxd profile.
@@ -408,10 +456,18 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
     DVT_P25_TG="${DVT_P25_TG:-31672}" DVT_P25_MODULE="${DVT_P25_MODULE:-G}" \
     sh rig/xlxd-entry.sh > "$cfg/render.log"
   cp rig/config/dmrid.dat rig/config/nxdn.csv "$cfg/"
+  if [ "$svc" = xlxd-sut ] && [ "${DVT_SUT_LAUNCH:-direct}" = native ]; then
+    python3 -m dvtest.sut_config "$DVT_SUT_CONFIG" "$cfg/dv-router.toml" --net "$net" --own "$3" --transcoder "$4" --tester 30 \
+      || exit 2
+  fi
   for f in xlxd.whitelist xlxd.blacklist xlxd.terminal ysfnode.dat; do : > "$cfg/$f"; done
   [ -z "${DVT_XLXD_BLACKLIST:-}" ] || printf '%s\n' $DVT_XLXD_BLACKLIST > "$cfg/xlxd.blacklist"
   {
-    if [ "$svc" = xlxd-sut ] && [ "${DVT_SUT_LAUNCH:-direct}" = import ]; then
+    if [ "$svc" = xlxd-sut ] && [ "${DVT_SUT_LAUNCH:-direct}" = native ]; then
+      # the image's own entrypoint (dv-router) takes a TOML file; no importer
+      printf '  %s:\n    image: "%s"\n' "$svc" "$img"
+      printf '    command: ["--config", "/etc/dv-router/dv-router.toml", "XLX999", "%s.%s", "%s.%s"]\n' "$net" "$3" "$net" "$4"
+    elif [ "$svc" = xlxd-sut ] && [ "${DVT_SUT_LAUNCH:-direct}" = import ]; then
       # the shim converts the mounted /xlxd files, then execs dv-router (same three words)
       printf '  %s:\n    image: "%s"\n    entrypoint: ["/usr/local/bin/dv-xlxd-import"]\n' "$svc" "$img"
       printf '    command: ["--exec", "--dir", "/xlxd", "XLX999", "%s.%s", "%s.%s", "--", "/usr/local/bin/dv-router"]\n' \
@@ -444,6 +500,9 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
     for f in xlxd.usrp xlxd.interlink xlxd.whitelist xlxd.blacklist xlxd.terminal dmrid.dat nxdn.csv ysfnode.dat; do
       printf '      - "%s/%s:/xlxd/%s:ro"\n' "$cfg" "$f" "$f"
     done
+    if [ "$svc" = xlxd-sut ] && [ "${DVT_SUT_LAUNCH:-direct}" = native ]; then
+      printf '      - "%s/dv-router.toml:/etc/dv-router/dv-router.toml:ro"\n' "$cfg"
+    fi
   } >> "$override"
   prebuilt+=("$svc")
 }
@@ -520,6 +579,19 @@ watch_control() {
       elif [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$action" = mark ] && { [ "$svc" = begin ] || [ "$svc" = end ]; } \
            && [[ "$extra" =~ ^[A-Za-z0-9._-]+$ ]]; then
         rc=0
+      elif [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$action" = kill-proc ]; then
+        # "kill-proc xlxd-sut <process> <signal>": see scripts/lib/killproc.sh (allow-list, exact comm)
+        if kp="$(dvt_killproc_parse "$line")"; then
+          read -r ksvc kproc ksig <<< "$kp"
+          kcid="$("${compose[@]}" ps -q "$ksvc" 2>/dev/null | head -n 1 || true)"
+          kimg="$(docker inspect -f '{{.Image}}' "$("${compose[@]}" ps -q tester 2>/dev/null | head -n 1 || true)" 2>/dev/null || true)"
+          rc=0
+          if [ -z "$kcid" ] || [ -z "$kimg" ]; then
+            echo "kill-proc: no running $ksvc or tester container" > "$control/$id.out"; rc=4
+          else
+            dvt_killproc_exec "$kcid" "$kimg" "$kproc" "$ksig" > "$control/$id.out" 2>> "$control/control.log" || rc=$?
+          fi
+        fi
       elif [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$action" = asl ] && [ -z "$extra" ]; then
         rc=0
         case "$svc" in

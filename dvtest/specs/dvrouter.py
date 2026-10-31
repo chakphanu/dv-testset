@@ -587,6 +587,15 @@ SPEC = {
         "P-DXT-54": {"keepalives_after_unlink": 0, "new_stream_heard": False, "header_heard": False,
                      "voice_heard": 0},
     },
+    # P19 edge relink (cases/test_edge_relink.py): the launcher restarts a
+    # killed edge process (SIGKILL of dv-edge-xlx / -nxdn / -p25); seconds from
+    # the kill to the first fully re-established link as the peer sees it
+    # (handshake, keepalive or polls, probe stream relayed again)
+    "relink": {
+        "P-RLK-01": {"edge": "dv-edge-xlx", "max_s": 10},
+        "P-RLK-02": {"edge": "dv-edge-nxdn", "max_s": 10},
+        "P-RLK-03": {"edge": "dv-edge-p25", "max_s": 10},
+    },
 }
 
 # B12: header fields DV-Router does not verify, because the tester (like

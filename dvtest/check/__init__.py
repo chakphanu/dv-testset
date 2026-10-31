@@ -98,6 +98,10 @@ MARK_SETTLE = 1.0
 # (test_xlx_cut_stream_no_closing_frame); their windows carry PEER_SUFFIX and
 # excuse only stream-end findings
 PEER_CUT_MARKS = {"xlx-cut-stream"}
+# findings on a copy the system under test relays of marked traffic (M17P sent
+# with a stream-bit TYPE or an oversize length is relayed unchanged: the cases
+# record that); the copy goes to the tester inside the same mark window
+FORWARDED_CODES = ("m17.m17p_type", "m17.m17p_length")
 PEER_SUFFIX = " (peer)"
 
 
@@ -137,6 +141,14 @@ def marks(run_dir, hosts):
         if out[index][2] > nxt:
             out[index] = out[index][:2] + (max(nxt, out[index][1]),) + out[index][3:]
     return out
+
+
+def peer_marks(windows, hosts):
+    """The mark windows again for the tester's other addresses: the M17
+    reflector peers it plays may sit on one of their own (<net>.32)."""
+    others = sorted(h for h, _ in m17.peer_endpoints(hosts) if h != hosts.get("tester"))
+    return [(other, t0, t1, label) for ip, t0, t1, label in windows if label.startswith("mark ")
+            and ip == hosts.get("tester") for other in others]
 
 
 def impairments(run_dir, hosts):
@@ -208,11 +220,15 @@ def _excuse(report, frame_ts, windows):
             if not (start <= t1 and ts >= t0 and re.search(r"(^|[<>])%s[:<]" % re.escape(ip), f.flow)):
                 continue
             if svc.startswith("mark "):
+                note = " [during %s]" % svc
                 if not f.flow.startswith(ip + ":"):
-                    continue
+                    # the sut forwards a datagram the case made malformed on
+                    # purpose: its copy to the tester is the same finding
+                    if f.code not in FORWARDED_CODES or (">" + ip + ":") not in f.flow:
+                        continue
+                    note = " [forwarded during %s]" % svc
                 if svc.endswith(PEER_SUFFIX) and f.code not in END_CODES:
                     continue
-                note = " [during %s]" % svc
             elif svc.startswith("netem "):
                 if not NETEM_CODES.search(f.code):
                     continue
@@ -330,8 +346,11 @@ def check_file(path, rig=None, jitter_ms=None, windows=()):
                 seen[d.src] += 1
                 seen[d.dst] += 1
         own = seen.most_common(1)[0][0] if seen else None
+    peers = m17.peer_endpoints(rig["hosts"] if rig else None)
     rig_hosts = set(rig["hosts"].values()) if rig else None
-    m17_checker = m17.Checker(report)
+    # M17 reflector peers the tester plays may sit on a tester address of their own (<net>.32)
+    peer_hosts = {ip for ip, _ in peers}
+    m17_checker = m17.Checker(report, peers)
     checkers = [ambed.Checker(report), dextra.Checker(report, m17_checker), dmr.Checker(report),
                 m17_checker, iax2.Checker(report), nxdn.Checker(report), p25.Checker(report), xlx.Checker(report, m17_checker),
                 dplus.Checker(report, m17_checker), dcs.Checker(report, m17_checker), ysf.Checker(report),
@@ -353,9 +372,10 @@ def check_file(path, rig=None, jitter_ms=None, windows=()):
             continue
         for name, checker in zip(names, checkers):
             if checker.claims(d):
-                if rig_hosts and (d.src not in rig_hosts or d.dst not in rig_hosts):
+                known = rig_hosts | peer_hosts if rig_hosts and name == m17.NAME else rig_hosts
+                if known and (d.src not in known or d.dst not in known):
                     report.error(name, d, "unknown_peer", "%s is not a rig host" % (
-                        d.src if d.src not in rig_hosts else d.dst))
+                        d.src if d.src not in known else d.dst))
                 checker.feed(d)
                 break
         else:
@@ -655,8 +675,9 @@ def main(argv=None):
     rig = rig_config() if args.ports_from == "rig" else None
     windows = []
     if rig and os.path.isdir(args.target):
-        windows = (outages(args.target, rig["hosts"]) + impairments(args.target, rig["hosts"])
-                   + marks(args.target, rig["hosts"]))
+        marked = marks(args.target, rig["hosts"])
+        windows = (outages(args.target, rig["hosts"]) + impairments(args.target, rig["hosts"]) + marked
+                   + peer_marks(marked, rig["hosts"]))
     results = []
     for path in files:
         try:

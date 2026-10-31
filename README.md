@@ -61,7 +61,7 @@ rules are mandatory; do not remove them to make a run faster.
 |------|-----|-------|
 | `scripts/run.sh` (docker CLI, pytest pipe, watcher, sampler) | scope `dvt-rig.scope`: 12G memory, swap 0, 800% CPU, 1024 tasks, `DVT_BUILD_JOBS` jobs | `run.sh` re-executes itself through `scripts/contained.sh --name rig` |
 | One rig at a time | the unit name `rig` is unique, so `DVT_INSTANCE` values take turns; at most 2 scopes in all, and a scope waits while the host has under 12 GiB free (`DVT_MIN_FREE_GIB`) | `scripts/contained.sh` |
-| Rig containers | every compose service has `mem_limit` = `memswap_limit` (no swap), `cpus` and `pids_limit`: small 256m / 0.5 / 128, medium 512m / 2 / 512, tester 2g / 2 / 512 | `rig/compose.yml`, sizes in `.env.example` (`DVT_MEM_*`, `DVT_CPUS_*`, `DVT_PIDS_*`) |
+| Rig containers | every compose service has `mem_limit` = `memswap_limit` (no swap), `cpus` and `pids_limit`: small 256m / 0.5 / 128, medium 512m / 2 / 512 (`xlxd-sut` 1g and pids 1024, `DVT_MEM_SUT` / `DVT_PIDS_SUT`), tester 2g / 2 / 512 | `rig/compose.yml`, sizes in `.env.example` (`DVT_MEM_*`, `DVT_CPUS_*`, `DVT_PIDS_*`) |
 | Containers started by host-side cases and tools | `docker run --memory/--memory-swap/--cpus/--pids-limit`, default 1g / 2 / 512 | `dvtest/limits.py`, `DVT_CTR_*`, `scripts/tshark.sh` |
 | Image builds and xlxd netns build | `make -j` follows `DVT_BUILD_JOBS` (default 4), never `nproc` | Dockerfiles (`MAKE_JOBS`), `scripts/build-xlxd-netns.sh` |
 

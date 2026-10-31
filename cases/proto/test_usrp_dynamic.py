@@ -64,7 +64,9 @@ def dyn(target):
     if not target.is_given("xlxd_sut"):
         pytest.skip("no system under test address (DVT_XLXD_SUT)")
     # 34001/udp: DV-Router's hub port (12345, DVSwitch's mobilePort, is Icom G3's fixed config port)
-    return Dyn((target.xlxd_sut, int(rules.get("dynamic_port", 34001))), rules)
+    hub_dyn = Dyn((target.xlxd_sut, int(rules.get("dynamic_port", 34001))), rules)
+    wait_hub_ready(hub_dyn)
+    return hub_dyn
 
 
 def judge_dev(dyn, nn, observed):
@@ -157,6 +159,33 @@ class DynClient:
         if unregister:
             self.send(usrp.text, usrp.REG_UNREG)
         self.sock.close()
+
+
+READY_S = 15.0        # a SUT just started answered no REG for its first ~6 s (cause not traced; DV-Router: not iddb)
+
+
+def wait_hub_ready(dyn, seconds=READY_S):
+    """Register and unregister one throwaway client, retrying until the hub
+    answers REG:OK or the time is up. The cases can run right after the
+    container start and a SUT was seen to answer no REG for its first ~6 s
+    (Gate A, image 1fda8c1; the cause is not established); this keeps that
+    start-up gap out of the assertions. On timeout it only prints a note: the
+    cases then fail on their own, and DV-Router wants to hear about a hub that
+    still says nothing after 15 s."""
+    deadline = time.monotonic() + seconds
+    client = DynClient(dyn, "N0READY")
+    try:
+        while time.monotonic() < deadline:
+            if client.register():
+                print("usrp dynamic hub ready after %.1f s of waiting" % (seconds - (deadline - time.monotonic())))
+                return True
+        print("usrp dynamic hub did not answer REG within %.0f s" % seconds)
+        return False
+    finally:
+        try:
+            client.close()
+        except OSError:
+            pass
 
 
 @pytest.fixture

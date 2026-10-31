@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
 
 from dvtest import limits  # noqa: E402
 from dvtest import target as target_mod  # noqa: E402
+from dvtest.control import RigControl  # noqa: E402
 from dvtest.proto import ambed  # noqa: E402
 
 
@@ -195,32 +196,6 @@ def rig_usrp(rig):
     if os.environ.get("DVT_SUT_USRP") != "on":
         pytest.skip("xlxd-sut has no USRP endpoints (DVT_SUT_USRP=on, e.g. run.sh --profile allstar)")
     return rig
-
-
-class RigControl:
-    """stop/start/kill of a rig service through the run.sh watcher: a
-    request file in $DVT_OUT/control, answered by an .ack file."""
-
-    def __init__(self, directory):
-        self.dir = Path(directory)
-        self.dir.mkdir(parents=True, exist_ok=True)
-        self.count = 0
-
-    def __call__(self, action, service, timeout=30.0):
-        self.count += 1
-        name = "%d-%d" % (os.getpid(), self.count)
-        tmp = self.dir / (name + ".tmp")
-        tmp.write_text("%s %s\n" % (action, service))
-        tmp.rename(self.dir / (name + ".req"))
-        ack = self.dir / (name + ".ack")
-        deadline = time.monotonic() + timeout
-        while not ack.exists():
-            if time.monotonic() > deadline:
-                raise TimeoutError("no ack for %s %s" % (action, service))
-            time.sleep(0.1)
-        reply = ack.read_text().strip()
-        if reply != "ok":
-            raise RuntimeError("%s %s: %s" % (action, service, reply))
 
 
 @pytest.fixture(scope="session")

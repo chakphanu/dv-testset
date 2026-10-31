@@ -33,6 +33,7 @@ import pytest
 from dvtest import clients, specs
 from dvtest.audio import score, signals, tandem
 from dvtest.proto import ambed, dextra, dmr, iax2, m17, p25
+from p25_common import encode, imbe_served, p25_client
 
 pytestmark = [pytest.mark.rig, pytest.mark.p25]
 
@@ -51,26 +52,6 @@ def save(key, value):
     out = Path(os.environ.get("DVT_OUT", "out"))
     out.mkdir(parents=True, exist_ok=True)
     (out / "p25.json").write_text(json.dumps(RESULTS, indent=1, sort_keys=True) + "\n")
-
-
-def imbe_served(addr, port):
-    """(True, how) when the transcoder at addr serves IMBE: CAPS mask bit 4,
-    or for a transcoder without CAPS a legacy open 4 -> (1, 2, 3)."""
-    client = ambed.AmbedClient(addr, port)
-    try:
-        caps = ambed.parse_caps(client.rpc(ambed.CAPS_REQUEST) or b"")
-        if caps is not None:
-            mask = "CAPS mask 0x%02x" % caps.mask
-            return bool(caps.mask & (1 << ambed.IMBE)), mask
-        reply = client.rpc(ambed.open_legacy("N0TEST", ambed.IMBE, ambed.AMBEPLUS, ambed.AMBE2PLUS,
-                                             ambed.CODEC2_3200)) or b""
-        std = ambed.parse_std(reply)
-        if std is not None:
-            client.close_stream(std.stream_id)
-            return True, "no CAPS, legacy open 4->(1,2,3) accepted"
-        return False, "no CAPS, legacy open 4->(1,2,3) refused: %r" % reply
-    finally:
-        client.close()
 
 
 @pytest.fixture(scope="module")
@@ -101,18 +82,9 @@ def p25rig(rig):
     return rig, setup
 
 
-def encode(rig, codec, pcm):
-    return ambed.transcode(rig.ambed_ref, ambed.PCM, [codec], pcm, port=rig.ambed_port,
-                           transaction=0x50320000 + codec)[codec]
-
-
 def decode(rig, codec, frames):
     return b"".join(ambed.transcode(rig.ambed_ref, codec, [ambed.PCM], frames, port=rig.ambed_port,
                                     transaction=0x50320100 + codec)[ambed.PCM])
-
-
-def p25_client(tg, index):
-    return p25.P25Client("0.0.0.0", callsign=clients.CALLSIGNS[index], src_id=clients.DMR_IDS[index], tg=tg)
 
 
 def stream_bounds(kind, inbox):

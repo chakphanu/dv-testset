@@ -324,8 +324,10 @@ def test_designation_mismatch_listed_and_pong_visible(made):
     assert link.designation_mismatches()
     link.reset()
     assert link.expect_designation == "M17-DVR"                      # a constructor mode survives reset()
-    link.clear()
+    # set the expectation BEFORE clearing: a datagram of the fake reflector still in flight would
+    # otherwise be counted against the old expectation after clear() (load-dependent flake)
     link.expect_designation = "M17-REF"
+    link.clear()
     refl.sock.sendto(m17.peer_pong_packet("M17-REF"), refl.hub)
     assert link.wait_for(kind="PONG", timeout=2) and not link.sent(kind="PONG")
     time.sleep(0.2)

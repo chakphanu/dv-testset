@@ -821,6 +821,36 @@ run against a fake DVSwitch hub; see usrp.md section 5.
 | P-USR-39 | SLIN to dynamic clients | test_usrp_dynamic::test_usrp_dyn_slin | conv | probe | covered (fake hub) |
 | P-USR-40 | Table bound: refusal when full | test_usrp_dynamic::test_usrp_dyn_table_full | dev | probe | covered (fake hub) |
 
+## P19 edge relink (`cases/test_edge_relink.py`, DV-Router profile)
+
+The DV-Router launcher supervises one process per edge. With the SUT running
+and the peer linked, the case SIGKILLs the edge inside the SUT container (rig
+control `kill-proc xlxd-sut <edge> KILL`, `docs/rig.md`), then times, on the
+tester, the seconds from the kill to the first fully re-established link as the
+peer sees it. 3 runs per edge; every run is printed and appended as a JSON line
+to `$DVT_OUT/edge_relink.jsonl`. The 10 s bound is `SPEC["relink"]` of
+`dvtest/specs/dvrouter.py`. Skipped unless `DVT_SUT_PROFILE=dvrouter`; the SUT's
+config must name the peers below (with `DVT_SUT_LAUNCH=native` the
+template does; `docs/rig.md`).
+
+| Row | Case | Edge, profile | Re-established means |
+|-----|------|---------------|----------------------|
+| P-RLK-01 | `test_edge_relink_xlx` | `dv-edge-xlx`, `--profile interlink` (`DVT_INTERLINK=on`); tester = peer XLX996 | a new L from the SUT, our A, its keepalive, and a probe stream from the peer relayed to a D-STAR client of the SUT; <= max_s |
+| P-RLK-02 | `test_edge_relink_nxdn` | `dv-edge-nxdn`, `--profile nxdn` (`DVT_NXDN=on`); tester = NXDN reflector of the probe row | the SUT's polls resume (echoed) and a DMR probe stream reaches the tester as NXDND voice; <= max_s |
+| P-RLK-03 | `test_edge_relink_p25` | `dv-edge-p25`, `--profile p25` (`DVT_P25=on`, IMBE transcoder) | a D-STAR probe on the P25 module reaches a P25 client of p25-sut; <= max_s |
+| - | `test_quiet_restart_{xlx,nxdn,p25}` (last in the file) | SIGUSR1 to the same edge process (quiet restart: sessions saved, launcher respawns it) | record only: the same numbers, nothing asserted. The launcher `dv-router` is never signalled (a stray signal kills the node, exit 138) |
+
+Every case ends by restoring the SUT: it checks that the SUT answers and the
+edge relays, waits a bounded time, and otherwise restarts `xlxd-sut` through the
+control channel and waits for the path; if that fails the case fails loudly
+("SUT RESTORE FAILED"). A baseline that cannot be established fails with the SUT
+state. JSON lines carry `sut_reachable_after`, `sut_exited` (inferred from a
+missing DExtra answer) and `sut_exit_code` (always null: the tester cannot read
+the container exit code; `compose-ps.txt` of the run has it).
+
+Probes are 52 frames (no short-stream guard) repeated back to back, so the
+relay time is an upper bound within one probe period (about 2 s).
+
 ## Upstream behaviour the cases accept
 
 Known xlxd behaviour that is not a defect of the build under test; cases and
