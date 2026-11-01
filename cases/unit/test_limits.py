@@ -55,6 +55,15 @@ def test_check_services_flags_swap_and_empty():
     assert limits.check_services({})
 
 
+def test_check_services_shm_size_must_fit_the_memory_cap():
+    ok = dict(GOOD, shm_size="256m")
+    assert limits.check_services({"services": {"s": ok}}) == []
+    big = dict(GOOD, shm_size="1g")
+    assert any("shm_size" in p for p in limits.check_services({"services": {"s": big}}))
+    junk = dict(GOOD, shm_size="lots")
+    assert any("shm_size" in p for p in limits.check_services({"services": {"s": junk}}))
+
+
 def test_main_exit_status(monkeypatch, capsys):
     import io
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"services": {"s": dict(GOOD)}})))

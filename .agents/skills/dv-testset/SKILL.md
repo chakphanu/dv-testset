@@ -25,6 +25,7 @@ rig (`rig/`; the service names `xlxd-ref` / `xlxd-sut` are historical).
 | Rig, byte-exact cross-mode (DV-Router) | `DVT_TRANSCODER_FAKE=1 DVT_SUT_PROFILE=dvrouter scripts/run.sh -m crossmode --capture -- cases/test_crossmode_exact.py cases/test_crossmode_failure.py` | as above; transcoder-sut becomes the fake (`docs/ambed-fake.md`) |
 | Rig, DV-Router web service (native launch) | `XLXD_SUT_IMAGE=<dv-router image> DVT_SUT_PROFILE=dvrouter DVT_SUT_LAUNCH=native DVT_SUT_CONFIG=<template> scripts/run.sh -m rig --capture --profile web -- cases/test_web_smoke.py` | as above; `docs/rig.md` "Web profile" (HTTPS proxy `https://dvt-web`, CA and operator login in `out/<run>/web/`) |
 | Rig, DV-Router API cases (native launch) | same as the web row with `cases/test_web_api.py` (about 4 minutes; `docs/web-api-cases.md`) | as above; also restarts `dv-svc-web` through the control channel |
+| Rig, DV-Router web UI in browsers (native launch) | `... scripts/run.sh -m rig --capture --profile web,browser -- cases/test_web_browser.py` (Playwright Chromium, Firefox and Playwright WebKit; `docs/web-browser-cases.md`) | as above; `docker pull` of `BROWSER_BASE_IMAGE` once (the only internet use); `docs/rig.md` "Browser profile" |
 | Rig + AllStarLink | `scripts/run.sh -m "rig or allstar" --profile allstar` | as above, `scripts/gen-local.sh` once |
 
 First time: `scripts/pre-fetch-xlxd.sh`, `scripts/pre-fetch-codec2.sh`,
@@ -58,7 +59,7 @@ limits"):
   log or copy secret values; `Target.iax_secret` is hidden from repr.
 - `dvtest/target.py` documents every `DVT_*` variable. Rig addresses default
   to 172.30.0.0/24: xlxd-ref .10, xlxd-sut .11, transcoder-ref .20,
-  transcoder-sut .21, tester .30, allstar .40, web-proxy .90.
+  transcoder-sut .21, tester .30, allstar .40, web-proxy .90, browser .91.
 
 ## Results
 
@@ -110,6 +111,12 @@ and hashes; never publish raw captures.
   invite code, TOTP secret, CSRF token or cookie, and record a difference from the
   specs with `web.finding()` instead of asserting it. `out/<run>/web/operator.env`
   and `out/<run>/sut-state/` hold run secrets: local to `out/`, never copied out.
+
+- Browser cases: the rig service `browser` (`--profile web,browser`) runs `playwright run-server`; cases use
+  the fixtures of `cases/browser_fixtures.py` (`browser_page`, `user_page`, `operator_page`, parametrized over
+  chromium / firefox / webkit) and put every selector in `cases/web_pages.py`. WebKit is "Playwright WebKit",
+  never "Safari". The Playwright pin (`PLAYWRIGHT_VERSION`) feeds both the server and the tester client; keep
+  the two equal. Failure artifacts (`out/<run>/web/browser/`) can hold typed run passwords: local to `out/`.
 
 ## Before committing
 

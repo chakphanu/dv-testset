@@ -25,6 +25,10 @@
 #                      DVT_SUT_USRP=on; host samples docker stats every ~1-2 s
 #                      into out/<utc>/stats.jsonl while pytest runs
 #   --profile g3       a second Icom G3 terminal: relay g3-term2 at .31 (DVT_G3=on)
+#   --profile browser  the Playwright browser service (browser, .91, ws://<net>.91:3000/:
+#                      chromium, firefox, WebKit of the pinned official Playwright image),
+#                      used together with web (--profile web,browser; exit 2 without it);
+#                      the tester gets DVT_BROWSER=on (docs/rig.md "Browser profile")
 #   --profile web      DV-Router's web service behind a TLS proxy: web-proxy (.90,
 #                      https://dvt-web, CA out/<utc>/web/ca.pem), a persistent state
 #                      dir out/<utc>/sut-state for the sut and a random operator
@@ -298,7 +302,7 @@ compose_all=(docker compose -p "${COMPOSE_PROJECT_NAME:-dvt}" "${compose_files[@
   --profile core --profile allstar --profile nxdn --profile capture --profile capture-allstar
   --profile capture-nxdn --profile p25 --profile capture-p25 --profile interlink
   --profile capture-interlink --profile load --profile netem --profile g3
-  --profile urfd --profile capture-urfd --profile mrefd --profile capture-mrefd --profile web)
+  --profile urfd --profile capture-urfd --profile mrefd --profile capture-mrefd --profile web --profile browser)
 
 if [ "$down_only" = 1 ]; then
   take_lock
@@ -367,13 +371,19 @@ for p in "${wanted[@]}"; do
       profiles+=(--profile web)
       export DVT_WEB=on
       ;;
+    browser)
+      # the browsers load the pages of the web service: it only makes sense together with web
+      case ",$profile," in *,web,*) ;; *) echo "run.sh: --profile browser needs --profile web (--profile web,browser)" >&2; exit 2 ;; esac
+      profiles+=(--profile browser)
+      export DVT_BROWSER=on
+      ;;
     urfd)
       has_urfd=1
       ;;
     mrefd)
       has_mrefd=1
       ;;
-    *) echo "run.sh: --profile takes core, allstar, nxdn, p25, interlink, load, g3, urfd, mrefd, web or a comma list" >&2; exit 2 ;;
+    *) echo "run.sh: --profile takes core, allstar, nxdn, p25, interlink, load, g3, urfd, mrefd, web, browser or a comma list" >&2; exit 2 ;;
   esac
 done
 # native launch reads no xlxd.* file: these settings only change the reference side

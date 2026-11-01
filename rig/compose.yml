@@ -32,6 +32,10 @@
 #   web      web-proxy (.90, https://dvt-web): TLS reverse proxy to dv-svc-web of the
 #            sut (DVT_SUT_LAUNCH=native, rig/config/dv-router/web.toml); the tester
 #            gets DVT_WEB=on, the CA is written to out/<run>/web/ca.pem
+#   browser  browser (.91): `playwright run-server` (chromium, firefox, WebKit of the pinned
+#            official Playwright image, rig/Dockerfile.browser) for the browser cases; used
+#            together with web (--profile web,browser); the tester gets DVT_BROWSER=on and
+#            DVT_BROWSER_WS=ws://<net>.91:3000/. Its own limit set x-limits-browser
 #   capture  sniffers on xlxd-ref, xlxd-sut, transcoder-sut (capture-allstar: on
 #            allstar, capture-nxdn: on nxdn-*, capture-p25: on p25-*)
 #
@@ -57,7 +61,7 @@
 # TRANSCODER_SUT_IMAGE; transcoder-ref stays the real image.
 #
 # Fixed addresses: xlxd-ref .10, xlxd-sut .11, transcoder-ref .20,
-# transcoder-sut .21, tester .30, allstar .40, web-proxy .90.
+# transcoder-sut .21, tester .30, allstar .40, web-proxy .90, browser .91.
 
 name: dvt
 
@@ -68,6 +72,7 @@ name: dvt
 #   small   sniffers, netem sidecars, NXDN/P25 reflectors, G3 relay, load nodes
 #   medium  xlxd, transcoders, URFd, mrefd, AllStarLink (the systems under test)
 #   tester  the pytest runner
+#   browser the Playwright browsers (chromium + firefox + WebKit at once; shm_size is part of the memory cap)
 x-limits-small: &limits-small
   mem_limit: ${DVT_MEM_SMALL:-256m}
   memswap_limit: ${DVT_MEM_SMALL:-256m}
@@ -78,6 +83,11 @@ x-limits-medium: &limits-medium
   memswap_limit: ${DVT_MEM_MEDIUM:-512m}
   cpus: ${DVT_CPUS_MEDIUM:-2}
   pids_limit: ${DVT_PIDS_MEDIUM:-512}
+x-limits-browser: &limits-browser
+  mem_limit: ${DVT_MEM_BROWSER:-3g}
+  memswap_limit: ${DVT_MEM_BROWSER:-3g}
+  cpus: ${DVT_CPUS_BROWSER:-2}
+  pids_limit: ${DVT_PIDS_BROWSER:-1024}
 x-limits-tester: &limits-tester
   mem_limit: ${DVT_MEM_TESTER:-2g}
   memswap_limit: ${DVT_MEM_TESTER:-2g}
@@ -279,6 +289,7 @@ services:
         <<: *build-jobs
         TESTER_BASE_IMAGE: ${TESTER_BASE_IMAGE:-error-set-tester-base-image-see-env-example}
         PYTEST_VERSION: ${PYTEST_VERSION:-}
+        PLAYWRIGHT_VERSION: ${PLAYWRIGHT_VERSION:-}
       additional_contexts:
         codec2: ../.cache/codec2
     user: "${DVT_UID:-1000}:${DVT_GID:-1000}"
@@ -305,6 +316,9 @@ services:
       DVT_WEB_URL: https://${DVT_WEB_HOST:-dvt-web}
       DVT_WEB_PROXY: ${DVT_NET:-172.30.0}.90
       DVT_ADMIN_URL: https://${DVT_ADMIN_HOST:-dvt-admin}:${DVT_ADMIN_PORT:-8443}
+      # profile browser (cases/browser_fixtures.py): on when the browser service runs
+      DVT_BROWSER: ${DVT_BROWSER:-off}
+      DVT_BROWSER_WS: ws://${DVT_NET:-172.30.0}.91:${DVT_BROWSER_PORT:-3000}/
       # how xlxd-sut starts (direct | import | native); the M17 peer cases skip with import
       DVT_SUT_LAUNCH: ${DVT_SUT_LAUNCH:-direct}
       # [data] require_ident of the native config (rig/config/dv-router/data-ident.toml); cases/test_data_ident.py
@@ -640,6 +654,35 @@ services:
         aliases:
           - ${DVT_WEB_HOST:-dvt-web}
           - ${DVT_ADMIN_HOST:-dvt-admin}
+
+  # Browsers for the browser cases (profile browser, together with web): `playwright run-server`
+  # of the pinned official Playwright image (rig/Dockerfile.browser). The tester connects with the
+  # Playwright client (chromium.connect / firefox.connect / webkit.connect); the pages are loaded
+  # by the browsers from THIS address (.91) through the rig network, so the web service sees a
+  # client address that is not the tester's. Non-root user of the image, no capability, root
+  # filesystem read-only, /tmp in memory, shm_size for chromium (inside the memory cap).
+  browser:
+    <<: *limits-browser
+    profiles: [browser]
+    init: true
+    restart: "no"
+    image: dvt-browser:local
+    build:
+      context: .
+      dockerfile: Dockerfile.browser
+      args:
+        BROWSER_BASE_IMAGE: ${BROWSER_BASE_IMAGE:-error-set-browser-base-image-see-env-example}
+        PLAYWRIGHT_VERSION: ${PLAYWRIGHT_VERSION:-}
+    shm_size: ${DVT_SHM_BROWSER:-1g}
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m
+    command: ["--host", "0.0.0.0", "--port", "${DVT_BROWSER_PORT:-3000}"]
+    networks:
+      rig:
+        ipv4_address: "${DVT_NET:-172.30.0}.91"
 
   capture-mrefd:
     <<: *capture

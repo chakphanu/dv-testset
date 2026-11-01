@@ -364,3 +364,13 @@ def test_run_sh_web_profile_adds_the_snippet_and_refuses_bad_templates(tmp_path)
     cfg.write_text('[web]\ntrusted_proxies = [\n "a",\n]\n')
     run = run_sh(tmp_path, "--profile", "web", XLXD_SUT_IMAGE="img:x", DVT_SUT_CONFIG=str(cfg))
     assert run.returncode == 2 and "spans lines" in run.stderr
+
+
+def test_browser_ip_token_is_the_browser_service_address():
+    out = sut_config.render('allow = ["<TESTER_IP>", "<BROWSER_IP>"]\n', "172.30.7")
+    assert out.strip() == 'allow = ["172.30.7.30", "172.30.7.91"]'
+    out = sut_config.render('x = "<BROWSER_IP>"\n', "172.30.7", browser=95)
+    assert out.strip() == 'x = "172.30.7.95"'
+    assert "BROWSER_IP" in sut_config.KNOWN
+    with pytest.raises(sut_config.ConfigError):
+        sut_config.render('x = "<BROWSER_IP>"\n', "172.30.7", browser=0)

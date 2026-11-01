@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Browser service of the rig (profile browser): `playwright run-server` on the official
+# Playwright image, which ships chromium, firefox and WebKit (Playwright's builds, not
+# Safari) and every system library they need. The image has no Playwright package, so the
+# Python package of the pinned version is installed here (build time only: the rig network
+# has no internet); the tester has the same version as client (Dockerfile.tester). Both
+# come from PLAYWRIGHT_VERSION in .env.example; BROWSER_BASE_IMAGE must be that release.
+# The build fails when the browsers of the image are not the ones the package expects.
+ARG BROWSER_BASE_IMAGE
+FROM ${BROWSER_BASE_IMAGE}
+ARG PLAYWRIGHT_VERSION
+RUN test -n "$PLAYWRIGHT_VERSION" || { echo "PLAYWRIGHT_VERSION build arg missing (see .env.example)" >&2; exit 1; } \
+    && pip install --no-cache-dir "playwright==${PLAYWRIGHT_VERSION}" \
+    && test "$(playwright --version)" = "Version ${PLAYWRIGHT_VERSION}" \
+    && playwright install --dry-run | sed -n 's/^ *Install location: *//p' | while read -r dir; do \
+         test -d "$dir" || { echo "image lacks $dir: BROWSER_BASE_IMAGE is not Playwright ${PLAYWRIGHT_VERSION}" >&2; exit 1; }; \
+       done
+# the image's own non-root user; chromium runs without its sandbox (Playwright's default) so no
+# extra capability is needed; HOME and temp files go to the tmpfs of the service
+USER pwuser
+ENV HOME=/tmp PYTHONDONTWRITEBYTECODE=1
+EXPOSE 3000
+ENTRYPOINT ["playwright", "run-server"]
+CMD ["--host", "0.0.0.0", "--port", "3000"]

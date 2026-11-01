@@ -67,14 +67,16 @@ rules are mandatory; do not remove them to make a run faster.
 |------|-----|-------|
 | `scripts/run.sh` (docker CLI, pytest pipe, watcher, sampler) | scope `dvt-rig.scope`: 12G memory, swap 0, 800% CPU, 1024 tasks, `DVT_BUILD_JOBS` jobs | `run.sh` re-executes itself through `scripts/contained.sh --name rig` |
 | One rig at a time | the unit name `rig` is unique, so `DVT_INSTANCE` values take turns; at most 2 scopes in all, and a scope waits while the host has under 12 GiB free (`DVT_MIN_FREE_GIB`) | `scripts/contained.sh` |
-| Rig containers | every compose service has `mem_limit` = `memswap_limit` (no swap), `cpus` and `pids_limit`: small 256m / 0.5 / 128, medium 512m / 2 / 512 (`xlxd-sut` 1g and pids 1024, `DVT_MEM_SUT` / `DVT_PIDS_SUT`), tester 2g / 2 / 512 | `rig/compose.yml`, sizes in `.env.example` (`DVT_MEM_*`, `DVT_CPUS_*`, `DVT_PIDS_*`) |
+| Rig containers | every compose service has `mem_limit` = `memswap_limit` (no swap), `cpus` and `pids_limit`: small 256m / 0.5 / 128, medium 512m / 2 / 512 (`xlxd-sut` 1g and pids 1024, `DVT_MEM_SUT` / `DVT_PIDS_SUT`), tester 2g / 2 / 512, browser (profile `browser`, three Playwright browsers) 3g / 2 / 1024 with `shm_size` 1g inside the 3g | `rig/compose.yml`, sizes in `.env.example` (`DVT_MEM_*`, `DVT_CPUS_*`, `DVT_PIDS_*`, `DVT_MEM_BROWSER` / `DVT_SHM_BROWSER`) |
 | Containers started by host-side cases and tools | `docker run --memory/--memory-swap/--cpus/--pids-limit`, default 1g / 2 / 512 | `dvtest/limits.py`, `DVT_CTR_*`, `scripts/tshark.sh` |
 | Image builds and xlxd netns build | `make -j` follows `DVT_BUILD_JOBS` (default 4), never `nproc` | Dockerfiles (`MAKE_JOBS`), `scripts/build-xlxd-netns.sh` |
 
 Worst case with every profile except `load` at once: 10 medium (5 GiB) +
-tester (2 GiB) + 18 small (4.5 GiB) = 11.5 GiB of caps; the `load` profile
-adds up to 26 nodes (6.5 GiB) to a core rig (4 GiB). Both stay under the 12G of
-the rig scope. Measured peaks are far lower (xlxd about 70 MiB, tester about
+tester (2 GiB) + 18 small (4.5 GiB) + browser (3 GiB) = 14.5 GiB of caps; the `load` profile
+adds up to 26 nodes (6.5 GiB) to a core rig (4 GiB). The first sum is above the 12G of
+the rig scope, which is why the browser profile is meant for `--profile web,browser`
+(core 4 GiB + web-proxy 0.5 GiB + browser 3 GiB = 7.5 GiB), not for every profile at once.
+Measured peaks are far lower (xlxd about 70 MiB, tester about
 90 MiB). The container caps are
 separate from the scope: the docker daemon starts the containers, so the
 compose limits are what bound them; image builds run in the daemon too, which

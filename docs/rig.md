@@ -48,6 +48,7 @@ internet, and every address is fixed.
 | urfd | 172.30.0.70 | urfd | URFd (`URF999`, modules A-Z), a second reference reflector; see "URFd as the reference" |
 | mrefd | 172.30.0.80 | mrefd | mrefd (`M17-REF`, modules `MNOP`), the M17 Project reflector, with interlink peers M17-DVT / M17-DVU at the tester; see "mrefd as an extra reference" |
 | web-proxy | 172.30.0.90 (aliases `dvt-web`, `dvt-admin`) | web | TLS reverse proxy: HTTPS 443 to dv-svc-web of the SUT (`<net>.11:8081`) and HTTPS 8443 to dv-svc-admin (`<net>.11:8080`), self-signed CA in `out/<run>/web/ca.pem`; see "Web profile" |
+| browser | 172.30.0.91 | browser | Playwright browsers (`playwright run-server`, chromium + firefox + WebKit) for the browser cases, used with `web`; see "Browser profile" |
 | load nodes | 172.30.0.128/25 | load | `DVT_LOAD_MODULES` tester replicas running `DVT_LOAD_CMD` against xlxd-sut |
 | capture-* | (shares the netns) | capture | dumpcap on xlxd-ref, xlxd-sut, transcoder-sut, allstar, nxdn-*, p25-*, urfd, mrefd |
 
@@ -66,6 +67,7 @@ internet, and every address is fixed.
 | UDP 10002 | XLX interlink | xlxd-*, xlxd-peer-* |
 | TCP 443 | HTTPS (TLS proxy, `dvt-web`) | web-proxy (profile web) |
 | TCP 8443 | HTTPS (TLS proxy, admin host `dvt-admin:8443`) | web-proxy (profile web) |
+| TCP 3000 | Playwright websocket server (`DVT_BROWSER_PORT`) | browser (profile browser) |
 | TCP 8081 | HTTP, dv-svc-web (plain; only the proxy is trusted) | xlxd-sut native with `web.toml` |
 | TCP 8080 | HTTP, dv-svc-admin (plain; answers only for the host `dvt-admin:8443`) | xlxd-sut native with `admin.toml` |
 | UDP 50000 | WebRTC media (one port, ICE-lite, `public_ips` = `<net>.11`) | xlxd-sut native with `web.toml` |
@@ -350,7 +352,7 @@ XLXD_SUT_IMAGE=<dv-router image> DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-router
 | config | `web.toml` merges into the template: `[node] state_dir = "/var/lib/dv"`; `[web] enable = true`, `bind = "0.0.0.0:8081"`, `trusted_proxies = ["<WEB_PROXY_IP>"]`, `operator_totp = true` (false would make dv-svc-web exit 2 on a non-loopback bind); `[edges.webrtc] enable = true`, `public_ips = ["<OWN_IP>"]` (the edge is ICE-lite and advertises exactly that; media is the one UDP port 50000, no range, no remap) |
 | state dir | `out/<utc>/sut-state/` (mode 0700, created by `run.sh`) mounted read-write at `/var/lib/dv`; the SUT container runs as the host uid/gid (`user:` in the generated override) so the files stay removable. Without a persistent state dir that is not the run dir, accounts are off and RTC offers answer 503. It holds `accounts.jsonl` (password hashes, TOTP secrets), `audit.jsonl` and `web/` circuits: local to `out/`, never publish it |
 | first operator | `sut-state/secrets/web-bootstrap` (`N0CALL:<password>`, mode 0600; dv-svc-web consumes and removes it at its first account) and the same login for the tester in `out/<utc>/web/operator.env` (`DVT_WEB_OPERATOR`, `DVT_WEB_OPERATOR_PASSWORD`, mode 0600). The password is `secrets.token_urlsafe(24)` per run and appears in no log, argument or compose file |
-| admin service | `admin.toml` merges `[admin] enable = true`, `bind = "0.0.0.0:8080"`, `trusted_proxies = [<WEB_PROXY_IP>]`, `host = "dvt-admin:8443"`, `allow_from = [<TESTER_IP>]` (the `/admin/` prefix mount is served only to listed addresses), `totp = true`. Users: `run.sh` writes `sut-state/admin/users` (mode 0600; `admin`, `operator`, `viewer`, random passwords, pure-Python Argon2id hashes from `dvtest/argon2_pure.py`, no `:totp=` field so each enrols at its first login) and the same logins for the tester in `out/<utc>/web/admin.env` (mode 0600). The bootstrap file `secrets/admin-bootstrap` is not used: it creates only one admin, and the role matrix needs a viewer and an operator too |
+| admin service | `admin.toml` merges `[admin] enable = true`, `bind = "0.0.0.0:8080"`, `trusted_proxies = [<WEB_PROXY_IP>]`, `host = "dvt-admin:8443"`, `allow_from = [<TESTER_IP>, <BROWSER_IP>]` (the `/admin/` prefix mount is served only to listed addresses), `totp = true`. Users: `run.sh` writes `sut-state/admin/users` (mode 0600; `admin`, `operator`, `viewer`, random passwords, pure-Python Argon2id hashes from `dvtest/argon2_pure.py`, no `:totp=` field so each enrols at its first login) and the same logins for the tester in `out/<utc>/web/admin.env` (mode 0600). The bootstrap file `secrets/admin-bootstrap` is not used: it creates only one admin, and the role matrix needs a viewer and an operator too |
 | `web-proxy` | service at `<net>.90`, network aliases `dvt-web` (`DVT_WEB_HOST`) and `dvt-admin` (`DVT_ADMIN_HOST`), HTTPS on 443 (web) and `DVT_ADMIN_PORT` 8443 (admin, `--route`, same certificate and CA); limits set `medium` (`init: true`, read-only root, all capabilities dropped, runs as the host uid). Image `dvt-web-proxy:local` from `rig/Dockerfile.web-proxy`: `TESTER_BASE_IMAGE` (python and the openssl CLI are in it) plus the stdlib `dvtest` package; no new pin, no new image pulled |
 | tester | `DVT_WEB=on`, `DVT_WEB_URL=https://dvt-web`, `DVT_ADMIN_URL=https://dvt-admin:8443`, `DVT_WEB_PROXY=<net>.90` |
 
@@ -411,6 +413,36 @@ legacy direct admin mount (no `[admin] host`, loopback only, cookie `dv_admin`)
 cannot be reached from the tester and is not covered. State is per run: a new
 `out/<utc>/sut-state` every time, so the first-operator flow always starts from a
 bootstrap file.
+
+## Browser profile
+
+`scripts/run.sh --profile web,browser` adds the service `browser` (`172.30.0.91`) to the web profile, for
+the browser cases of the web unit (`cases/test_web_browser.py`, `docs/web-browser-cases.md`). `browser`
+alone is exit 2: the browsers load the pages of the web service.
+
+```sh
+XLXD_SUT_IMAGE=<dv-router image> DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-router \
+  DVT_SUT_LAUNCH=native DVT_SUT_CONFIG=<template path> \
+  scripts/run.sh -m rig --capture --profile web,browser -- cases/test_web_browser.py
+```
+
+| What | Detail |
+|------|--------|
+| why a service | The tester container has no docker socket and no browsers, and browsers do not belong in the tester image (size, memory cap). The browsers run in their own container, the tester drives them over a websocket with the Playwright Python client, and the browsers load `https://dvt-web` from `<net>.91`, so the web service sees a client address that is neither the tester's nor the proxy's (the NAT stage needs that) |
+| image | `rig/Dockerfile.browser` on `BROWSER_BASE_IMAGE` = the official `mcr.microsoft.com/playwright/python:v1.64.0-noble` pinned by tag AND digest in `.env.example` (about 1.0 GB; chromium 1248, firefox 1555, webkit 2370 and every system library). That image has no Playwright package, so the build installs `playwright==PLAYWRIGHT_VERSION` (build time only; the rig network has no internet) and fails when the browsers of the image are not the ones that version expects. `docker pull` of the base image is the one internet use; pull it once before the first run |
+| server | `playwright run-server --host 0.0.0.0 --port 3000` (ws://`<net>.91`:3000/). One connection per engine and run (`browser_type.connect`), the server starts that browser for the connection and stops it at disconnect; a new context per case separates the cases |
+| client | the tester image has `playwright==PLAYWRIGHT_VERSION` (client only, no browsers downloaded; `rig/Dockerfile.tester`). The client and the server must be the same version: one pin feeds both images. `DVT_BROWSER=on` and `DVT_BROWSER_WS` reach the tester; the cases skip with the reason otherwise |
+| caps | own set `x-limits-browser`: memory 3g = swap 3g (`DVT_MEM_BROWSER`; three browsers at once, each about 0.5-1 GiB with a page open), cpus 2, pids 1024 (browsers are multi-process; chromium, firefox and WebKit together stayed below that), `shm_size` 1g (`DVT_SHM_BROWSER`, chromium needs a large /dev/shm; it is memory and counted in the 3g; `dvtest/limits.py` refuses a `shm_size` larger than `mem_limit`), tmpfs `/tmp` 512m. Sizes are settings in `.env.example`; `run.sh` refuses an uncapped service as for every other one |
+| hardening | non-root `pwuser` of the image, `init: true`, `cap_drop: ALL`, `no-new-privileges`, read-only root filesystem. Chromium runs without its own sandbox (Playwright's default `chromiumSandbox=false`; the container is the boundary) so no capability or seccomp profile is needed |
+| trust | the proxy certificate is self-signed and the browsers are not given the run CA: the cases create every context with `ignore_https_errors=True`, and that is the only TLS relaxation (the Python test clients keep verifying against `out/<run>/web/ca.pem`) |
+| artifacts | on a failed case: `out/<run>/web/browser/<engine>-<case>/` with `page.png`, `trace.zip` (Playwright trace viewer), `page.har.zip` (HAR without bodies) and `log.json` (console, page errors, request list); `engines.txt` lists the browser builds that answered. Local to `out/`, never committed; a trace holds the values the case typed (throwaway run passwords) |
+| engine names | the WebKit of Playwright is the engine of Safari but not Safari (a Linux build without Safari's behaviour and without iOS): results are labelled "Playwright WebKit" everywhere |
+
+The fixtures (`cases/browser_fixtures.py`): `engine` (chromium, firefox, webkit), `browser_page`
+(a new context per case, anonymous), `user_page` and `operator_page` (signed in), each with the page
+log (console, page errors, every request with its status, dialogs, CSP reports) and `problems()`.
+All selectors are in `cases/web_pages.py` (role, text, aria-label, ids; DV-Router's `data-testid`
+hooks, WEB2, are not on `wip-f3adb62` yet: a later switch is a change of that one module).
 
 ## Control channel
 

@@ -10,15 +10,18 @@
 # be https://dvt-admin:8443, or the answer is 404 (fail closed). The users file
 # <state>/admin/users is written by run.sh (admin, operator, viewer; no TOTP yet).
 #
-# allow_from is the tester only: the client IP that dv-svc-admin believes is the
-# right-most X-Forwarded-For hop outside trusted_proxies, which is the tester
-# (the proxy appends nothing but the peer). It makes the /admin/ prefix mount on
-# another host name usable (that mount is never served with an empty list).
+# allow_from lists the tester and the browser service (<BROWSER_IP>, profile browser: the
+# browsers load the admin sign-in screen). Each entry is the client IP that dv-svc-admin
+# believes is the right-most X-Forwarded-For hop outside trusted_proxies (the proxy appends
+# nothing but the peer), so it is the address of whoever connected to the proxy. The list
+# also makes the /admin/ prefix mount on another host name usable (that mount is never
+# served with an empty list) and, as observed, it applies to the admin host too: a browser
+# at an unlisted address gets 404.
 # totp stays true: an exposed bind with totp off makes dv-svc-admin exit 2.
 [admin]
 enable = true
 bind = "0.0.0.0:8080"
 trusted_proxies = ["<WEB_PROXY_IP>"]
 host = "dvt-admin:8443"
-allow_from = ["<TESTER_IP>"]
+allow_from = ["<TESTER_IP>", "<BROWSER_IP>"]
 totp = true

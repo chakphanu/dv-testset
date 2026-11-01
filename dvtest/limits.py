@@ -8,7 +8,7 @@ Two jobs:
   DVT_CTR_MEM, DVT_CTR_CPUS and DVT_CTR_PIDS (.env.example).
 * check_services(): verify a `docker compose config --format json` document:
   every service has a memory limit, a swap limit equal to it, a cpus quota
-  and a pids limit. scripts/run.sh runs it before the rig is brought up:
+  and a pids limit (and a shm_size, when set, that fits into the memory limit). scripts/run.sh runs it before the rig is brought up:
 
       docker compose ... config --format json | python3 -m dvtest.limits
 """
@@ -86,6 +86,15 @@ def check_services(config):
                 raise ValueError
         except (TypeError, ValueError):
             problems.append("%s: pids_limit missing or invalid (%r)" % (name, svc.get("pids_limit")))
+        # /dev/shm is memory: a service that asks for a big one must fit it into its own cap
+        if svc.get("shm_size") is not None:
+            try:
+                shm = parse_bytes(svc.get("shm_size"))
+                if mem is not None and shm > mem:
+                    problems.append("%s: shm_size %r is larger than mem_limit %r"
+                                    % (name, svc.get("shm_size"), svc.get("mem_limit")))
+            except ValueError:
+                problems.append("%s: shm_size invalid (%r)" % (name, svc.get("shm_size")))
     return problems
 
 
