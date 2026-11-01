@@ -197,11 +197,11 @@ def test_cli_extra_and_require_ident(tmp_path):
 
 # ---- scripts/run.sh refuses a bad native launch before it touches docker
 
-def run_sh(tmp_path, **env):
+def run_sh(tmp_path, *args, **env):
     full = {"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path), "DVT_CONTAINED": "1",
             "DVT_SUT_LAUNCH": "native", "XLXD_SUT_IMAGE": "", "DVT_SUT_CONFIG": "", "TRANSCODER_IMAGE": "x"}
     full.update(env)
-    return subprocess.run(["bash", str(ROOT / "scripts" / "run.sh")], cwd=ROOT, env=full,
+    return subprocess.run(["bash", str(ROOT / "scripts" / "run.sh"), *args], cwd=ROOT, env=full,
                           capture_output=True, text=True, timeout=60)
 
 
@@ -268,3 +268,99 @@ def test_run_sh_native_checks_the_extras_before_docker(tmp_path):
     run = run_sh(tmp_path, XLXD_SUT_IMAGE="img:x", DVT_SUT_CONFIG=str(cfg), DVT_SUT_CONFIG_EXTRA=str(bad))
     assert run.returncode == 2 and "<NOPE>" in run.stderr
 
+
+
+# ---- merging a table the template already has (rig/config/dv-router/web.toml)
+
+WEB_TEMPLATE = """\
+[node]
+callsign = "XLX999"
+# no state_dir here
+rooms = "A-Z"
+
+# services
+[web]
+# off in the template
+enable = false
+bind = "127.0.0.1:8081"
+
+[admin]
+enable = false
+"""
+
+
+def test_merge_replaces_and_adds_keys_in_an_existing_table():
+    extra = '[node]\nstate_dir = "/var/lib/dv"\n\n[web]\nenable = true\ntrusted_proxies = ["<WEB_PROXY_IP>"]\n'
+    out = sut_config.render(WEB_TEMPLATE, "172.30.0", extras=[extra])
+    import tomllib
+    cfg = tomllib.loads(out)
+    assert cfg["node"] == {"callsign": "XLX999", "rooms": "A-Z", "state_dir": "/var/lib/dv"}
+    assert cfg["web"] == {"enable": True, "bind": "127.0.0.1:8081", "trusted_proxies": ["172.30.0.90"]}
+    assert cfg["admin"] == {"enable": False}
+    assert out.count("[web]") == 1 and out.count("[node]") == 1
+    assert "enable = false\nbind" not in out                 # the replaced line is gone
+    # new keys follow the last value, not the blank line and comment that precede the next table
+    assert out.index("state_dir") < out.index("# services")
+
+
+def test_merge_appends_other_tables_and_arrays_as_before():
+    extra = ('# header\n\n[node]\nstate_dir = "/s"\n\n[edges.webrtc]\nenable = true\n'
+             '\n[[peer]]\nhost = "<NET>.12"\n')
+    out = sut_config.render(WEB_TEMPLATE, "172.30.0", extras=[extra])
+    import tomllib
+    cfg = tomllib.loads(out)
+    assert cfg["edges"]["webrtc"] == {"enable": True} and cfg["peer"] == [{"host": "172.30.0.12"}]
+    assert cfg["node"]["state_dir"] == "/s"
+    assert out.index("[edges.webrtc]") > out.index("[admin]")
+
+
+def test_merge_second_extra_merges_into_the_first():
+    one, two = '[web]\nenable = true\n', '[web]\nbind = "0.0.0.0:8081"\nenable = false\n'
+    import tomllib
+    cfg = tomllib.loads(sut_config.render(WEB_TEMPLATE, "172.30.0", extras=[one, two]))
+    assert cfg["web"] == {"enable": False, "bind": "0.0.0.0:8081"}
+
+
+def test_merge_refuses_to_replace_a_multi_line_value():
+    template = '[web]\ntrusted_proxies = [\n  "a",\n  "b",\n]\n'
+    with pytest.raises(sut_config.ConfigError, match="spans lines"):
+        sut_config.render(template, "172.30.0", extras=['[web]\ntrusted_proxies = ["c"]\n'])
+    # a different key is fine, and the array stays whole
+    import tomllib
+    cfg = tomllib.loads(sut_config.render(template, "172.30.0", extras=['[web]\nenable = true\n']))
+    assert cfg["web"] == {"trusted_proxies": ["a", "b"], "enable": True}
+
+
+def test_the_web_snippet_merges_into_a_template_that_switches_web_off():
+    import tomllib
+    snippet = (ROOT / "rig" / "config" / "dv-router" / "web.toml").read_text()
+    cfg = tomllib.loads(sut_config.render(WEB_TEMPLATE, "172.30.7", extras=[snippet]))
+    assert cfg["node"]["state_dir"] == "/var/lib/dv"
+    assert cfg["web"]["enable"] is True and cfg["web"]["bind"] == "0.0.0.0:8081"
+    assert cfg["web"]["trusted_proxies"] == ["172.30.7.90"] and cfg["web"]["operator_totp"] is True
+    assert cfg["edges"]["webrtc"] == {"enable": True, "public_ips": ["172.30.7.11"]}
+
+
+def test_web_proxy_octet_option(tmp_path):
+    src = tmp_path / "t.toml"
+    src.write_text('x = "<WEB_PROXY_IP>"\n')
+    assert sut_config.render(src.read_text(), "172.30.0") == 'x = "172.30.0.90"\n'
+    assert sut_config.render(src.read_text(), "172.30.0", web_proxy=95) == 'x = "172.30.0.95"\n'
+    run = cli(str(src), str(tmp_path / "o.toml"), "--net", "172.30.0", "--web-proxy", "99")
+    assert run.returncode == 0 and (tmp_path / "o.toml").read_text() == 'x = "172.30.0.99"\n'
+
+
+def test_run_sh_web_profile_needs_the_native_launch(tmp_path):
+    run = run_sh(tmp_path, "--profile", "web", DVT_SUT_LAUNCH="direct")
+    assert run.returncode == 2 and "--profile web needs DVT_SUT_LAUNCH=native" in run.stderr
+
+
+def test_run_sh_web_profile_adds_the_snippet_and_refuses_bad_templates(tmp_path):
+    cfg = tmp_path / "t.toml"
+    cfg.write_text(WEB_TEMPLATE + 'bad = "<NOPE>"\n')
+    run = run_sh(tmp_path, "--profile", "core,web", XLXD_SUT_IMAGE="img:x", DVT_SUT_CONFIG=str(cfg))
+    assert run.returncode == 2 and "<NOPE>" in run.stderr
+    # a template that does not merge cleanly is refused with the merge message, before docker
+    cfg.write_text('[web]\ntrusted_proxies = [\n "a",\n]\n')
+    run = run_sh(tmp_path, "--profile", "web", XLXD_SUT_IMAGE="img:x", DVT_SUT_CONFIG=str(cfg))
+    assert run.returncode == 2 and "spans lines" in run.stderr

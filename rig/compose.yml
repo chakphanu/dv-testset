@@ -29,6 +29,9 @@
 #   mrefd    mrefd (.80, M17-REF, the M17 Project reflector) with configured
 #            interlink peers M17-DVT / M17-DVU at the tester; DVT_REF_KIND=mrefd
 #            points the tester's reference at it (capture-mrefd)
+#   web      web-proxy (.90, https://dvt-web): TLS reverse proxy to dv-svc-web of the
+#            sut (DVT_SUT_LAUNCH=native, rig/config/dv-router/web.toml); the tester
+#            gets DVT_WEB=on, the CA is written to out/<run>/web/ca.pem
 #   capture  sniffers on xlxd-ref, xlxd-sut, transcoder-sut (capture-allstar: on
 #            allstar, capture-nxdn: on nxdn-*, capture-p25: on p25-*)
 #
@@ -54,7 +57,7 @@
 # TRANSCODER_SUT_IMAGE; transcoder-ref stays the real image.
 #
 # Fixed addresses: xlxd-ref .10, xlxd-sut .11, transcoder-ref .20,
-# transcoder-sut .21, tester .30, allstar .40.
+# transcoder-sut .21, tester .30, allstar .40, web-proxy .90.
 
 name: dvt
 
@@ -297,6 +300,10 @@ services:
       # M17-DVU peer an extra tester address added by the tester-addr sidecar
       DVT_M17_PEER_DVT_HOST: ${DVT_M17_PEER_DVT_HOST:-${DVT_NET:-172.30.0}.30}
       DVT_M17_PEER_DVU_HOST: ${DVT_M17_PEER_DVU_HOST:-${DVT_NET:-172.30.0}.32}
+      # profile web (cases/web_fixtures.py): on when web-proxy runs; CA and operator login in $DVT_OUT/web/
+      DVT_WEB: ${DVT_WEB:-off}
+      DVT_WEB_URL: https://${DVT_WEB_HOST:-dvt-web}
+      DVT_WEB_PROXY: ${DVT_NET:-172.30.0}.90
       # how xlxd-sut starts (direct | import | native); the M17 peer cases skip with import
       DVT_SUT_LAUNCH: ${DVT_SUT_LAUNCH:-direct}
       # [data] require_ident of the native config (rig/config/dv-router/data-ident.toml); cases/test_data_ident.py
@@ -574,6 +581,56 @@ services:
       - /bin/sh
       - -c
       - ip addr show dev eth0 | grep -q "inet $$DVT_ADDR/" || ip addr add "$$DVT_ADDR/24" dev eth0; exec sleep infinity
+
+  # ---- TLS proxy for DV-Router's web service (profile web) ----
+  # dv-svc-web speaks HTTP and sets a Secure __Host- cookie, so cases and browsers
+  # need HTTPS: this proxy (dvtest/tools/tls_proxy.py) terminates TLS with a
+  # throwaway CA made at start and writes the CA certificate to out/<run>/web/ca.pem
+  # (the only place it can write); it forwards to the sut's :8081 with
+  # X-Forwarded-Proto https and streams (SSE). The host name DVT_WEB_HOST is a
+  # network alias; the certificate names it, localhost and the address.
+  web-proxy:
+    <<: *limits-medium
+    profiles: [web]
+    init: true
+    restart: "no"
+    image: dvt-web-proxy:local
+    build:
+      context: .
+      dockerfile: Dockerfile.web-proxy
+      args:
+        TESTER_BASE_IMAGE: ${TESTER_BASE_IMAGE:-error-set-tester-base-image-see-env-example}
+      additional_contexts:
+        dvtest: ../dvtest
+    user: "${DVT_UID:-1000}:${DVT_GID:-1000}"
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs:
+      - /tmp
+    command:
+      - --listen
+      - 0.0.0.0:443
+      - --upstream
+      - ${DVT_NET:-172.30.0}.11:8081
+      - --ca-out
+      - /webout/ca.pem
+      - --san-dns
+      - ${DVT_WEB_HOST:-dvt-web}
+      - --san-dns
+      - localhost
+      - --san-ip
+      - ${DVT_NET:-172.30.0}.90
+      - --san-ip
+      - 127.0.0.1
+      - --max-conns
+      - ${DVT_WEB_PROXY_CONNS:-256}
+    volumes:
+      - ../out/${DVT_RUN_ID:-manual}/web:/webout
+    networks:
+      rig:
+        ipv4_address: "${DVT_NET:-172.30.0}.90"
+        aliases:
+          - ${DVT_WEB_HOST:-dvt-web}
 
   capture-mrefd:
     <<: *capture

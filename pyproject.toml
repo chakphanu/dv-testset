@@ -28,6 +28,7 @@ markers = [
     "p25: needs the docker rig with profile p25",
     "load: needs the docker rig with profile load (many modules at once)",
     "interlink: needs the docker rig with profile interlink",
+    "web: needs the docker rig with profile web (DV-Router web service behind the TLS proxy)",
     "speech: needs the fetched speech corpus (scripts/pre-fetch-speech.sh)",
     "slow: long-running cases (minutes), e.g. tot_180s",
     "interop: protocol interop, always judged against xlxd-ref",

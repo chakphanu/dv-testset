@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/rig.md): the web service
+# of DV-Router (dv-svc-web) and the WebRTC edge, for `scripts/run.sh --profile web`
+# (which adds this file by itself). The template switches [web] off and has no
+# state dir, so dvtest/sut_config.py MERGES the tables [node] and [web] below
+# into the template's own (the keys here replace the same keys there).
+#
+# Tokens: <OWN_IP> is the SUT (<net>.11), <WEB_PROXY_IP> the TLS proxy web-proxy
+# (<net>.90), the only address dv-svc-web believes X-Forwarded-* from.
+
+# node.state_dir is persistent: run.sh mounts the host directory out/<run>/sut-state
+# at /var/lib/dv (accounts, audit, web circuits; without it, or with the state
+# dir equal to the run dir, accounts are off and RTC offers answer 503) and writes
+# secrets/web-bootstrap there (the first operator, N0CALL, random password per run).
+[node]
+state_dir = "/var/lib/dv"
+
+# HTTP and the WebRTC signalling relay (/api/v1/rtc/*) are the same listener.
+# The cookie is always Secure (__Host- prefix): browsers need HTTPS, hence the
+# proxy. operator_totp stays true: false on a non-loopback bind, or with
+# trusted_proxies, makes dv-svc-web exit 2.
+[web]
+enable = true
+bind = "0.0.0.0:8081"
+trusted_proxies = ["<WEB_PROXY_IP>"]
+operator_totp = true
+
+# Media is one UDP port (50000) of dv-edge-webrtc: no range, no remap. The edge
+# is ICE-lite and advertises exactly these addresses.
+[edges.webrtc]
+enable = true
+public_ips = ["<OWN_IP>"]

@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+# TLS proxy in front of DV-Router's web service (dvtest/tools/tls_proxy.py, stdlib
+# only): the python of the tester base image plus the stdlib-only dvtest package,
+# passed in as the named build context "dvtest". The openssl CLI it needs to make
+# the throwaway CA and server certificate at start is already part of the base
+# image (checked here), so nothing is installed and no new image is pulled.
+# Runs as service web-proxy (profile web); arguments come from rig/compose.yml.
+ARG TESTER_BASE_IMAGE
+FROM ${TESTER_BASE_IMAGE}
+RUN openssl version
+COPY --from=dvtest . /app/dvtest/
+ENV PYTHONPATH=/app PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+ENTRYPOINT ["python", "-m", "dvtest.tools.tls_proxy"]

@@ -23,6 +23,7 @@ rig (`rig/`; the service names `xlxd-ref` / `xlxd-sut` are historical).
 | xlxd vs fake transcoder/USRP peer | `scripts/build-xlxd-netns.sh`, then `DVT_XLXD_BIN=<path> python3 -m pytest -m netns` | `unshare -rn` (user namespaces) |
 | Full rig | `scripts/run.sh -m rig` | docker, `TRANSCODER_IMAGE` in `.env` |
 | Rig, byte-exact cross-mode (DV-Router) | `DVT_TRANSCODER_FAKE=1 DVT_SUT_PROFILE=dvrouter scripts/run.sh -m crossmode --capture -- cases/test_crossmode_exact.py cases/test_crossmode_failure.py` | as above; transcoder-sut becomes the fake (`docs/ambed-fake.md`) |
+| Rig, DV-Router web service (native launch) | `XLXD_SUT_IMAGE=<dv-router image> DVT_SUT_PROFILE=dvrouter DVT_SUT_LAUNCH=native DVT_SUT_CONFIG=<template> scripts/run.sh -m rig --capture --profile web -- cases/test_web_smoke.py` | as above; `docs/rig.md` "Web profile" (HTTPS proxy `https://dvt-web`, CA and operator login in `out/<run>/web/`) |
 | Rig + AllStarLink | `scripts/run.sh -m "rig or allstar" --profile allstar` | as above, `scripts/gen-local.sh` once |
 
 First time: `scripts/pre-fetch-xlxd.sh`, `scripts/pre-fetch-codec2.sh`,
@@ -56,7 +57,7 @@ limits"):
   log or copy secret values; `Target.iax_secret` is hidden from repr.
 - `dvtest/target.py` documents every `DVT_*` variable. Rig addresses default
   to 172.30.0.0/24: xlxd-ref .10, xlxd-sut .11, transcoder-ref .20,
-  transcoder-sut .21, tester .30, allstar .40.
+  transcoder-sut .21, tester .30, allstar .40, web-proxy .90.
 
 ## Results
 
@@ -100,6 +101,13 @@ and hashes; never publish raw captures.
   `scripts/run.sh`, or pass `--env-file .env.example --env-file .env`.
 - Use only the compose project `dvt`; never stop, remove or prune other
   containers, images or volumes.
+
+- Web unit: use `dvtest/web.py` (HTTPS client with the run CA, TOTP, `Pacer` for the
+  login/register budgets, account helpers) and the fixtures `web_operator` /
+  `web_user` / `web_client` (`cases/web_fixtures.py`); never print a password,
+  invite code, TOTP secret, CSRF token or cookie, and record a difference from the
+  specs with `web.finding()` instead of asserting it. `out/<run>/web/operator.env`
+  and `out/<run>/sut-state/` hold run secrets: local to `out/`, never copied out.
 
 ## Before committing
 

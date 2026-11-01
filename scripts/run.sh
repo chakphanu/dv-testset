@@ -25,6 +25,13 @@
 #                      DVT_SUT_USRP=on; host samples docker stats every ~1-2 s
 #                      into out/<utc>/stats.jsonl while pytest runs
 #   --profile g3       a second Icom G3 terminal: relay g3-term2 at .31 (DVT_G3=on)
+#   --profile web      DV-Router's web service behind a TLS proxy: web-proxy (.90,
+#                      https://dvt-web, CA out/<utc>/web/ca.pem), a persistent state
+#                      dir out/<utc>/sut-state for the sut and a random operator
+#                      login (out/<utc>/web/operator.env, mode 600, never printed);
+#                      needs DVT_SUT_LAUNCH=native; adds rig/config/dv-router/web.toml
+#                      to DVT_SUT_CONFIG_EXTRA by itself; the tester gets DVT_WEB=on
+#                      (docs/rig.md "Web profile")
 #   DVT_XLXD_BLACKLIST callsigns written to both reflectors' xlxd.blacklist
 #                      (default empty; P-G3-05 uses N0G3X, no other suite does)
 #   --capture          sniffers on xlxd-ref/xlxd-sut/transcoder-sut (+allstar/nxdn/p25): pcapng in
@@ -83,7 +90,8 @@
 # /xlxd/dmrid.dat and nxdn.csv; the env pins win over the file).
 # DVT_SUT_CONFIG_EXTRA=<file>[:<file>...] appends repo-owned snippets (rig/config/dv-router/)
 # after the rendered template, with the same tokens plus <REQUIRE_IDENT> (env
-# DVT_REQUIRE_IDENT, true or false, default true); docs/rig.md.
+# DVT_REQUIRE_IDENT, true or false, default true) and <WEB_PROXY_IP> (<net>.90);
+# a plain [table] the template already has is merged key by key; docs/rig.md.
 # The launcher reads no other xlxd.* file: DVT_NXDN, DVT_P25, DVT_INTERLINK, DVT_SUT_USRP and
 # DVT_XLXD_BLACKLIST only draw a warning, and DVT_UNSERVED_MODULE=M|N is refused
 # (exit 2; a template may name peers on other modules too).
@@ -222,6 +230,19 @@ case "${DVT_REQUIRE_IDENT:-true}" in
   true|false) ;;
   *) echo "run.sh: DVT_REQUIRE_IDENT must be true or false" >&2; exit 2 ;;
 esac
+# --profile web: dv-svc-web is DV-Router's, so the launch is native and the snippet
+# rig/config/dv-router/web.toml is part of the config (added unless already listed)
+has_web=0
+case ",$profile," in *,web,*) has_web=1 ;; esac
+if [ "$has_web" = 1 ]; then
+  [ "${DVT_SUT_LAUNCH:-direct}" = native ] \
+    || { echo "run.sh: --profile web needs DVT_SUT_LAUNCH=native (the web service is DV-Router's)" >&2; exit 2; }
+  case ":${DVT_SUT_CONFIG_EXTRA:-}:" in
+    *:rig/config/dv-router/web.toml:*) ;;
+    *) DVT_SUT_CONFIG_EXTRA="${DVT_SUT_CONFIG_EXTRA:+$DVT_SUT_CONFIG_EXTRA:}rig/config/dv-router/web.toml" ;;
+  esac
+  export DVT_SUT_CONFIG_EXTRA
+fi
 # DVT_SUT_CONFIG_EXTRA=<file>[:<file>...]: repo-owned snippets (rig/config/dv-router/)
 # appended after the rendered template, token substituted like the template
 cfg_opts=(--require-ident "${DVT_REQUIRE_IDENT:-true}")
@@ -269,7 +290,7 @@ compose_all=(docker compose -p "${COMPOSE_PROJECT_NAME:-dvt}" "${compose_files[@
   --profile core --profile allstar --profile nxdn --profile capture --profile capture-allstar
   --profile capture-nxdn --profile p25 --profile capture-p25 --profile interlink
   --profile capture-interlink --profile load --profile netem --profile g3
-  --profile urfd --profile capture-urfd --profile mrefd --profile capture-mrefd)
+  --profile urfd --profile capture-urfd --profile mrefd --profile capture-mrefd --profile web)
 
 if [ "$down_only" = 1 ]; then
   take_lock
@@ -334,13 +355,17 @@ for p in "${wanted[@]}"; do
       profiles+=(--profile g3)
       export DVT_G3=on
       ;;
+    web)
+      profiles+=(--profile web)
+      export DVT_WEB=on
+      ;;
     urfd)
       has_urfd=1
       ;;
     mrefd)
       has_mrefd=1
       ;;
-    *) echo "run.sh: --profile takes core, allstar, nxdn, p25, interlink, load, g3, urfd, mrefd or a comma list" >&2; exit 2 ;;
+    *) echo "run.sh: --profile takes core, allstar, nxdn, p25, interlink, load, g3, urfd, mrefd, web or a comma list" >&2; exit 2 ;;
   esac
 done
 # native launch reads no xlxd.* file: these settings only change the reference side
@@ -470,6 +495,22 @@ out="out/$DVT_RUN_ID"
 mkdir -p "$out/logs"
 [ "$capture" = 0 ] || mkdir -p "$out/capture"
 
+# --profile web: the sut's persistent state dir (host directory, mounted at /var/lib/dv,
+# mode 0700, owned by the host user the sut container runs as) with the bootstrap secret
+# of the first operator, and the same login for the tester. The password is random per
+# run and goes only into those two files (mode 0600), never to a log or an argument.
+if [ "$has_web" = 1 ]; then
+  mkdir -p "$out/web"
+  (umask 077; mkdir -p "$out/sut-state/secrets")
+  chmod 700 "$out/sut-state" "$out/sut-state/secrets"
+  web_pw="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
+  (umask 077
+   printf 'N0CALL:%s\n' "$web_pw" > "$out/sut-state/secrets/web-bootstrap"
+   printf 'DVT_WEB_OPERATOR=N0CALL\nDVT_WEB_OPERATOR_PASSWORD=%s\n' "$web_pw" > "$out/web/operator.env")
+  unset web_pw
+  echo "run.sh: web profile: operator login in $out/web/operator.env (mode 600), CA will be $out/web/ca.pem"
+fi
+
 # Prebuilt reflector images (XLXD_REF_IMAGE / XLXD_SUT_IMAGE): another
 # implementation can be the system under test. Its contract: argv
 # "CALLSIGN OWN_IP TRANSCODER_IP"; config files mounted read-only under /xlxd/
@@ -520,6 +561,10 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
     fi
     # the image is used as it is: no build section, never pulled
     printf '    build: !reset null\n    pull_policy: never\n'
+    # --profile web: the sut writes the persistent state dir of the host user
+    if [ "$svc" = xlxd-sut ] && [ "$has_web" = 1 ]; then
+      printf '    user: "%s:%s"\n' "$DVT_UID" "$DVT_GID"
+    fi
     printf '    environment:\n      DVT_CONFIG_MOUNTED: "1"\n'
     # P25 gateway id for unknown talkers (P-P25-23; not in rig/config/dmrid.dat)
     [ "$svc" != xlxd-sut ] || printf '      DV_P25_GATEWAY_ID: "%s"\n' "${DV_P25_GATEWAY_ID:-1023000}"
@@ -545,6 +590,9 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
     done
     if [ "$svc" = xlxd-sut ] && [ "${DVT_SUT_LAUNCH:-direct}" = native ]; then
       printf '      - "%s/dv-router.toml:/etc/dv-router/dv-router.toml:ro"\n' "$cfg"
+    fi
+    if [ "$svc" = xlxd-sut ] && [ "$has_web" = 1 ]; then
+      printf '      - "%s/%s/sut-state:/var/lib/dv"\n' "$DVT_ROOT" "$out"
     fi
   } >> "$override"
   prebuilt+=("$svc")
@@ -741,6 +789,7 @@ printf 'markers=%s profile=%s xlxd_ref=%s xlxd_sut=%s transcoder=%s sut_divergen
   "$markers" "$profile" "${XLXD_REF_IMAGE:-${XLXD_REF_DIR:-ref}}" "${XLXD_SUT_IMAGE:-${XLXD_SUT_DIR:-sut}}" "$TRANSCODER_IMAGE" \
   "${DVT_SUT_DIVERGENCES:-}" "${DVT_SUT_NAME:-}" "${DVT_SUT_PROFILE:-xlxd}" "${DVT_NO_RADIO_ID:-}" "${DVT_REF_KIND:-xlxd}" "${DVT_SUT_LAUNCH:-direct}" \
   > "$out/run.txt"
+[ "$has_web" = 0 ] || echo "web=on sut_config_extra=${DVT_SUT_CONFIG_EXTRA}" >> "$out/run.txt"
 cat ".cache/xlxd/${XLXD_REF_DIR:-ref}.fetched" ".cache/xlxd/${XLXD_SUT_DIR:-sut}.fetched" >> "$out/run.txt" 2>/dev/null || true
 
 # Images are shared by all instances: one build at a time (fd 8, own lock).

@@ -47,6 +47,7 @@ internet, and every address is fixed.
 | xlxd-peer-sut / xlxd-peer-ref | 172.30.0.12 / .13 | interlink | XLX998, interlinked with xlxd-sut / xlxd-ref on `DVT_INTERLINK_MODULES` |
 | urfd | 172.30.0.70 | urfd | URFd (`URF999`, modules A-Z), a second reference reflector; see "URFd as the reference" |
 | mrefd | 172.30.0.80 | mrefd | mrefd (`M17-REF`, modules `MNOP`), the M17 Project reflector, with interlink peers M17-DVT / M17-DVU at the tester; see "mrefd as an extra reference" |
+| web-proxy | 172.30.0.90 (alias `dvt-web`) | web | TLS reverse proxy (HTTPS 443) to dv-svc-web of the SUT (`<net>.11:8081`), self-signed CA in `out/<run>/web/ca.pem`; see "Web profile" |
 | load nodes | 172.30.0.128/25 | load | `DVT_LOAD_MODULES` tester replicas running `DVT_LOAD_CMD` against xlxd-sut |
 | capture-* | (shares the netns) | capture | dumpcap on xlxd-ref, xlxd-sut, transcoder-sut, allstar, nxdn-*, p25-*, urfd, mrefd |
 
@@ -63,6 +64,9 @@ internet, and every address is fixed.
 | UDP 41400 | NXDNReflector network (xlxd connects out) | nxdn-ref, nxdn-sut |
 | UDP 41000 | P25Reflector network (xlxd connects out) | p25-ref, p25-sut |
 | UDP 10002 | XLX interlink | xlxd-*, xlxd-peer-* |
+| TCP 443 | HTTPS (TLS proxy, `dvt-web`) | web-proxy (profile web) |
+| TCP 8081 | HTTP, dv-svc-web (plain; only the proxy is trusted) | xlxd-sut native with `web.toml` |
+| UDP 50000 | WebRTC media (one port, ICE-lite, `public_ips` = `<net>.11`) | xlxd-sut native with `web.toml` |
 
 `DVT_SUBNET` (a /24) or `DVT_NET` (the prefix) moves the whole rig, and
 `DVT_INSTANCE=<n>` moves it to `172.30.<n>.0/24`; the host offsets stay the
@@ -283,8 +287,13 @@ The DV-Router template lives outside this repository and is never copied in.
 or absolute) appends repo-owned snippets after the rendered template, in the
 order given, with the same token substitution (`dvtest/sut_config.py`, option
 `--extra`; `run.sh` checks them before anything starts: a missing file or an
-unknown token is exit 2). A snippet must not repeat a table the template already
-defines (TOML refuses duplicate keys). Only `native` reads a config file; with
+unknown token is exit 2). A plain table `[name]` of a snippet that the template
+already defines is merged into it key by key (the snippet's keys replace the same
+keys, everything else of the template stays; a multi-line value that would have to
+be replaced is exit 2); `[[arrays]]` and other tables are appended. This is how
+`web.toml` switches `[web]` on although the template has `enable = false`. The
+rendered file must parse as TOML (checked before anything starts). Extra token:
+`<WEB_PROXY_IP>` = `<net>.90`. Only `native` reads a config file; with
 another launch mode the variable draws a warning. Snippets in
 `rig/config/dv-router/`:
 
@@ -292,6 +301,7 @@ another launch mode the variable draws a warning. Snippets in
 |------|------|
 | `data-ident.toml` | `[data] enable = true`, `require_ident = <REQUIRE_IDENT>`, `xlx_text_overs = true`: the data worker on, with the identity policy of the run |
 | `xlx-peer.toml` | `[[edges.xlx.peer]]` XLX998 at `<NET>.12` on modules `DE` |
+| `web.toml` | the web service, a persistent state dir and the WebRTC edge; added by `--profile web` itself (next section) |
 
 The XLX peer row names `xlxd-peer-sut` (`<NET>.12`, XLX998), not `xlxd-peer-ref`
 (`.13`): `xlxd-peer-sut` is configured to link with `xlxd-sut` (`.11`, XLX999),
@@ -315,6 +325,87 @@ a `dv_room_data_total` or `dv_pkt_items_total` family (the `[data]` table is on)
 It reads the setting from `DVT_REQUIRE_IDENT` in the tester environment
 (`rig/compose.yml`, default `true`) and writes what it observed to
 `out/<run>/data-ident.txt`.
+
+## Web profile
+
+`scripts/run.sh --profile web` makes DV-Router's web service (`dv-svc-web`) usable
+from the rig: HTTPS in front of it, accounts that work (a persistent state dir
+and a first operator), and the WebRTC edge up. It is the base of the web unit
+(smoke cases now; API probes, browsers, NAT and load build on it). It needs
+`DVT_SUT_LAUNCH=native` (the web service is DV-Router's; exit 2 otherwise).
+
+```sh
+XLXD_SUT_IMAGE=<dv-router image> DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-router \
+  DVT_SUT_LAUNCH=native DVT_SUT_CONFIG=<template path> \
+  scripts/run.sh -m rig --capture --profile web -- cases/test_web_smoke.py
+```
+
+`--profile web` adds `rig/config/dv-router/web.toml` to `DVT_SUT_CONFIG_EXTRA`
+(naming it yourself is harmless) and does five things:
+
+| What | Detail |
+|------|--------|
+| config | `web.toml` merges into the template: `[node] state_dir = "/var/lib/dv"`; `[web] enable = true`, `bind = "0.0.0.0:8081"`, `trusted_proxies = ["<WEB_PROXY_IP>"]`, `operator_totp = true` (false would make dv-svc-web exit 2 on a non-loopback bind); `[edges.webrtc] enable = true`, `public_ips = ["<OWN_IP>"]` (the edge is ICE-lite and advertises exactly that; media is the one UDP port 50000, no range, no remap) |
+| state dir | `out/<utc>/sut-state/` (mode 0700, created by `run.sh`) mounted read-write at `/var/lib/dv`; the SUT container runs as the host uid/gid (`user:` in the generated override) so the files stay removable. Without a persistent state dir that is not the run dir, accounts are off and RTC offers answer 503. It holds `accounts.jsonl` (password hashes, TOTP secrets), `audit.jsonl` and `web/` circuits: local to `out/`, never publish it |
+| first operator | `sut-state/secrets/web-bootstrap` (`N0CALL:<password>`, mode 0600; dv-svc-web consumes and removes it at its first account) and the same login for the tester in `out/<utc>/web/operator.env` (`DVT_WEB_OPERATOR`, `DVT_WEB_OPERATOR_PASSWORD`, mode 0600). The password is `secrets.token_urlsafe(24)` per run and appears in no log, argument or compose file |
+| `web-proxy` | service at `<net>.90`, network alias `dvt-web` (`DVT_WEB_HOST`), HTTPS on 443; limits set `medium` (`init: true`, read-only root, all capabilities dropped, runs as the host uid). Image `dvt-web-proxy:local` from `rig/Dockerfile.web-proxy`: `TESTER_BASE_IMAGE` (python and the openssl CLI are in it) plus the stdlib `dvtest` package; no new pin, no new image pulled |
+| tester | `DVT_WEB=on`, `DVT_WEB_URL=https://dvt-web`, `DVT_WEB_PROXY=<net>.90` |
+
+**The proxy** (`dvtest/tools/tls_proxy.py`, unit tests `cases/unit/test_tls_proxy.py`
+against a fake backend) is repo-owned stdlib Python rather than nginx or caddy: it
+adds no image and no pin, and what the cases need is small and exactly testable:
+it streams both ways without buffering (SSE frames reach the client as they
+leave the SUT; request bodies of any size go through with their length or
+chunked), keeps method, path, query, headers and `Host` (the service compares
+`Origin` with the effective host), drops hop-by-hop headers, sets
+`X-Forwarded-Proto: https`, `X-Forwarded-Host` and `X-Forwarded-For` (the client
+address; a client-sent value is discarded, the proxy is the edge), passes any
+status (304, 204, 404, several `Set-Cookie`), answers 502 for an unreachable
+SUT and 501 for `Upgrade` (the web service has no WebSocket), and caps open
+connections (`DVT_WEB_PROXY_CONNS`, 256, then 503; one thread each). If a later
+stage needs HTTP/2, WebSocket or very many connections, put a pinned nginx or
+caddy image in its place; the address, alias, CA path and headers are the
+contract. At start it makes a throwaway CA and a server certificate (SAN:
+`dvt-web`, `localhost`, `<net>.90`, `127.0.0.1`; RSA 2048, 2 days) with the openssl CLI,
+deletes the CA key at once and writes the CA certificate to
+`out/<utc>/web/ca.pem` (mode 0644): trust that file (Python
+`ssl.create_default_context(cafile=...)`; a later Playwright container mounts
+`out/<utc>/web` and sets the CA or `ignoreHTTPSErrors`). The server key stays in
+the container's tmpfs. The log (`logs/web-proxy.log`) has one line per request:
+method, path without the query, status, bytes, ms.
+
+**Tester side**
+- `dvtest/web.py` (stdlib): `WebClient` (HTTPS with the run's CA, cookie jar with
+  the cookie attributes, CSRF token, Origin, JSON, SSE reader, `WebError` with
+  status and a body scrubbed of every secret the client was told about),
+  `Authenticator`/`totp` (RFC 6238, unit-tested with the RFC vectors; each counter
+  used once because the server accepts a code once), `Pacer` (the server's budgets
+  as token buckets: login 1/s burst 10 per client address, register 0.2/s burst 2
+  with at least 2 s between registrations, public reads 5/s burst 20,
+  authenticated reads 20/s burst 20, unsafe requests 2/s burst 10; one instance for
+  the process because the server counts per address), the account flow
+  (`login`, `enrol_totp`, `step_up_headers`, `create_invite`, `register_user`,
+  `user_session`) and `finding()`.
+- `cases/web_fixtures.py` (loaded by `conftest.py`): `web_base_url`
+  (`https://dvt-web`, waits up to 90 s for `/api/v1/public/state` = 200), `web_ca`
+  (`out/<utc>/web/ca.pem` as the tester sees it, `DVT_WEB_CA`), `web_client()` (an
+  anonymous client), `web_operator` (logged in as `N0CALL`, TOTP enrolled,
+  step-up window open) and `web_user(callsign=None, may_tx=False)` (registers and
+  logs in `N0CALL1`, `N0CALL2`, ...). All skip with the reason unless
+  `DVT_WEB=on` and the service answers.
+- `cases/test_web_smoke.py` (markers `rig`, `web`; about 20 s of cases): what it checks
+  and what it only records is in its header. Differences from the documents are
+  printed as `FINDING:` warnings and appended to `out/<utc>/web-findings.txt`;
+  they are never encoded as assertions.
+
+**Limits.** The TLS proxy and lockouts: login/register limits and lockouts live
+in the SUT's memory, so a case that needs a clean budget restarts the SUT (RTC
+answers 503 for about 36 s after a web restart). The WebRTC media path is
+configured (UDP 50000 on `<net>.11`) but not exercised yet. The admin host
+(`dv-svc-admin`, 8080, `/health`) is off in the template; the smoke case probes
+`<net>.11:8080` and skips with the reason when nothing listens. State is per run:
+a new `out/<utc>/sut-state` every time, so the first-operator flow always starts
+from a bootstrap file.
 
 ## Control channel
 

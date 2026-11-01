@@ -5,7 +5,7 @@ prefix, lower case, top level or under [target]). Environment wins.
 
 Rig defaults (DVT_SUBNET, default 172.30.0.0/24): xlxd-ref .10,
 xlxd-sut .11, transcoder-ref .20, transcoder-sut .21, tester .30,
-allstar .40, urfd .70, mrefd .80.
+allstar .40, urfd .70, mrefd .80, web-proxy .90.
 
   DVT_SUBNET         rig subnet
   DVT_XLXD_REF       reference reflector address (xlxd-ref .10; with
@@ -27,6 +27,10 @@ allstar .40, urfd .70, mrefd .80.
   DVT_P25_SUT        P25 reflector under test (.61)
   DVT_URFD           URFd reflector (.70, profile urfd)
   DVT_MREFD          mrefd reflector (.80, profile mrefd; M17 only)
+  DVT_WEB_PROXY      TLS proxy in front of the sut's web service (.90, profile web)
+  DVT_WEB            on when the rig runs profile web (cases/web_fixtures.py)
+  DVT_WEB_URL        base URL of the web service (https://dvt-web); DVT_WEB_CA the CA file
+                     (default $DVT_OUT/web/ca.pem); operator login in $DVT_OUT/web/operator.env
   DVT_AMBED_ADDR     single transcoder for the wire case (no default)
   DVT_AMBED_PORT     transcoder control port (10100)
   DVT_TRANSCODER_FAKE  1 when transcoder-sut is the fake extended AMBEd (control socket
@@ -59,10 +63,10 @@ HOST_OFFSETS = {"xlxd_ref": 10, "xlxd_sut": 11, "xlxd_peer_sut": 12, "xlxd_peer_
                 "xlxd_peer2_sut": 14, "xlxd_peer2_ref": 15,
                 "ambed_ref": 20, "ambed_sut": 21,
                 "tester": 30, "allstar": 40, "nxdn_ref": 50, "nxdn_sut": 51,
-                "p25_ref": 60, "p25_sut": 61, "urfd": 70, "mrefd": 80}
+                "p25_ref": 60, "p25_sut": 61, "urfd": 70, "mrefd": 80, "web_proxy": 90}
 KEYS = ("subnet", "xlxd_ref", "xlxd_sut", "xlxd_peer_sut", "xlxd_peer_ref", "xlxd_peer2_sut", "xlxd_peer2_ref",
         "ambed_ref", "ambed_sut", "tester", "allstar",
-        "nxdn_ref", "nxdn_sut", "p25_ref", "p25_sut", "urfd", "mrefd", "ref_kind",
+        "nxdn_ref", "nxdn_sut", "p25_ref", "p25_sut", "urfd", "mrefd", "web_proxy", "ref_kind",
         "ambed_addr", "ambed_port", "ambed_stream_cap", "xlxd_bin", "xlxd_ref_bin", "reflector", "iax_secret",
         "sut_profile", "no_radio_id", "out")
 
@@ -86,6 +90,7 @@ class Target:
     p25_sut: str = ""
     urfd: str = ""
     mrefd: str = ""
+    web_proxy: str = ""
     ref_kind: str = "xlxd"
     ambed_addr: str = ""
     ambed_port: int = 10100
