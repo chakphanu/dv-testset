@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: MIT
+# Fake extended AMBEd transcoder (dvtest/fake_ambed.py, docs/ambed-fake.md):
+# the python of the tester base image plus the stdlib-only dvtest package,
+# passed in as the named build context "dvtest". Nothing is compiled; MAKE_JOBS
+# is accepted so the build args match the other images. It runs as
+# transcoder-sut when scripts/run.sh is given DVT_TRANSCODER_FAKE=1. Settings:
+# DVT_TRANSCODER_BIND (own address, set by rig/compose.yml), the JSON control
+# port 10190 and the data ports 10200-10299 on that address.
+ARG TESTER_BASE_IMAGE
+FROM ${TESTER_BASE_IMAGE}
+ARG MAKE_JOBS=4
+COPY --from=dvtest . /app/dvtest/
+ENV PYTHONPATH=/app PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+USER nobody
+ENTRYPOINT ["sh", "-c", "exec python -m dvtest.fake_ambed --bind \"$DVT_TRANSCODER_BIND\" --control-port 10190 \"$@\"", "fake-ambed"]

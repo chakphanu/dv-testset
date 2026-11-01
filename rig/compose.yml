@@ -49,6 +49,10 @@
 # replaces the build; run.sh adds an override with its argv and the config
 # files mounted read-only under /xlxd/.
 #
+# DVT_TRANSCODER_FAKE=1 (scripts/run.sh): transcoder-sut runs the image built from
+# Dockerfile.ambed-fake (service ambed-fake-build, build only) instead of
+# TRANSCODER_SUT_IMAGE; transcoder-ref stays the real image.
+#
 # Fixed addresses: xlxd-ref .10, xlxd-sut .11, transcoder-ref .20,
 # transcoder-sut .21, tester .30, allstar .40.
 
@@ -243,6 +247,23 @@ services:
     networks:
       rig: {ipv4_address: "${DVT_NET:-172.30.0}.21"}
 
+  # Build-only service: DVT_TRANSCODER_FAKE=1 (scripts/run.sh) builds this image
+  # and uses it as transcoder-sut (TRANSCODER_SUT_IMAGE). Its profile is never
+  # selected for "up", so it is never started; the limits stay set (run.sh
+  # checks the build-only profile too).
+  ambed-fake-build:
+    <<: *limits-small
+    profiles: [ambed-fake-build]
+    image: dvt-ambed-fake:local
+    build:
+      context: .
+      dockerfile: Dockerfile.ambed-fake
+      args:
+        <<: *build-jobs
+        TESTER_BASE_IMAGE: ${TESTER_BASE_IMAGE:-error-set-tester-base-image-see-env-example}
+      additional_contexts:
+        dvtest: ../dvtest
+
   tester:
     <<: *limits-tester
     profiles: [core]
@@ -323,6 +344,8 @@ services:
       DVT_SUT_NAME: ${DVT_SUT_NAME:-}
       # behaviour spec the system under test is held to (dvtest/specs/)
       DVT_SUT_PROFILE: ${DVT_SUT_PROFILE:-xlxd}
+      # 1 = transcoder-sut is the fake extended AMBEd (docs/ambed-fake.md; control <net>.21:10190)
+      DVT_TRANSCODER_FAKE: ${DVT_TRANSCODER_FAKE:-}
       # wire cases: transcoder under test when run inside the rig
       DVT_AMBED_ADDR: ${DVT_AMBED_ADDR:-${DVT_NET:-172.30.0}.21}
       # on when xlxd-sut has USRP endpoints (A/B -> allstar, C -> tester)

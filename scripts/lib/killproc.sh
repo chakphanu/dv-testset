@@ -14,8 +14,9 @@
 # Allow-list (anything else is "error refused", nothing runs):
 #   service xlxd-sut only; dv-edge-xlx, dv-edge-nxdn, dv-edge-p25 with KILL or
 #   USR1 (quiet restart: the edge saves its sessions, exits, the launcher
-#   respawns it). The launcher dv-router is never signalled: it has no handler
-#   and a stray signal kills the node.
+#   respawns it); dv-codec-ambed (the codec worker) with KILL only. The
+#   launcher dv-router is never signalled: it has no handler and a stray signal
+#   kills the node.
 # dvtest/control.py (KILL_PROC_ALLOWED) mirrors the table for the tester;
 # cases/unit/test_control.py checks that the two agree.
 #
@@ -29,7 +30,7 @@ dvt_killproc_allowed() {
   [ "$#" -eq 3 ] || return 1
   [ "$1" = xlxd-sut ] || return 1
   case "$2:$3" in
-    dv-edge-xlx:KILL|dv-edge-xlx:USR1|dv-edge-nxdn:KILL|dv-edge-nxdn:USR1|dv-edge-p25:KILL|dv-edge-p25:USR1) return 0 ;;
+    dv-edge-xlx:KILL|dv-edge-xlx:USR1|dv-edge-nxdn:KILL|dv-edge-nxdn:USR1|dv-edge-p25:KILL|dv-edge-p25:USR1|dv-codec-ambed:KILL) return 0 ;;
   esac
   return 1
 }

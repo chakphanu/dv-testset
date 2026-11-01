@@ -26,6 +26,7 @@ KILL_PROC_ALLOWED = {
     ("xlxd-sut", "dv-edge-xlx"): ("KILL", "USR1"),
     ("xlxd-sut", "dv-edge-nxdn"): ("KILL", "USR1"),
     ("xlxd-sut", "dv-edge-p25"): ("KILL", "USR1"),
+    ("xlxd-sut", "dv-codec-ambed"): ("KILL",),
 }
 
 

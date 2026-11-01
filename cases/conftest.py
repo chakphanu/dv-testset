@@ -20,6 +20,9 @@ from dvtest import target as target_mod  # noqa: E402
 from dvtest.control import RigControl  # noqa: E402
 from dvtest.proto import ambed  # noqa: E402
 
+# fixtures of the cross-mode cases against the fake AMBEd (docs/ambed-fake.md)
+from crossmode_fake import fake, fake_ctl  # noqa: E402,F401
+
 
 def pytest_addoption(parser):
     parser.addoption("--update-baseline", action="store_true",

@@ -89,6 +89,19 @@ them from `.local/compose.override.yml` (gitignored; template
 `rig/compose.override.example.yml`), which `run.sh` adds with `-f` when it
 exists.
 
+Fake transcoder: `DVT_TRANSCODER_FAKE=1 scripts/run.sh ...` makes `transcoder-sut`
+the fake extended AMBEd (`dvtest/fake_ambed.py`, `docs/ambed-fake.md`). `run.sh`
+builds `rig/Dockerfile.ambed-fake` through the compose service `ambed-fake-build`
+(profile `ambed-fake-build`: built on request, never started, limits set,
+`MAKE_JOBS` build arg) from `TESTER_BASE_IMAGE` plus the stdlib-only `dvtest`
+package, and sets `TRANSCODER_SUT_IMAGE` to `dvt-ambed-fake:local`.
+`transcoder-ref` stays `TRANSCODER_IMAGE` (xlxd-ref needs the real one), so the
+two never share `<net>.21`. The container listens on `DVT_TRANSCODER_BIND:10100`,
+the JSON control socket on `<net>.21:10190` (reachable from the tester) and
+serves stream data on 10200-10299. The tester gets `DVT_TRANSCODER_FAKE=1`;
+`cases/crossmode_fake.py` skips unless the fake answers `stats`. The `wire`
+cases are for a real transcoder, not for the fake.
+
 Run-time variables (not pins): `DVT_SUT_USRP`, `DVT_RUN_ID`,
 `DVT_UID`/`DVT_GID`, `DVT_AMBED_ADDR`, `DVT_START_DELAY`; see the header of
 `rig/compose.yml`. `dvtest/target.py` documents every `DVT_*` variable the
@@ -289,7 +302,7 @@ namespace (`docker run --pid container:<id>`, `dvtest.limits.docker_run_args()`
 caps, no network, only CAP_KILL) and walks `/proc/<pid>/comm`: a process is
 signalled only when its comm equals `<process>` exactly and it is not a zombie.
 Allow-list: `dv-edge-xlx`, `dv-edge-nxdn`, `dv-edge-p25` with `KILL` or `USR1` (quiet restart: the edge saves its sessions, exits and the
-launcher respawns it); the launcher `dv-router` is never signalled (no handler, a
+launcher respawns it) and the codec worker `dv-codec-ambed` with `KILL` only; the launcher `dv-router` is never signalled (no handler, a
 stray signal kills the node); anything else
 is `error refused`. `<id>.out` has `pid=<n>` per process and `t_kill=<epoch s>`
 (taken in the container right after the signals); `error 3` = no such process.

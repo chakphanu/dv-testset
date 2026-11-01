@@ -29,6 +29,8 @@ allstar .40, urfd .70, mrefd .80.
   DVT_MREFD          mrefd reflector (.80, profile mrefd; M17 only)
   DVT_AMBED_ADDR     single transcoder for the wire case (no default)
   DVT_AMBED_PORT     transcoder control port (10100)
+  DVT_TRANSCODER_FAKE  1 when transcoder-sut is the fake extended AMBEd (control socket
+                     <ambed_sut>:10190, dvtest/fake_ctl.py; scripts/run.sh sets it)
   DVT_AMBED_STREAM_CAP  optional stream limit the wire case checks
   DVT_XLXD_BIN       local xlxd binary for the netns case (no default)
   DVT_XLXD_REF_BIN   optional reference xlxd binary for the netns case

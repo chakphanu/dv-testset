@@ -22,6 +22,7 @@ rig (`rig/`; the service names `xlxd-ref` / `xlxd-sut` are historical).
 | Transcoder conformance | `DVT_AMBED_ADDR=<ip> python3 -m pytest -m wire` | a running transcoder (or `TRANSCODER_IMAGE` + optional `DVT_TRANSCODER_ENV`/`DVT_TRANSCODER_ARGS`) |
 | xlxd vs fake transcoder/USRP peer | `scripts/build-xlxd-netns.sh`, then `DVT_XLXD_BIN=<path> python3 -m pytest -m netns` | `unshare -rn` (user namespaces) |
 | Full rig | `scripts/run.sh -m rig` | docker, `TRANSCODER_IMAGE` in `.env` |
+| Rig, byte-exact cross-mode (DV-Router) | `DVT_TRANSCODER_FAKE=1 DVT_SUT_PROFILE=dvrouter scripts/run.sh -m crossmode --capture -- cases/test_crossmode_exact.py cases/test_crossmode_failure.py` | as above; transcoder-sut becomes the fake (`docs/ambed-fake.md`) |
 | Rig + AllStarLink | `scripts/run.sh -m "rig or allstar" --profile allstar` | as above, `scripts/gen-local.sh` once |
 
 First time: `scripts/pre-fetch-xlxd.sh`, `scripts/pre-fetch-codec2.sh`,
@@ -66,7 +67,8 @@ and hashes; never publish raw captures.
 
 - Build packets only through `dvtest/proto/*` (one module per protocol; the
   AMBEd transcoder protocol, including `FakeAmbed`, lives in
-  `dvtest/proto/ambed.py`). Add a round-trip test in `cases/unit/` for any
+  `dvtest/proto/ambed.py`; the extended-protocol fake with the bit-exact transform
+  is `dvtest/fake_ambed.py`, see `docs/ambed-fake.md`). Add a round-trip test in `cases/unit/` for any
   new encoder/parser.
 - Inputs come from `dvtest/audio/signals.py` (deterministic tones and PRNG
   frames). Never commit audio or bitstreams (`*.pcm *.bin *.wav *.raw

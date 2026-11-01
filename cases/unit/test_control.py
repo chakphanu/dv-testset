@@ -20,7 +20,7 @@ pytestmark = pytest.mark.unit
 LIB = Path(__file__).resolve().parents[2] / "scripts" / "lib" / "killproc.sh"
 
 SERVICES = ["xlxd-sut", "xlxd-ref", "tester", "transcoder-sut", "allstar", "XLXD-SUT", "", "xlxd-sut ", "*"]
-PROCESSES = ["dv-edge-xlx", "dv-edge-nxdn", "dv-edge-p25", "dv-router", "dv-edge-dextra", "dv-edge-*", "dv-edge",
+PROCESSES = ["dv-edge-xlx", "dv-edge-nxdn", "dv-edge-p25", "dv-router", "dv-codec-ambed", "dv-codec", "dv-codec-ambed2", "dv-codec-*", "dv-edge-dextra", "dv-edge-*", "dv-edge",
              "dv-router2", "DV-ROUTER", "xlxd", "sh", "", "dv-edge-xlx;id", "../dv-router", "-1", "1"]
 SIGNALS = ["KILL", "USR1", "TERM", "SIGKILL", "kill", "9", "HUP", "USR2", "INT", "STOP", "", "-9", "KILL;id"]
 
@@ -44,7 +44,12 @@ def test_python_table():
         assert not control.kill_proc_allowed("xlxd-sut", "dv-router", sig)      # the launcher is never signalled
     assert not control.kill_proc_allowed("xlxd-sut", "dv-edge-xlx", "TERM")
     assert not control.kill_proc_allowed("xlxd-ref", "dv-edge-xlx", "KILL")
-    assert sum(len(v) for v in control.KILL_PROC_ALLOWED.values()) == 6
+    # the codec worker: KILL only (never the launcher)
+    assert control.kill_proc_allowed("xlxd-sut", "dv-codec-ambed", "KILL")
+    for sig in ("USR1", "TERM", "HUP", "INT", "STOP"):
+        assert not control.kill_proc_allowed("xlxd-sut", "dv-codec-ambed", sig)
+    assert not control.kill_proc_allowed("xlxd-ref", "dv-codec-ambed", "KILL")
+    assert sum(len(v) for v in control.KILL_PROC_ALLOWED.values()) == 7
     assert not any(proc == "dv-router" for _svc, proc in control.KILL_PROC_ALLOWED)
 
 
@@ -64,7 +69,7 @@ def test_bash_and_python_agree_on_every_combination():
     allowed_bash = {combos[int(i)] for v, i in verdicts if v == "1"}
     allowed_py = {c for c in combos if control.kill_proc_allowed(*c)}
     assert allowed_bash == allowed_py
-    assert len(allowed_py) == 6
+    assert len(allowed_py) == 7
     assert not any(p == "dv-router" for _s, p, _g in allowed_bash)
 
 
@@ -85,6 +90,7 @@ def test_bash_allowed_needs_exactly_three_words():
     ("kill-proc xlxd-sut dv-edge-xlx USR1", "xlxd-sut dv-edge-xlx USR1"),
     ("kill-proc xlxd-sut dv-edge-nxdn USR1", "xlxd-sut dv-edge-nxdn USR1"),
     ("kill-proc xlxd-sut dv-edge-p25 USR1", "xlxd-sut dv-edge-p25 USR1"),
+    ("kill-proc xlxd-sut dv-codec-ambed KILL", "xlxd-sut dv-codec-ambed KILL"),
 ])
 def test_parse_accepts(line, out):
     run = bash('dvt_killproc_parse "$1"', line)
@@ -96,6 +102,10 @@ def test_parse_accepts(line, out):
     "kill-proc xlxd-sut dv-router KILL",              # the launcher is never signalled at all
     "kill-proc xlxd-sut dv-router USR1",
     "kill-proc xlxd-sut dv-router TERM",
+    "kill-proc xlxd-sut dv-codec-ambed TERM",
+    "kill-proc xlxd-sut dv-codec-ambed USR1",
+    "kill-proc xlxd-ref dv-codec-ambed KILL",
+    "kill-proc xlxd-sut dv-codec KILL",
     "kill-proc xlxd-sut dv-edge-xlx TERM",
     "kill-proc xlxd-sut dv-edge-xlx USR2",
     "kill-proc xlxd-ref dv-edge-xlx USR1",

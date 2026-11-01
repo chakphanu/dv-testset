@@ -61,6 +61,14 @@
 # into .local/compose.override.yml (COMPOSE_OVERRIDE), added with -f if present.
 # Results: out/<utc>/ (pytest junit + log, compose ps/images, one log per service).
 #
+# DVT_TRANSCODER_FAKE=1: transcoder-sut is the fake extended AMBEd
+# (dvtest/fake_ambed.py, docs/ambed-fake.md) instead of a real transcoder. run.sh
+# builds rig/Dockerfile.ambed-fake (compose service ambed-fake-build, build only,
+# never started) and sets TRANSCODER_SUT_IMAGE to it; transcoder-ref stays
+# TRANSCODER_IMAGE (xlxd-ref needs the real one). The tester sees
+# DVT_TRANSCODER_FAKE=1 and reaches the JSON control socket at <net>.21:10190
+# (cases/crossmode_fake.py); the wire cases (-m wire) are not meant for it.
+#
 # DVT_SUT_LAUNCH selects how a prebuilt XLXD_SUT_IMAGE starts: direct (default,
 # its own entrypoint, argv "XLX999 OWN_IP TRANSCODER_IP"), import (through the
 # dv-xlxd-import shim) or native (DV-Router with its own TOML). native needs
@@ -125,7 +133,7 @@ while [ "$#" -gt 0 ]; do
     --netem) [ "$#" -ge 2 ] || { echo "run.sh: --netem needs a preset or netem arguments" >&2; exit 2; }; netem_cli="$2"; netem_set=1; shift 2 ;;
     --down) down_only=1; shift ;;
     --) shift; break ;;
-    -h|--help) sed -n '3,103p' "$0"; exit 0 ;;
+    -h|--help) sed -n '3,111p' "$0"; exit 0 ;;
     *) echo "run.sh: unknown argument '$1' (see --help)" >&2; exit 2 ;;
   esac
 done
@@ -179,6 +187,14 @@ case "${DVT_SUT_LAUNCH:-direct}" in
             || { echo "run.sh: DVT_SUT_CONFIG '$DVT_SUT_CONFIG' is not a readable file" >&2; exit 2; } ;;
   *) echo "run.sh: DVT_SUT_LAUNCH must be direct, import or native" >&2; exit 2 ;;
 esac
+# DVT_TRANSCODER_FAKE=1: transcoder-sut runs the fake extended AMBEd (header)
+case "${DVT_TRANSCODER_FAKE:-}" in
+  ''|1) ;;
+  *) echo "run.sh: DVT_TRANSCODER_FAKE must be 1 or unset" >&2; exit 2 ;;
+esac
+if [ "${DVT_TRANSCODER_FAKE:-}" = 1 ]; then
+  export DVT_TRANSCODER_FAKE TRANSCODER_SUT_IMAGE="dvt-ambed-fake:local"
+fi
 instance="${DVT_INSTANCE:-0}"
 [[ "$instance" =~ ^([0-9]|[1-9][0-9])$ ]] || { echo "run.sh: DVT_INSTANCE must be 0..99" >&2; exit 2; }
 lock=".cache/rig.lock"
@@ -518,6 +534,8 @@ compose=(docker compose -p "${COMPOSE_PROJECT_NAME:-dvt}" "${compose_files[@]}" 
 # Never start an uncapped service: the base file, the prebuilt-image override
 # and .local/compose.override.yml all have to leave mem/swap/cpus/pids set.
 "${compose[@]}" config --format json | python3 -m dvtest.limits || exit 4
+# the build-only service of the fake transcoder is never part of "up", but it keeps its limits too
+"${compose[@]}" --profile ambed-fake-build config --format json | python3 -m dvtest.limits || exit 4
 
 watcher_pid=""
 stats_pid=""
@@ -693,6 +711,10 @@ cat ".cache/xlxd/${XLXD_REF_DIR:-ref}.fetched" ".cache/xlxd/${XLXD_SUT_DIR:-sut}
   # prebuilt reflector images are used as they are, never built over
   mapfile -t to_build < <("${compose[@]}" config --services | grep -vxF -f <(printf '%s\n' "${prebuilt[@]}" "-"))
   "${compose[@]}" build "${to_build[@]}"
+  # DVT_TRANSCODER_FAKE=1: build-only service, built on request and never started
+  if [ "${DVT_TRANSCODER_FAKE:-}" = 1 ]; then
+    "${compose[@]}" --profile ambed-fake-build build ambed-fake-build
+  fi
 )
 # everything was built above; up never builds (a prebuilt image is never replaced)
 "${compose[@]}" up -d --no-build
