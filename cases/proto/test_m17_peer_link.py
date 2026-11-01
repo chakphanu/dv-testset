@@ -21,6 +21,7 @@ case of this module. P-M17-44 (an unconfigured CONN gets NACK 4 B) stays in
 test_m17.py; P-M17-58 / 59 / 60 extend it one factor at a time.
 """
 import contextlib
+import os
 import threading
 import time
 
@@ -696,13 +697,14 @@ def test_m17_peer_disc_removes_all_modules(rig, m17_peers):
         assert r["control_to_peer"] == list(mods), "%s: before the DISC the peer got traffic of %s" % (side, r["control_to_peer"])
         assert all(r["control_from_peer"].values()), "%s: before the DISC the peer's streams were relayed %s" % (side, r["control_from_peer"])
         assert r["streams_to_peer_after"] == 0, "%s: %d stream datagrams to a removed peer" % (side, r["streams_to_peer_after"])
-        # DV-Router P26k: the sut still answers a peer DISC with a bare 4 B DISC (a deviation, mrefd sends
-        # nothing to a peer); accepted for the sut until P26k lands, then tighten to "nothing"
-        tolerated = {"DISC4"} if side == "sut" else set()
+        # DV-Router P26k (image from 4225a53 on): a peer's DISC gets NO reply, as in mrefd; the 4 B DISC
+        # answer is for clients only. DVT_SUT_PRE_P26K=1 tolerates the bare 4 B DISC of older images
+        # (Gate A image 1fda8c1).
+        tolerated = {"DISC4"} if side == "sut" and os.environ.get("DVT_SUT_PRE_P26K") == "1" else set()
         assert not set(r["replies"]) & ({"DISC4", "DISC10", "NACK4", "ACKN4", "ACKN37"} - tolerated), \
             "%s: reply to a peer DISC: %s" % (side, r["replies"])
         if set(r["replies"]) & tolerated:
-            print("P-M17-53 %s: bare 4 B DISC answered to a peer DISC (tolerated, P26k)" % side)
+            print("P-M17-53 %s: bare 4 B DISC answered to a peer DISC (tolerated: DVT_SUT_PRE_P26K=1)" % side)
         assert not any(r["heard_after"].values()), "%s: stream of a removed peer relayed: %s" % (side, r["heard_after"])
 
 

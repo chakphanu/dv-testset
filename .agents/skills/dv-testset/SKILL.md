@@ -1,13 +1,18 @@
 ---
 name: dv-testset
-description: Run, extend or debug the dv-testset black-box tests for digital-voice reflectors and transcoders (xlxd, ambed/AMBEd-compatible transcoders, USRP/AllStarLink). Use when asked to test a reflector or transcoder build, add a protocol client or test case, update baselines, or read rig results in out/.
+description: Run, extend or debug the dv-testset black-box tests for digital-voice protocols and the servers that speak them (reflectors, transcoders, gateways), first of all the DV-Router project, with xlxd, URFd and mrefd as references. Use when asked to test a server build, add a protocol client or test case, update baselines, or read rig results in out/.
 ---
 
 # dv-testset
 
 Black-box tests: every case talks to the system under test over UDP only, so
-the same cases run against any implementation. Python 3.11+, stdlib-only
-library (`dvtest/`), pytest cases (`cases/`), docker rig (`rig/`).
+the same cases run against any implementation. The focus is the protocols and
+the servers that speak them, first of all DV-Router; xlxd, URFd and mrefd are
+references to calibrate against, not the goal: write a case per protocol
+obligation (`docs/protocols/`) and assert on the system under test through its
+profile spec (`dvtest/specs/`), using the references only where they agree.
+Python 3.11+, stdlib-only library (`dvtest/`), pytest cases (`cases/`), docker
+rig (`rig/`; the service names `xlxd-ref` / `xlxd-sut` are historical).
 
 ## Pick the level
 

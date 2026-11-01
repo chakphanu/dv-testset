@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "dvtest"
 version = "0.1.0"
-description = "Black-box test clients and rig for digital-voice reflectors and transcoders"
+description = "Black-box test clients and rig for digital-voice protocols and the servers that speak them"
 license = "MIT"
 requires-python = ">=3.11"
 dependencies = []

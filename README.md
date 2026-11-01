@@ -1,8 +1,12 @@
 # dv-testset
 
-Black-box tests for digital-voice reflectors and transcoders (xlxd, ambed and
-compatible implementations). The tests talk to the system under test only over
-the network, so the same cases run against any build or implementation.
+Black-box tests for digital-voice protocols and for the servers that speak
+them: reflectors, transcoders and gateways. The first target is the DV-Router
+project; xlxd, URFd and mrefd are reference implementations the cases are
+calibrated against, not the goal. Cases are written per protocol obligation
+(`docs/protocols/`) and judged on the system under test through its profile
+(`dvtest/specs/`). The tests talk to the system under test only over the
+network, so the same cases run against any build or implementation.
 
 Nothing third-party is shipped here: sources and inputs are fetched by
 `scripts/pre-fetch-*.sh` into `.cache/` (see NOTICE).
@@ -12,8 +16,10 @@ Nothing third-party is shipped here: sources and inputs are fetched by
 - `dvtest/` - Python clients (stdlib only): AMBEd transcoder protocol,
   DExtra, MMDVM/DMR, M17, USRP, IAX2, test signals and scoring.
 - `cases/` - pytest cases, selected by marker.
-- `rig/` - docker compose rig: reference xlxd, xlxd under test, transcoder,
-  tester, optional AllStarLink node.
+- `rig/` - docker compose rig: a reference reflector, the system under test,
+  a transcoder, the tester and optional peers (AllStarLink, NXDN, P25, URFd,
+  mrefd). The service names `xlxd-ref` and `xlxd-sut` are historical and
+  stand for the reference and the system under test of any kind.
 - `scripts/` - fetch, local setup, run and PII check scripts.
 - `baselines/` - expected frame hashes and numbers per xlxd ref.
 
