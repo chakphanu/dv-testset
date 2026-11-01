@@ -8,8 +8,11 @@ skips with the reason otherwise (cases/web_fixtures.py).
 The route tables are dvtest/api_web.py and dvtest/api_admin.py; the probes never
 act (invalid bodies, missing targets, throwaway accounts for anything that ends a
 session), and the matrix judges the AUTHORIZATION class only (dvtest/api_probe.py).
-What the specs leave open is observed and recorded with web.finding(), never
-asserted. Results of the matrix go to $DVT_OUT/web-api-matrix.jsonl (one line per
+Statuses, guard order and headers that DV-Router documents (since API4, DV-Router
+2fab0f8: docs/api/README.md, openapi-web.yaml, web.md "Guard order", admin.md) are
+asserted, as are the declared success statuses of the real successful calls
+(api_web.Op.success). What the specs leave open is observed and recorded with
+web.finding(), never asserted. Results of the matrix go to $DVT_OUT/web-api-matrix.jsonl (one line per
 probe: operation, role, status, verdict) for docs/web-api-cases.md.
 
 Order matters: the matrix and the read cases first, the cases that spend login or
@@ -21,9 +24,11 @@ register budgets or restart the web service LAST (limits are in the SUT's memory
      test_prefix_floor_*, test_method_*  unknown paths under a prefix, 405, the RFC 7807 error shape
   b  test_removed_*                     the 55 moved templates answer 404; the 4 RTC URLs still work
   d  test_own_account_*                 login, CSRF, Origin, password, own sessions, TOTP rules
-  g  test_xss_*                         reflected and stored fields: JSON type, nosniff, CSP of pages
+     test_declared_success_*            invite 201, register 201, logout 204, reset 201, deletes 200
+  g  test_xss_*                       reflected and stored fields: JSON type, nosniff, CSP of pages
   h  test_admin_*                       the admin API: matrix, mounts, wrong Origin, cookies, /health /ready
-  f  test_limits_*                      MS9 login/register budgets, lockout; restarts dv-svc-web, LAST
+  f  test_limits_*                      MS9 login/register budgets, lockout, LOGIN1 (a missing code is a
+                                        challenge, a wrong code a guess); restarts dv-svc-web, LAST
 """
 import json
 import os
@@ -36,6 +41,7 @@ import pytest
 
 from dvtest import admin as admin_mod
 from dvtest import api_admin, api_probe, api_web, web
+from web_fixtures import make_operator
 
 pytestmark = [pytest.mark.rig, pytest.mark.web]
 
@@ -101,6 +107,37 @@ def headers_ok(res, what):
     assert not HTML.search(res.headers.get("content-type", "")), "%s: HTML content type" % what
 
 
+PUBLIC_HEADERS = {"x-frame-options": "DENY", "cross-origin-opener-policy": "same-origin",
+                  "referrer-policy": "no-referrer"}
+
+
+def public_security_headers(res, what):
+    """The security headers web.md "Public API" lists for every public reply since API4. A difference is a
+    finding (they were not checked before 13e7e70), not an assertion."""
+    for name, value in PUBLIC_HEADERS.items():
+        if res.headers.get(name, "").lower() != value.lower():
+            web.finding("%s: %s is %r, web.md (Public API) documents %r" % (what, name, res.headers.get(name), value))
+    perm = res.headers.get("permissions-policy", "")
+    if "microphone=()" not in perm or "camera=()" not in perm:
+        web.finding("%s: Permissions-Policy %r, web.md (Public API) documents microphone=(), camera=()" % (what, perm))
+
+
+def success_check(kind, op, role, res):
+    """A 2xx answer of a probe must be the operation's declared success status (API4). The matrix judges the
+    authorization class only, so a different 2xx is a finding there, not a failure."""
+    if res is not None and 200 <= res.status < 300 and res.status != op.success:
+        web.finding("%s %s as %s: HTTP %d, the spec declares %d for success" % (kind, op_id(op), role, res.status,
+                                                                                 op.success))
+
+
+def declared(method, path, ops=None):
+    """The declared success status of an operation of the tables (api_web / api_admin)."""
+    for op in ops or (api_web.WEB_OPS + api_web.WEB_ROOT_OPS + api_admin.ADMIN_OPS):
+        if op.key == (method, path):
+            return op.success
+    raise KeyError((method, path))
+
+
 # ------------------------------------------------------------------ fixtures
 
 @pytest.fixture(scope="module")
@@ -136,10 +173,9 @@ def test_public_state_and_lastheard_contract(anon):
             "%s: cache-control %r" % (what, resp.headers.get("cache-control"))
         headers_ok(resp, what)
         assert resp.headers.get("etag", "").startswith("W/"), what
-        csp = resp.headers.get("content-security-policy")
-        if csp is None:
-            web.finding("GET %s: no Content-Security-Policy on the JSON answer (documented: security headers on "
-                        "every reply; the CSP is documented for static pages)" % what)
+        # documented by API4 (web.md "Public API"): CSP on static files only, not on API replies
+        assert resp.headers.get("content-security-policy") is None, "%s: CSP on an API reply" % what
+        public_security_headers(resp, "GET " + what)
     state = anon.get("/api/v1/public/state", expect=200).json()
     assert {"clients", "info", "live", "now_ms", "reflector", "rooms", "version"} <= set(state), sorted(state)
     heard = anon.get("/api/v1/public/lastheard", expect=200).json()
@@ -185,9 +221,12 @@ def test_public_methods_and_cors_on_errors(anon):
     headers_ok(unknown, "public 404")
     opt = anon.request("OPTIONS", "/api/v1/public/state", headers={
         "Access-Control-Request-Method": "GET", "Origin": "https://third-party.example"})
-    assert opt.status < 500, "OPTIONS preflight: HTTP %d" % opt.status
-    web.finding("OPTIONS /api/v1/public/state (CORS preflight): HTTP %d, ACAO %r; the spec lists only GET and HEAD"
-                % (opt.status, opt.headers.get("access-control-allow-origin")))
+    # documented by API4 (web.md "Public API", CORS): no preflight is served; OPTIONS is 405 with the same
+    # allow-origin header and no allow-methods / allow-headers
+    assert opt.status == 405, "OPTIONS /api/v1/public/state (CORS preflight): HTTP %d, documented 405" % opt.status
+    assert opt.headers.get("access-control-allow-origin") == "*", opt.headers.get("access-control-allow-origin")
+    assert "access-control-allow-methods" not in opt.headers and "access-control-allow-headers" not in opt.headers, \
+        "OPTIONS: preflight headers, documented: none"
     # no credentials involved: a simple cross-origin GET works for a third-party page
     cross = anon.get("/api/v1/public/state", headers={"Origin": "https://third-party.example"}, expect=200)
     assert cross.headers.get("access-control-allow-origin") == "*"
@@ -247,7 +286,23 @@ def test_public_events_resume_and_topics(anon):
 
 # ================================================================ (a) role matrix
 
-WEB_MATRIX = [(op, role) for op in api_web.WEB_OPS for role in api_probe.WEB_ROLES]
+WEB_MATRIX = [(op, role) for op in api_web.WEB_OPS + api_web.WEB_ROOT_OPS for role in api_probe.WEB_ROLES]
+
+# Answers of matrix probes that DV-Router documents exactly since API4 (asserted on top of the class):
+# (method, path) -> {role: (status, problem code or None)}
+DOCUMENTED_PROBE_ANSWERS = {
+    # web.md Account API: offer is 400 for users; an enrolled operator without X-DV-TOTP gets 403 totp_invalid
+    ("POST", "/api/v1/auth/session/totp"): {"user": (400, None), "operator": (403, "totp_invalid")},
+    # web.md "Guard order": Origin/JSON (403 csrf) before the audience floor and the handler; README UI1:
+    # force checks the media type of a nonempty body
+    ("POST", "/api/v1/operator/ids/sync/force"): {"user": (403, "csrf"), "operator": (403, "csrf")},
+    # web.md RTC: unknown and foreign circuits both get 403 forbidden
+    ("POST", "/api/v1/rtc/close"): {"user": (403, "forbidden"), "operator": (403, "forbidden")},
+    ("POST", "/api/v1/rtc/alive"): {"user": (403, "forbidden"), "operator": (403, "forbidden")},
+}
+if os.environ.get("DVT_TURN") != "on":
+    # web.md RTC: empty web.turn_urls is 404 before method, Origin, cookie or circuit checks (anonymous too)
+    DOCUMENTED_PROBE_ANSWERS[("GET", "/api/v1/rtc/ice")] = {r: (404, "not_found") for r in api_probe.WEB_ROLES}
 
 
 @pytest.mark.parametrize("op,role", WEB_MATRIX, ids=["%s | %s" % (op_id(op), role) for op, role in WEB_MATRIX])
@@ -274,13 +329,15 @@ def test_prefix_minimum_role(op, role, anon, rx_user, tx_user, web_operator, web
     ok, why = api_probe.judge(op, expect, res)
     record("web", op_id(op), role, res, "pass" if ok else "fail", why)
     assert ok, "%s as %s: %s (expected class %s)" % (op_id(op), role, why, expect)
-    if expect == "403" and res.code() == "csrf":
-        web.finding("%s as user: 403 `csrf` for a request with a text/plain body, before the role floor "
-                    "(documented: the prefix floor is checked before dispatch; JSON rules apply to the handler)"
-                    % op_id(op))
-    if res.status == 403 and expect == "allow" and res.code() != "forbidden":
-        web.finding("%s as %s: 403 %s although the role is at or above the floor (a guard after the role check)"
-                    % (op_id(op), role, res.code()))
+    documented = DOCUMENTED_PROBE_ANSWERS.get(op.key, {}).get(role)
+    if documented:
+        status, code = documented
+        assert res.status == status and (code is None or res.code() == code), \
+            "%s as %s: %s, documented by API4: HTTP %d %s" % (op_id(op), role, res.brief(), status, code or "")
+    elif res.status == 403 and expect == "allow" and res.code() != "forbidden":
+        web.finding("%s as %s: 403 %s although the role is at or above the floor (a guard the documents do not "
+                    "list for this probe)" % (op_id(op), role, res.code()))
+    success_check("web", op, role, res)
 
 
 def test_head_aliases_match_get(anon, web_operator):
@@ -300,26 +357,30 @@ PROBLEM_OPTIONAL = {"errors", "retry_after", "current_etag"}
 
 
 def test_prefix_floor_covers_unknown_paths(anon, rx_user, web_operator):
-    """api README: "the web router checks the prefix floor before dispatch"; web.md: "unclassified API paths
-    return 404". A path no handler serves must never answer 2xx or 5xx; which of 401 / 403 / 404 a role gets is
-    recorded as a finding when it is not the floor's answer."""
-    for prefix, floor in (("user", (401, 404, 404)), ("operator", (401, 403, 404))):
+    """Documented by API4 (README "API3 audience paths", web.md "Account and operator API"): the router
+    classifies first; an unclassified path under /user or /operator is 404 for every caller, anonymous
+    included, before authentication; API route misses and missing targets both use 404 problem+json
+    `not_found` (the two cannot be told apart, by design)."""
+    for prefix in ("user", "operator"):
         path = "/api/v1/%s/dvt-no-such-route" % prefix
-        got = tuple(c.get(path).status for c in (anon, rx_user.client, web_operator))
-        assert set(got) <= {401, 403, 404}, "GET %s as anonymous/user/operator: %s" % (path, got)
-        assert got[2] == 404, "GET %s as operator: HTTP %d, documented 404" % (path, got[2])
-        if got != floor:
-            web.finding("GET %s as anonymous/user/operator: %s; the floor-first reading of the API3 README gives %s "
-                        "(web.md: unclassified API paths return 404)" % (path, got, floor))
+        answers = [c.get(path) for c in (anon, rx_user.client, web_operator)]
+        got = tuple(r.status for r in answers)
+        assert got == (404, 404, 404), "GET %s as anonymous/user/operator: %s, documented 404 for every caller" % (
+            path, got)
+        for resp in answers:
+            res = api_probe.Result(resp.status, resp.headers, resp.body)
+            if not (res.is_problem() and res.code() == "not_found"):
+                web.finding("GET %s: 404 %s; web.md documents route misses as 404 problem+json not_found"
+                            % (path, res.brief()))
     for prefix in ("public", "auth", "rtc"):
         path = "/api/v1/%s/dvt-no-such-route" % prefix
         resp = anon.get(path)
         assert resp.status == 404, "%s: HTTP %d" % (path, resp.status)
     resp = anon.get("/api/v1/dvt-no-such-prefix/x")
+    res = api_probe.Result(resp.status, resp.headers, resp.body)
     assert resp.status == 404, "unclassified API path: HTTP %d, documented 404" % resp.status
-    web.finding("unknown API path /api/v1/dvt-no-such-prefix/x: HTTP 404, content type %r: a missing route and a "
-                "handler's own 'no such target' 404 look alike (both problem+json, code not_found)"
-                % resp.headers.get("content-type"))
+    assert res.is_problem() and res.code() == "not_found", \
+        "unclassified API path: %s, documented 404 problem+json not_found (same as a missing target)" % res.brief()
 
 
 def test_method_not_allowed_and_problem_shape(anon, rx_user, web_operator):
@@ -446,6 +507,9 @@ def test_unchanged_rtc_urls_still_work(rx_user, anon):
         res = api_probe.send(rx_user.client, op)
         ok, why = api_probe.judge(op, "allow", res)
         assert ok, "%s as a signed-in user: %s" % (op_id(op), why)
+        if op.path in ("/api/v1/rtc/close", "/api/v1/rtc/alive"):
+            # documented by API4 (web.md RTC): an unknown circuit is the same 403 forbidden as a foreign one
+            assert (res.status, res.code()) == (403, "forbidden"), "%s, unknown circuit: %s" % (op_id(op), res.brief())
 
 
 def test_services_do_not_serve_each_others_paths(anon, web_url_admin, web_ca):
@@ -486,22 +550,22 @@ def test_own_account_csrf_origin_and_content_type(one_user):
         if api_probe.Result(resp.status, resp.headers, resp.body).code() != "csrf":
             web.finding("DELETE own session, %s: 403 code %r, documented `csrf`" % (
                 what, api_probe.Result(resp.status, resp.headers, resp.body).code()))
-    # Origin: a foreign one is refused (the status is not specified for writes), none at all too
+    # Origin: a foreign one is refused with 403 csrf (web.md "Guard order", API4), none at all is refused too
     for origin, what in (("https://evil.example", "foreign Origin"), ("https://dvt-web.evil.example", "look-alike Origin")):
         resp = cli.request("DELETE", path, headers={"Origin": origin})
-        assert resp.status in (403, 404), "%s: HTTP %d, expected a refusal" % (what, resp.status)
-        if resp.status != 403:
-            web.finding("unsafe request with a %s: HTTP %d (documented: same-origin required; no status given)"
-                        % (what, resp.status))
+        assert resp.status == 403, "%s: HTTP %d, documented 403 csrf (Origin/JSON write guard)" % (what, resp.status)
+        code = api_probe.Result(resp.status, resp.headers, resp.body).code()
+        if code != "csrf":
+            web.finding("unsafe request with a %s: 403 code %r, web.md (Guard order) documents `csrf`" % (what, code))
     resp = cli.request("DELETE", path, headers={"Origin": None})
     assert resp.status in (403, 404), "no Origin on an unsafe request: HTTP %d" % resp.status
     resp = cli.request("DELETE", path, headers={"Sec-Fetch-Site": "cross-site"})
     assert resp.status in (403, 404), "Sec-Fetch-Site cross-site: HTTP %d" % resp.status
     resp = cli.request("POST", "/api/v1/auth/password", raw_body=b"x", headers={"Content-Type": "text/plain"})
-    assert resp.status in (400, 403, 415, 422), "non-JSON content type on a JSON write: HTTP %d" % resp.status
-    if resp.status == 403:
-        web.finding("unsafe request with Content-Type text/plain: HTTP 403 code %r (documented: JSON required; no "
-                    "status given)" % api_probe.Result(resp.status, resp.headers, resp.body).code())
+    # documented by API4 (web.md "Guard order"): a nonempty non-JSON body of a write is 403 csrf
+    code = api_probe.Result(resp.status, resp.headers, resp.body).code()
+    assert (resp.status, code) == (403, "csrf"), \
+        "non-JSON content type on a JSON write: HTTP %d %s, documented 403 csrf" % (resp.status, code)
     resp = cli.request("POST", "/api/v1/auth/password", raw_body=b"{not json", headers={"Content-Type": "application/json"})
     assert resp.status == 400, "malformed JSON: HTTP %d, documented 400" % resp.status
     # the own session is still alive after all those refusals
@@ -524,10 +588,12 @@ def test_own_account_sessions_and_password(web_operator, web_user):
     assert all(isinstance(i, str) and i for i in ids) and len(set(ids)) == len(ids), ids
     # revoke one login by id: the other one keeps working
     victim = None
+    revoke_one = declared("DELETE", "/api/v1/user/me/sessions/{id}")              # 200 (API4)
     for sid in ids:
         probe = second.request("DELETE", "/api/v1/user/me/sessions/%s" % sid)
-        assert probe.status in (200, 204, 404), "DELETE session by id: HTTP %d" % probe.status
-        if probe.status in (200, 204):
+        assert probe.status in (revoke_one, 404), "DELETE session by id: HTTP %d, declared %d" % (
+            probe.status, revoke_one)
+        if probe.status == revoke_one:
             victim = sid
             break
     assert victim, "no login could be revoked by id"
@@ -542,7 +608,8 @@ def test_own_account_sessions_and_password(web_operator, web_user):
     short = keeper.post("/api/v1/auth/password", {"current_password": user.password, "new_password": "short"})
     assert short.status in (400, 422), "password shorter than 8 bytes: HTTP %d, documented 8-1024 bytes" % short.status
     ok = keeper.post("/api/v1/auth/password", {"current_password": user.password, "new_password": new_password})
-    assert ok.status in (200, 204), "password change: HTTP %d %s" % (ok.status, keeper.scrub(ok.text())[:100])
+    assert ok.status == declared("POST", "/api/v1/auth/password"), "password change: HTTP %d %s, declared %d" % (
+        ok.status, keeper.scrub(ok.text())[:100], declared("POST", "/api/v1/auth/password"))
     assert keeper.request("GET", "/api/v1/user/me").status == 401, "a password change revokes the logins"
     anon = web.WebClient(keeper.base_url)
     anon._ctx = keeper._ctx
@@ -552,7 +619,8 @@ def test_own_account_sessions_and_password(web_operator, web_user):
     assert again["callsign"] == user.callsign
     # revoke all own logins
     gone = anon.request("DELETE", "/api/v1/user/me/sessions")
-    assert gone.status in (200, 204), "revoke all own logins: HTTP %d" % gone.status
+    assert gone.status == declared("DELETE", "/api/v1/user/me/sessions"), "revoke all own logins: HTTP %d, declared %d" % (
+        gone.status, declared("DELETE", "/api/v1/user/me/sessions"))
     assert anon.request("GET", "/api/v1/user/me").status == 401
 
 
@@ -565,6 +633,8 @@ def test_operator_totp_rules(web_operator2, web_client):
     resp = anon.request("POST", "/api/v1/auth/session",
                         json_body={"callsign": op2.callsign, "password": op2.password})
     assert resp.status == 401, "operator without a TOTP code: HTTP %d, documented 401" % resp.status
+    code = api_probe.Result(resp.status, resp.headers, resp.body).code()
+    assert code == "totp_required", "operator without a TOTP code: code %r, documented totp_required (LOGIN1)" % code
     assert "set-cookie" not in resp.headers
     code = auth.next_code()
     anon.hide(code)
@@ -577,13 +647,80 @@ def test_operator_totp_rules(web_operator2, web_client):
     again = replay.request("POST", "/api/v1/auth/session", json_body={"callsign": op2.callsign,
                                                                      "password": op2.password, "totp": code})
     assert again.status == 401, "a TOTP code used twice: HTTP %d, documented: accepted once" % again.status
-    # re-enrolment needs the current authenticator's code in X-DV-TOTP, a window is not enough
+    # re-enrolment needs the current authenticator's code in X-DV-TOTP, a window is not enough; documented by
+    # API4 (web.md Account API): 403 totp_invalid (and one lockout failure for the account)
     offer = op2.client.request("POST", "/api/v1/auth/session/totp", json_body={})
     assert offer.status == 403, "re-enrolment without X-DV-TOTP: HTTP %d, documented 403" % offer.status
     assert "secret" not in offer.text(), "a refused offer must not carry a new secret"
-    if offer.json().get("code") not in ("step_up_required", "totp_invalid"):
-        web.finding("re-enrolment without a code: 403 code %r (documented step_up_required or totp_invalid)"
-                    % offer.json().get("code"))
+    assert offer.json().get("code") == "totp_invalid", \
+        "re-enrolment without a code: 403 code %r, documented totp_invalid" % offer.json().get("code")
+
+
+def _hide_body_strings(client, resp):
+    """Register every string value of a JSON answer as a secret (invite and reset codes come back once)."""
+    try:
+        data = json.loads(resp.body.decode("utf-8")) if resp.body else None
+    except (ValueError, UnicodeDecodeError):
+        return
+    if isinstance(data, dict):
+        client.hide(*[v for v in data.values() if isinstance(v, str)])
+
+
+def _operator_action(client, method, path, body=None):
+    """An operator write; when the handler asks for a step-up (403 step_up_required), once more with a code."""
+    resp = client.request(method, path, json_body=body)
+    if resp.status == 403 and api_probe.Result(resp.status, resp.headers, resp.body).code() == "step_up_required":
+        resp = client.request(method, path, json_body=body, headers=client.step_up_headers())
+    _hide_body_strings(client, resp)
+    return resp
+
+
+def test_declared_success_statuses_of_real_calls(web_operator, web_client):
+    """Real successful calls of the account flow answer the status their operation declares (API4, openapi-web.yaml):
+    invite issue 201, register 201, login 200, logout 204, invite revoke 200, password-reset code 201, account
+    delete 200. Throwaway names: N0SUC (registered, then deleted; one token of the 0.2/s register budget) and
+    N0SUD (an invite that is revoked)."""
+    seen = []
+
+    def check(method, template, resp, path=None):
+        want = declared(method, template)
+        seen.append("%s %s %d" % (method, template.replace("/api/v1/", ""), resp.status))
+        assert resp.status == want, "%s %s: HTTP %d %s, declared %d" % (
+            method, path or template, resp.status, web_operator.scrub(resp.text())[:120], want)
+
+    callsign, password = "N0SUC", web.new_password()
+    web_operator.hide(password)
+    inv = _operator_action(web_operator, "POST", "/api/v1/operator/invites",
+                           {"callsign": callsign, "role": "user", "may_tx": False})
+    check("POST", "/api/v1/operator/invites", inv)
+    invite = inv.json().get("code")
+    anon = web_client()
+    anon.hide(invite, password)
+    reg = anon.request("POST", "/api/v1/auth/register", json_body={"callsign": callsign, "invite": invite,
+                                                                    "password": password})
+    check("POST", "/api/v1/auth/register", reg)
+    user = web_client()
+    user.hide(password)
+    login = user.request("POST", "/api/v1/auth/session", json_body={"callsign": callsign, "password": password})
+    check("POST", "/api/v1/auth/session", login)
+    user.csrf = login.json().get("csrf")
+    user.hide(user.csrf)
+    out = user.request("DELETE", "/api/v1/auth/session")
+    check("DELETE", "/api/v1/auth/session", out)
+    assert user.request("GET", "/api/v1/auth/session").status == 401, "the session ends with the logout"
+    # an invite that is revoked again
+    inv2 = _operator_action(web_operator, "POST", "/api/v1/operator/invites",
+                            {"callsign": "N0SUD", "role": "user", "may_tx": False})
+    check("POST", "/api/v1/operator/invites", inv2)
+    path = "/api/v1/operator/invites/N0SUD"
+    check("DELETE", "/api/v1/operator/invites/{callsign}", _operator_action(web_operator, "DELETE", path), path)
+    # a password-reset code for the throwaway account (shown once: hidden), then the account is removed
+    path = "/api/v1/operator/accounts/%s/reset" % callsign
+    check("POST", "/api/v1/operator/accounts/{callsign}/reset", _operator_action(web_operator, "POST", path, {}), path)
+    path = "/api/v1/operator/accounts/%s" % callsign
+    check("DELETE", "/api/v1/operator/accounts/{callsign}", _operator_action(web_operator, "DELETE", path), path)
+    assert web_operator.get(path).status == 404, "the deleted account is gone"
+    record("success", "account flow", "operator", None, "pass", "; ".join(seen))
 
 
 # ================================================================== (g) xss / injection
@@ -799,6 +936,7 @@ def test_admin_minimum_role(op, role, admin_anon, admin_session):
     ok, why = api_probe.judge(op, expect, res)
     record("admin", op_id(op), role, res, "pass" if ok else "fail", why)
     assert ok, "%s as %s: %s (expected class %s)" % (op_id(op), role, why, expect)
+    success_check("admin", op, role, res)
 
 
 def test_admin_roles_from_the_login(admin_session):
@@ -899,6 +1037,21 @@ def test_admin_login_rules(admin_session, web_url_admin, web_ca):
     assert unknown.status == 401 and "set-cookie" not in unknown.headers
     # a web account is not an admin account (separate stores)
     assert cli.request("POST", cli.path("/session"), json_body={"user": "N0CALL", "password": "x" * 12}).status == 401
+    # real login and logout of a throwaway session: the declared success statuses (API4: login 200, logout 204)
+    base = admin_session("viewer")
+    temp = base.clone()
+    temp.authenticator = base.authenticator
+    temp.hide(password)
+    code = temp.authenticator.next_code()
+    temp.hide(code)
+    resp = temp.request("POST", temp.path("/session"), json_body={"user": user, "password": password, "totp": code})
+    assert resp.status == declared("POST", "/api/v1/admin/session"), "admin login: HTTP %d" % resp.status
+    temp.csrf = resp.json().get("csrf")
+    temp.hide(temp.csrf)
+    out = temp.request("DELETE", temp.path("/session"))
+    assert out.status == declared("DELETE", "/api/v1/admin/session"), "admin logout: HTTP %d, declared %d" % (
+        out.status, declared("DELETE", "/api/v1/admin/session"))
+    assert temp.request("GET", temp.path("/session")).status == 401, "the session ends with the logout"
 
 
 # ============================================================== (f) limits (LAST)
@@ -943,14 +1096,20 @@ class Sut:
         pytest.fail("RTC still answers 503 %d s after the web restart" % budget)
 
 
+LOGIN1_OPERATORS = ("N0LKA", "N0LKB", "N0LKC")      # throwaway enrolled operators, one per LOGIN1 case
+
+
 @pytest.fixture(scope="module")
 def limits_env(rig_control, web_base_url, web_ca, web_user, web_operator, web_operator2):
-    """The throwaway account first (registration needs the operator's session), then a clean SUT; the
-    SUT is restarted again after the module's last limits case."""
+    """The throwaway accounts first (registration needs the operator's session; the register case below
+    drains the register bucket): the user N0LCK and three enrolled operators for the LOGIN1 cases, so no
+    lockout ever hits N0CALL / N0OP. Then a clean SUT; the SUT is restarted again after the module's last
+    limits case. Accounts and TOTP secrets survive the restart (state dir), sessions do not."""
     acct = web_user("N0LCK", may_tx=False)
+    operators = {cs: make_operator(web_operator, web_base_url, web_ca, cs, may_tx=False) for cs in LOGIN1_OPERATORS}
     sut = Sut(rig_control, web_base_url, web_ca)
     sut.restart_web()
-    yield {"sut": sut, "account": acct}
+    yield {"sut": sut, "account": acct, "operators": operators}
     # restore the SUT: a new process has empty buckets and no lockouts; wait until RTC answers again
     sut.restart_web(rtc_user=web_operator2)
 
@@ -1007,6 +1166,25 @@ def test_limits_register_budget(limits_env, web_base_url, web_ca):
     time.sleep(6)                                             # ~1.2 tokens back at 0.2/s
 
 
+LOCK_S = 900                                      # first lock: 15 minutes (web.md, doubling later)
+
+
+def assert_locked(resp, what):
+    """Documented by API4 (web.md Account API, LOGIN1 table): a locked (callsign, prefix) pair is 429
+    `rate_limited`, even with the right credentials; Retry-After is the REMAINING lock in whole seconds.
+    A fresh first lock has close to 900 s left; more than 60 s tells it from the 1 s of the login bucket."""
+    res = api_probe.Result(resp.status, resp.headers, resp.body)
+    assert resp.status == 429, "%s: %s, documented 429 rate_limited for a locked pair" % (what, res.brief())
+    assert res.code() == "rate_limited", "%s: code %r, documented rate_limited" % (what, res.code())
+    ra = res.retry_after()
+    assert ra is not None and 60 < ra <= LOCK_S, \
+        "%s: Retry-After %r, documented: the remaining lock (a fresh first lock: up to %d s)" % (what, ra, LOCK_S)
+    body_ra = resp.json().get("retry_after")
+    assert body_ra in (None, ra), "retry_after %r vs Retry-After %r" % (body_ra, ra)
+    assert "set-cookie" not in resp.headers, "%s: a cookie on a refused login" % what
+    return ra
+
+
 @pytest.mark.slow
 def test_limits_login_lockout(limits_env, web_base_url, web_ca):
     """5 failures per (account, client prefix) lock the account, even for the right password."""
@@ -1025,21 +1203,102 @@ def test_limits_login_lockout(limits_env, web_base_url, web_ca):
     res = api_probe.Result(locked.status, locked.headers, locked.body)
     assert locked.status != 200, "the right password right after 5 failures must not log in"
     assert "set-cookie" not in locked.headers
-    if locked.status == 429:
-        assert res.retry_after() and res.retry_after() >= 1, "lockout 429 without Retry-After"
-        ra = res.retry_after()
-        if not (800 <= ra <= 1000):
-            web.finding("lockout Retry-After is %d s; documented: locked for 15 min (900 s), then doubling" % ra)
-    else:
-        web.finding("login during a lockout: HTTP %d %s (Retry-After %r); docs say the account is locked for 15 minutes "
-                    "after 5 failures but not which status the locked attempt gets" % (locked.status, res.code(),
-                                                                                       locked.headers.get("retry-after")))
+    assert_locked(locked, "the right password after 5 wrong ones")
     record("limits", "login lockout", "anonymous", res, "pass", "5x401 then %d code %s Retry-After %s" % (
         locked.status, res.code(), locked.headers.get("retry-after")))
     # another account of the same client prefix is not locked
     other = web.WebClient(web_base_url, web_ca, timeout=15)
     resp = other.request("POST", "/api/v1/auth/session", json_body={"callsign": "N0NOBODY", "password": "x" * 12}, pace=False)
     assert resp.status == 401, "an unknown account is a plain 401, got %d" % resp.status
+
+
+def _login_client(url, ca, op):
+    cli = web.WebClient(url, ca, timeout=15)
+    cli.hide(op.password)
+    return cli
+
+
+def _login(cli, callsign, password, code=None):
+    """One login attempt, then 1.1 s of rest: the attempts stay inside the 1/s login bucket of the client
+    prefix, so a 429 here is never the bucket's (that one is test_limits_login_burst)."""
+    body = {"callsign": callsign, "password": password}
+    if code is not None:
+        cli.hide(code)
+        body["totp"] = code
+    resp = cli.request("POST", "/api/v1/auth/session", json_body=body, pace=False)
+    time.sleep(1.1)
+    return resp, api_probe.Result(resp.status, resp.headers, resp.body)
+
+
+def _logout(cli, login):
+    cli.csrf = login.json().get("csrf")
+    cli.hide(cli.csrf)
+    out = cli.request("DELETE", "/api/v1/auth/session")
+    assert out.status == declared("DELETE", "/api/v1/auth/session"), "logout: HTTP %d" % out.status
+
+
+@pytest.mark.slow
+def test_limits_login_missing_code_is_no_failure(limits_env, web_base_url, web_ca):
+    """LOGIN1 (web.md "Operator login and failure counting"): the right password without a code on an enrolled
+    operator is the 401 `totp_required` challenge, no cookie; it neither adds nor clears lockout failures. Five
+    of them (the lockout threshold) leave the pair unlocked: password + fresh code still logs in (200)."""
+    op = limits_env["operators"]["N0LKA"]
+    cli = _login_client(web_base_url, web_ca, op)
+    for i in range(5):
+        resp, res = _login(cli, op.callsign, op.password)
+        assert (resp.status, res.code()) == (401, "totp_required"), \
+            "password without a code, attempt %d: %s, documented 401 totp_required" % (i + 1, res.brief())
+        assert "set-cookie" not in resp.headers, "the challenge issues no cookie or session"
+    resp, res = _login(cli, op.callsign, op.password, op.client.authenticator.next_code())
+    assert resp.status == declared("POST", "/api/v1/auth/session"), \
+        "password + fresh code after 5 challenges: %s; documented 200 (a challenge is no lockout failure)" % res.brief()
+    assert cli.cookies.get(web.COOKIE_NAME), "a complete login sets the session cookie"
+    record("limits", "LOGIN1 challenges", "operator", res, "pass", "5x401 totp_required then %d" % resp.status)
+    _logout(cli, resp)
+
+
+@pytest.mark.slow
+def test_limits_login_wrong_codes_lock(limits_env, web_base_url, web_ca):
+    """LOGIN1: the right password with a WRONG code is a guess (401 `unauthorized`, one failure each); after
+    five the pair is locked: the right code, and a password-only attempt, get 429 rate_limited with the
+    remaining lock in Retry-After (API4)."""
+    op = limits_env["operators"]["N0LKB"]
+    cli = _login_client(web_base_url, web_ca, op)
+    for i in range(5):
+        resp, res = _login(cli, op.callsign, op.password, op.client.authenticator.wrong_code())
+        assert (resp.status, res.code()) == (401, "unauthorized"), \
+            "right password, wrong code, attempt %d: %s, documented 401 unauthorized" % (i + 1, res.brief())
+        assert "set-cookie" not in resp.headers
+    resp, res = _login(cli, op.callsign, op.password, op.client.authenticator.next_code())
+    ra = assert_locked(resp, "the right code after 5 wrong codes")
+    resp, _res = _login(cli, op.callsign, op.password)
+    assert_locked(resp, "a password-only attempt of the locked pair")
+    record("limits", "LOGIN1 wrong codes", "operator", res, "pass", "5x401 unauthorized then 429 Retry-After %d" % ra)
+
+
+@pytest.mark.slow
+def test_limits_login_wrong_passwords_count_challenges_do_not(limits_env, web_base_url, web_ca):
+    """LOGIN1: wrong passwords count as before (one failure each) and a challenge in between preserves them:
+    3 wrong passwords, 2 challenges, 2 wrong passwords are five counted failures; the fifth still answers
+    401, the next attempt (right password and code) is 429. Had the challenges counted, the sixth request
+    would already be 429."""
+    op = limits_env["operators"]["N0LKC"]
+    cli = _login_client(web_base_url, web_ca, op)
+    plan = ("wrong",) * 3 + ("challenge",) * 2 + ("wrong",) * 2
+    got = []
+    for step in plan:
+        if step == "wrong":
+            resp, res = _login(cli, op.callsign, "wrong-" + op.password)
+            want = (401, "unauthorized")
+        else:
+            resp, res = _login(cli, op.callsign, op.password)
+            want = (401, "totp_required")
+        got.append("%s:%s" % (step, res.brief()))
+        assert (resp.status, res.code()) == want, "step %d (%s): %s, documented %d %s; so far %s" % (
+            len(got), step, res.brief(), want[0], want[1], got)
+    resp, res = _login(cli, op.callsign, op.password, op.client.authenticator.next_code())
+    ra = assert_locked(resp, "the right password and code after 5 counted failures (3 + 2 wrong passwords)")
+    record("limits", "LOGIN1 mixed", "operator", res, "pass", "%s then 429 Retry-After %d" % (" ".join(got), ra))
 
 
 @pytest.mark.slow

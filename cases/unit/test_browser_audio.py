@@ -147,13 +147,34 @@ def test_no_non_ascii_in_the_probe():
     assert b.RTC_PROBE_JS.isascii()
 
 
-def test_patch_fragments_makes_every_fragment_a_component():
-    src = "const a = html`<>one</>`;\nconst b = html`<><${A}/><>inner</></>`;\n"
-    out = b.patch_fragments_js(src)
-    assert out.startswith("const __dvtFragment")
-    assert "<>" not in out.split("\n", 1)[1] and "</>" not in out
-    assert out.count("<${__dvtFragment}>") == 3 and out.count("<//>") == 3
-    assert b.patch_fragments_js("const a = html`<div></div>`;") is None
+def test_probe_records_sent_and_received_channel_frames():
+    js = b.RTC_PROBE_JS
+    assert "tap.sent.push" in js and "tap.msgs.push" in js
+    assert "pc.addEventListener('datachannel'" in js and "watch(e.channel)" in js
+
+
+def _ack(t, frame=None, label="ctl"):
+    return {"t": t, "pc": 0, "label": label, "data": json.dumps(frame or b.RENEWED)}
+
+
+def test_renewal_verdict_counts_and_spaces_the_acks():
+    msgs = [_ack(0.0, {"op": "selected", "room": "Y"}), _ack(100.0, {"op": "ptt", "state": "granted", "code": "ok"})]
+    msgs += [_ack(1000.0 * i + 30.0) for i in range(1, 10)]                       # one per lease, 1 s apart
+    msgs.append(_ack(5000.0, label="other"))                                     # another channel: ignored
+    msgs.append({"t": 5100.0, "label": "ctl", "data": "not json"})
+    v = b.renewal_verdict(msgs)
+    assert v["acks"] == 9 and v["problems"] == [] and v["min_interval_ms"] == 1000.0
+    assert v["other_ptt"] == ["granted/ok"]
+    assert b.renewal_verdict(msgs, since_ms=2500.0, until_ms=6100.0)["acks"] == 4
+
+
+def test_renewal_verdict_flags_a_flood_and_odd_frames():
+    close = [_ack(0.0), _ack(460.0), _ack(800.0)]                                # 460 passes (tolerance), 340 does not
+    v = b.renewal_verdict(close)
+    assert v["acks"] == 3 and len(v["problems"]) == 1 and "340.0" in v["problems"][0]
+    odd = b.renewal_verdict([_ack(0.0, {"op": "ptt", "state": "renewed", "code": "ok", "x": 1})])
+    assert odd["acks"] == 0 and odd["odd_acks"] == 1 and odd["problems"]
+    assert b.ctl_frames([{"t": 1, "label": "ctl", "data": "[1]"}]) == []         # not an object
 
 
 def test_usrp_check_leaves_webrtc_media_alone_in_the_web_profile(monkeypatch):

@@ -11,13 +11,14 @@ unit-tested (cases/unit/test_browser_helpers.py).
   * PageLog: what a page did (console, page errors, requests, responses, dialogs, CSP
     violations) and `PageLog.problems()`, the list of things a normal page view must not do.
   * parse_csp / csp_problems, cookie_problems: header and cookie judgements.
-  * patch_public_js: the one-line workaround that lets the dashboard script render (a finding).
   * artifact_dir / safe_name: where failure artifacts go ($DVT_OUT/web/browser/).
   * Stage 3b (WebRTC listen and talk): goertzel_amplitude / scan_peak (the frequency judgement),
     RTC_PROBE_JS (the same algorithm as plain JavaScript, installed in the page: it taps the received
     MediaStream and reads getStats), tone_wav_bytes (the fake microphone file), launch_options (how an
     engine is started with a fake microphone through `playwright run-server --unsafe`),
     summarize_stats / inbound_verdict (what getStats says about the audio).
+  * TALK1: ctl_frames / renewal_verdict (the {"op":"ptt","state":"renewed","code":"ok"} acknowledgements
+    of lease renewals the edge sends on the control DataChannel while an over is live, as the probe saw them).
 """
 import json
 import math
@@ -142,30 +143,6 @@ def record_request(log, method, url, resource="", status=None, ctype=""):
     log.requests.append({"method": method, "url": url, "path": urlsplit(url).path, "status": status,
                          "ctype": ctype, "resource": resource})
     return log.requests[-1]
-
-
-def patch_public_js(source):
-    """The public dashboard script with the one change that makes it render: `PublicContent` returns
-    html`<>...</>`, and the vendored htm-preact-3.1.1 turns `<>` into a node of type '' (it has no Fragment),
-    which Preact cannot create (document.createElement('') throws, the page body stays "Loading"). Here the
-    fragment becomes a component that returns its children. Returns None when the script has no `<>`
-    (fixed upstream), so the workaround switches itself off."""
-    if "html`<>" not in source or "</>`" not in source:
-        return None
-    out = source.replace("html`<>", "html`<${__dvtFragment}>", 1)
-    at = out.index("</>`", out.index("__dvtFragment"))
-    out = out[:at] + "<//>`" + out[at + len("</>`"):]
-    return "const __dvtFragment = (p) => p.children;\n" + out
-
-
-def patch_fragments_js(source):
-    """Every html`<>...</>` fragment of a page script made a component that returns its children (the
-    defect of patch_public_js, in a script with several fragments such as recordings/recordings.js,
-    where fragments also nest). Returns None when the script has no `<>` (fixed upstream)."""
-    if "<>" not in source:
-        return None
-    out = source.replace("<>", "<${__dvtFragment}>").replace("</>", "<//>")
-    return "const __dvtFragment = (p) => p.children;\n" + out
 
 
 # ---------------------------------------------------------------------- CSP
@@ -425,6 +402,60 @@ def inbound_verdict(first, second, interval_ms=20.0, tolerance=0.15):
     return growth, problems
 
 
+# TALK1 (DV-Router web.md, "PTT"): while an over is live and controller-granted, the edge answers each lease
+# renewal that advances the lease with {"op":"ptt","state":"renewed","code":"ok"} on the ctl DataChannel, at most
+# one per 500 ms per peer; the page sends a lease every 1000 ms while the button is held and resets its 4 s
+# watchdog on each ack. The probe keeps every received frame as {t: performance.now() ms, label, data}.
+RENEWED = {"op": "ptt", "state": "renewed", "code": "ok"}
+ACK_MIN_INTERVAL_MS = 500.0
+ACK_INTERVAL_TOLERANCE_MS = 50.0          # receive-side timer and event-loop jitter of the page: >= 450 ms passes
+
+
+def ctl_frames(msgs, label="ctl"):
+    """[(t_ms, frame dict)] of the JSON frames received on the DataChannel `label` (tap.msgs of RTC_PROBE_JS);
+    frames that are not a JSON object are skipped."""
+    out = []
+    for m in msgs or ():
+        if m.get("label") != label:
+            continue
+        try:
+            frame = json.loads(m.get("data") or "")
+        except ValueError:
+            continue
+        if isinstance(frame, dict):
+            out.append((float(m.get("t", 0.0)), frame))
+    return out
+
+
+def renewal_verdict(msgs, since_ms=None, until_ms=None, min_interval_ms=ACK_MIN_INTERVAL_MS,
+                    tolerance_ms=ACK_INTERVAL_TOLERANCE_MS):
+    """What the ctl channel said about lease renewals in [since_ms, until_ms] (page clock). Returns
+    {'acks': n, 'intervals_ms': [...], 'min_interval_ms': x or None, 'other_ptt': [state/code, ...],
+    'odd_acks': [frames with state 'renewed' that are not exactly RENEWED], 'problems': [...]}. A problem is
+    an ack frame that is not exactly {"op":"ptt","state":"renewed","code":"ok"} or two acks closer than
+    min_interval_ms - tolerance_ms. Counting enough acks is the caller's judgement."""
+    acks, odd, other = [], [], []
+    for t, f in ctl_frames(msgs):
+        if (since_ms is not None and t < since_ms) or (until_ms is not None and t > until_ms):
+            continue
+        if f.get("op") != "ptt":
+            continue
+        if f.get("state") == "renewed":
+            (acks if f == RENEWED else odd).append(t)
+        else:
+            other.append("%s/%s" % (f.get("state"), f.get("code")))
+    intervals = [round(b - a, 1) for a, b in zip(acks, acks[1:])]
+    problems = []
+    if odd:
+        problems.append("%d 'renewed' frame(s) not equal to %s" % (len(odd), json.dumps(RENEWED, sort_keys=True)))
+    close = [i for i in intervals if i < min_interval_ms - tolerance_ms]
+    if close:
+        problems.append("acks %s ms apart, documented at most one per %g ms (tolerance %g ms)"
+                        % (close[:4], min_interval_ms, tolerance_ms))
+    return {"acks": len(acks), "intervals_ms": intervals, "min_interval_ms": min(intervals) if intervals else None,
+            "other_ptt": other, "odd_acks": len(odd), "problems": problems}
+
+
 # The page side. Installed with context.add_init_script before the first navigation. It wraps
 # RTCPeerConnection so the page's own peer can be reached (window.__dvtTap), records connection
 # state changes with a timestamp (performance.now()), taps the received audio and answers
@@ -433,7 +464,7 @@ RTC_PROBE_JS = r"""
 (() => {
   if (window.__dvtTap) return;
   const Orig = window.RTCPeerConnection || window.webkitRTCPeerConnection;
-  const tap = { pcs: [], channels: [], msgs: [], events: [], ctx: null, buf: [], have: 0, rate: 0, proc: null, el: null, sources: 0 };
+  const tap = { pcs: [], channels: [], msgs: [], sent: [], events: [], ctx: null, buf: [], have: 0, rate: 0, proc: null, el: null, sources: 0 };
   window.__dvtTap = tap;
   const now = () => performance.now();
   document.addEventListener('click', (e) => tap.events.push({ t: now(), what: 'click',
@@ -457,17 +488,21 @@ RTC_PROBE_JS = r"""
         state: ev === 'connectionstatechange' ? pc.connectionState : ev === 'iceconnectionstatechange' ? pc.iceConnectionState
              : ev === 'signalingstatechange' ? pc.signalingState : pc.iceGatheringState }));
     }
-    const makeChannel = pc.createDataChannel.bind(pc);
-    pc.createDataChannel = (...a) => {
-      const ch = makeChannel(...a);
+    // every frame received (tap.msgs) and sent (tap.sent: the page's own ptt / lease / select frames) on a
+    // data channel, with the page clock; frames are short JSON (the page drops anything over 128 bytes)
+    const watch = (ch) => {
       tap.channels.push(ch);
       ch.addEventListener('open', () => tap.events.push({ t: now(), pc: n, what: 'channel-open', label: ch.label }));
       ch.addEventListener('close', () => tap.events.push({ t: now(), pc: n, what: 'channel-close', label: ch.label }));
       ch.addEventListener('message', (ev) => tap.msgs.push({ t: now(), pc: n, label: ch.label, data: String(ev.data).slice(0, 200) }));
+      const send = ch.send.bind(ch);
+      ch.send = (d) => { tap.sent.push({ t: now(), pc: n, label: ch.label, data: String(d).slice(0, 200) }); return send(d); };
       return ch;
     };
+    const makeChannel = pc.createDataChannel.bind(pc);
+    pc.createDataChannel = (...a) => watch(makeChannel(...a));
     pc.addEventListener('track', (e) => tap.events.push({ t: now(), pc: n, what: 'track', kind: e.track.kind }));
-    pc.addEventListener('datachannel', (e) => tap.events.push({ t: now(), pc: n, what: 'datachannel', label: e.channel.label }));
+    pc.addEventListener('datachannel', (e) => { tap.events.push({ t: now(), pc: n, what: 'datachannel', label: e.channel.label }); watch(e.channel); });
     return pc;
   }
   Wrapped.prototype = Orig.prototype;
@@ -551,7 +586,8 @@ RTC_PROBE_JS = r"""
   });
   // a raw frame on the page's own control channel (the page itself only sends well-formed ones)
   tap.sendControl = (text) => {
-    const ch = tap.channels[tap.channels.length - 1];
+    const ctl = tap.channels.filter((c) => c.label === 'ctl');
+    const ch = ctl[ctl.length - 1] || tap.channels[tap.channels.length - 1];
     if (!ch || ch.readyState !== 'open') return false;
     ch.send(text);
     return true;

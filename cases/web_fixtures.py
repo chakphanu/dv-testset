@@ -17,6 +17,9 @@ conftest.py. Every fixture skips with the reason unless the profile is up.
   web_operator2  a second operator (N0OP, own TOTP): the destructive and "authenticated
                  but throwaway" checks of cases/test_web_api.py use it, so the run's
                  first operator never loses its session
+  make_operator  (a function, not a fixture) make_operator(web_operator, url, ca, callsign):
+                 one more enrolled operator, e.g. the throwaway LOGIN1 accounts of the
+                 limits cases
   web_url_admin  "https://dvt-admin:8443" (DVT_ADMIN_URL): the admin host answered /health
   admin_session  factory admin_session(role, mount="host") -> AdminClient logged in as
                  the run's admin / operator / viewer account (random passwords in
@@ -129,19 +132,26 @@ def web_user(web_operator):
     return factory
 
 
+def make_operator(web_operator, base_url, ca, callsign, may_tx=True):
+    """Invite and register `callsign` as an operator through `web_operator`, log it in and enrol its TOTP.
+    Returns a WebUser whose client is logged in and has the Authenticator (`client.authenticator`). One
+    registration: the caller respects the register budget through the shared Pacer."""
+    password = web.new_password()
+    web_operator.hide(password)
+    web_operator.register_user(callsign, password, may_tx=may_tx, role="operator")
+    client = web.WebClient(base_url, ca)
+    client.hide(password)
+    ident = client.login(callsign, password)
+    if ident.get("totp") != "enrol":
+        pytest.fail("operator %s first login: totp state %r, wanted 'enrol'" % (callsign, ident.get("totp")))
+    client.enrol_totp()
+    return WebUser(callsign, password, bool(may_tx), client)
+
+
 @pytest.fixture(scope="session")
 def web_operator2(web_operator, web_base_url, web_ca):
     """A second operator account with its own TOTP (the first one stays untouched)."""
-    password = web.new_password()
-    web_operator.hide(password)
-    web_operator.register_user("N0OP", password, may_tx=True, role="operator")
-    client = web.WebClient(web_base_url, web_ca)
-    client.hide(password)
-    ident = client.login("N0OP", password)
-    if ident.get("totp") != "enrol":
-        pytest.fail("second operator first login: totp state %r, wanted 'enrol'" % (ident.get("totp"),))
-    client.enrol_totp()
-    return WebUser("N0OP", password, True, client)
+    return make_operator(web_operator, web_base_url, web_ca, "N0OP", may_tx=True)
 
 
 @pytest.fixture(scope="session")

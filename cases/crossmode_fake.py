@@ -212,6 +212,17 @@ class Fake:
             self.ctl.wait_for(lambda s: s["counters"].get("rx_cs", 0) >= expect_cs, wait)
         return crossmode.sessions(self.log())
 
+    def clock_offset(self, samples=5):
+        """(offset, half_rtt) of the fake's log clock (`t`, `now`) against
+        time.monotonic() here: local = fake_t - offset (crossmode.clock_offset
+        over a few stats round trips, the shortest wins)."""
+        rows = []
+        for _ in range(samples):
+            before = time.monotonic()
+            now = self.ctl.stats()["now"]
+            rows.append((before, now, time.monotonic()))
+        return crossmode.clock_offset(rows)
+
     def set(self, **modes):
         self.dirty = True
         self.fault(fault_tag(**modes))
@@ -271,6 +282,7 @@ class Result:
     def __init__(self):
         self.frames = {}            # listener label -> unit list
         self.raw = {}               # listener label -> raw inbox (digital: bytes, usrp: (t, bytes))
+        self.times = {}             # listener label -> monotonic receive time of each raw entry
         self.sid = None
         self.t_talk = 0.0           # wall clock (time.time) when the talker started
 
@@ -297,13 +309,16 @@ def settle_clients(*peers):
         else:
             peer.client.drain()
             peer.client.inbox.clear()
+            peer.client.inbox_times.clear()      # keep the stamps aligned with the inbox
 
 
-def scenario(target, src, dsts, frames, module=MODULE, talk=None, listen=LISTEN_S, labels=None):
+def scenario(target, src, dsts, frames, module=MODULE, talk=None, listen=LISTEN_S, labels=None, on_linked=None):
     """Link one listener per entry of dsts (kind names, repeats allowed when
     labels give distinct names), link the talker, run talk(talker, kind) (default
     the client library's talk), and collect every listener. Result.frames is
-    keyed by the label (the kind when labels is None)."""
+    keyed by the label (the kind when labels is None). on_linked(talker,
+    {label: peer}) runs once everything is linked, before the talk (a timed
+    talk keeps the listeners drained with it)."""
     ip = target.xlxd_sut
     labels = labels or list(dsts)
     listeners = []
@@ -317,6 +332,8 @@ def scenario(target, src, dsts, frames, module=MODULE, talk=None, listen=LISTEN_
         talker = make_peer(target, src, module, 0)
         assert link_peer(talker, src, ip), "%s talker cannot link to %s" % (src, ip)
         settle_clients(talker, *[p for _l, _k, p in listeners])
+        if on_linked is not None:
+            on_linked(talker, {label: peer for label, _k, peer in listeners})
         res.t_talk = time.time()
         if talk is not None:
             res.sid = talk(talker, src)
@@ -326,7 +343,8 @@ def scenario(target, src, dsts, frames, module=MODULE, talk=None, listen=LISTEN_
             res.sid = clients.talk(talker, src, frames)
         for label, kind, peer in listeners:
             res.frames[label] = peer.collect(listen)
-            res.raw[label] = peer.inbox if kind == "usrp" else peer.client.inbox
+            res.raw[label] = list(peer.inbox if kind == "usrp" else peer.client.inbox)   # a copy: unlinking later adds datagrams
+            res.times[label] = [t for t, _d in peer.inbox] if kind == "usrp" else list(peer.client.inbox_times)
         return res
     finally:
         for _l, kind, peer in listeners:
@@ -344,6 +362,46 @@ def _close(peer, kind):
             clients.close(peer)
     except OSError:
         pass
+
+
+# ---- timed sending ---------------------------------------------------------------
+
+def _drain(peer):
+    if isinstance(peer, UsrpPeer):
+        peer.pump(0)
+    else:
+        peer.client.drain()
+
+
+def pump_all(peers, seconds, step=0.002):
+    """Drain every peer each `step` for `seconds`: receive times stay within
+    a few ms of the arrival (UdpClient stamps a datagram when it drains it)."""
+    end = time.monotonic() + seconds
+    while True:
+        for peer in peers:
+            _drain(peer)
+        if time.monotonic() >= end:
+            return
+        time.sleep(step)
+
+
+def paced_drain(client, dest, packets, gap, peers, start=None, step=0.002):
+    """Send packets at start + i * gap (start: now) from UdpClient `client`,
+    draining `peers` every `step` in between; the send times (monotonic)."""
+    start = time.monotonic() if start is None else start
+    stamps = []
+    for index, packet in enumerate(packets):
+        target = start + index * gap
+        while True:
+            for peer in peers:
+                _drain(peer)
+            left = target - time.monotonic()
+            if left <= 0:
+                break
+            time.sleep(min(step, left))
+        client.send(dest, packet)
+        stamps.append(time.monotonic())
+    return stamps
 
 
 # ---- comparing -----------------------------------------------------------------

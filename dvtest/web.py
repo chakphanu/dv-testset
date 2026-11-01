@@ -99,6 +99,18 @@ class Authenticator:
                 # counter is two steps ahead: wait until it is within one step
                 self._sleep(max(0.05, (counter - 1) * self.period - self._clock() + 0.05))
 
+    def wrong_code(self):
+        """A well-formed code that is NOT valid now: it differs from the codes of
+        the steps within +-2 of the clock (wider than the server's +-1 tolerance),
+        so it is always a wrong guess. Uses no counter."""
+        now = int(self._clock() // self.period)
+        valid = {hotp(self._key, c, self.digits) for c in range(max(0, now - 2), now + 3)}
+        for d in "0123456789":
+            code = d * self.digits
+            if code not in valid:
+                return code
+        raise AssertionError("unreachable: five valid codes cannot cover ten candidates")
+
 
 # ------------------------------------------------------------------- pacing
 

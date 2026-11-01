@@ -18,7 +18,8 @@ def res(status, code=None, ctype=PROBLEM, headers=None):
 
 
 def op(path, method="GET"):
-    return next(o for o in api_web.WEB_OPS + api_admin.ADMIN_OPS if o.path == path and o.method == method)
+    return next(o for o in api_web.WEB_OPS + api_web.WEB_ROOT_OPS + api_admin.ADMIN_OPS
+                if o.path == path and o.method == method)
 
 
 def test_expectation_by_floor():
@@ -108,10 +109,15 @@ def test_send_builds_the_probe_and_retries_a_429(monkeypatch):
     assert api_probe.send(cli, op("/api/v1/user/me"), retries=2).status == 429 and len(cli.calls) == 3
 
 
-def test_judge_observed_guard_orders():
+def test_judge_documented_guard_orders():
+    """API4: web write guards (403 csrf) before the audience floor; admin checks the role first."""
     force = op("/api/v1/operator/ids/sync/force", "POST")
     assert force.raw is not None
     assert judge(force, "403", res(403, "csrf"))[0], "non-JSON probe: the unsafe-request guard answers before the floor"
+    assert not judge(force, "403", res(403, "forbidden"))[0], "web: documented csrf before the floor"
+    raw_put = op("/api/v1/admin/config/raw", "PUT")
+    assert judge(raw_put, "403", res(403, "forbidden"))[0], "admin: the role floor before CSRF/content type"
+    assert not judge(raw_put, "403", res(403, "csrf"))[0]
     inv = op("/api/v1/operator/invites", "POST")
     assert not judge(inv, "403", res(403, "csrf"))[0], "a JSON probe gets the role floor first"
     close = op("/api/v1/rtc/close", "POST")

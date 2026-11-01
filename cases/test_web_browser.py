@@ -5,15 +5,16 @@ docs/web-browser-cases.md): the browsers run in the rig service `browser` and lo
 https://dvt-web through the proxy; every case skips with the reason otherwise
 (cases/browser_fixtures.py). WebKit here is Playwright WebKit, the engine of Safari but not Safari.
 
-All page knowledge (paths, roles, texts, ids) is in cases/web_pages.py. Differences from the
-documents are recorded with web.finding() (web-findings.txt), never asserted. WebRTC listen and talk
-and recorder playback are stage 3b.
+All page knowledge (paths, test ids, roles, texts) is in cases/web_pages.py (WEB2 data-testid / data-state
+first, calibrated against dv-router:wip-13e7e70). Differences from the documents are recorded with
+web.finding() (web-findings.txt), never asserted. WebRTC listen and talk and recorder playback are stage 3b.
 
-  a  test_dashboard_loads_clean                    each route renders, SSE live, no console error, no CSP report
+  a  test_dashboard_renders_the_state              as served (DASH1): room cards, the six routes, no page error, no CSP report
+  a2 test_event_stream_slot_is_freed_on_reload     reloads within seconds: is a closed stream's slot free at once (record)
   b  test_signed_out_dashboard_requests            no message-history fetch when signed out, the 401 of the identity probe is silent
-  c  test_login_wrong_password_text                documented fixed error text, no cookie, field cleared
+  c  test_login_wrong_password_text                documented fixed error text, no cookie, field cleared, not the wrong-code text
   d  test_user_login_cookie_and_logout             cookie flags as the browser sees them, document.cookie, storage, sign out
-  e  test_operator_login_with_totp_step            operator: password, then the authenticator code in the form
+  e  test_operator_login_with_totp_step            operator: wrong password (generic text), password, wrong code (LOGIN1b text), code
   f  test_ops_page_renders / ..._matches_the_api   the five operator pages for an operator
   g  test_ops_pages_refuse_user_and_anonymous      role floor in the UI and in the API from the browser
   h  test_xss_*                                    stored and reflected text is shown inert (names, limits, messages, invites, audit, last heard)
@@ -93,14 +94,14 @@ def assert_inert(bp, what="page"):
 
 
 def wait_live(bp):
-    """True when the dashboard shows Live (the SSE stream is connected). When it does not, that is a
-    finding of this engine and the case goes on (the page polls)."""
+    """True when the live-update indicator says data-state="connected" (the SSE stream is live; WEB2). When it
+    does not, that is a finding of this engine and the case goes on (the page polls)."""
     ms = 3000 if bp.engine in _NO_LIVE else LIVE_MS
     try:
-        expect(pages.connection_state(bp.page)).to_contain_text("Live", timeout=ms)
+        expect(pages.connection_state(bp.page)).to_have_attribute("data-state", "connected", timeout=ms)
         return True
     except AssertionError:
-        state = pages.connection_state(bp.page).inner_text().strip()
+        state = "%s (data-state %s)" % (pages.connection_state(bp.page).inner_text().strip(), pages.dashboard_state(bp.page))
         _NO_LIVE.add(bp.engine)
         failed = [f["path"] for f in bp.log.failed if f["path"] in SSE_PATHS]
         try:      # what a bare EventSource to the same URL does in this engine
@@ -136,48 +137,76 @@ def open_dashboard(bp, route="/"):
 
 # ========================================================================== a, b: dashboard
 
-def test_dashboard_renders_the_state(browser_page):
-    """The public dashboard as served: it shows the room cards of the state it fetched (web.md: the dashboard
-    lists rooms, last heard and room messages). No workaround here."""
-    bp = browser_page
-    resp = open_dashboard(bp)
-    assert resp.status == 200
-    wait_for_state(bp)
-    cards = bp.page.locator("main .card")
-    try:
-        expect(cards.first).to_be_visible(timeout=8000)
-    except AssertionError:
-        errors = [e.split(" | ")[0] for e in bp.log.errors]
-        body = bp.page.locator("main").inner_text().strip()[:40]
-        finding(bp.engine, "the dashboard does not render after its state arrived: main shows %r, page errors %s "
-                           "(vendored htm-preact-3.1.1 turns the fragment `<>` of PublicContent into a node of type '' "
-                           "and Preact calls document.createElement(''); see docs/web-browser-cases.md)" % (body, errors[:1]))
-        raise
-    report(bp, EXPECT_401, "public dashboard")
-
-
-def test_dashboard_routes_with_the_fragment_workaround(dashboard_page):
-    """Everything else about the dashboard, with /public.js patched so that it renders (BrowserPage.apply_
-    fragment_workaround): routes, live state, no console error."""
+def test_dashboard_renders_the_state(dashboard_page):
+    """The public dashboard as served (DASH1, wip-13e7e70; the stage 3a fragment workaround is gone): it shows the
+    room cards of the state it fetched (web.md: the dashboard lists rooms, last heard and room messages), the six
+    routes render through the page's own navigation (dashboard-nav-* hooks, one document: no new event stream),
+    no page error, no error banner, no CSP report in any engine (DASH1 removed the inline styles WebKit reported)."""
     bp = dashboard_page
     resp = open_dashboard(bp)
     assert resp.status == 200
     assert bp.page.title(), "the dashboard has no title"
     wait_for_state(bp)
+    try:
+        expect(pages.room_cards(bp.page).first).to_be_visible(timeout=8000)
+    except AssertionError:
+        errors = [e.split(" | ")[0] for e in bp.log.errors]
+        body = bp.page.locator("main").inner_text().strip()[:40]
+        finding(bp.engine, "the dashboard does not render after its state arrived: main shows %r, page errors %s"
+                           % (body, errors[:1]))
+        raise
     expect(pages.dashboard_alerts(bp.page)).to_have_count(0)
-    expect(bp.page.locator("main .card").first).to_be_visible()
-    assert not bp.log.errors, "page error with the workaround: %s" % bp.log.errors[:1]
-    # the other routes, through the page's own navigation (one document: no new event stream)
     for route, title in pages.ROUTE_TITLES.items():
         if route == "/":
             continue
-        bp.page.get_by_role("link", name=title, exact=True).first.click()
+        pages.dashboard_nav(bp.page, route).first.click()
         expect(pages.heading(bp.page)).to_have_text(title)
-    report(bp, EXPECT_401, "public dashboard (workaround)")
+    pages.dashboard_nav(bp.page, "/").first.click()
+    expect(pages.heading(bp.page)).to_have_text(pages.ROUTE_TITLES["/"])
+    expect(pages.room_cards(bp.page).first).to_be_visible()
+    streams = [r for r in bp.log.requests if r["path"] == "/api/v1/public/events" and r["status"] == 200]
+    if len(streams) > 1:
+        finding(bp.engine, "the six routes of one document opened %d event streams" % len(streams))
+    assert not bp.log.errors, "page error on the dashboard as served: %s" % bp.log.errors[:1]
+    if bp.log.csp and bp.engine == "webkit":
+        # DASH1 removed the style= attributes of web/site, yet Playwright WebKit still reports style-src-attr
+        # (inline) with the vendored htm-preact module as the source: recorded, not hidden, and asserted for the others
+        for v in bp.log.csp[:3]:
+            finding(bp.engine, "CSP report on the dashboard as served after DASH1: %s blocked %s (source %s)" % (
+                v.get("directive"), v.get("blocked"), (v.get("source") or "-").rsplit("/", 1)[-1]))
+    else:
+        assert not bp.log.csp, "%s: CSP report on the dashboard as served: %s" % (brlib.label(bp.engine), bp.log.csp[:2])
+    report(bp, EXPECT_401, "public dashboard")
+    # a recorded note, not asserted: the 401 of the identity probe is the documented answer of a signed-out
+    # GET /api/v1/auth/session; Chromium and Playwright WebKit write a console line for any non-2xx answer
     if any("Failed to load resource" in c["text"] and "401" in c["text"] for c in bp.log.console):
-        finding(bp.engine, "the signed-out dashboard logs a console error for the 401 of its identity probe "
-                           "GET %s (the browser writes it for any non-2xx answer; no document says the probe "
-                           "is expected to fail)" % AUTH_SESSION)
+        finding(bp.engine, "the signed-out dashboard logs a console error for the documented 401 of its identity "
+                           "probe GET %s (the browser writes it for any non-2xx answer)" % AUTH_SESSION)
+
+
+def test_event_stream_slot_is_freed_on_reload(dashboard_page):
+    """Record only. At most 4 event streams per client address (web.md); DASH1 closes the EventSource on pagehide
+    and the server releases a slot when its connection ends. Six reloads in a row (more than the cap): does
+    every new page get its stream at once (200, data-state connected) or a 429 (a slot still held)?"""
+    bp = dashboard_page
+    open_dashboard(bp)
+    rounds = []
+    for i in range(6):
+        n0 = len([r for r in bp.log.requests if r["path"] == "/api/v1/public/events"])
+        t0 = time.monotonic()
+        bp.page.reload(wait_until="load")
+        live = True
+        try:
+            expect(pages.connection_state(bp.page)).to_have_attribute("data-state", "connected", timeout=8000)
+        except AssertionError:
+            live = False
+        got = [r["status"] for r in bp.log.requests if r["path"] == "/api/v1/public/events"][n0:]
+        rounds.append({"reload": i + 1, "live": live, "seconds": round(time.monotonic() - t0, 1), "statuses": got})
+    refused = [r for r in rounds if 429 in r["statuses"]]
+    finding(bp.engine, "event-stream slot after a reload (pagehide closes the EventSource): %d of %d reloads got a 429; "
+                       "rounds %s" % (len(refused), len(rounds), json.dumps(rounds)))
+    note("%s: stream slot on reload: %s" % (brlib.label(bp.engine), json.dumps(rounds)))
+    expect(pages.heading(bp.page)).to_have_text(pages.ROUTE_TITLES["/"])
 
 
 def test_signed_out_dashboard_requests(dashboard_page):
@@ -242,6 +271,10 @@ def test_login_wrong_password_text(browser_page, br_user):
     assert texts[0] == texts[1] and texts[0], "known vs unknown callsign: %r" % texts
     if texts[0] != pages.LOGIN_FAILED_TEXT:
         finding(bp.engine, "wrong-password text is %r, the UI source says %r" % (texts[0], pages.LOGIN_FAILED_TEXT))
+    # LOGIN1b (web.md): the wrong-code text only after a totp_required challenge for the same pair, never for a
+    # plain wrong password; and no code field appears for a user
+    assert pages.TOTP_WRONG_TEXT not in texts[0], "the wrong-code text for a plain wrong password: %r" % texts[0]
+    expect(pages.totp_field(bp.page)).to_have_count(0)
     expect(pages.signed_in_as(bp.page)).to_have_count(0)
     report(bp, {(AUTH_SESSION, 401)}, "login page")
 
@@ -287,22 +320,35 @@ def login_operator(engine, web_operator, web_base_url, web_ca):
 
 @pytest.mark.slow
 def test_operator_login_with_totp_step(browser_page, login_operator):
+    """LOGIN1b (web.md; auth-page.js): a wrong password of an operator gives the generic text and no code field;
+    the right password alone asks for the code (totp_required, no cookie); a wrong code for that same pair gives
+    the dedicated wrong-code text; the right code signs in. Three denied attempts, under the lockout of 5."""
     bp = browser_page
     op = login_operator
     bp.goto(pages.LOGIN)
+    ui_sign_in(bp, op.callsign, op.password + "x")
+    expect(pages.auth_error(bp.page)).to_be_visible()
+    plain = pages.auth_error(bp.page).inner_text().strip()
+    assert plain == pages.LOGIN_FAILED_TEXT, "operator, wrong password: %r" % plain
+    assert pages.TOTP_WRONG_TEXT not in plain
+    expect(pages.totp_field(bp.page)).to_have_count(0)
+    expect(pages.sign_in_button(bp.page)).to_be_enabled()
     ui_sign_in(bp, op.callsign, op.password)
     # the password alone does not sign an operator in: the form asks for the authenticator code
     expect(pages.totp_field(bp.page)).to_be_visible()
     expect(pages.signed_in_as(bp.page)).to_have_count(0)
     assert bp.session_cookie() is None, "an operator session before the TOTP step"
+    # the password stays in its field for this retry; only the code is typed (typing the password again would
+    # clear the challenge: auth-page.js clearLoginChallenge on input)
     web.PACER.wait("login")
     pages.totp_field(bp.page).fill("000000")
     pages.sign_in_button(bp.page).click()
-    expect(pages.auth_error(bp.page)).to_be_visible()
+    expect(pages.auth_error(bp.page)).to_contain_text(pages.TOTP_WRONG_TEXT)
     wrong = pages.auth_error(bp.page).inner_text().strip()
     note("%s: wrong TOTP code in the login form shows %r" % (brlib.label(bp.engine), wrong))
     assert bp.session_cookie() is None
     assert op.password not in wrong
+    expect(pages.totp_field(bp.page)).to_be_visible()
     code = op.client.authenticator.next_code()
     op.client.hide(code)
     web.PACER.wait("login")
@@ -341,10 +387,10 @@ def open_ops(bp, page, fresh=True):
     if fresh:
         bp.goto(pages.ops_url(page))
     else:
-        pages.ops_header_nav(bp.page).get_by_role("link", name=title, exact=True).click()
+        pages.ops_nav(bp.page, page).click()
     expect(pages.heading(bp.page)).to_have_text("Operator: " + title)
     expect(pages.ops_table(bp.page, title)).to_be_visible()
-    expect(bp.page.locator("[aria-busy='true']")).to_have_count(0, timeout=LIVE_MS)
+    expect(pages.ops_busy(bp.page)).to_have_count(0, timeout=LIVE_MS)
     return title
 
 
@@ -354,8 +400,8 @@ def test_ops_pages_render(operator_page, ops_data):
         title = open_ops(bp, page, fresh=(i == 0))
         headings = [t.strip() for t in pages.ops_headings(bp.page, title).all_inner_texts()]
         assert headings == pages.OPS_HEADINGS[page], "%s: %s" % (page, headings)
-        expect(pages.ops_header_nav(bp.page).get_by_role("link")).to_have_count(len(pages.OPS_PAGES))
-        expect(bp.page.locator(".ops-identity")).to_have_text("N0BRO")
+        expect(pages.ops_nav_links(pages.ops_header_nav(bp.page))).to_have_count(len(pages.OPS_PAGES))
+        expect(pages.ops_identity(bp.page)).to_have_text("N0BRO")
         expect(pages.ops_denied(bp.page)).to_have_count(0)
         assert bp.page.title().endswith("DV-Router operator"), bp.page.title()
     bp.page.wait_for_timeout(1500)
@@ -403,7 +449,7 @@ def test_ops_pages_refuse_user_and_anonymous(browser_page, br_user):
     # anonymous
     bp.goto(pages.ops_url("accounts"))
     expect(pages.ops_denied(bp.page)).to_be_visible()
-    expect(bp.page.get_by_role("link", name="Sign in")).to_be_visible()
+    expect(pages.ops_sign_in_link(bp.page)).to_be_visible()
     expect(pages.ops_table(bp.page, "Accounts")).to_have_count(0)
     bp.page.goto(bp.url(pages.ops_url("ids")))
     expect(pages.ops_denied(bp.page)).to_be_visible()
@@ -604,11 +650,12 @@ def test_xss_room_message_history_is_inert(user_page, stored_messages):
 
 @pytest.mark.slow
 def test_xss_room_message_arrives_live_on_the_public_stream(dashboard_page, br_user, web_client):
-    """A signed-out visitor sees room text as it arrives on the public SSE stream (web.md, Roles)."""
+    """A signed-out visitor sees room text as it arrives on the public SSE stream (web.md, Roles). Strict since
+    DASH1 (wip-13e7e70: live room text is no longer dropped when it arrives before the room snapshot); finding 2
+    of stage 3a. When the text does not appear, the tester reads the public stream itself for the report."""
     bp = dashboard_page
     open_dashboard(bp)
-    if not wait_live(bp):
-        pytest.skip("%s: the dashboard never reached Live, so there is no public stream to deliver the message" % brlib.label(bp.engine))
+    assert wait_live(bp), "%s: the dashboard never reached data-state connected, no public stream to deliver the message" % brlib.label(bp.engine)
     before = {m["id"] for m in history(br_user)}
     payload = PAYLOADS[1] + " live-" + bp.engine          # a new text: the service refuses a repeated one (409)
     status = post_text(br_user, payload)
@@ -635,12 +682,11 @@ def test_xss_room_message_arrives_live_on_the_public_stream(dashboard_page, br_u
                     sorted(row), row.get("item_type"), row.get("protocol"), row.get("room"), row.get("dst_kind"))
             except ValueError:
                 shape = "; the frame's data is not JSON"
-        finding(bp.engine, "a room message accepted with 202 (and in the history) did not appear on the signed-out "
-                           "dashboard within 15 s although the stream was Live (documented: web.md Roles, 'sees the public "
-                           "text and status messages of a room as they arrive on the public event stream'); a tester "
-                           "client on /api/v1/public/events during a second post saw events %s, %d with a message body" % (
-                               kinds, len(with_body)) + shape)
-        pytest.skip("live room text not delivered to the dashboard (finding recorded)")
+        pytest.fail("%s: a room message accepted with 202 (and in the history) did not appear on the signed-out "
+                    "dashboard within 15 s although the stream was live (web.md Roles, 'sees the public text and status "
+                    "messages of a room as they arrive on the public event stream'; DASH1); a tester client on "
+                    "/api/v1/public/events during a second post saw events %s, %d with a message body%s" % (
+                        brlib.label(bp.engine), kinds, len(with_body), shape))
     # signed out: still no history fetch
     assert not bp.seen("/api/v1/user/")
     assert_inert(bp, "dashboard, live message")
@@ -739,7 +785,7 @@ def test_xss_last_heard_callsign(dashboard_page, rig, web_client):
     if not bad:
         pytest.skip("the router stored no callsign with markup characters (links refused or sanitised: %s)" % heard_as)
     open_dashboard(bp)
-    cells = bp.page.locator("main table tbody td").all_inner_texts()
+    cells = pages.heard_cells(bp.page).all_inner_texts()
     for row in bad:
         base = str(row.get("callsign_base") or row.get("callsign"))
         assert any(base in c for c in cells), "heard callsign %r not shown as text" % base
@@ -799,14 +845,26 @@ def test_csp_header_and_enforcement(browser_page):
         assert not weak, "%s %s: CSP %r: %s" % (brlib.label(bp.engine), path, csp, "; ".join(weak))
         assert resp.headers.get("x-content-type-options", "").lower() == "nosniff"
         note("%s: CSP of %s: %s" % (brlib.label(bp.engine), path, csp))
-    # normal use: the dashboard, its routes and the login page raise no report (a report is a finding)
+    # normal use: the dashboard, its routes, the login and ops pages raise no report. Stage 3a: Playwright WebKit
+    # reported style-src-attr for the inline styles of the vendored htm-preact views; DASH1 (wip-13e7e70) removed
+    # every inline style (no style= in web/site), so none is expected in any engine
     open_dashboard(bp)
+    expect(pages.room_cards(bp.page).first).to_be_visible(timeout=LIVE_MS)
     bp.page.wait_for_timeout(500)
     bp.goto(pages.LOGIN)
+    expect(pages.heading(bp.page)).to_have_text("Sign in")
     bp.page.wait_for_timeout(500)
-    for v in list(bp.log.csp):
-        finding(bp.engine, "CSP report in normal use: %s blocked %s (source %s)" % (
-            v.get("directive"), v.get("blocked"), (v.get("source") or "-").rsplit("/", 1)[-1]))
+    bp.goto(pages.ops_url("accounts"))
+    expect(pages.ops_denied(bp.page)).to_be_visible()             # anonymous: the denial view renders too
+    bp.page.wait_for_timeout(500)
+    seen = ["%s blocked %s (source %s)" % (v.get("directive"), v.get("blocked"), (v.get("source") or "-").rsplit("/", 1)[-1])
+            for v in bp.log.csp]
+    for v in seen:
+        finding(bp.engine, "CSP report in normal use: %s" % v)
+    if bp.engine != "webkit":
+        # Playwright WebKit still reports style-src-attr from the vendored htm-preact module after DASH1: the
+        # finding lines above record it; Chromium and Firefox report none and that is asserted
+        assert not seen, "%s: CSP reports in normal use: %s" % (brlib.label(bp.engine), seen[:3])
     bp.log.csp.clear()
     # deliberate violations: an inline script and an inline event handler are blocked by this engine and reported
     bp.goto(pages.LOGIN)

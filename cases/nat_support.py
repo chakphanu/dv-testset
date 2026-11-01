@@ -161,6 +161,10 @@ class NatRtc(Rtc):
         return self.ev("() => window.__dvtArr")
 
     def lost_text(self):
+        """The page gave up the connection: the Listen card's data-state is 'failed' (WEB2: a failed peer reports
+        failed) or the status line has a loss text ('Connection lost. Connect again manually.', ...)."""
+        if self.panel_state() == "failed":
+            return True
         text = self.status().lower()
         return any(p in text for p in LOST_TEXT_PARTS) and not text.startswith(("listening", "connecting"))
 

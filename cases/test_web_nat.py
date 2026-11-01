@@ -20,9 +20,10 @@ criteria") are asserted.
   f  test_ice_404_goes_direct           no TURN configured: GET /rtc/ice answers 404 and the page goes direct
   g  test_ice_429_goes_direct           third connect within a minute: 429 from the issuer, the page goes direct
 
-DV-Router's dashboard needs the fragment workaround (finding 1 of stage 3a) for the Listen panel to render; the
-fixtures of browser_fixtures.py apply it, as in stage 3b. The protocol talker is a USRP dynamic client
-(DVT_USRP_DYNAMIC=1).
+Calibrated against dv-router:wip-13e7e70: the dashboard renders as served (DASH1, no workaround), the Listen card
+is driven through the WEB2 hooks of cases/web_pages.py and its data-state (connected, failed, closed), and the
+browser fixtures start only after GET /ready of dv-svc-web answered 200 (browser_fixtures.web_ready). The protocol
+talker is a USRP dynamic client (DVT_USRP_DYNAMIC=1).
 """
 import json
 import os
@@ -556,9 +557,7 @@ def test_ice_429_goes_direct(engine, web_user, engine_browsers, web_base_url, re
         for _ in range(3):
             rtc.connect(ROOM_FALLBACK, timeout_s=25.0)
             rtc.disconnect()
-            deadline = time.monotonic() + 8
-            while time.monotonic() < deadline and rtc.status() != pages.LISTEN_IDLE_TEXT:
-                time.sleep(0.1)
+            rtc.wait_idle(8.0)
         ice = rtc.ice_statuses()
         note(engine, "port_restricted", "429 fallback: GET /rtc/ice statuses of three connects", ice)
         rtc.connect(ROOM_FALLBACK, timeout_s=25.0)            # the fourth: still refused, still connects

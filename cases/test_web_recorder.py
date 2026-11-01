@@ -15,6 +15,12 @@ rooms. Overs of AMBE and other vocoder profiles need the decoder worker of K14c 
   f  test_audio_guards                            Sec-Fetch-Site, Origin, anonymous, another User-Agent
   g  test_audio_rate_limit                        20 WAV requests per 10 s per login (record)
   h  test_recordings_page_*                       the page lists the rows, plays one on each engine, audit row; anonymous text
+  i  test_browser_talk_is_recorded_as_webrtc      a Hold Talk over of the browser: one row, protocol webrtc, reason terminator
+
+Which over is which (DV-Router docs/design/recorder.md "PCM talk metadata", DOC6): the rows with protocol `usrp`
+and reason `terminator` are the USRP overs this file seeds (OVERS, rooms S and T); a direct browser talk through
+the WebRTC edge is recorded as protocol `webrtc`, and `terminator` is the explicit end of either (a PTT release
+too). Both use profile pcm-s16le-8k.
 """
 import json
 import os
@@ -30,13 +36,17 @@ pytest.importorskip("playwright.sync_api", reason="the playwright Python package
 import web_pages as pages  # noqa: E402
 from dvtest import browser as brlib  # noqa: E402
 from dvtest import web  # noqa: E402
-from webrtc_support import Talk, pcm_floats, tone_frames, usrp_client, wait_js  # noqa: E402
+from webrtc_support import (  # noqa: E402
+    MIC_UNAVAILABLE, Rtc, Talk, on_air_or_end, pcm_floats, press, release, tone_frames, usrp_client, wait_js, wait_talk_text)
 
 pytestmark = [pytest.mark.rig, pytest.mark.web, pytest.mark.browser, pytest.mark.webrtc]
 
 ROOM_A, ROOM_B = "S", "T"
+ROOM_WEB = "U"                  # the browser talk of test_browser_talk_is_recorded_as_webrtc
+WEB_TALKER = "N0BRU"            # br_user, the may_tx account of rtc_tx_page
 FIELDS = {"id", "room", "start_ms", "end_ms", "duration_ms", "decoded_bytes", "callsign", "protocol", "profile", "reason", "lost_units"}
 SAME = {"Sec-Fetch-Site": "same-origin", "Accept": "*/*"}
+AUD = json.dumps(pages.RECORDING_AUDIO_CSS)       # the shared <audio> of the recordings page, as a JS string literal
 AUDIO = "/api/v1/user/recordings/%s/audio.wav"
 OVERS = [  # (room, callsign, seconds, tone Hz)
     (ROOM_A, "N0TEST", 2.0, 700.0),
@@ -170,7 +180,10 @@ def test_list_visibility(seeded, rec_user, web_operator, web_client):
     assert len(mine) >= len(OVERS)
     protocols = sorted({r["protocol"] for r in mine})
     reasons = sorted({r["reason"] for r in mine})
-    web.finding("recorder: protocol strings of USRP overs %s, end reasons %s" % (protocols, reasons))
+    web.finding("recorder: the seeded USRP overs (rooms %s/%s) are listed with protocol %s, end reason %s"
+                % (ROOM_A, ROOM_B, protocols, reasons))
+    # recorder.md "PCM talk metadata": a USRP-origin over records protocol usrp (PCM alone does not select it)
+    assert protocols == ["usrp"], "USRP overs listed with protocol %s" % protocols
     for r in mine:
         assert set(r) == FIELDS, sorted(set(r) ^ FIELDS)
         assert re.fullmatch(r"[0-9a-f]{96}", r["id"])
@@ -358,42 +371,34 @@ def recordings_page(bp, path_query=""):
 
 @pytest.fixture
 def rec_page(user_page, recorder_on):
-    """user_page (N0BRU, signed in, dashboard workaround) plus the recordings.js workaround."""
-    user_page.apply_recordings_workaround()
+    """user_page (N0BRU, signed in); recordings.js as served (DASH1 removed the fragments, wip-13e7e70)."""
     return user_page
 
 
-def test_recordings_page_unpatched_is_recorded(engine, browser_page, recorder_on):
-    """Finding 1 of stage 3a again, in recordings.js: with the script as served, does a signed-in page render?
-    Recorded, not asserted (DASH1). Signed out here, so the only thing judged is whether the page draws at all."""
-    bp = browser_page
-    bp.goto(pages.RECORDINGS)
-    bp.page.wait_for_timeout(2500)
-    body = bp.page.inner_text("body")
-    errors = [e for e in bp.log.errors if "createElement" in e or "InvalidCharacter" in e]
-    web.finding("%s: /recordings/ as served, signed out: text %r; fragment errors %d" % (brlib.label(engine), body[:120].replace("\n", " | "), len(errors)))
-
-
 def test_recordings_page_anonymous_text(engine, browser_page, recorder_on):
+    """The page as served renders signed out (stage 3b: it stayed "Loading recordings..." until DASH1) and says
+    what to do: the 401 text of recordings.js errorText."""
     bp = browser_page
-    bp.apply_recordings_workaround()
     bp.goto(pages.RECORDINGS)
-    bp.page.wait_for_timeout(2500)
+    expect_text = "Sign in to browse recordings."
+    wait_js(bp.page, "() => document.querySelector('main') && document.querySelector('main').innerText.includes(%s)"
+            % json.dumps(expect_text), 15.0)
     body = bp.page.inner_text("main")
-    web.finding("%s: /recordings/ signed out shows %r (UI source: 401 'Sign in to browse recordings.' or 403 'Recordings need a user account.')"
-                % (brlib.label(engine), body[:200].replace("\n", " | ")))
+    note_text = body[:200].replace("\n", " | ")
+    web.finding("%s: /recordings/ signed out shows %r" % (brlib.label(engine), note_text))
     assert pages.recording_rows(bp.page).count() == 0
-    assert "Recordings need a user account." in body or "Sign in" in body
+    assert "Loading recordings..." not in body
+    assert not [e for e in bp.log.errors if "createElement" in e or "InvalidCharacter" in e], bp.log.errors[:1]
 
 
 def test_dashboard_shows_the_recording_notice(engine, user_page, recorder_on):
     bp = user_page
     bp.goto("/#/")
-    notice = bp.page.locator(".callout-warning", has_text=pages.RECORDING_NOTICE)
+    notice = pages.recording_callout(bp.page).filter(has_text=pages.RECORDING_NOTICE)
     notice.first.wait_for(state="visible", timeout=30000)
     assert "Recordings are kept for 7 days" in notice.first.inner_text()
-    link = bp.page.get_by_role("link", name="Recordings")
-    assert link.count() >= 1
+    link = pages.recordings_link(bp.page)
+    assert link.count() == 1
     web.finding("%s: dashboard recordings link href %r" % (brlib.label(engine), link.first.get_attribute("href")))
 
 
@@ -414,13 +419,13 @@ def test_recordings_page_lists_and_plays(engine, rec_page, seeded, web_operator)
     assert pages.RECORDING_NOTICE in pages.recording_notice(page).first.inner_text()
     pages.recording_room_filter(page).select_option(ROOM_A)
     pages.recording_apply(page).click()
-    wait_js(page, "() => document.querySelectorAll('table.recording-table tbody tr').length >= 2")
+    wait_js(page, "() => document.querySelectorAll(%s).length >= 2" % json.dumps(pages.RECORDING_ROWS_CSS))
     api_rows = [r for r in seeded.values() if r["room"] == ROOM_A]
     rows = pages.recording_rows(page)
     assert rows.count() >= len(api_rows)
     # the row of the 2 s over by N0TEST: module, callsign, protocol, reason, lost units as the API says
     row = [r for r in seeded.values() if r["room"] == ROOM_A and (r["callsign"] or "").upper().startswith("N0TEST")][0]
-    cell = page.locator("tr:has(button[data-play='%s'])" % row["id"])
+    cell = pages.recording_row(page, row["id"])
     cell.wait_for(state="visible", timeout=10000)
     text = cell.inner_text()
     for want in (row["room"], row["callsign"], row["protocol"], row["reason"], str(row["lost_units"])):
@@ -430,22 +435,22 @@ def test_recordings_page_lists_and_plays(engine, rec_page, seeded, web_operator)
     pages.recording_play_button(page, row["id"]).click()
     player = pages.recording_player(page)
     try:
-        wait_js(page, "() => { const a = document.querySelector('audio[aria-label=\"Recording audio\"]'); return a && a.currentTime > 0.3 && (!a.error || a.error.message.includes('MediaSink')); }", 15.0)
+        wait_js(page, "() => { const a = document.querySelector(%s); return a && a.currentTime > 0.3 && (!a.error || a.error.message.includes('MediaSink')); }" % AUD, 15.0)
     except AssertionError:
-        diag = page.evaluate("""() => { const a = document.querySelector('audio[aria-label="Recording audio"]');
+        diag = page.evaluate("""() => { const a = document.querySelector(%s);
             return a ? {t: a.currentTime, duration: a.duration, paused: a.paused, ready: a.readyState, network: a.networkState,
-                        error: a.error ? [a.error.code, a.error.message] : null, src: a.currentSrc.slice(-40)} : null; }""")
+                        error: a.error ? [a.error.code, a.error.message] : null, src: a.currentSrc.slice(-40)} : null; }""" % AUD)
         alert = pages.recording_alert(page).all_inner_texts()
         web.finding("%s: playback did not start in 15 s: audio %s, page alert %s, audio requests %s, console %s"
                     % (brlib.label(engine), json.dumps(diag), alert, json.dumps(seen), [c["text"][:100] for c in bp.log.console[-4:]]))
         raise
-    state = page.evaluate("""() => { const a = document.querySelector('audio[aria-label="Recording audio"]');
+    state = page.evaluate("""() => { const a = document.querySelector(%s);
         return {t: a.currentTime, duration: a.duration, paused: a.paused, ended: a.ended, ready: a.readyState,
-                network: a.networkState, error: a.error ? a.error.code : null, src: a.currentSrc.replace(location.origin, '')}; }""")
+                network: a.networkState, error: a.error ? a.error.code : null, src: a.currentSrc.replace(location.origin, '')}; }""" % AUD)
     status = pages.recording_player_status(page).inner_text()
     assert "Module %s" % ROOM_A in status and row["callsign"] in status, status
-    sink = page.evaluate("""() => { const a = document.querySelector('audio[aria-label="Recording audio"]');
-        return a && a.error ? a.error.message : ''; }""")
+    sink = page.evaluate("""() => { const a = document.querySelector(%s);
+        return a && a.error ? a.error.message : ''; }""" % AUD)
     if "MediaSink" in sink:
         # no sound card in the container: Firefox raises OnMediaSinkAudioError after its clock ran; the data itself loaded
         web.finding("%s: playback START works (currentTime advanced to %.2f of %.2f s, requests %s) but the engine reports %s: no audio "
@@ -456,9 +461,9 @@ def test_recordings_page_lists_and_plays(engine, rec_page, seeded, web_operator)
         return
     assert state["error"] is None
     # to the end of the 2 s clip
-    wait_js(page, "() => { const a = document.querySelector('audio[aria-label=\"Recording audio\"]'); return a.ended || a.currentTime > 1.8; }")
-    end = page.evaluate("""() => { const a = document.querySelector('audio[aria-label="Recording audio"]');
-        return {t: a.currentTime, duration: a.duration, ended: a.ended, error: a.error ? a.error.code : null}; }""")
+    wait_js(page, "() => { const a = document.querySelector(%s); return a.ended || a.currentTime > 1.8; }" % AUD)
+    end = page.evaluate("""() => { const a = document.querySelector(%s);
+        return {t: a.currentTime, duration: a.duration, ended: a.ended, error: a.error ? a.error.code : null}; }""" % AUD)
     web.finding("%s: playback of a 2 s recording: started %s, end %s, requests %s" % (brlib.label(engine), json.dumps(state), json.dumps(end), json.dumps(seen)))
     assert end["error"] is None and abs(end["duration"] - row["duration_ms"] / 1000.0) < 0.3, end
     assert pages.recording_alert(page).count() == 0
@@ -466,8 +471,8 @@ def test_recordings_page_lists_and_plays(engine, rec_page, seeded, web_operator)
     assert seen and all(x["status"] in (0, 200, 206) for x in seen) and any(x["status"] in (200, 206) for x in seen), seen
     assert player.get_attribute("controlslist") == "nodownload"
     # seek into the middle: a range request, playback goes on
-    page.evaluate("""() => { const a = document.querySelector('audio[aria-label="Recording audio"]'); a.currentTime = 0.5; a.play(); }""")
-    wait_js(page, "() => { const a = document.querySelector('audio[aria-label=\"Recording audio\"]'); return !a.error && a.currentTime > 0.6; }")
+    page.evaluate("""() => { const a = document.querySelector(%s); a.currentTime = 0.5; a.play(); }""" % AUD)
+    wait_js(page, "() => { const a = document.querySelector(%s); return !a.error && a.currentTime > 0.6; }" % AUD)
     web.finding("%s: after seeking to 0.5 s the page's audio requests are %s" % (brlib.label(engine), json.dumps(seen[-4:])))
     # the playback audit row (web.md: recording_play before the first byte)
     audit = web_operator.get("/api/v1/operator/audit?limit=200", expect=200).json()
@@ -476,3 +481,51 @@ def test_recordings_page_lists_and_plays(engine, rec_page, seeded, web_operator)
     web.finding("%s: audit rows mentioning recording after playback: %d" % (brlib.label(engine), len(plays)))
     problems = bp.problems({("/api/v1/rtc/ice", 404)})
     web.finding("%s: recordings page problems: %s" % (brlib.label(engine), problems[:5] or "none"))
+
+
+# ------------------------------------------------------------------------------------ i browser talk
+
+WEB_HOLD_S = 2.5
+
+
+@pytest.mark.slow
+def test_browser_talk_is_recorded_as_webrtc(engine, rtc_tx_page, recorder_on, rec_user):
+    """A Hold Talk over of the browser (N0BRU on module U, released by the button) is one recorder row with
+    protocol `webrtc` and reason `terminator`, profile pcm-s16le-8k (recorder.md "PCM talk metadata": direct
+    browser talk through the WebRTC edge records protocol webrtc; a PTT release is an explicit end). The
+    callsign and the duration of the time on air are checked; lost units are recorded."""
+    bp = rtc_tx_page
+    rtc = Rtc(bp)
+    rtc.open()
+    rtc.connect(ROOM_WEB)
+    t_press_ms = int(time.time() * 1000)
+    press(rtc)
+    text, _took = wait_talk_text(rtc, on_air_or_end, 30.0)
+    if text.startswith(MIC_UNAVAILABLE):
+        release(rtc)
+        pytest.skip("%s: no fake microphone (talk status %r)" % (brlib.label(engine), text))
+    assert text == pages.TALK_ON_AIR_TEXT, "talk status %r after pressing" % text
+    t_air = time.monotonic()
+    time.sleep(WEB_HOLD_S)
+    on_air_s = release(rtc) - t_air
+    ended, _took = wait_talk_text(rtc, lambda s: s != pages.TALK_ON_AIR_TEXT, 8.0)
+    assert ended == pages.TALK_RELEASED_TEXT, ended
+    lo, hi = day_window()
+    deadline = time.monotonic() + 30.0
+    mine = []
+    while time.monotonic() < deadline and not mine:
+        rows = all_rows(rec_user.client, room=ROOM_WEB, date_from_ms=lo, date_to_ms=hi)
+        mine = [r for r in rows if (r["callsign"] or "").split("/")[0].upper() == WEB_TALKER and r["start_ms"] >= t_press_ms - 2000]
+        if not mine:
+            time.sleep(1.0)
+    web.finding("%s: recorder row of a browser Hold Talk over (%.1f s on air): %s" % (
+        brlib.label(engine), on_air_s, json.dumps([{k: r[k] for k in ("protocol", "reason", "profile", "duration_ms", "lost_units", "callsign")}
+                                                   for r in mine])))
+    assert len(mine) == 1, "browser over: %d rows for %s in room %s since the press" % (len(mine), WEB_TALKER, ROOM_WEB)
+    row = mine[0]
+    assert row["protocol"] == "webrtc", "a browser talk is recorded as protocol %r, recorder.md says webrtc" % row["protocol"]
+    assert row["reason"] == "terminator", "a released browser over ends with reason %r, recorder.md says terminator" % row["reason"]
+    assert row["profile"] == "pcm-s16le-8k", row["profile"]
+    assert set(row) == FIELDS, sorted(set(row) ^ FIELDS)
+    assert row["duration_ms"] == row["decoded_bytes"] // 16
+    assert abs(row["duration_ms"] - on_air_s * 1000) <= 800, (row["duration_ms"], round(on_air_s, 2))

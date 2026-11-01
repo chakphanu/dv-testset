@@ -1,10 +1,15 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Web unit, stage 3a: browser cases
 
-DV-Router's web UI in real browsers: `cases/test_web_browser.py`, 18 cases, 54 runs (every case on three
-engines). Built on the stage 1 and 2 rig (`docs/rig.md`, "Web profile"; `docs/web-api-cases.md`) and on the new
-`browser` profile (`docs/rig.md`, "Browser profile"). Calibrated against the image **`dv-router:wip-5aa7cfd`**
-(the first calibration runs were on `wip-f3adb62`; the dashboard defect below is the same on both).
+DV-Router's web UI in real browsers: `cases/test_web_browser.py`, 19 cases, 57 runs (every case on three
+engines). Built on the stage 1 and 2 rig (`docs/rig.md`, "Web profile"; `docs/web-api-cases.md`) and on the
+`browser` profile (`docs/rig.md`, "Browser profile"). Calibrated against `dv-router:wip-5aa7cfd` and **rerun on
+`dv-router:wip-648e539`** (superset of 13e7e70: DASH1, WEB2, LOGIN1b, TALK1; diff in `docs/results-adaptation.md`). Since WEB2
+every selector in `cases/web_pages.py` is a `data-testid` (naming scheme: DV-Router `web/README.md`, "Stable browser rig
+hooks"), and the connection widgets are read from `data-state` (`listen-connection`, `dashboard-connection`: idle,
+connecting, connected, failed, closed). Controls without a hook keep a text/role/id fallback in the same module (h1,
+`#auth-error`, `#auth-notice`, `#talk-status`, `p[role=status]`, `main .card`, the ops tables, `.ops-identity`, the recordings
+page). The browser fixtures wait for `GET /ready` of `dv-svc-web` (200) instead of polling a page.
 
 ## Engines
 
@@ -24,24 +29,24 @@ certificate errors (`ignore_https_errors`, the proxy certificate is self-signed)
 
 | Case | What it asserts | Engines |
 |------|-----------------|---------|
-| `test_dashboard_renders_the_state` | the dashboard as served shows room cards after its state arrived (no workaround). **Fails on all three engines: finding 1** | 3 |
-| `test_dashboard_routes_with_the_fragment_workaround` | with `/public.js` served with the one-line fix (below): the six routes render through the page's own navigation, state fetched, no error banner | 3 |
+| `test_dashboard_renders_the_state` | the dashboard as served (no workaround) shows room cards after its state arrived, the six routes render through the page's own navigation, no page error and no CSP report (Playwright WebKit: recorded, see finding 3). **Passes on all three engines since DASH1** (failed on all three before) | 3 |
+| `test_event_stream_slot_is_freed_on_reload` (record) | six reloads of a Live dashboard: `pagehide` closes the EventSource, so no reload gets a 429 (0 of 6 on every engine, the next stream is live within 0.0 to 0.3 s) | 3 |
 | `test_signed_out_dashboard_requests` | a signed-out dashboard requests nothing under `/api/v1/user/`, `/operator/` or `/rtc/` (no message history), the public SSE is connected (200, `text/event-stream`), the only `auth/session` answers are 401, no error banner and no "Unauthorized", "Cannot connect", "Offline" text, and the history sign-in link is shown | 3 |
-| `test_login_wrong_password_text` | wrong password and unknown callsign give the same fixed text, no cookie, password field cleared, the callsign is not echoed | 3 |
+| `test_login_wrong_password_text` | wrong password and unknown callsign give the same fixed text, no cookie, password field cleared, the callsign is not echoed, and (LOGIN1b) neither the wrong-code text nor a code field | 3 |
 | `test_user_login_cookie_and_logout` | user login in the form; the cookie as the browser sees it is `__Host-dv_web`, Secure, HttpOnly, SameSite=Strict, Path=/, host-only; `document.cookie` does not show it; password and CSRF token are in no web storage; sign out removes the cookie and the session answers 401 | 3 |
-| `test_operator_login_with_totp_step` (slow) | password alone does not sign an operator in (code field appears, no cookie), a wrong code is refused, the right code signs in, the cookie flags, `role operator / totp ok`, sign out | 3 |
+| `test_operator_login_with_totp_step` (slow) | password alone does not sign an operator in (code field appears, no cookie), a wrong password still gives the generic text, a wrong code AFTER the challenge gives the dedicated wrong-code text (LOGIN1b), the right code signs in, the cookie flags, `role operator / totp ok`, sign out | 3 |
 | `test_ops_pages_render` | the six operator pages (clients, events, accounts, invites, audit, **Radio IDs `#/ids`**) render for an operator with the headings of the UI and the five-plus-one navigation, one document | 3 |
 | `test_ops_pages_match_the_api` | accounts page = `/operator/accounts` (callsign, name, role, status), invites page lists the open invite and no code value, audit page has the invite action, Radio IDs rows = `/operator/ids/rows` | 3 |
 | `test_ops_pages_refuse_user_and_anonymous` | anonymous and user get "Operator access required" (also `#/ids`), the page requests no operator route, the same browser gets 401 / 403 from `/operator/accounts`, `/audit`, `/invites`, `/ids/rows` | 3 |
 | `test_xss_display_names_on_the_accounts_page` | eight payloads stored as display names (registration), the accounts page shows each stored name as text, `window.__pwn` unset, no dialog, no live element made from the text | 3 |
 | `test_xss_account_limits_are_inert` | free text in the `limits` object (the only other free-form account field) shown as the API's JSON | 3 |
 | `test_xss_room_message_history_is_inert` (slow) | the eight payloads as room messages, a signed-in user's dashboard shows each stored body as `textContent` | 3 |
-| `test_xss_room_message_arrives_live_on_the_public_stream` (slow) | a payload posted while a signed-out dashboard is Live appears as text. **Skipped with finding 2 on Chromium and Firefox in the last run (WebKit passed); it varied between runs** | 3 |
+| `test_xss_room_message_arrives_live_on_the_public_stream` (slow) | a payload posted while a signed-out dashboard is Live appears as text. **Passes on all three engines since DASH1** (live text before the room snapshot is buffered); no skip branch | 3 |
 | `test_xss_invite_fields` | hostile callsign, role and expiry in invites are refused 400/422, the invites page shows no payload | 3 |
 | `test_xss_audit_text` | after hostile logins, hostile path segments and a name change: every row of the audit page is a row of the API tail, hostile characters shown as text if any (none reached the tail: failed logins are recorded as `unauthenticated`) | 3 |
 | `test_xss_last_heard_callsign` | six D-STAR callsigns with markup characters are refused at link time by the router, so there is nothing to render. **Skipped (3)** | 3 |
 | `test_xss_reflected_in_url_and_forms` | payloads in query, hash and path of the dashboard, login, register, ops pages, typed into the Last heard filter and the login form: nothing runs, nothing becomes markup, the typed callsign is not echoed | 3 |
-| `test_csp_header_and_enforcement` | CSP on `/`, `/login.html`, `/register.html`, `/totp.html`, `/ops/`: `default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`, no unsafe-inline / unsafe-eval, nosniff; a deliberate inline script and inline handler are blocked and reported (`script-src-elem`, `script-src-attr`, `img-src`) | 3 |
+| `test_csp_header_and_enforcement` | CSP on `/`, `/login.html`, `/register.html`, `/totp.html`, `/ops/`: `default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`, no unsafe-inline / unsafe-eval, nosniff; a deliberate inline script and inline handler are blocked and reported (`script-src-elem`, `script-src-attr`, `img-src`); normal use (dashboard, login, ops) reports nothing on Chromium and Firefox (asserted); Playwright WebKit still reports `style-src-attr` (recorded, finding 3) | 3 |
 | `test_admin_spa_loads` | the admin host sign-in screen renders, CSP restrictive | 3 |
 
 XSS probes use the stage 1 and 2 helpers: the payloads (`dvtest/browser.py` `XSS_PAYLOADS`: script tag, `<img onerror>`,
@@ -52,25 +57,29 @@ means: `window.__pwn` stays undefined, no dialog, no `securitypolicyviolation` f
 The service stored display names and room messages unchanged (the page showed the literal payload); callsigns,
 invite roles and expiries with markup are refused by the API.
 
-Last run on `dv-router:wip-5aa7cfd` (`out/20261101T140506Z`, 8 min 28 s): **49 passed, 3 failed, 5 skipped**, 57
-finding lines. Per engine (passed / failed / skipped): Playwright Chromium 16 / 1 / 2, Playwright Firefox 16 / 1 / 2,
-Playwright WebKit 17 / 1 / 1; finding lines Chromium 6, Firefox 5, WebKit 46 (43 of them the style reports of
-finding 3). The three failures are `test_dashboard_renders_the_state` (finding 1); the skips are the live-message
-case (finding 2, two engines) and the last-heard case (3).
+Before, on `dv-router:wip-5aa7cfd` (`out/20261101T140506Z`, 8 min 28 s): 49 passed, 3 failed, 5 skipped (the dashboard case on three
+engines; the live-message case skipped on two; the last-heard case skipped on three).
+
+Now, on `dv-router:wip-648e539` (`out/20261101T203217Z` as part of the 3a+3b session, 21 min 13 s, and `out/20261101T202754Z`
+`-k chromium`: 18 passed, 1 skipped): the browser file is 57 runs: **52 passed, 2 failed, 3 skipped** in the first full session, and the
+two failures were case assertions that were too strict for Playwright WebKit (CSP reports of finding 3; the cases now record them
+for that engine and still assert none for Chromium and Firefox): re-run in `out/20261101T205603Z` (`-k` selection of the recorder file and the two WebKit cases: 21 passed). So **54 passed, 0 failed, 3 skipped** (the skips are the last-heard case, see
+Not covered). That session also showed a rig matter (see "Browser connection loss" below): a long session lost browsers
+(`Browser closed`) in 4 recorder setups; run 3a and 3b as separate runs.
 
 ## Findings (observed vs documented)
 
-None of these is asserted except where it is the documented behaviour (case 1). Each is a line in `web-findings.txt`.
+Each is a line in `web-findings.txt`. Status on `wip-648e539` (and 13e7e70):
 
-| # | Observed | Documented / expected |
-|---|----------|-----------------------|
-| 1 | **The public dashboard does not render in any engine** (`wip-f3adb62` and `wip-5aa7cfd`). Once `/api/v1/public/state` has arrived, `PublicContent` in `web/site/public.js` returns ``html`<>...</>` ``; the vendored `htm-preact-3.1.1.module.js` turns `<>` into a node of type `''` (it exports no `Fragment`) and Preact calls `document.createElement('')`: `InvalidCharacterError` in Chromium, Firefox and WebKit, `main` stays "Loading", the header and the live state widget work. Reproduced outside the rig with the image's own files and the rig's state JSON. Minimal fix: a component that returns its children (the case `..._with_the_fragment_workaround` serves exactly that change, `dvtest.browser.patch_public_js`, and switches itself off when the script has no `<>`) | web.md: public dashboard with rooms, last heard, Listen/Talk and room messages |
-| 2 | A room message accepted with 202, stored in the history and delivered on the public stream (a tester client sees an `event: data` frame with the body) does **not** always appear on a Live signed-out dashboard within 15 s (workaround on): missing on Chromium and Firefox in the last run, on all three in an earlier one, delivered on WebKit; the frame is `type data`, fields `body callsign id item_type protocol room ts_ms`, `item_type text`, `protocol web`, `room A`, so it looks valid; cause not found | web.md Roles: anonymous "sees the public text and status messages of a room as they arrive on the public event stream" |
-| 3 | Playwright WebKit reports a CSP violation `style-src-attr` (inline style, source `htm-preact-3.1.1.module.js`) and the console error "Refused to apply a stylesheet..." on every page that renders; Chromium and Firefox report none | CSP with no violation in normal use |
-| 4 | The signed-out dashboard probes `GET /api/v1/auth/session` and gets 401; Chromium and Playwright WebKit write a console error for it (Firefox does not) | not documented as expected; "no connection error shown" holds |
-| 5 | At most 4 event streams per client address (public and `/api/v1/operator/stream` together) and a closed stream's slot is freed at the next 15 s heartbeat: pages opened within that time get 429, the app retries (3 s) and goes on, Firefox logs "can't establish a connection" | the cap and the 15 s heartbeat are documented; the effect on a reloading user or on one address with several tabs (the browser container is one address) is not. The cases wait for stale slots (`browser_fixtures.wait_for_stream_slots`) |
-| 6 | A wrong authenticator code in the login form shows "The callsign, password or code is incorrect." The UI has a dedicated text for `totp_invalid` ("...wrong or was already used"), but the API answers a wrong code at login with plain 401. The password-only first step of an enrolled operator is audited as a denied login and counts toward the lockout (5 per (account, address)) | web.md: lockout 5 failures per 15 minutes; no word on the password-only step |
-| 7 | The admin host answers 404 to a client address that is not in `[admin] allow_from` (the browser container until `<BROWSER_IP>` was added to the rig's list) | admin.md: allow_from "optional on the admin host, required for the /admin/ prefix"; whether it applies to the host when set is not stated |
+| # | Observed before | Status now |
+|---|-----------------|------------|
+| 1 | the public dashboard did not render in any engine (`<>` fragment, `InvalidCharacterError`) | **CLOSED by DASH1**: `test_dashboard_renders_the_state` passes on Chromium, Firefox and Playwright WebKit with no workaround, no page error; `patch_public_js` and `patch_fragments_js` are deleted |
+| 2 | a room message delivered on the public stream did not always appear on a Live signed-out dashboard | **CLOSED by DASH1**: the live-message case passes on all three engines, no skip branch |
+| 3 | Playwright WebKit reports CSP `style-src-attr` (inline) from `htm-preact-3.1.1.module.js` and "Refused to apply a stylesheet" | **STILL OPEN, WebKit only**: DASH1 removed every `style=` of `web/site` (README rule), yet WebKit reports it on every page that renders (dashboard, login, ops, recordings, 100+ lines in the run); Chromium and Firefox report none and that is asserted. Cause not determined here: the reported source is the vendored htm-preact module, `web/site` has no `style=`; to DV-Router |
+| 4 | the signed-out dashboard's `GET /auth/session` 401 is a console error on Chromium and WebKit | unchanged, documented contract: recorded note only (Chromium; WebKit the same) |
+| 5 | event-stream cap 4 per address, a closed stream freed at the next 15 s heartbeat; reload gets 429 | **CLOSED for the page**: `pagehide` closes the EventSource, 0 of 6 reloads got a 429 on every engine (`test_event_stream_slot_is_freed_on_reload`); `wait_for_stream_slots` is kept for pages closed by the harness. The rig's stdlib TLS proxy used to delay the release of an API client's slot (it did not pass the client close upstream); fixed in `dvtest/tools/tls_proxy.py` |
+| 6 | the login form showed the generic text for a wrong code (the dedicated text was dead) | **CLOSED by LOGIN1b** (page) and LOGIN1 (budget): the wrong-code text appears only after a `totp_required` challenge for the same pair, never for a plain wrong password; the password-only step no longer counts toward the lockout |
+| 7 | admin host 404 for an address outside `[admin] allow_from` | unchanged (not stated by admin.md) |
 
 Observed and consistent with the documents: CSP header on every page and enforced by each engine; cookie
 `__Host-dv_web` with all documented attributes as the browser sees them; role floors in the UI and the API for
@@ -101,14 +110,14 @@ No difference needed a change of the rig except `allow_from` (an error on our si
 | Safari and iOS | Playwright WebKit is not Safari |
 | WebMonitor | needs the rig's metrics |
 | Last-heard rendering of a hostile callsign | the router refuses markup callsigns at link time for D-STAR (six variants); other protocols' callsign fields not tried |
-| Live room text (finding 2) and the dashboard without the workaround beyond case 1 | the cases that need a rendered dashboard run with the workaround, named in each fixture (`dashboard_page`, `user_page`) |
+| Last-heard rendering with markup | skipped on 3 engines (the router refuses the callsigns at link time) |
 | Operator actions (edit, reset, delete, invite form, kick, radio-ID commands) in the UI | forms are not submitted; the destructive paths are API-level in stage 2 |
-| `data-testid` selectors (WEB2), `/health` and `/ready` on web | not on `wip-5aa7cfd`; selectors are in `cases/web_pages.py` only |
+| Controls without a `data-testid` | h1, the auth error/notice, the talk status line, the ops tables, the recordings page keep a text/role/id fallback in `cases/web_pages.py` |
 
 ## Rerun
 
 ```sh
-XLXD_SUT_IMAGE=dv-router:wip-5aa7cfd DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-router DVT_SUT_LAUNCH=native \
+XLXD_SUT_IMAGE=dv-router:wip-648e539 DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-router DVT_SUT_LAUNCH=native \
   DVT_SUT_CONFIG=<template path> DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml \
   scripts/run.sh -m rig --capture --profile web,browser -- cases/test_web_browser.py
 ```
@@ -116,13 +125,13 @@ XLXD_SUT_IMAGE=dv-router:wip-5aa7cfd DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-ro
 Pull the base image once (`docker pull` of `BROWSER_BASE_IMAGE` of `.env.example`, the one internet use); the
 first run builds `dvt-browser:local` and the tester image. Select parts with `-k` (`-k chromium`, `-k xss`); the
 file takes about 8 minutes, most of it waiting for the registration budget, TOTP steps and the event-stream slots.
-Run it alone: the stage 2 limits cases restart the web service. Failure artifacts and notes (CSP headers seen,
+Run it alone (and not in one session with the 3b files: see "Browser connection loss"): the stage 2 limits cases restart the web service. Failure artifacts and notes (CSP headers seen,
 engine builds, page-error dumps with the public state JSON) are under `out/<run>/web/browser/`; findings are in
 `out/<run>/web-findings.txt`.
 
 # Stage 3b: WebRTC Listen / Talk and recorder playback
 
-`cases/test_web_webrtc.py` (9 cases, 27 runs) and `cases/test_web_recorder.py` (7 API cases and 4 page cases on three engines, 19 runs). Calibrated against **`dv-router:wip-5aa7cfd`**; docs read: DV-Router `docs/design/web.md`, `deployment.md` ("Test rig"),
+`cases/test_web_webrtc.py` (12 cases, 36 runs) and `cases/test_web_recorder.py` (7 API cases and 4 page cases on three engines, 19 runs). Calibrated against `dv-router:wip-5aa7cfd`, rerun on **`dv-router:wip-648e539`** (55 of 55 pass, `out/20261101T205817Z`, 12 min 50 s; before: 46 runs, 45 passed and the hold case an expected failure); docs read: DV-Router `docs/design/web.md`, `deployment.md` ("Test rig"),
 `docs/project/testing.md`, `docs/api/openapi-web.yaml`, `config.md`, `recorder.md` and the page sources `web/site/public.js`,
 `web/site/recordings/recordings.js` (a tree two documentation commits ahead of the image).
 
@@ -144,7 +153,10 @@ engine builds, page-error dumps with the public state JSON) are under `out/<run>
 | `test_listen_is_not_offered_to_anonymous` | `guest_listen` is off: a signed-out dashboard has no Listen panel and sends no `/rtc/` POST | 3 |
 | `test_listen_receives_the_tone` | user without `may_tx`: no Talk controls; Listen / Connect on module H: connected, "Listening on module H", `GET /rtc/ice` once (404, TURN off), answer SDP has `PCMU/8000`, `ptime:20`, `ice-lite`, one host candidate `<net>.11:50000`; silence (rms < 0.004) before the over; a 700 Hz USRP over: `inbound-rtp` packets and bytes grow, 160 bytes per packet, 50 packets/s (19.96 to 20.09 ms), loss 0, codec `audio/PCMU`, jitter under 60 ms, the Goertzel scan in the page finds 700 Hz within 20 Hz (best of three 1 s windows); no packets and silence after the over; Disconnect sends `/rtc/close` and the circuit answers 403 afterwards | 3 (frequency: Chromium, WebKit; Firefox: see below) |
 | `test_listen_lease_stays_alive_past_30_s` (slow) | 36 s of listening: connected throughout, four `POST /rtc/alive` (204) at connect and every 10 s, then a 2.5 s over still arrives (125 packets) and the tone is 700 Hz | 3 |
-| `test_talk_reaches_a_protocol_listener` (slow) | Hold Talk disabled before Listen; mouse down on `#talk-button` (pointerdown): mic, re-offer, "On air"; a USRP client on the module hears the over: frame count (>= 80 % of 50/s of the time the page stayed on air), no gap over 120 ms, dominant frequency (Chromium 700 Hz within 20 Hz), the public state names `N0BRU` in `rooms[].onair.callsign` | 3 (WebKit's gap limit 250 ms) |
+| `test_talk_reaches_a_protocol_listener` (slow) | Hold Talk disabled before Listen; pointer down on `talk-ptt`: mic, re-offer, "On air"; a 6 s hold stays "On air" until the release (TALK1: **passes, the expected-failure branch is gone**), then "Ended: Button released."; a USRP client on the module hears the over: frame count (>= 80 % of 50/s of the time on air), no gap over 120 ms (WebKit 250 ms), dominant frequency (Chromium 700 Hz within 20 Hz), the public state names `N0BRU` in `rooms[].onair.callsign`; the `renewed` acks (below) | 3 |
+| `test_talk_hold_10_s_stays_on_air_until_release` (slow, new) | a 10 s hold on each engine: "On air" the whole time, the router hears about 10 s of frames (494 to 506), "Ended: Button released." at the release, at least 4 `renewed` acks (10 seen) | 3 |
+| `test_talk_release_inside_the_watchdog_window` (new) | a 2 s hold: "Ended: Button released." at the release, 2 acks | 3 |
+| `test_listen_gauges_in_the_hub_metrics` (new) | WEB2 gauges `dv_edge_webrtc_listeners` and `dv_edge_webrtc_room_listeners{room}` read from the hub metrics (`metrics xlxd-sut`): 1 while listening on room M, 0 after Disconnect (all three engines; skips when the family is absent) | 3 |
 | `test_talk_denied_without_may_tx` (slow) | no `#talk-button`, no `.talk-controls`; a raw `{"op":"ptt","state":"down",...}` on the control channel is answered `{"op":"ptt","state":"denied","code":"denied"}`, never granted, nothing sent upstream | 3 |
 | `test_talk_floor_busy_when_the_room_is_taken` (slow) | a USRP talker holds the module (1000 Hz, 24 s): Hold Talk shows "Denied: The floor is busy." within 0.22 to 0.4 s | 3 |
 | `test_talk_second_talker_is_denied` (slow) | the browser is on air; a second USRP client sends 1700 Hz on the module: a third client hears no 1700 Hz | 3 |
@@ -152,6 +164,18 @@ engine builds, page-error dumps with the public state JSON) are under `out/<run>
 | `test_reconnect_after_the_lease_expires` (slow, record) | see Reconnect | 3 |
 | `test_recording_notice_is_published` .. `test_audio_rate_limit` | see Recorder | API |
 | `test_recordings_page_*`, `test_dashboard_shows_the_recording_notice` | see Recorder | 3 |
+
+## TALK1: lease acknowledgements (wip-648e539)
+
+The probe (`dvtest/browser.py` `RTC_PROBE_JS`) now records the frames of the control DataChannel. During a hold the edge answers
+every accepted lease renewal of the live over with `{"op":"ptt","state":"renewed","code":"ok"}` and the page's 4 s watchdog is
+reset by it: 6 acks in a 6 s hold and 10 in a 10 s hold on every engine, spaced 999 to 1025 ms (the page sends the lease every
+second; the documented cap is one per 500 ms per peer, so the minimum interval asserted is 450 ms and the observed minimum is
+999.0 ms); no other ptt frame but `ended/released` at the release; the 2 s hold gives 2 acks. Hold results (router side): Chromium
+10 s: 506 frames, max gap 30 ms, peak 700 Hz; Firefox: 504 frames, max gap 45 ms, 1000 Hz (its fake source); Playwright WebKit:
+494 frames, max gap 97 ms, peak 500 Hz (its mock device, as before). The status never leaves "On air" in the 0.5 s timeline of any
+hold, the release text is "Ended: Button released." (finding 10 closed). The lease denied/rate cap of one reply per 500 ms per peer
+is not driven.
 
 ## Results per engine (Listen / Talk)
 
@@ -222,6 +246,27 @@ Each is a `FINDING:` line in `out/<run>/web-findings.txt`; none of them is asser
 | 20 | Recorder | Playwright WebKit reports the CSP style violation of finding 3 on the recordings page too | CSP with no violation in normal use |
 | 21 | Rig | the browser container has no audio device: Firefox raises `OnMediaSinkAudioError` after the clock ran; its Web Audio context stays `suspended` (`media.cubeb.force_null_context` and the autoplay prefs did not change that) | not a product matter |
 
+### Status of the 3b findings on 648e539
+
+| # | Status |
+|---|--------|
+| 8 | **CLOSED by TALK1**: the over lasts the whole hold (6 s and 10 s) on all three engines; acks as above |
+| 10 | **CLOSED**: "Ended: Button released." is seen after every hold (2, 6, 10 s) |
+| 17 | **explained (DOC6, recorder.md "PCM talk metadata")**: the `usrp` / `terminator` rows were the USRP overs this run sent into rooms S and T; a browser Talk over is recorded as `protocol webrtc`, reason `terminator` (`test_browser_talk_is_recorded_as_webrtc`, room U: one row, `pcm-s16le-8k`, passes on all three engines); the seeded-rows case now asserts `usrp` for its own overs only |
+| 18 | **CLOSED by DASH1**: `recordings.js` renders as served; `/recordings/` lists the rows, no patch |
+| 20 | WebKit CSP `style-src-attr` on the recordings page: still open with finding 3 |
+| 9, 11, 12, 13, 14, 15, 16, 19, 21 | unchanged |
+
+## Browser connection loss in a long session
+
+In the combined 3a+3b session (`out/20261101T203217Z`, 21 min) four recorder setups failed with `Browser closed` / "Provisional navigation
+canceled" (one per engine and one more), and in the NAT run without TURN (`out/20261101T211249Z`, 26 min) the three WebKit
+404 cases did (`Target page, context or browser has been closed`); each passes when rerun alone (`out/20261101T205603Z`, and
+`-k "404 and webkit"`: 3 passed). The service log shows no restart and the container's memory peaked at about 510 MiB of 3 GiB in a
+short run; the cause (a browser process dying inside the shared `playwright run-server`) is not established. Mitigation:
+`engine_browsers` reconnects when its cached browser is no longer connected (`is_connected()`), and the stages are run as separate
+sessions as documented. Not hidden: a case that loses its browser still fails.
+
 ## Gaps
 
 | What | Why |
@@ -238,12 +283,12 @@ Each is a `FINDING:` line in `out/<run>/web-findings.txt`; none of them is asser
 ## Rerun (stage 3b)
 
 ```sh
-DVT_USRP_DYNAMIC=1 XLXD_SUT_IMAGE=dv-router:wip-5aa7cfd DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-router DVT_SUT_LAUNCH=native \
+DVT_USRP_DYNAMIC=1 XLXD_SUT_IMAGE=dv-router:wip-648e539 DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-router DVT_SUT_LAUNCH=native \
   DVT_SUT_CONFIG=<template path> \
   DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/recorder.toml \
   scripts/run.sh -m rig --capture --profile web,browser -- cases/test_web_webrtc.py cases/test_web_recorder.py
 ```
 
-About 10 minutes (the 36 s lease cases and the 25 s lease-expiry cases, three engines each). `-k listen`, `-k talk`, `-k reconnect`,
+About 13 minutes (the 36 s lease cases and the 25 s lease-expiry cases, three engines each). `-k listen`, `-k talk`, `-k reconnect`,
 `-k recordings` select parts; the recorder cases skip without `recorder.toml`, all WebRTC cases that talk skip without
 `DVT_USRP_DYNAMIC=1`. Measurements and observations are also in `out/<run>/web/webrtc-notes.jsonl`.

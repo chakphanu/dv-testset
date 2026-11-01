@@ -65,6 +65,23 @@ def test_authenticator_never_reuses_a_counter_and_stays_within_one_step():
     assert "Authenticator(...)" == repr(auth)
 
 
+def test_authenticator_wrong_code_is_never_valid_nearby():
+    import base64
+    secret = base64.b32encode(RFC_KEY).decode()
+    for t in range(0, 30 * 400, 7):
+        clock = Clock(float(t))
+        auth = web.Authenticator(secret, clock=clock, sleep=clock.sleep)
+        wrong = auth.wrong_code()
+        step = t // 30
+        assert len(wrong) == 6 and wrong.isdigit()
+        assert wrong not in {web.hotp(RFC_KEY, c) for c in range(max(0, step - 2), step + 3)}
+    # it uses no counter: next_code still gives the current step
+    clock = Clock(30 * 100 + 5.0)
+    auth = web.Authenticator(secret, clock=clock, sleep=clock.sleep)
+    auth.wrong_code()
+    assert auth.next_code() == web.hotp(RFC_KEY, 100)
+
+
 def test_pacer_login_burst_then_rate():
     clock = Clock(0.0)
     pacer = web.Pacer(clock=clock, sleep=clock.sleep)

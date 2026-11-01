@@ -130,16 +130,6 @@ def test_artifact_paths_are_flat_and_safe(tmp_path):
     assert os.path.dirname(path) == os.path.join(str(tmp_path), "web", "browser")
 
 
-def test_fragment_workaround_rewrites_only_the_public_content_fragment():
-    src = "import x;\nexport function C() {\n  return html`<>\n    ${a}\n    <${B} />\n  </>`;\n}\nconst y = html`<p></p>`;\n"
-    out = b.patch_public_js(src)
-    assert out.startswith("const __dvtFragment = (p) => p.children;\n")
-    assert "html`<${__dvtFragment}>" in out and "<//>`" in out
-    assert "html`<>" not in out and "</>`" not in out
-    assert "html`<p></p>`" in out                       # nothing else touched
-    assert b.patch_public_js("const y = html`<p></p>`;") is None      # fixed upstream: the workaround is off
-
-
 def test_stream_slot_gate_waits_for_stale_streams_only(monkeypatch):
     import browser_fixtures as bf
     clock = {"t": 1000.0}
@@ -153,3 +143,64 @@ def test_stream_slot_gate_waits_for_stale_streams_only(monkeypatch):
     waited = bf.wait_for_stream_slots(need=2)                      # 3 stale: wait until they are older than 17 s
     assert 16.0 <= waited <= 18.0, waited
     assert bf.wait_for_stream_slots(need=2) == 0.0
+
+
+class _Resp:
+    def __init__(self, status, body=None):
+        self.status, self._body = status, body
+
+    def json(self):
+        if self._body is None:
+            raise ValueError("no body")
+        return self._body
+
+
+class _Probe:
+    """A client whose GET /ready answers come from a list (the last one repeats)."""
+
+    def __init__(self, answers):
+        self.answers, self.calls = list(answers), []
+
+    def get(self, path, pace=True):
+        self.calls.append((path, pace))
+        return self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]
+
+
+def _clock():
+    t = {"now": 0.0}
+    return (lambda: t["now"]), (lambda s: t.__setitem__("now", t["now"] + s))
+
+
+def test_poll_ready_waits_through_503_then_ready():
+    import browser_fixtures as bf
+    clock, sleep = _clock()
+    probe = _Probe([_Resp(503, {"ready": False, "reasons": ["rtc_recovery"]})] * 3 + [_Resp(200, {"ready": True})])
+    assert bf.poll_ready(probe, wait_s=60, sleep=sleep, clock=clock) == ("ready", 3.0)
+    assert probe.calls[0] == ("/ready", False)                    # unpaced: one per second, under the public bucket
+
+
+def test_poll_ready_absent_and_never_ready():
+    import browser_fixtures as bf
+    clock, sleep = _clock()
+    assert bf.poll_ready(_Probe([_Resp(404)]), sleep=sleep, clock=clock) == ("absent", 404)
+    clock, sleep = _clock()
+    verdict, last = bf.poll_ready(_Probe([_Resp(503, {"ready": False, "reasons": ["hub"]})]), wait_s=5, sleep=sleep, clock=clock)
+    assert verdict == "not ready" and "503" in last and "hub" in last
+
+
+def test_page_hooks_follow_the_web2_naming_scheme():
+    """web/README.md "Stable browser rig hooks": lowercase kebab-case, the fixed data-state vocabulary, the
+    route and page names appended to the navigation hooks."""
+    import re
+
+    import web_pages as wp
+    kebab = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)+$")
+    for key, tid in wp.TESTIDS.items():
+        assert kebab.match(tid), (key, tid)
+        assert tid.replace("-", "_") == key, "the key of %r is its name with underscores" % tid
+    assert wp.CONNECTION_STATES == ("idle", "connecting", "connected", "failed", "closed")
+    assert wp.dashboard_nav_testid("/") == "dashboard-nav-overview"
+    assert [wp.dashboard_nav_testid(r) for r in wp.ROUTE_TITLES][1:] == [
+        "dashboard-nav-heard", "dashboard-nav-modules", "dashboard-nav-nodes", "dashboard-nav-peers", "dashboard-nav-about"]
+    assert [wp.ops_nav_testid(p) for p in wp.OPS_PAGES] == [
+        "ops-nav-clients", "ops-nav-events", "ops-nav-accounts", "ops-nav-invites", "ops-nav-audit", "ops-nav-ids"]

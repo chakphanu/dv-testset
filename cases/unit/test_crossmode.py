@@ -8,6 +8,7 @@ from dvtest.audio import signals
 from dvtest.fake_ambed import FakeAmbedServer
 from dvtest.fake_ctl import FakeCtl, FakeCtlError
 from dvtest.proto import ambed_ext as ext
+from dvtest.proto import usrp
 
 from test_fake_ambed import HOST, Worker, wait_for
 
@@ -74,7 +75,7 @@ def test_m17_listener_eot_holds_pending_unit_or_silence():
 def test_same_codec_is_not_transformed():
     f = frames("dstar", 10)
     got = cm.expected_listener("dstar", "dcs", f)
-    assert got.frames == f and got.exact
+    assert got.frames == f
 
 
 def test_same_protocol_follows_the_client_library():
@@ -85,9 +86,84 @@ def test_same_protocol_follows_the_client_library():
     assert cm.expected_listener("dmr", "dmr", d).frames == d + [bytes(9)] * 2
 
 
-def test_usrp_listener_tail_is_open():
-    e = cm.expected_listener("dstar", "usrp", frames("dstar", 5))
-    assert not e.exact and e.prefix == 5 and len(e.frames) == 5
+@pytest.mark.parametrize("src", ["dstar", "dplus", "dmr", "m17"])
+def test_usrp_listener_gets_exactly_the_voice_units(src):
+    # XC1 (media-format.md USRP): the end-hinted unit is never rendered and no
+    # synthetic PCM end unit follows: the transform of the voice units, nothing else
+    f = frames(src, 5)
+    unit = cm.source_units(src, f)
+    e = cm.expected_listener(src, "usrp", f)
+    assert e.frames == cm.transform_units(cm.CODEC[src], 5, unit.voice)
+
+
+def usrp_frames(*kinds, seq0=0):
+    out = []
+    for i, k in enumerate(kinds):
+        if k == "v":
+            out.append(usrp.voice(seq0 + i, bytes(320)))
+        elif k == "u":
+            out.append(usrp.unkey(seq0 + i))
+        else:
+            out.append(usrp.text(seq0 + i, usrp.REG_OK))
+    return out
+
+
+def test_usrp_tail_voice_then_one_unkey():
+    assert cm.usrp_tail_problems(usrp_frames("t", "v", "v", "v", "u")) == []
+    timed = [(0.1 * i, d) for i, d in enumerate(usrp_frames("v", "v", "u"))]
+    assert cm.usrp_tail_problems(timed) == []
+    assert cm.usrp_tail_problems(usrp_frames("u", "v", "u")) == []      # an unkey before the stream is not its tail
+
+
+@pytest.mark.parametrize("kinds,word", [
+    (("v", "v"), "0 unkeys"),
+    (("v", "v", "u", "u"), "2 unkeys"),
+    (("v", "u", "v", "u"), "between voice frames"),            # an extra keyed frame after the unkey
+    (("t", "u"), "no keyed voice")])
+def test_usrp_tail_problems_named(kinds, word):
+    problems = cm.usrp_tail_problems(usrp_frames(*kinds))
+    assert problems and any(word in p for p in problems), problems
+
+
+def test_clock_offset_takes_the_shortest_round_trip():
+    # remote = local + 100; the second sample has the shortest round trip
+    samples = [(1.0, 101.05, 1.2), (2.0, 102.001, 2.002), (3.0, 103.3, 3.5)]
+    offset, half = cm.clock_offset(samples)
+    assert abs(offset - 100.0) < 1e-9 and abs(half - 0.001) < 1e-9
+    with pytest.raises(ValueError):
+        cm.clock_offset([])
+
+
+T = cm.Timing
+
+
+def ids(problems):
+    return sorted(p[0] for p in problems)
+
+
+def test_header_cost_xc1_passes():
+    # session opened at the first voice unit: the OPEN time (0.3 s) is paid after
+    # the first voice frame with and without the header gap
+    assert cm.header_cost_problems(T(0.5, 0.004, 0.33), T(0.02, 0.003, 0.34), 0.3) == []
+    assert cm.header_cost_problems(T(0.5, 0.004, 0.03), T(0.02, 0.003, 0.04), 0.0) == []
+
+
+def test_header_cost_open_at_grant_is_named():
+    # the former behaviour: OPEN at the header, its 0.3 s hidden in the 0.5 s gap
+    got = ids(cm.header_cost_problems(T(0.5, -0.497, 0.03), T(0.02, -0.017, 0.31), 0.3))
+    assert got == ["header-gap-open-cost-not-hidden", "header-gap-open-not-before-voice",
+                   "no-gap-open-not-before-voice", "same-delay"]
+
+
+def test_header_cost_limits_and_missing_values():
+    lim = cm.OPEN_AFTER_VOICE_MAX
+    assert ids(cm.header_cost_problems(T(0.5, lim + 0.01, 0.5), T(0.02, 0.0, 0.5), 0.3)) == ["header-gap-open-same-turn"]
+    assert cm.header_cost_problems(T(0.5, -cm.OPEN_BEFORE_VOICE_TOL, 0.3), T(0.02, 0.0, 0.3), 0.3) == []
+    d = cm.SAME_DELAY_TOL
+    assert cm.header_cost_problems(T(0.5, 0.0, 0.3 + d - 0.001), T(0.02, 0.0, 0.3), 0.3) == []
+    assert ids(cm.header_cost_problems(T(0.5, 0.0, 0.3 + d + 0.001), T(0.02, 0.0, 0.3), 0.3)) == ["same-delay"]
+    assert ids(cm.header_cost_problems(T(0.5, None, None), T(0.02, 0.0, None), 0.3)) == [
+        "header-gap-open-seen", "no-gap-output-seen"]
 
 
 def test_every_unit_has_one_k_not_two():
@@ -200,3 +276,58 @@ def test_fake_ctl_follows_more(worker, server):
         server._note("rx", "unknown", bytes(100), 1)                  # long log: needs several datagrams
     ctl = FakeCtl(HOST, server.control_port)
     assert len(ctl.log()) == 400
+
+
+# ---- crossmode_fake: clock mapping and timed sending -------------------------------
+
+def test_fake_clock_offset_maps_the_log_clock(server):
+    import time
+    from crossmode_fake import Fake
+    fake = Fake(FakeCtl(HOST, server.control_port), "unit")
+    offset, half = fake.clock_offset(samples=3)
+    assert half < 0.05
+    # the fake's clock is time.monotonic() - t0 in this process
+    assert abs((time.monotonic() - server.t0) - (time.monotonic() + offset)) < 0.01 + half
+
+
+def test_paced_drain_stamps_and_receive_times():
+    import types
+    from crossmode_fake import paced_drain, pump_all
+    from dvtest.net import UdpClient
+    tx, rx = UdpClient(HOST), UdpClient(HOST)
+    try:
+        peer = types.SimpleNamespace(client=rx)
+        stamps = paced_drain(tx, rx.local, [bytes([i]) for i in range(5)], 0.02, [peer])
+        pump_all([peer], 0.05)
+        assert rx.inbox == [bytes([i]) for i in range(5)]
+        gaps = [b - a for a, b in zip(stamps, stamps[1:])]
+        assert all(0.015 <= g <= 0.035 for g in gaps), gaps
+        # every datagram was stamped within a few ms of its send time
+        assert all(0 <= r - s < 0.015 for r, s in zip(rx.inbox_times, stamps)), list(zip(rx.inbox_times, stamps))
+    finally:
+        tx.close()
+        rx.close()
+
+
+def test_first_arrival_needs_aligned_stamps():
+    raw = [b"link", b"voice-a", b"voice-b"]
+    assert cm.first_arrival([1.0, 2.0, 3.0], raw, lambda d: d.startswith(b"voice")) == 2.0
+    assert cm.first_arrival([1.0, 2.0, 3.0], raw, lambda d: d == b"none") is None
+    with pytest.raises(ValueError):
+        cm.first_arrival([0.5, 1.0, 2.0, 3.0], raw, lambda d: True)      # stale stamps left after a clear()
+
+
+def test_settle_clients_clears_the_receive_stamps_too():
+    import types
+    from crossmode_fake import settle_clients
+    from dvtest.net import UdpClient
+    a, b = UdpClient(HOST), UdpClient(HOST)
+    try:
+        a.send(b.local, b"old")
+        b.pump(0.05)
+        assert b.inbox_times
+        settle_clients(types.SimpleNamespace(client=b))
+        assert b.inbox == [] and b.inbox_times == []
+    finally:
+        a.close()
+        b.close()

@@ -5,21 +5,25 @@ Chromium, Firefox and Playwright WebKit, which is the engine of Safari and not S
 "Stage 3b"). The protocol side is a USRP dynamic client of the rig (PCM straight into the room, no
 transcoder). Differences from the documents are recorded with web.finding(), not asserted.
 
-The dashboard script needs the fragment workaround in every engine (finding 1 of stage 3a, DASH1); the
-fixtures apply it. The Listen panel is on the dashboard route `#/`; the page chooses the module with
-#listen-room, connects with "Listen / Connect" (offer through the proxy, ICE-lite edge at <net>.11:50000,
+Calibrated against dv-router:wip-13e7e70: the dashboard renders as served (DASH1), the selectors are the WEB2
+hooks of cases/web_pages.py (listen-room, listen-toggle, talk-ptt; the Listen card's data-state), and TALK1 keeps
+a held over alive with 'renewed' acks of the lease. The Listen panel is on the dashboard route `#/`; the page
+chooses the module, connects with "Listen / Connect" (offer through the proxy, ICE-lite edge at <net>.11:50000,
 media to the browser container), and sends /rtc/alive every 10 s.
 
   a  test_listen_is_not_offered_to_anonymous      guest_listen is off: no Listen panel for a signed-out visitor
   b  test_listen_receives_the_tone                connect, silence, a 700 Hz USRP talker: getStats growth, codec, 20 ms,
                                                   Goertzel in the page, end of the over, Disconnect closes the circuit
   c  test_listen_lease_stays_alive_past_30_s      /rtc/alive every 10 s, still receiving after 35 s (slow)
-  d  test_talk_reaches_a_protocol_listener        fake microphone, Hold Talk, the USRP listener gets the tone; release ends it (slow)
+  d  test_talk_reaches_a_protocol_listener        6 s hold: on air throughout (TALK1), the USRP listener gets it, release ends it (slow)
+  d2 test_talk_hold_10_s_stays_on_air_until_release  10 s hold: on air until release, 'renewed' acks counted and spaced (slow)
+  d3 test_talk_release_inside_the_watchdog_window  2 s hold: "Ended: Button released." (slow)
   e  test_talk_denied_without_may_tx              no Talk controls; a raw ptt frame on the control channel is recorded
   f  test_talk_floor_busy_when_the_room_is_taken  a protocol talker holds the floor, Hold Talk is denied (slow)
   g  test_talk_second_talker_is_denied            the browser holds the floor, a second protocol talker is not heard (slow)
   h  test_reconnect_after_disconnect_and_reload   manual reconnect, reload, record what the page does (record only)
   i  test_reconnect_after_the_lease_expires       stop /rtc/alive, record page and server (slow, record only)
+  j  test_listen_gauges_in_the_hub_metrics        dv_edge_webrtc_listeners / _room_listeners{room}: 1 while listening, 0 after Disconnect
 """
 import json
 import os
@@ -33,14 +37,15 @@ pytest.importorskip("playwright.sync_api", reason="the playwright Python package
 
 import web_pages as pages  # noqa: E402
 from dvtest import browser as brlib  # noqa: E402
-from dvtest import web  # noqa: E402
+from dvtest import metrics, web  # noqa: E402
 from webrtc_support import (  # noqa: E402
-    SILENCE_RMS, TONE_HZ, TONE_TOL_HZ, Rtc, Talk, find_values, gaps_ms, pcm_floats, public_state, pump_while, set_info_callsigns,
-    tone_frames, usrp_client, voice_frames)
+    MIC_UNAVAILABLE, SILENCE_RMS, TONE_HZ, TONE_TOL_HZ, Rtc, Talk, find_values, gaps_ms, on_air_or_end, pcm_floats, press,
+    public_state, pump_while, release, set_info_callsigns, tone_frames, usrp_client, voice_frames, wait_talk_text)
 
 pytestmark = [pytest.mark.rig, pytest.mark.web, pytest.mark.browser, pytest.mark.webrtc]
 
 ROOM_LISTEN, ROOM_LEASE, ROOM_TALK, ROOM_RX, ROOM_FLOOR, ROOM_BUSY, ROOM_RECONNECT, ROOM_EXPIRE = "HJKLQWRX"
+ROOM_HOLD10, ROOM_SHORT, ROOM_GAUGE = "YZM"       # recorder cases use S, T, U
 PROTO_CALL = "N0TEST"           # the protocol talker / listener
 PROTO_CALL2 = "N0USR"           # the second protocol client
 SECOND_HZ = 1700.0              # its tone: not a harmonic of Firefox's 1000 Hz beep or of the 500 Hz of WebKit's mock device
@@ -97,7 +102,7 @@ def test_listen_is_not_offered_to_anonymous(engine, dashboard_page):
     the offer route answers 401 (stage 2 covers the API)."""
     bp = dashboard_page
     bp.goto("/#/")
-    bp.page.locator("main .card").first.wait_for(state="visible", timeout=30000)
+    pages.room_cards(bp.page).first.wait_for(state="visible", timeout=30000)
     bp.page.wait_for_timeout(1500)
     assert pages.listen_panel(bp.page).count() == 0
     assert bp.seen("/api/v1/rtc/") == [] or all(r["method"] != "POST" for r in bp.log.requests if "/rtc/" in r["path"])
@@ -196,7 +201,8 @@ def test_listen_receives_the_tone(engine, rtc_rx_page, target):
     while time.monotonic() < deadline and not rtc.sent_posts("close"):
         time.sleep(0.1)
     assert rtc.sent_posts("close") == 1, rtc.sent
-    assert rtc.status() == pages.LISTEN_IDLE_TEXT
+    assert rtc.wait_idle(), "after Disconnect: data-state %r, status %r" % (rtc.panel_state(), rtc.status())
+    assert rtc.panel_state() == "closed", "a local disconnect reports data-state closed (web/README.md): %r" % rtc.panel_state()
     assert set(rtc.alive_posts()) <= {200, 204}
     # the close is a keepalive fetch (no response event in the page log): the server side shows it
     time.sleep(0.5)
@@ -254,66 +260,41 @@ def test_listen_lease_stays_alive_past_30_s(engine, rtc_rx_page, target):
 
 # ------------------------------------------------------------------------------------ d..g talk
 
-HOLD_S = 6.0
-
-
-def press(rtc):
-    """Mouse down in the middle of #talk-button (pointerdown, primary button): the page asks for the
-    microphone, re-offers sendrecv, and sends ptt down when the control channel is open."""
-    box = pages.talk_button(rtc.page).bounding_box()
-    rtc.page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
-    rtc.page.mouse.down()
-    return time.monotonic()
-
-
-def release(rtc):
-    rtc.page.mouse.up()
-    return time.monotonic()
-
-
-def wait_talk_text(rtc, pred, timeout_s):
-    """Poll #talk-status until pred(text); returns (text, seconds). The last text on timeout."""
-    t0 = time.monotonic()
-    text = ""
-    while time.monotonic() - t0 < timeout_s:
-        text = rtc.talk_status()
-        if pred(text):
-            return text, time.monotonic() - t0
-        time.sleep(0.1)
-    return text, None
-
-
 def mic_unavailable(engine, rtc, text):
     """The engine has no usable fake microphone: record and skip the rest of the case."""
     note(engine, "fake microphone", "not usable (talk status %r; panel %r)" % (text, rtc.status()))
     pytest.skip("%s: no fake microphone (talk status %r)" % (brlib.label(engine), text))
 
 
-@pytest.mark.slow
-def test_talk_reaches_a_protocol_listener(engine, rtc_tx_page, target, web_client):
-    bp = rtc_tx_page
+def hold_talk(engine, bp, target, web_client, room, hold_s, min_acks, label):
+    """TALK1 (DV-Router web.md "PTT", wip-13e7e70): Listen on `room`, hold the Talk button for `hold_s` seconds
+    after the page shows "On air", release. Asserted: the page stays "On air" for the whole hold (the edge
+    acknowledges each accepted lease renewal with {"op":"ptt","state":"renewed","code":"ok"} and the page resets
+    its 4 s watchdog on it), the release shows "Ended: Button released.", a USRP listener on the module hears
+    >= 80 % of 50 frames/s of the time on air with no gap over the limit and nothing after the release, the
+    renewal acks on the ctl DataChannel are exactly that frame, at most one per 500 ms (receipt intervals
+    >= 450 ms) and at least `min_acks` of them. Returns the measurements."""
     rtc = Rtc(bp)
     rtc.open()
     assert pages.talk_button(bp.page).inner_text().strip() == "Hold Talk"
     assert rtc.talk_status() == pages.TALK_READY_TEXT
     assert pages.talk_button(bp.page).is_disabled()                      # not before Listen
-    listener = usrp_client(target, PROTO_CALL, ROOM_TALK)
+    listener = usrp_client(target, PROTO_CALL, room)
     anon = web_client()
     try:
-        listening(rtc, ROOM_TALK)
+        listening(rtc, room)
         assert pages.talk_button(bp.page).is_enabled()
         rtc.tap_start()
         press(rtc)
-        text, took = wait_talk_text(rtc, lambda s: s == "On air" or s.startswith(("Denied", "Ended")), 30.0)
-        if text.startswith("Denied: Microphone access is unavailable"):
+        text, took = wait_talk_text(rtc, on_air_or_end, 30.0)
+        if text.startswith(MIC_UNAVAILABLE):
             release(rtc)
             mic_unavailable(engine, rtc, text)
-        note(engine, "press to On air", {"seconds": round(took, 2) if took else None, "status": text})
-        assert text == "On air", "talk status %r after pressing (panel %r)" % (text, rtc.status())
+        note(engine, "%s: press to On air" % label, {"seconds": round(took, 2) if took else None, "status": text})
+        assert text == pages.TALK_ON_AIR_TEXT, "talk status %r after pressing (panel %r)" % (text, rtc.status())
         t_air = time.monotonic()
-        # while on air: who does the router say is talking
+        page_air = rtc.clock()
         seen_paths = []
-
         timeline = []
 
         def poll():
@@ -321,34 +302,41 @@ def test_talk_reaches_a_protocol_listener(engine, rtc_tx_page, target, web_clien
             if not seen_paths:
                 seen_paths.extend(find_values(public_state(anon), "N0BRU"))
 
-        pump_while(listener, max(0.0, HOLD_S - (time.monotonic() - t_air)), poll, poll_every=0.5)
-        paths = seen_paths
-        note(engine, "public state names the talker (paths)", paths[:4] or "not seen")
-        # the button is still held here: how long does the page stay "On air"?
-        on_air_s = max([t for t, st in timeline if st == "On air"] or [0.0]) + 0.5
-        released_by_page = next((t for t, st in timeline if st != "On air"), None)
-        note(engine, "status while the button is held", {"timeline": timeline, "page left On air at s": released_by_page})
-        if released_by_page is not None:
-            web.finding("%s: Hold Talk is still pressed but the page left 'On air' after %.1f s (status %r): its 4 s watchdog "
-                        "(public.js armWatchdog) is armed at down and at granted/pending feedback and the edge sends no further "
-                        "feedback while on air, so the over ends by itself" % (brlib.label(engine), released_by_page,
-                                                                               dict(timeline).get(released_by_page)))
+        pump_while(listener, max(0.0, hold_s - (time.monotonic() - t_air)), poll, poll_every=0.5)
+        left_on_air = next(((t, st) for t, st in timeline if st != pages.TALK_ON_AIR_TEXT), None)
+        note(engine, "%s: status while the button is held" % label, {"timeline": timeline, "left On air": left_on_air})
         outbound = rtc.stats()["outbound"] or {}
-        release(rtc)
-        ended, took_end = wait_talk_text(rtc, lambda s: s != "On air", 8.0)
-        note(engine, "after release", {"status": ended, "seconds": round(took_end, 2) if took_end else None})
+        page_release = rtc.clock()
+        t_release = release(rtc)
+        on_air_s = t_release - t_air
+        ended, took_end = wait_talk_text(rtc, lambda s: s != pages.TALK_ON_AIR_TEXT, 8.0)
+        note(engine, "%s: after release" % label, {"status": ended, "seconds": round(took_end, 2) if took_end else None})
         pump_while(listener, 1.5)
         frames = voice_frames(listener)
         times = [t for t, _p in frames]
         samples = pcm_floats([p for _t, p in frames])
-        peak, amp, frac, level = brlib.scan_peak(samples, 8000) if samples else (0.0, 0.0, 0.0, 0.0)
+        peak, _amp, frac, level = brlib.scan_peak(samples, 8000) if samples else (0.0, 0.0, 0.0, 0.0)
         g = gaps_ms(times)
-        note(engine, "protocol listener heard", {"frames": len(frames), "on_air_s_about": round(on_air_s, 1),
-                                                 "max_gap_ms": max(g) if g else None, "peak_hz": peak, "fraction": round(frac, 2),
-                                                 "rms": round(level, 3), "outbound_packets": outbound.get("packetsSent")})
+        note(engine, "%s: protocol listener heard" % label, {
+            "frames": len(frames), "held_on_air_s": round(on_air_s, 1), "max_gap_ms": max(g) if g else None,
+            "peak_hz": peak, "fraction": round(frac, 2), "rms": round(level, 3), "outbound_packets": outbound.get("packetsSent")})
         talkers = set_info_callsigns(listener)
         note(engine, "SET_INFO callsigns at the protocol listener", sorted(set(talkers)) or "none")
+        # the renewal acknowledgements on the ctl channel, between On air and the release (+ 300 ms in flight)
+        received = rtc.ctl_received()
+        sent = rtc.ctl_sent()
+        acks = brlib.renewal_verdict(received, since_ms=page_air, until_ms=page_release + 300.0)
+        leases = [m for m in sent if m.get("label") == "ctl" and '"lease"' in (m.get("data") or "")
+                  and page_air <= m["t"] <= page_release]
+        note(engine, "%s: ctl renewal acks" % label, {k: acks[k] for k in ("acks", "min_interval_ms", "other_ptt", "odd_acks")}
+             | {"leases_sent": len(leases), "intervals_ms": acks["intervals_ms"][:12]})
+
+        # TALK1: a held button keeps the over until it is released
+        assert left_on_air is None, "%s: the page left 'On air' after %.1f s of a %.0f s hold (status %r)" % (
+            brlib.label(engine), left_on_air[0], hold_s, left_on_air[1])
+        assert ended == pages.TALK_RELEASED_TEXT, "after the release the talk status is %r" % ended
         assert len(frames) >= 0.8 * 50 * on_air_s, "%d frames for %.1f s on air" % (len(frames), on_air_s)
+        assert g, "fewer than two frames at the protocol listener"
         limit = 120.0 if engine != "webkit" else 250.0          # WebKit's mock device is bursty (gap recorded above)
         assert max(g) <= limit, "dropout: a gap of %.0f ms in the over (%s)" % (max(g), sorted(g)[-3:])
         # getUserMedia({audio: true}) leaves echo cancellation, noise suppression and AGC on: they treat a pure
@@ -360,20 +348,45 @@ def test_talk_reaches_a_protocol_listener(engine, rtc_tx_page, target, web_clien
             assert level > 0.01, "silence from the %s fake microphone" % brlib.label(engine)
             note(engine, "fake microphone tone", {"peak_hz": peak, "fraction": round(frac, 2)})
         # the over ended with the button: no voice in the last second
-        last = [t for t, _p in frames][-1]
-        assert time.monotonic() - last >= 0.9, "frames kept arriving after the release"
+        assert time.monotonic() - times[-1] >= 0.9, "frames kept arriving after the release"
+        # the acks: only observable through the page's own channel (the probe wraps createDataChannel)
+        if not brlib.ctl_frames(received):
+            web.finding("%s: %s: the probe saw no frame on the ctl DataChannel (not even the grant), so the "
+                        "'renewed' acknowledgements of TALK1 are not observable in this engine" % (brlib.label(engine), label))
+        else:
+            assert not acks["problems"], acks["problems"]
+            assert acks["acks"] >= min_acks, "%d 'renewed' acks during %.1f s on air (%d leases sent), expected at least %d" % (
+                acks["acks"], on_air_s, len(leases), min_acks)
         # TX identity: the account callsign, wherever it can be seen
-        if not paths and "N0BRU" not in talkers:
+        if not seen_paths and "N0BRU" not in talkers:
             web.finding("%s: the callsign of the web talker (N0BRU) is neither in the public state during the over "
                         "nor in a SET_INFO to a USRP client" % brlib.label(engine))
-        # CORRECT behaviour: a held button keeps the over alive for the whole hold. DV-Router unit TALK1 (after
-        # DASH1) fixes the 4 s watchdog; until then this is an expected failure, judged last so that every
-        # check above still ran. It passes silently once the page is fixed.
-        if released_by_page is not None:
-            pytest.xfail("TALK1: the page left 'On air' after %.1f s of a %.0f s hold (watchdog not refreshed by "
-                         "lease renewals)" % (released_by_page, HOLD_S))
+        note(engine, "public state names the talker (paths)", seen_paths[:4] or "not seen")
+        return {"on_air_s": on_air_s, "frames": len(frames), "acks": acks}
     finally:
         listener.close()
+
+
+@pytest.mark.slow
+def test_talk_reaches_a_protocol_listener(engine, rtc_tx_page, target, web_client):
+    """A 6 s hold (stage 3b: the page ended it by itself after about 4 s, fixed by TALK1): on air for the
+    whole hold, the USRP listener hears it, release ends it."""
+    hold_talk(engine, rtc_tx_page, target, web_client, ROOM_TALK, 6.0, min_acks=2, label="6 s hold")
+
+
+@pytest.mark.slow
+def test_talk_hold_10_s_stays_on_air_until_release(engine, rtc_tx_page, target, web_client):
+    """TALK1: a 10 s hold, more than twice the page's 4 s watchdog: the 'renewed' acks of about one lease per
+    second keep it alive (at least 4 acks asked for, about 9 expected), the router hears about 10 s of frames,
+    the over ends on release with "Ended: Button released."."""
+    hold_talk(engine, rtc_tx_page, target, web_client, ROOM_HOLD10, 10.0, min_acks=4, label="10 s hold")
+
+
+@pytest.mark.slow
+def test_talk_release_inside_the_watchdog_window(engine, rtc_tx_page, target, web_client):
+    """A 2 s hold, released well inside the 4 s watchdog: "Ended: Button released." (finding 10 of stage 3b:
+    not seen before because the watchdog always came first)."""
+    hold_talk(engine, rtc_tx_page, target, web_client, ROOM_SHORT, 2.0, min_acks=0, label="2 s hold")
 
 
 @pytest.mark.slow
@@ -384,7 +397,7 @@ def test_talk_denied_without_may_tx(engine, rtc_rx_page):
     rtc = Rtc(bp)
     rtc.open()
     assert pages.talk_button(bp.page).count() == 0
-    assert bp.page.locator(".talk-controls").count() == 0
+    assert pages.talk_controls(bp.page).count() == 0
     listening(rtc, ROOM_RX)
     sent = rtc.ev("window.__dvtTap.sendControl(JSON.stringify({op: 'ptt', state: 'down', seq: 0, t_ms: 1}))")
     time.sleep(2.0)
@@ -412,8 +425,8 @@ def test_talk_floor_busy_when_the_room_is_taken(engine, rtc_tx_page, target):
         assert talk.started.wait(5)
         time.sleep(1.0)
         press(rtc)
-        text, took = wait_talk_text(rtc, lambda s: s.startswith(("Denied", "Ended", "On air")), 30.0)
-        if text.startswith("Denied: Microphone access is unavailable"):
+        text, took = wait_talk_text(rtc, on_air_or_end, 30.0)
+        if text.startswith(MIC_UNAVAILABLE):
             release(rtc)
             mic_unavailable(engine, rtc, text)
         note(engine, "Hold Talk while a protocol talker holds the floor", {"status": text, "seconds": round(took, 2) if took else None})
@@ -440,8 +453,8 @@ def test_talk_second_talker_is_denied(engine, rtc_tx_page, target):
     try:
         listening(rtc, ROOM_BUSY)
         press(rtc)
-        text, _took = wait_talk_text(rtc, lambda s: s == "On air" or s.startswith(("Denied", "Ended")), 30.0)
-        if text.startswith("Denied: Microphone access is unavailable"):
+        text, _took = wait_talk_text(rtc, on_air_or_end, 30.0)
+        if text.startswith(MIC_UNAVAILABLE):
             release(rtc)
             mic_unavailable(engine, rtc, text)
         assert text == "On air", text
@@ -550,3 +563,63 @@ def test_reconnect_after_the_lease_expires(engine, rtc_rx_page, target):
     note(engine, "connect after the lease expired", {"click_to_connected_ms": again["click_to_connected_ms"],
                                                      "needs": "a click on Listen / Connect (no automatic reconnect, ICE restart not built)"})
     rtc.disconnect()
+
+
+# ------------------------------------------------------------------------------------ j gauges (WEB2)
+
+LISTENERS = "dv_edge_webrtc_listeners"
+ROOM_LISTENERS = "dv_edge_webrtc_room_listeners"
+GAUGE_WAIT_S = 35.0       # the edge refreshes its snapshot every 1 s and publishes it every 10 s (web.md); the hub caches
+
+
+def edge_gauges(rig_control, room):
+    """(listeners, room listeners, families present) from the hub metrics of the SUT (dv-svc-status exports the edge's
+    telemetry with a `proc` label; the room label is the module letter in lower case)."""
+    text = rig_control.metrics("xlxd-sut")
+    fam = metrics.families(text)
+    samples = metrics.parse(text)
+    room_sum = sum(s.value for s in samples if s.name == ROOM_LISTENERS and s.labels.get("room", "").lower() == room.lower())
+    return metrics.total(samples, LISTENERS), room_sum, {LISTENERS, ROOM_LISTENERS} <= fam
+
+
+def wait_gauges(rig_control, room, pred, timeout_s=GAUGE_WAIT_S):
+    end = time.monotonic() + timeout_s
+    seen = []
+    while True:
+        got = edge_gauges(rig_control, room)
+        seen.append((round(got[0]), round(got[1])))
+        if got[2] and pred(got[0], got[1]):
+            return got, True, seen
+        if time.monotonic() >= end:
+            return got, False, seen
+        time.sleep(2.0)
+
+
+def test_listen_gauges_in_the_hub_metrics(engine, rtc_rx_page, target, rig_control):
+    """WEB2: the edge gauges dv_edge_webrtc_listeners and dv_edge_webrtc_room_listeners{room} count an admitted
+    browser listener: 1 on the module while the page listens, 0 after Disconnect (no other listener in the rig
+    meanwhile: the cases run one at a time)."""
+    if target.sut_profile != "dvrouter":
+        pytest.skip("DV-Router only: DVT_SUT_PROFILE=dvrouter (profile %s)" % target.sut_profile)
+    try:
+        edge_gauges(rig_control, ROOM_GAUGE)
+    except (RuntimeError, TimeoutError) as exc:
+        pytest.skip("the hub metrics are not reachable through the control channel (%s)" % exc)
+    bp = rtc_rx_page
+    rtc = Rtc(bp)
+    rtc.open()
+    listening(rtc, ROOM_GAUGE)
+    (total, room, present), ok, seen = wait_gauges(rig_control, ROOM_GAUGE, lambda t, r: r >= 1)
+    note(engine, "edge gauges while listening on %s" % ROOM_GAUGE, {"listeners": total, "room": room, "samples": seen})
+    if not present:
+        pytest.skip("%s / %s not in the hub metrics after %.0f s of listening: not observable on this image"
+                    % (LISTENERS, ROOM_LISTENERS, GAUGE_WAIT_S))
+    assert ok and room == 1, "%s{room=%r} is %s while one page listens (samples %s)" % (ROOM_LISTENERS, ROOM_GAUGE.lower(), room, seen)
+    assert total >= 1, "%s is %s while a page listens" % (LISTENERS, total)
+    if total != 1:
+        note(engine, "edge listeners gauge with one page listening", total)
+    rtc.disconnect()
+    assert rtc.wait_idle()
+    (total, room, _p), ok, seen = wait_gauges(rig_control, ROOM_GAUGE, lambda t, r: r == 0)
+    note(engine, "edge gauges after Disconnect", {"listeners": total, "room": room, "samples": seen})
+    assert ok, "%s{room=%r} still %s %.0f s after Disconnect (samples %s)" % (ROOM_LISTENERS, ROOM_GAUGE.lower(), room, GAUGE_WAIT_S, seen)

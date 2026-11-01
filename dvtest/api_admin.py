@@ -16,6 +16,15 @@ admin host and on the legacy direct mount, `/admin/api/v1/admin/...` on the
 prefix mount; `/health` and `/ready` also exist at the root of a mount
 (ROOT_PROBES). The 25 old admin templates are in api_web.REMOVED_ADMIN.
 
+Success statuses (`success`, API4): 204 logout, 202 restart-node, 200 the rest
+(/ready may answer the documented 503).
+
+Guard order (admin.md, API4) differs from the web service: Origin (403 `csrf`)
+before authentication, then cookie/binding (401), the minimum role (403
+`forbidden`), TOTP enrolment (403), and only then X-DV-CSRF and content type
+(403 `csrf`): a caller below the floor gets `forbidden` before a non-JSON body
+is looked at.
+
 Probes never act: bodies are empty or invalid, targets do not exist
 (history sequence, child name, circuit), and the raw configuration PUT carries
 no If-Match, so it is refused (428) before anything is written.
@@ -37,7 +46,7 @@ ADMIN_OPS = (
     _op("GET", _B + "/version", "anonymous"),
     _op("POST", _B + "/session", "anonymous", body={}, credential_401=True, note="empty body: no login"),
     _op("GET", _B + "/session", "viewer"),
-    _op("DELETE", _B + "/session", "viewer", fresh=True),
+    _op("DELETE", _B + "/session", "viewer", fresh=True, success=204),
     _op("POST", _B + "/session/totp", "viewer", body={}, step_up=True,
         note="re-enrolment of an enrolled account needs its current code: refused, nothing changes"),
     _op("POST", _B + "/session/totp/confirm", "viewer", body={}),
@@ -60,7 +69,7 @@ ADMIN_OPS = (
         missing_ok=True),
     _op("GET", _B + "/audit", "admin", query="limit=1", step_up=True),
     _op("GET", _B + "/audit/logins", "admin", query="limit=1", step_up=True),
-    _op("POST", _B + "/system/restart-node", "admin", body={}, step_up=True,
+    _op("POST", _B + "/system/restart-node", "admin", body={}, step_up=True, success=202,
         note="no confirm string: 400/422, the node is not restarted"),
     _op("POST", _B + "/children/{name}/restart", "admin", params={"name": NO_CHILD}, body={}, step_up=True,
         missing_ok=True, note="a child the launcher does not supervise: 404"),

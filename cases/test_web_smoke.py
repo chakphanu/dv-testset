@@ -21,7 +21,10 @@ not fetching authenticated history, the cookie in a real browser) is stage 3.
   h  test_roles                          anonymous 401 on user routes, user 403 on operator routes
   i  test_wrong_password                 documented 401 for a wrong password (own account: lockout)
   j  test_admin_health                   GET /health and /ready on the admin host (https://dvt-admin:8443)
+  k  test_web_health_and_ready           WEB2: GET and HEAD /health and /ready of dv-svc-web through the proxy, no cookie
 """
+import time
+
 import pytest
 
 from dvtest import web
@@ -155,3 +158,55 @@ def test_admin_health(web_url_admin, web_ca):
     assert resp.status == 200, "GET /health on the admin host: HTTP %d" % resp.status
     ready = client.get("/ready")
     assert ready.status in (200, 503), "GET /ready on the admin host: HTTP %d" % ready.status
+
+
+READY_WAIT_S = 90.0       # /ready: at least 36 s since the start of dv-svc-web and RTC ownership recovery done
+
+
+def _probe_checks(resp, method, path):
+    """The documented shape of a probe answer (openapi-web.yaml webHealth / webReady): no-store, no cookie."""
+    assert "no-store" in resp.headers.get("cache-control", ""), "%s %s: Cache-Control %r" % (
+        method, path, resp.headers.get("cache-control"))
+    assert "set-cookie" not in resp.headers, "%s %s sets a cookie" % (method, path)
+
+
+def test_web_health_and_ready(web_client):
+    """WEB2 (docs/api/openapi-web.yaml /health, /ready; web.md): the web service's own probes at the root of
+    https://dvt-web, public (no session, no cookie sent or set), GET with a JSON body and HEAD with none, 405 for
+    other methods. /ready answers 503 {"ready": false, "reasons": [...]} with Retry-After 5 until the hub answers,
+    36 s since startup and RTC recovery are done; the case waits for its 200."""
+    anon = web_client()
+    resp = anon.request("GET", "/health")
+    assert resp.status == 200, "GET /health: HTTP %d" % resp.status
+    assert resp.headers.get("content-type", "").startswith("application/json"), resp.headers.get("content-type")
+    assert resp.json() == {"status": "ok"}, resp.text()[:120]
+    _probe_checks(resp, "GET", "/health")
+    head = anon.request("HEAD", "/health")
+    assert head.status == 200 and head.body == b"", ("HEAD /health", head.status, len(head.body))
+    _probe_checks(head, "HEAD", "/health")
+    deadline = time.monotonic() + READY_WAIT_S
+    seen = []
+    while True:
+        ready = anon.request("GET", "/ready")
+        seen.append(ready.status)
+        if ready.status == 200 or time.monotonic() >= deadline:
+            break
+        assert ready.status == 503, "GET /ready: HTTP %d (documented 200 or 503)" % ready.status
+        body = ready.json()
+        assert body.get("ready") is False and set(body.get("reasons") or []) <= {"hub", "rtc_recovery"}, body
+        assert ready.headers.get("retry-after") == "5", ready.headers.get("retry-after")
+        time.sleep(1.0)
+    if seen.count(503):
+        web.finding("web /ready answered 503 %d time(s) before 200 (the rig had started its tests before dv-svc-web was "
+                    "ready)" % seen.count(503))
+    assert ready.status == 200, "GET /ready not 200 within %.0f s (statuses %s)" % (READY_WAIT_S, sorted(set(seen)))
+    assert ready.headers.get("content-type", "").startswith("application/json")
+    assert ready.json() == {"ready": True}, ready.text()[:120]
+    _probe_checks(ready, "GET", "/ready")
+    head = anon.request("HEAD", "/ready")
+    assert head.status == 200 and head.body == b"", ("HEAD /ready", head.status, len(head.body))
+    _probe_checks(head, "HEAD", "/ready")
+    for path in ("/health", "/ready"):
+        other = anon.request("POST", path, json_body={})
+        assert other.status == 405, "POST %s: HTTP %d, documented 405" % (path, other.status)
+    assert not anon.cookie_attrs, "the probes left cookies in the client: %s" % sorted(anon.cookie_attrs)

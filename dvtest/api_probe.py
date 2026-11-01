@@ -5,9 +5,11 @@ functions are pure and unit-tested (cases/unit/test_api_probe.py).
 
 Classes (what the spec's role floor demands of a role):
   "401"     below the floor and not signed in: 401 (code `unauthorized`)
-  "403"     signed in, role too low: 403 (code `forbidden`); a probe whose body is
-            not JSON (op.raw) may get the unsafe-request guard's 403 `csrf` first
-            (observed: that guard runs before the role floor; recorded as a finding)
+  "403"     signed in, role too low: 403 (code `forbidden`). On the web service a
+            probe whose body is not JSON (op.raw) gets the write guard's 403 `csrf`
+            instead: the session write guards run before the audience floor
+            (documented by API4: web.md "Guard order"). The admin service checks
+            the role first (admin.md "Guard order"), so there it is `forbidden`
   "refuse"  conditional admission without a proof (rtc/* as anonymous with guest
             listening off): 401 or 403; for the TURN route a documented 404 (TURN
             disabled, problem+json) counts too
@@ -16,12 +18,14 @@ Classes (what the spec's role floor demands of a role):
             EXCEPT 401, 403 (but a 403 that is not a role refusal, for instance
             step_up_required, is a handler answer) and 404 (but a handler's own
             "no such target" 404 with an application/problem+json body is, for
-            operations whose probe names a missing target). Limit: the router's
-            404 for an unknown path is problem+json too (observed), so for those
-            operations a regression to "no route" cannot be told from "no target"
-            here; the removed-URL cases and the other roles of the same route cover it. On rtc/* a 403 `forbidden` is the circuit ownership
-            check of the handler (the probe names a circuit nobody owns). 5xx other
-            than the documented 503 is a failure.
+            operations whose probe names a missing target). Limit: a route miss
+            and a missing target are both 404 problem+json `not_found` (documented
+            by API4: web.md "Account and operator API"), so for those operations
+            a regression to "no route" cannot be told from "no target" here; the
+            removed-URL cases and the other roles of the same route cover it. On
+            rtc/* a 403 `forbidden` is the handler's answer for an unknown or
+            foreign circuit (documented by API4, web.md RTC rows; the probe names
+            a circuit nobody owns). 5xx other than the documented 503 is a failure.
 
 Error codes (docs/design/admin.md "Errors", shared by both services): 403 is
 `forbidden` for a role refusal, but also `csrf`, `step_up_required`,
@@ -125,8 +129,9 @@ def judge(op, expect, res):
     if expect == "401":
         return st == 401, "wanted 401, got " + res.brief()
     if expect == "403":
-        if st == 403 and op.raw is not None and res.code() == "csrf":
-            return True, "403 csrf before the role floor (non-JSON body)"
+        if op.raw is not None and op.audience != "admin":
+            # web: the write guard answers a nonempty non-JSON body before the floor (API4 guard order)
+            return st == 403 and res.code() == "csrf", "wanted 403 csrf (write guard before the floor), got " + res.brief()
         ok = st == 403 and res.code() not in NON_ROLE_403
         return ok, "wanted 403 forbidden, got " + res.brief()
     if expect == "refuse":

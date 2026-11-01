@@ -43,6 +43,7 @@ import argparse
 import http.client
 import http.server
 import os
+import select
 import shutil
 import ssl
 import subprocess
@@ -264,6 +265,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     self.server.log("upstream error %s: %s" % (type(exc).__name__, exc))
                     return self._send_simple(502, "bad gateway")
                 status = resp.status
+                self._up_sock = up.sock
                 sent = self._relay(resp)
             finally:
                 up.close()
@@ -295,6 +297,36 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.flush()
         if no_body:
             return 0
+        stop = threading.Event()
+        if chunked:
+            # a response of unknown length (SSE): close the upstream when the client goes away, as a real
+            # reverse proxy does, so the service frees its stream slot at once, not at its next heartbeat
+            threading.Thread(target=self._watch_client, args=(stop, getattr(self, "_up_sock", None)),
+                             daemon=True).start()
+        try:
+            return self._relay_body(resp, chunked)
+        finally:
+            stop.set()
+
+    def _watch_client(self, stop, up_sock):
+        """Shut the upstream socket when the client's side shows EOF (a GET has no more request bytes)."""
+        conn = self.connection
+        while not stop.is_set() and up_sock is not None:
+            try:
+                ready, _, _ = select.select([conn], [], [], 0.25)
+                if not ready or stop.is_set():
+                    continue
+                if not conn.recv(4096):
+                    up_sock.shutdown(2)
+                    return
+            except (OSError, ValueError, ssl.SSLError):
+                try:
+                    up_sock.shutdown(2)
+                except OSError:
+                    pass
+                return
+
+    def _relay_body(self, resp, chunked):
         sent = 0
         while True:
             data = resp.read1(CHUNK)

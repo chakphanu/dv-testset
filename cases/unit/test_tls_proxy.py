@@ -56,6 +56,25 @@ class Backend(http.server.BaseHTTPRequestHandler):
 
     def handle_any(self):
         path = self.path
+        if path.startswith("/idle"):                  # one frame, then silence until the peer (the proxy) closes
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            frame = b"event: hello\ndata: {}\n\n"
+            self.wfile.write(b"%x\r\n" % len(frame) + frame + b"\r\n")
+            self.wfile.flush()
+            self.server.idle_ended = None
+            t0 = time.monotonic()
+            self.connection.settimeout(8)
+            try:
+                while self.connection.recv(1024):
+                    pass
+            except OSError:
+                pass
+            self.server.idle_ended = time.monotonic() - t0
+            self.close_connection = True
+            return
         if path.startswith("/sse"):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -226,6 +245,21 @@ def test_sse_is_streamed_not_buffered(stack):
     assert rest.count(b"event: tick") == 3
     assert time.monotonic() - t0 >= 1.2
     c.close()
+
+
+def test_client_close_closes_the_upstream_stream_at_once(stack):
+    """A stream whose client goes away is closed upstream at once (the service frees its slot then, not at
+    its next heartbeat)."""
+    c = conn(stack, timeout=10)
+    c.request("GET", "/idle", headers={"Accept": "text/event-stream"})
+    r = c.getresponse()
+    assert r.readline() == b"event: hello\n"
+    stack["backend"].idle_ended = None
+    c.close()
+    deadline = time.monotonic() + 3
+    while stack["backend"].idle_ended is None and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert stack["backend"].idle_ended is not None, "the upstream connection stayed open after the client closed"
 
 
 def test_upstream_down_is_502_and_upgrade_501(stack):

@@ -185,8 +185,8 @@ Cases: `cases/test_crossmode_exact.py` (marker `crossmode`).
 ## Rig cases (DV-Router, marker `crossmode`)
 
     XLXD_SUT_IMAGE=<dv-router image> DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-router \
-      DVT_SUT_LAUNCH=import DVT_USRP_DYNAMIC=1 DVT_TRANSCODER_FAKE=1 \
-      scripts/run.sh -m rig --capture -- cases/test_crossmode_exact.py cases/test_crossmode_failure.py
+      DVT_SUT_LAUNCH=native DVT_SUT_CONFIG=<template path> DVT_USRP_DYNAMIC=1 DVT_TRANSCODER_FAKE=1 \
+      scripts/run.sh -m crossmode --capture -- cases/test_crossmode_exact.py cases/test_crossmode_failure.py
 
 `dvtest/crossmode.py` turns what a rig client sends into the units DV-Router
 ingests (media-format.md: D-STAR frames + last frame, DMR bursts + terminator,
@@ -218,10 +218,30 @@ and collected in `out/<run>/crossmode_findings.json` instead.
 Observed on `dv-router:wip-265d818` (47 of 47 pass): every cross cell is byte
 exact with the document's counts; CAPS re-probe 1.054 s after an unanswered OPEN;
 CS 0.40 s after the first unanswered request; exit status 3 on `caps=changed`;
-`dv-codec-ambed` restarted 0.5 s after a KILL. Open points: a DPlus link header
-opens a transcode session for its end unit alone (FINDING `dplus-join-stream`);
-the USRP listener gets exactly the voice units (the document is silent on a PCM
-end unit).
+`dv-codec-ambed` restarted 0.5 s after a KILL. Two open points of that image are
+closed by XC1 (below).
+
+### XC1 (`dv-router:wip-13e7e70`): the session opens on the first voice unit
+
+The cases follow transcoding.md and media-format.md since XC1; run on
+`dv-router:wip-13e7e70` (the delay measurement again on `wip-3b0724a`):
+
+- A header with no voice (the DPlus client link header, `test_cross_pair_exact[dplus-m17]`) and an
+  end-only stream cost no session: zero OPEN, zero data requests, zero CS right after the join
+  (`test_voiceless_stream_opens_no_session[header, header-end]`). The former FINDING
+  `dplus-join-stream` is closed.
+- The three USRP listener cells (`dstar-usrp`, `dmr-usrp`, `m17-usrp`) and the one-OPEN case with the USRP
+  listener compare EXACT bytes: the voice PCM units, then exactly one 32 B unkey. There is no synthetic PCM
+  end unit any more; the prefix compare and its NOTE are gone.
+- `test_header_gap_costs_no_hidden_open[dstar|dplus x open0|open300]` measures the first transcoded output
+  (M17 listener) after the first voice frame, with a 0.5 s voiceless header gap and without it, and the
+  fake's OPEN delay at 0 and 300 ms: the OPEN arrives within a few ms of the first voice unit (never during
+  the gap), and the output delay is identical with and without the gap (0.022 s at 0 ms, 0.304 s at 300 ms).
+  That is the documented cost: the OPEN no longer overlaps the header-to-voice gap, so the transcoded path
+  starts later by min(OPEN time, gap) than with opening at grant (0.30 s here; with a gap shorter than the OPEN
+  it would be the gap). It is printed as `FINDING xc1-<src>-open<ms>-measure` (`crossmode_findings.json`).
+  Asserted: no OPEN in the gap, OPEN within -10..+150 ms of the first voice unit, first output not earlier
+  than the OPEN time minus 40 ms, delays with and without the gap within 80 ms of each other.
 
 Injected faults and the capture check: every failure case brackets its fault
 with the control channel mark `ambed-fault-<mode>` (`Fake.set(**modes)` opens it

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 """Route tables of the web unit (dvtest/api_web.py, dvtest/api_admin.py): counts of
 the API3 migration, safety rules for probes, and the spec comparison (regex YAML
-reader) on small fixture snippets. With DVT_API_SPEC_DIR=<dir with openapi-web.yaml
+reader, success statuses) on small fixture snippets. With DVT_API_SPEC_DIR=<dir with openapi-web.yaml
 and openapi-admin.yaml> (a DV-Router checkout, docs/api) the tables are also compared
 with the real specs and its README migration table; without it that case is skipped."""
 import os
@@ -47,7 +47,11 @@ def test_counts_match_the_api3_migration():
     assert len(api_admin.ADMIN_OPS) == 28 and len(api_admin.ADMIN_TEMPLATES) == 25
     assert len(api_web.MIGRATION) == 59 and len(api_web.REMOVED) == 55 and len(api_web.UNCHANGED) == 4
     assert len(api_web.REMOVED_WEB) == 30 and len(api_web.REMOVED_ADMIN) == 25
-    assert len(api_web.WEB_KEYS) == 48 and len(api_admin.ADMIN_KEYS) == 28           # no duplicate operation
+    assert len(api_web.WEB_KEYS) == 52 and len(api_admin.ADMIN_KEYS) == 28           # no duplicate operation
+    # the four root probe methods of WEB2 count in the spec's 52, not in the migration
+    assert sorted(op.key for op in api_web.WEB_ROOT_OPS) == [("GET", "/health"), ("GET", "/ready"),
+                                                              ("HEAD", "/health"), ("HEAD", "/ready")]
+    assert all(op.floor == "anonymous" and not op.mutating for op in api_web.WEB_ROOT_OPS)
     assert sorted(p for _s, _m, p, _n in api_web.UNCHANGED) == sorted(api_web.RTC_PATHS)
     # every moved template has its new template in the table of its service, with each listed method
     for service, methods, old, new in api_web.MIGRATION:
@@ -102,6 +106,68 @@ def test_every_probe_is_safe_and_complete():
     assert {op.key for op in api_web.WEB_OPS if op.fresh} == {
         ("DELETE", "/api/v1/auth/session"), ("DELETE", "/api/v1/user/me/sessions")}
     assert {op.key for op in api_admin.ADMIN_OPS if op.fresh} == {("DELETE", "/api/v1/admin/session")}
+
+
+def test_declared_success_statuses():
+    """API4: every operation declares its success status; the tables carry it (Op.success)."""
+    web = {op.key: op.success for op in api_web.WEB_OPS + api_web.WEB_ROOT_OPS}
+    adm = {op.key: op.success for op in api_admin.ADMIN_OPS}
+    assert {k for k, v in web.items() if v == 201} == {
+        ("POST", "/api/v1/auth/register"), ("POST", "/api/v1/operator/invites"),
+        ("POST", "/api/v1/operator/accounts/{callsign}/reset")}
+    assert {k for k, v in web.items() if v == 204} == {
+        ("DELETE", "/api/v1/auth/session"), ("POST", "/api/v1/rtc/close"), ("POST", "/api/v1/rtc/alive")}
+    assert {k for k, v in web.items() if v == 202} == {
+        ("POST", "/api/v1/user/rooms/{R}/messages"), ("POST", "/api/v1/user/rooms/{R}/messages/directed")}
+    assert set(web.values()) == {200, 201, 202, 204}
+    assert {k for k, v in adm.items() if v != 200} == {("DELETE", "/api/v1/admin/session"),
+                                                       ("POST", "/api/v1/admin/system/restart-node")}
+    assert adm[("DELETE", "/api/v1/admin/session")] == 204 and adm[("POST", "/api/v1/admin/system/restart-node")] == 202
+
+
+SUCCESS_SNIPPET = """\
+paths:
+  /a:
+    post:
+      x-role: user
+      responses: &shared
+        default: {$ref: '#/components/responses/ProblemFallback'}
+        '201': {description: created}
+        '400': {$ref: '#/components/responses/BadRequest'}
+      x-note: after the responses
+    put:
+      responses: *shared
+  /b:
+    get:
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                properties:
+                  '204': {type: string}
+        '206': {description: partial}
+        '503': {description: busy}
+    delete:
+      description: no 2xx here
+      responses:
+        '404': {description: gone}
+components:
+  responses:
+    Ok:
+      '299': {description: not a path}
+"""
+
+
+def test_parse_spec_success_follows_anchors_and_indent():
+    got = api_web.parse_spec_success(SUCCESS_SNIPPET)
+    assert got == {("POST", "/a"): (201,), ("PUT", "/a"): (201,), ("GET", "/b"): (200, 206), ("DELETE", "/b"): ()}
+    ops = [api_web._op("POST", "/a", "user", success=201), api_web._op("GET", "/b", "user"),
+           api_web._op("DELETE", "/b", "user"), api_web._op("PUT", "/a", "user"), api_web._op("GET", "/zz", "user")]
+    assert api_web.success_mismatches(ops, got) == [("DELETE", "/b", 200, ()), ("PUT", "/a", 200, (201,))]
+    with pytest.raises(ValueError):
+        api_web.parse_spec_success("openapi: 3.1.0\n")
 
 
 def test_removed_probe_paths_are_concrete_and_distinct():
@@ -169,6 +235,8 @@ def test_tables_match_the_real_specs():
     for name, (added, removed) in result.items():
         assert not added and not removed, "%s spec vs table: in the spec only %s, in the table only %s" % (
             name, added, removed)
+    for name, bad in api_web.compare_spec_success(directory).items():
+        assert not bad, "%s: declared success statuses differ (method, path, table, spec 2xx): %s" % (name, bad)
     readme = Path(directory) / "README.md"
     if readme.is_file():
         rows = api_web.parse_migration_table(readme.read_text(encoding="utf-8"))

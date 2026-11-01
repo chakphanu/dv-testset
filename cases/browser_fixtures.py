@@ -142,8 +142,54 @@ def fake_mic_file():
     return str(path)
 
 
+READY_WAIT_S = 120.0     # /ready needs 36 s since the start of dv-svc-web plus the RTC ownership recovery (web.md)
+
+
+def poll_ready(client, wait_s=READY_WAIT_S, sleep=time.sleep, clock=time.monotonic):
+    """GET /ready of dv-svc-web (WEB2; through the proxy, no cookie) until 200. Returns ('ready', seconds),
+    ('absent', status) when the service has no probe (404: an image before WEB2), or ('not ready', last) after
+    wait_s with the last status and the documented `reasons` (hub, rtc_recovery) of a 503."""
+    t0 = clock()
+    last = "no answer"
+    while True:
+        try:
+            resp = client.get("/ready", pace=False)
+            if resp.status == 200:
+                return "ready", round(clock() - t0, 1)
+            if resp.status == 404:
+                return "absent", 404
+            reasons = ""
+            if resp.status == 503:
+                try:
+                    reasons = " reasons %s" % (resp.json().get("reasons"),)
+                except ValueError:
+                    reasons = ""
+            last = "HTTP %d%s" % (resp.status, reasons)
+        except web.WebError as exc:
+            last = str(exc)[:120]
+        if clock() - t0 >= wait_s:
+            return "not ready", last
+        sleep(1.0)
+
+
 @pytest.fixture(scope="session")
-def engine_browsers(playwright_driver, browser_ws, fake_mic_file):
+def web_ready(web_base_url, web_ca):
+    """The browser cases start only when dv-svc-web says it is ready (GET /ready 200, docs/api/openapi-web.yaml
+    webReady: the hub answers, 36 s since startup, RTC ownership recovery done): before that an offer of a
+    Listen case can meet a web service that is up but not ready. web_base_url (cases/web_fixtures.py) already
+    waited for /api/v1/public/state; this adds the service's own readiness. An image without the probe (404)
+    goes on as before."""
+    client = web.WebClient(web_base_url, web_ca, timeout=5)
+    verdict, detail = poll_ready(client)
+    if verdict == "not ready":
+        pytest.fail("dv-svc-web does not answer GET /ready with 200 within %d s (last: %s)" % (READY_WAIT_S, detail))
+    if verdict == "absent":
+        web.finding("dv-svc-web has no GET /ready (HTTP 404): the browser cases started on /api/v1/public/state alone")
+    return verdict
+
+
+@pytest.fixture(scope="session")
+def engine_browsers(playwright_driver, browser_ws, fake_mic_file, web_ready):
     """engine -> connected Browser, connected on first use and kept for the session (a context per
     case isolates the cases; one connection per engine keeps the service at three browsers).
     Each engine starts with a fake microphone (dvtest.browser.launch_options: Chromium flags and the
@@ -152,6 +198,8 @@ def engine_browsers(playwright_driver, browser_ws, fake_mic_file):
     made = {}
 
     def get(engine):
+        if engine in made and not made[engine].is_connected():
+            made.pop(engine)                   # the connection closed since last use: connect again
         if engine not in made:
             kind = getattr(playwright_driver, engine)
             last = None
@@ -223,9 +271,12 @@ def br_login_operator(web_operator, web_base_url, web_ca):
 
 # ----------------------------------------------------------------- BrowserPage
 
-# The service allows 4 event streams per client address and frees the slot of a closed stream when its next
-# heartbeat write fails (every 15 s, web.md / admin.md): the browsers of every case share one address. A case
-# that has just ended may still hold slots, so a new one waits until at most (4 - need) are stale.
+# The service allows 4 event streams per client address (web.md) and the browsers of every case share one address.
+# On dv-router:wip-5aa7cfd the slot of a closed stream was freed only at its next heartbeat write (15 s); DASH1
+# (wip-13e7e70) closes the EventSource on pagehide and the server releases a slot when its connection ends, and
+# finish() now leaves the page (pagehide) before closing the context. Whether a slot is free at once is recorded by
+# test_web_browser.py::test_event_stream_slot_is_freed_on_reload; until a run shows it, a new page still waits
+# until at most (4 - need) streams closed in the last STREAM_FREE_S are counted as stale (a no-op when none are).
 STREAM_CAP = 4
 STREAM_FREE_S = 17.0
 SSE_PATHS = ("/api/v1/public/events", "/api/v1/operator/stream")
@@ -351,47 +402,6 @@ class BrowserPage:
         the context loaded from now on. Call before the first navigation."""
         self.context.add_init_script(brlib.RTC_PROBE_JS)
 
-    def apply_fragment_workaround(self):
-        """Serve /public.js with `<>` replaced (patch_public_js); True when the script needed it. Call before
-        the first navigation of the case. Only the cases that look at the rendered dashboard use it; the case
-        test_dashboard_renders_the_state runs without it and says what is broken."""
-        self.patched = False
-
-        def handler(route):
-            resp = route.fetch()
-            body = resp.text()
-            new = brlib.patch_public_js(body)
-            if new is None:
-                route.fulfill(response=resp)
-                return
-            self.patched = True
-            data = new.encode("utf-8")
-            headers = {k: v for k, v in resp.headers.items() if k.lower() not in ("content-length", "content-encoding", "etag")}
-            headers["content-length"] = str(len(data))
-            route.fulfill(status=resp.status, headers=headers, body=data)
-
-        self.context.route("**/public.js", handler)
-
-    def apply_recordings_workaround(self):
-        """The same fragment defect (finding 1) is in recordings.js: serve it with every `<>` made a
-        component (dvtest.browser.patch_fragments_js); True through self.patched_recordings when needed."""
-        self.patched_recordings = False
-
-        def handler(route):
-            resp = route.fetch()
-            body = resp.text()
-            new = brlib.patch_fragments_js(body)
-            if new is None:
-                route.fulfill(response=resp)
-                return
-            self.patched_recordings = True
-            data = new.encode("utf-8")
-            headers = {k: v for k, v in resp.headers.items() if k.lower() not in ("content-length", "content-encoding", "etag")}
-            headers["content-length"] = str(len(data))
-            route.fulfill(status=resp.status, headers=headers, body=data)
-
-        self.context.route("**/recordings/recordings.js", handler)
-
     def seen(self, path_prefix, method=None):
         return self.log.paths(path_prefix, method)
 
@@ -482,6 +492,12 @@ class BrowserPage:
                     self.context.tracing.stop()
                 except Exception:
                     pass
+            # leave the page first: its pagehide closes the event stream and the Listen circuit the way a user's
+            # navigation does (DASH1: the EventSource is closed on pagehide), which a bare context.close() may skip
+            try:
+                self.page.goto("about:blank", timeout=5000)
+            except Exception:
+                pass
         finally:
             try:
                 self.context.close()
@@ -518,8 +534,8 @@ def browser_page(engine, engine_browsers, web_base_url, request):
 
 @pytest.fixture
 def dashboard_page(browser_page):
-    """browser_page with the dashboard script made renderable (BrowserPage.apply_fragment_workaround)."""
-    browser_page.apply_fragment_workaround()
+    """An anonymous page for the dashboard cases: browser_page, the scripts as served (DASH1 on
+    dv-router:wip-13e7e70 made the dashboard render; the stage 3a fragment workaround is gone)."""
     return browser_page
 
 
@@ -527,7 +543,6 @@ def dashboard_page(browser_page):
 def user_page(engine, engine_browsers, web_base_url, request, br_user):
     """Signed in as the browser user for the case; signed out (session revoked) afterwards."""
     bp = BrowserPage(engine, engine_browsers(engine), web_base_url, request.node.name.replace("[", "-").rstrip("]"))
-    bp.apply_fragment_workaround()
     status = bp.api_login(br_user.callsign, br_user.password)
     assert status == 200, "browser API login of the user: HTTP %s" % status
     yield bp
@@ -583,13 +598,12 @@ def br_tx2(web_user):
 
 def _rtc_page(engine, engine_browsers, web_base_url, request, user, talk):
     """Signed in as `user` (API login inside the browser, the session is bound to its User-Agent), with the
-    RTCPeerConnection probe and the dashboard workaround. `talk` grants the microphone permission to the
+    RTCPeerConnection probe. `talk` grants the microphone permission to the
     engines that take it as a context permission (Chromium, WebKit; Firefox uses its prefs)."""
     ctx = {"permissions": ["microphone"]} if talk and engine in ("chromium", "webkit") else None
     bp = BrowserPage(engine, engine_browsers(engine), web_base_url, request.node.name.replace("[", "-").rstrip("]"),
                      context_options=ctx)
     bp.install_rtc_probe()
-    bp.apply_fragment_workaround()
     status = bp.api_login(user.callsign, user.password)
     if status != 200:
         bp.finish(True)

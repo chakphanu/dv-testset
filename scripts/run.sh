@@ -583,10 +583,15 @@ if [ "$has_web" = 1 ]; then
    printf 'N0CALL:%s\n' "$web_pw" > "$out/sut-state/secrets/web-bootstrap"
    printf 'DVT_WEB_OPERATOR=N0CALL\nDVT_WEB_OPERATOR_PASSWORD=%s\n' "$web_pw" > "$out/web/operator.env")
   unset web_pw
-  # admin accounts (admin, operator, viewer; random passwords, pure-python argon2id hashes in the users
-  # file, no totp field: each enrols at its first login); logins for the tester in web/admin.env
+  # admin accounts (admin, operator, viewer; random passwords, no totp field: each enrols at its first
+  # login); logins for the tester in web/admin.env. Route: the SUT image's own `dv-svc-admin user add`
+  # (ADM1; throw-away container, no network, capped by dvtest.limits.docker_run_args(), password on stdin)
+  # when the image has it, else pure-python argon2id hashes (dvtest/argon2_pure.py). DVT_ADMIN_USERS=
+  # auto|image|python. The service reads the file at start (compose up below), so no restart is needed.
+  # The chosen route (never a password) is logged here and kept in web/admin-users.route.
   (cd "$DVT_ROOT" && PYTHONPATH="$DVT_ROOT" python3 -m dvtest.tools.admin_users \
-    --users-file "$DVT_ROOT/$out/sut-state/admin/users" --env-file "$DVT_ROOT/$out/web/admin.env") \
+    --users-file "$DVT_ROOT/$out/sut-state/admin/users" --env-file "$DVT_ROOT/$out/web/admin.env" \
+    --image "$XLXD_SUT_IMAGE" --route-file "$DVT_ROOT/$out/web/admin-users.route") \
     || { echo "run.sh: could not write the admin users file" >&2; exit 2; }
   # --profile nat: the per-run TURN secret (also coturn's static-auth-secret) and coturn's private config, both
   # mode 600 and written by dvtest.turn (never printed). The SUT mounts the secret only with turn.toml.

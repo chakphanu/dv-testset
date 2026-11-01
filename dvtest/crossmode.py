@@ -6,9 +6,11 @@ Pure functions, no network. They turn what a rig client sends into the codec
 units the system under test ingests, apply the fake transform per listener
 codec and fold the result into what a listener of a given protocol receives.
 Every rule below is taken from DV-Router docs/design/media-format.md
-("Unit granularity", "End unit", "Cross-mode egress", "Expected counts") and
-transcoding.md; where those documents are silent a function says so by
-returning a prefix-only expectation (Expect.exact False) instead of guessing.
+("Unit granularity", "End unit", "Cross-mode egress", "Expected counts", "USRP")
+and transcoding.md ("Controller transcoding"), as of XC1 (DV-Router 2c937c3):
+a transcode session opens on the first voice unit, a stream without voice
+(header only, or header and end unit) opens none, and a USRP listener gets
+exactly the voice PCM units, then one unkey (no synthetic PCM end unit).
 
 Kinds: dstar (DExtra), dplus, dcs (codec 1), dmr (codec 2), m17 (codec 3),
 usrp (codec 5, PCM). The end unit is the unit the source edge marks with the
@@ -31,9 +33,9 @@ DSTAR_SYNC = bytes.fromhex("552d16")
 DSTAR_FILLER = bytes.fromhex("1629f5")
 
 Source = namedtuple("Source", "voice end")
-# frames: list of the units a listener receives; exact: the whole list is
-# documented (count and order); False: only the first `prefix` frames are
-Expect = namedtuple("Expect", "frames exact prefix note")
+# frames: the units a listener receives, the whole list (count and order) is
+# documented; note: the rule that shaped the tail
+Expect = namedtuple("Expect", "frames note")
 
 
 def codec_of(kind):
@@ -113,7 +115,7 @@ def expected_listener(src_kind, dst_kind, frames, m17_fn0=False):
     if src_kind == dst_kind:
         from dvtest import clients
         out = clients.wire_frames(src_kind, [bytes(f) for f in frames], m17_fn0=m17_fn0)
-        return Expect(out, True, len(out), "same-protocol path, no transform")
+        return Expect(out, "same-protocol path, no transform")
     unit = source_units(src_kind, frames)
     if src == dst:
         voice, end = list(unit.voice), unit.end
@@ -122,17 +124,17 @@ def expected_listener(src_kind, dst_kind, frames, m17_fn0=False):
         end = None if unit.end is None else ext.expected_output(src, dst, unit.end)
     if dst_kind in DSTAR_KINDS:
         # the last frame is not in the voice list the clients collect
-        return Expect(voice, True, len(voice), "end unit goes to the last frame")
+        return Expect(voice, "end unit goes to the last frame")
     if dst_kind == "dmr":
         out = _fold_dmr(voice)
-        return Expect(out, True, len(out), "end unit not rendered; padded to whole bursts")
+        return Expect(out, "end unit not rendered; padded to whole bursts")
     if dst_kind == "m17":
         out = _fold_m17(voice, end)
-        return Expect(out, True, len(out), "EOT = [pending or silence, end unit or silence]")
+        return Expect(out, "EOT = [pending or silence, end unit or silence]")
     if dst_kind == "usrp":
-        # media-format.md does not say whether a PCM end unit is rendered:
-        # the voice units are documented, a following unit is recorded
-        return Expect(voice, False, len(voice), "end unit rendering undocumented for USRP")
+        # media-format.md USRP (XC1): one keyed frame per voice PCM unit; the
+        # end-hinted unit is never rendered and StreamEnd adds no PCM unit
+        return Expect(voice, "voice PCM units only, then the unkey")
     raise ValueError("no listener rule for kind %r" % dst_kind)
 
 
@@ -243,3 +245,118 @@ def check_link(session, src_codec, units, outs):
             problems.append("reply %d is not the transform" % index)
             break
     return problems
+
+
+# ---- USRP listener framing (media-format.md USRP, XC1) ---------------------------
+
+USRP_HEADER = 32
+USRP_VOICE = 352
+
+
+def usrp_tail_problems(inbox):
+    """Problems (list of strings) of the stream framing a USRP listener got:
+    keyed 352 B voice frames, then exactly one 32 B unkey after the last one;
+    no keyed frame after the unkey (no synthetic PCM end unit, no extra keyed
+    frame). inbox: datagrams or (time, datagram) pairs; frames that are not
+    USRP type-0 voice / unkey (REG answers, text) are ignored."""
+    seq = []
+    for item in inbox:
+        data = item[1] if isinstance(item, tuple) else item
+        if len(data) not in (USRP_HEADER, USRP_VOICE) or not data.startswith(b"USRP"):
+            continue
+        if int.from_bytes(data[20:24], "little") != 0:
+            continue
+        keyup = int.from_bytes(data[12:16], "big")
+        if len(data) == USRP_VOICE and keyup == 1:
+            seq.append("v")
+        elif len(data) == USRP_HEADER and keyup == 0:
+            seq.append("u")
+    if "v" not in seq:
+        return ["no keyed voice frame"]
+    first = seq.index("v")
+    tail = seq[first:]
+    last_voice = len(tail) - 1 - tail[::-1].index("v")
+    unkeys_inside = tail[:last_voice].count("u")
+    unkeys_after = tail[last_voice + 1:].count("u")
+    problems = []
+    if unkeys_inside:
+        problems.append("%d unkey(s) between voice frames" % unkeys_inside)
+    if unkeys_after != 1:
+        problems.append("%d unkeys after the last voice frame, expected 1" % unkeys_after)
+    return problems
+
+
+# ---- timing of the transcoded path (transcoding.md Controller transcoding) -------
+
+# Tolerances of the first-voice timing checks, seconds. The OPEN goes out in the
+# controller turn of the first voice unit (no timer, no lookahead): it reaches the
+# fake a few fabric hops after the tester sent that unit.
+OPEN_BEFORE_VOICE_TOL = 0.010      # clock mapping error (half the control RTT) and jitter
+OPEN_AFTER_VOICE_MAX = 0.150       # edge -> room -> worker -> fake, no added timer
+OPEN_COST_TOL = 0.040              # the first output cannot precede the STD by more than this
+SAME_DELAY_TOL = 0.080             # with vs without a leading header (M17 pairs, 20 ms pacing)
+
+Timing = namedtuple("Timing", "gap open_after_voice output_after_voice")
+
+
+def clock_offset(samples):
+    """Offset of a remote monotonic clock against the local one from
+    (local_before, remote_now, local_after) samples: (offset, half_rtt) of the
+    sample with the shortest round trip; local = remote - offset."""
+    if not samples:
+        raise ValueError("no clock samples")
+    before, remote, after = min(samples, key=lambda s: s[2] - s[0])
+    return remote - (before + after) / 2.0, (after - before) / 2.0
+
+
+def first_arrival(times, raw, match):
+    """Receive time of the first datagram of raw for which match(datagram) is
+    true, or None; times[i] is the receive time of raw[i] (same local clock as
+    the send stamps). ValueError when the two lists are not aligned."""
+    if len(times) != len(raw):
+        raise ValueError("%d receive times for %d datagrams" % (len(times), len(raw)))
+    for stamp, data in zip(times, raw):
+        if match(data):
+            return stamp
+    return None
+
+
+def header_cost_problems(with_header, without_header, open_s):
+    """Problems (list of (id, documented, observed)) of two Timing records of
+    the same voice stream, one with a voiceless header gap before the first
+    voice unit, one with the voice right after the header, when the fake
+    answers OPEN after open_s seconds. transcoding.md (XC1): the first voice
+    unit emits CreateSession in the same controller turn, the OPEN wait counts
+    from that unit, and the OPEN no longer overlaps the header-to-voice gap, so
+    the transcoded path starts later than with opening at grant by
+    min(OPEN time, gap): measured from the first voice unit, the delay is the
+    same with or without the header gap and includes the OPEN time."""
+    out = []
+    for name, t in (("header-gap", with_header), ("no-gap", without_header)):
+        if t.open_after_voice is None:
+            out.append((name + "-open-seen", "one OPEN for the voiced stream", "no OPEN in the fake log"))
+            continue
+        if t.open_after_voice < -OPEN_BEFORE_VOICE_TOL:
+            out.append((name + "-open-not-before-voice",
+                        "the session opens on the first voice unit, not at the header",
+                        "OPEN %.3f s before the first voice unit (gap %.3f s)" % (-t.open_after_voice, t.gap)))
+        elif t.open_after_voice > OPEN_AFTER_VOICE_MAX:
+            out.append((name + "-open-same-turn",
+                        "CreateSession in the controller turn of the first voice unit (<= %.3f s)"
+                        % OPEN_AFTER_VOICE_MAX,
+                        "OPEN %.3f s after the first voice unit" % t.open_after_voice))
+        if t.output_after_voice is None:
+            out.append((name + "-output-seen", "transcoded output", "no transcoded output unit received"))
+        elif t.output_after_voice < open_s - OPEN_COST_TOL:
+            out.append((name + "-open-cost-not-hidden",
+                        "the OPEN time (%.3f s) is not hidden before the first voice unit" % open_s,
+                        "first output %.3f s after the first voice unit" % t.output_after_voice))
+    if with_header.output_after_voice is not None and without_header.output_after_voice is not None:
+        diff = with_header.output_after_voice - without_header.output_after_voice
+        if abs(diff) > SAME_DELAY_TOL:
+            out.append(("same-delay",
+                        "the delay from the first voice unit does not depend on the header gap (+-%.3f s)"
+                        % SAME_DELAY_TOL,
+                        "%.3f s with a %.3f s header gap, %.3f s without" % (
+                            with_header.output_after_voice, with_header.gap, without_header.output_after_voice)))
+    return out

@@ -31,7 +31,7 @@ from web_fixtures import (  # noqa: E402,F401
 from browser_fixtures import (  # noqa: E402,F401
     br_login_operator, br_operator, br_rx, br_tx2, br_user, browser_page, browser_ws, dashboard_page, engine, engine_browsers,
     fake_mic_file, operator_page, operator_state, playwright_driver, pytest_runtest_makereport, rtc_rx_page, rtc_tx2_page,
-    rtc_tx_page, user_page, web_origin)
+    rtc_tx_page, user_page, web_origin, web_ready)
 
 
 def pytest_addoption(parser):

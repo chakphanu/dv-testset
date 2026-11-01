@@ -136,7 +136,8 @@ def watch_public_state(client, callsign, seconds, interval=0.5):
 # ----------------------------------------------------------------- the page side
 
 class Rtc:
-    """The Listen / Talk panel of one BrowserPage (probe installed, dashboard workaround applied)."""
+    """The Listen / Talk panel of one BrowserPage (probe installed). Connection state from the Listen card's
+    data-state (WEB2), the peer state from the probe."""
 
     def __init__(self, bp):
         self.bp = bp
@@ -176,20 +177,41 @@ class Rtc:
     def events(self):
         return self.ev("window.__dvtTap ? window.__dvtTap.events : []")
 
+    def panel_state(self):
+        """data-state of the Listen card (WEB2: idle | connecting | connected | failed | closed)."""
+        return pages.listen_state(self.page)
+
     def wait_state(self, want="connected", timeout_s=20.0):
-        """Poll the connection state of the page's peer; returns seconds waited or raises AssertionError with
-        the status line of the panel when the page gave up (an error text) or time ran out."""
+        """Wait until the Listen card's data-state is `want` and, for 'connected', the page's own peer (probe) is
+        connected too; returns seconds waited. Raises AssertionError with the status line when the card reports
+        'failed' after it went 'connecting' (the page gave up) or time ran out. 'closed', 'idle' or 'failed'
+        right after a click are the state of the previous circuit, so they are waited through."""
         t0 = time.monotonic()
         last = None
+        moved = False
         while time.monotonic() - t0 < timeout_s:
+            state = self.panel_state()
             last = self.state()
-            if last and last.get("connection") == want:
+            moved = moved or state in ("connecting", "connected")
+            peer_ok = want != "connected" or not last or last.get("connection") == "connected"
+            if state == want and peer_ok:
                 return time.monotonic() - t0
-            text = self.status()
-            if text not in (pages.LISTEN_IDLE_TEXT,) and not text.startswith(("Connecting", "Listening", "Switching")):
-                raise AssertionError("the panel shows %r while waiting for %s (peer %s)" % (text, want, last))
+            if state == "failed" and want != "failed" and moved:
+                raise AssertionError("the Listen card reports data-state failed while waiting for %s: %r (peer %s)"
+                                     % (want, self.status(), last))
             time.sleep(0.1)
-        raise AssertionError("peer not %s after %.0f s (last %s, panel %r)" % (want, timeout_s, last, self.status()))
+        raise AssertionError("Listen card not %s after %.0f s (data-state %r, peer %s, panel %r)"
+                             % (want, timeout_s, self.panel_state(), last, self.status()))
+
+    def wait_idle(self, timeout_s=8.0):
+        """After Disconnect: data-state closed (local disconnect) or idle, and the status line 'Idle'. True when
+        reached in time."""
+        end = time.monotonic() + timeout_s
+        while time.monotonic() < end:
+            if self.panel_state() in ("closed", "idle") and self.status() == pages.LISTEN_IDLE_TEXT:
+                return True
+            time.sleep(0.1)
+        return False
 
     def connect(self, room, timeout_s=20.0):
         """Choose `room`, click Listen / Connect, wait for 'connected' and for the status line to say
@@ -258,9 +280,56 @@ class Rtc:
         return [r["status"] for r in self.bp.log.requests if r["path"] == "/api/v1/rtc/" + suffix and r["method"] == "POST"]
 
     def audio_element(self):
-        return self.ev("""() => { const a = document.querySelector('audio.listen-audio');
+        return self.ev("""(css) => { const a = document.querySelector(css);
             return a ? {paused: a.paused, muted: a.muted, ready: a.readyState, hasStream: !!a.srcObject,
-                        error: a.error ? a.error.code : null} : null; }""")
+                        error: a.error ? a.error.code : null} : null; }""", pages.MODULE_AUDIO_CSS)
+
+    # -- the control DataChannel (frames as the probe saw them, page clock)
+    def clock(self):
+        return self.ev("performance.now()")
+
+    def ctl_received(self):
+        """[{t, pc, label, data}] of every frame the page received on a data channel."""
+        return self.ev("window.__dvtTap ? window.__dvtTap.msgs : []")
+
+    def ctl_sent(self):
+        """[{t, pc, label, data}] of every frame the page sent (ptt, lease, select)."""
+        return self.ev("window.__dvtTap ? window.__dvtTap.sent : []")
+
+
+# ------------------------------------------------------------------------ Hold Talk
+
+def press(rtc):
+    """Mouse down in the middle of the Talk button (pointerdown, primary button): the page asks for the
+    microphone, re-offers sendrecv, and sends ptt down when the control channel is open."""
+    box = pages.talk_button(rtc.page).bounding_box()
+    rtc.page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    rtc.page.mouse.down()
+    return time.monotonic()
+
+
+def release(rtc):
+    rtc.page.mouse.up()
+    return time.monotonic()
+
+
+def wait_talk_text(rtc, pred, timeout_s):
+    """Poll the talk status until pred(text); returns (text, seconds). The last text and None on timeout."""
+    t0 = time.monotonic()
+    text = ""
+    while time.monotonic() - t0 < timeout_s:
+        text = rtc.talk_status()
+        if pred(text):
+            return text, time.monotonic() - t0
+        time.sleep(0.1)
+    return text, None
+
+
+def on_air_or_end(text):
+    return text == pages.TALK_ON_AIR_TEXT or text.startswith(("Denied", "Ended"))
+
+
+MIC_UNAVAILABLE = "Denied: Microphone access is unavailable"
 
 
 def pump_while(peer, seconds, poll=None, poll_every=0.5):

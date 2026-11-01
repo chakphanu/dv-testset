@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: MIT
 """Route table of DV-Router's web service API (dv-svc-web), API3 path scheme.
 
-One record per operation (method, path template, audience prefix, minimum role
-and a SAFE probe) for the 48 operations / 34 path templates of the hand-written
-OpenAPI description (docs/api/openapi-web.yaml of DV-Router), and the 55 OLD
+One record per operation (method, path template, audience prefix, minimum role,
+declared success status and a SAFE probe) for the 48 audience operations / 34
+path templates of the hand-written OpenAPI description (docs/api/openapi-web.yaml
+of DV-Router) plus its four root probe methods (GET/HEAD /health and /ready,
+WEB2; WEB_ROOT_OPS), and the 55 OLD
 templates that API3 removed (docs/api/README.md, "API3 audience paths"; 30 of
 the web service, 25 of the admin service, see api_admin.py). Stdlib only: dvtest
 has no YAML parser and the spec files are not copied here.
@@ -16,9 +18,12 @@ indent under `paths:`, method keys at four) and reports additions and
 removals. It never fails a case by itself: the unit test skips without the
 variable, and a difference is the news that the tables need an update.
 
-Roles ("floor"): the web prefix floor is checked by the router before dispatch
+Roles ("floor"): the web router classifies the path first (an unclassified path
+under /user or /operator is 404 for everyone), then applies the audience floor
 (`public`, `auth`, `rtc` keep their own admission; `user` needs a web session;
-`operator` an operator web session; a higher role passes a lower floor).
+`operator` an operator web session; a higher role passes a lower floor). The
+session write guards (Origin/JSON, X-DV-CSRF: 403 `csrf`) run BEFORE that floor
+(API4: docs/api/README.md "API3 audience paths", web.md "Guard order").
   anonymous   no session needed (login, register, public reads)
   user        a web session (user or operator)
   operator    an operator web session
@@ -43,6 +48,15 @@ Probe fields (all optional):
   credential_401  a 401 is the answer to a bad credential (login, register),
                   not a role refusal
   needs_tx        a user with may_tx is needed to get past the may_tx check
+
+Success status (`success`): the 2xx every operation declares since API4
+(DV-Router 2fab0f8, "every operation declares its success status explicitly"):
+201 register, password-reset code and invite issue; 204 logout and RTC
+close/alive (admin: logout); 202 room messages (admin: restart-node); 200 the
+rest (GET/HEAD readiness and ID reads may also answer the documented 503). The
+matrix judges the authorization class only; cases that make a REAL successful
+call assert this status, and `parse_spec_success()` checks the values against
+the spec.
 """
 import os
 import re
@@ -69,6 +83,7 @@ class Op:
     needs_tx: bool = False
     step_up: bool = False        # the spec lists the step_up guard
     mutating: bool = False
+    success: int = 200           # the declared 2xx of a successful call (module doc)
     note: str = ""
 
     @property
@@ -112,13 +127,15 @@ WEB_OPS = (
     _op("GET", "/api/v1/public/events", "anonymous", stream=True),
     _op("HEAD", "/api/v1/public/events", "anonymous"),
     # ---- auth: anonymous login/register, the rest needs a session
-    _op("POST", "/api/v1/auth/register", "anonymous", body={}, credential_401=True,
+    _op("POST", "/api/v1/auth/register", "anonymous", body={}, credential_401=True, success=201,
         note="empty body: 400/401/422, nothing is redeemed"),
     _op("POST", "/api/v1/auth/session", "anonymous", body={}, credential_401=True,
         note="empty body: 400/401, no login happens"),
     _op("GET", "/api/v1/auth/session", "user"),
-    _op("DELETE", "/api/v1/auth/session", "user", fresh=True),
-    _op("POST", "/api/v1/auth/session/totp", "user", body={}, note="a user has no TOTP in v1"),
+    _op("DELETE", "/api/v1/auth/session", "user", fresh=True, success=204),
+    _op("POST", "/api/v1/auth/session/totp", "user", body={},
+        note="400 for a user (no TOTP in v1); an enrolled operator without X-DV-TOTP: 403 totp_invalid and a "
+             "lockout failure (API4, web.md Account API)"),
     _op("POST", "/api/v1/auth/session/totp/confirm", "user", body={}),
     _op("POST", "/api/v1/auth/password", "user", body={}, note="no password is changed with an empty body"),
     _op("PUT", "/api/v1/auth/password", "user", body={}),
@@ -128,10 +145,10 @@ WEB_OPS = (
     _op("DELETE", "/api/v1/user/me/sessions", "user", fresh=True, note="revokes every login of the account"),
     _op("DELETE", "/api/v1/user/me/sessions/{id}", "user", params={"id": NO_SESSION_ID}, missing_ok=True),
     _op("GET", "/api/v1/user/rooms/{R}/messages", "user", params={"R": ROOM}, query="limit=1"),
-    _op("POST", "/api/v1/user/rooms/{R}/messages", "user", params={"R": ROOM}, body=WRONG_JSON, needs_tx=True,
+    _op("POST", "/api/v1/user/rooms/{R}/messages", "user", params={"R": ROOM}, body=WRONG_JSON, needs_tx=True, success=202,
         note="a rejected body (400); nothing is sent to the room"),
     _op("POST", "/api/v1/user/rooms/{R}/messages/directed", "user", params={"R": ROOM}, body=WRONG_JSON,
-        needs_tx=True),
+        needs_tx=True, success=202),
     _op("GET", "/api/v1/user/recordings", "user", missing_ok=True, note="503/404 without a recorder"),
     _op("GET", "/api/v1/user/recordings/{id}", "user", params={"id": NO_RECORDING}, missing_ok=True),
     _op("GET", "/api/v1/user/recordings/{id}/audio.wav", "user", params={"id": NO_RECORDING}, missing_ok=True),
@@ -148,9 +165,9 @@ WEB_OPS = (
         missing_ok=True),
     _op("DELETE", "/api/v1/operator/accounts/{callsign}", "operator", params={"callsign": NO_CALL}, missing_ok=True),
     _op("POST", "/api/v1/operator/accounts/{callsign}/reset", "operator", params={"callsign": NO_CALL}, body={},
-        missing_ok=True),
+        missing_ok=True, success=201),
     _op("GET", "/api/v1/operator/invites", "operator", query="limit=1"),
-    _op("POST", "/api/v1/operator/invites", "operator", body={}, note="empty body: no invite is created"),
+    _op("POST", "/api/v1/operator/invites", "operator", body={}, success=201, note="empty body: no invite is created"),
     _op("DELETE", "/api/v1/operator/invites/{callsign}", "operator", params={"callsign": NO_CALL}, missing_ok=True),
     _op("GET", "/api/v1/operator/audit", "operator", query="limit=1"),
     _op("GET", "/api/v1/operator/ids/rows", "operator", query="kind=dmr&limit=1"),
@@ -159,17 +176,30 @@ WEB_OPS = (
     _op("GET", "/api/v1/operator/ids/sync", "operator"),
     _op("HEAD", "/api/v1/operator/ids/sync", "operator"),
     _op("POST", "/api/v1/operator/ids/sync/force", "operator", raw=(b"x", "text/plain"), step_up=True,
-        note="a non-JSON body: the media-type check refuses before a forced sync could start"),
+        note="a nonempty non-JSON body: the write guard's 403 csrf answers before the floor and the handler "
+             "(API4 guard order; force checks the media type only of a nonempty body)"),
     # ---- rtc: conditional (session, or guest lease); URLs unchanged by API3
     _op("POST", "/api/v1/rtc/offer", "rtc", body=WRONG_JSON),
-    _op("POST", "/api/v1/rtc/close", "rtc", body={"sess_id": "0" * 64}, missing_ok=True),
-    _op("POST", "/api/v1/rtc/alive", "rtc", body={"sess_id": "0" * 64}, missing_ok=True),
+    _op("POST", "/api/v1/rtc/close", "rtc", body={"sess_id": "0" * 64}, missing_ok=True, success=204,
+        note="unknown or foreign circuit: 403 forbidden (API4, web.md RTC)"),
+    _op("POST", "/api/v1/rtc/alive", "rtc", body={"sess_id": "0" * 64}, missing_ok=True, success=204,
+        note="unknown or foreign circuit: 403 forbidden (API4, web.md RTC)"),
     _op("GET", "/api/v1/rtc/ice", "rtc", headers={"X-DV-RTC-Session": "0" * 64}, missing_ok=True,
-        note="404 also when [web] turn_urls is empty (the rig)"),
+        note="empty [web] turn_urls (the rig without turn.toml): 404 before method, Origin, cookie or circuit "
+             "checks, anonymous callers included (API4, web.md RTC)"),
 )
 
-WEB_KEYS = frozenset(op.key for op in WEB_OPS)
-WEB_TEMPLATES = frozenset(op.path for op in WEB_OPS)
+# Root probes of the web service (WEB2; README: "52 operations (48 audience API operations and four root
+# probe methods)"): no audience prefix, anonymous, shared public bucket; /ready is 200 or 503 with reasons.
+WEB_ROOT_OPS = (
+    _op("GET", "/health", "anonymous"),
+    _op("HEAD", "/health", "anonymous"),
+    _op("GET", "/ready", "anonymous", note="200 ready or 503 with reasons (hub, rtc_recovery)"),
+    _op("HEAD", "/ready", "anonymous"),
+)
+
+WEB_KEYS = frozenset(op.key for op in WEB_OPS + WEB_ROOT_OPS)      # 52, as the spec
+WEB_TEMPLATES = frozenset(op.path for op in WEB_OPS)                  # the 34 audience templates
 RTC_PATHS = ("/api/v1/rtc/offer", "/api/v1/rtc/close", "/api/v1/rtc/alive", "/api/v1/rtc/ice")
 
 # (service, methods, old template, new template): README "API3 audience paths", the 59
@@ -287,6 +317,80 @@ def parse_spec_ops(text):
         if m and cur:
             ops[cur] = m.group(1)
     return ops
+
+
+_RESPONSES = re.compile(r"^      responses:(?:\s+([&*])([\w-]+))?\s*$")     # block, &anchor or *alias
+_STATUS_KEY = re.compile(r"""^        ['"]?([1-5][0-9][0-9])['"]?:""")
+
+
+def parse_spec_success(text):
+    """{(METHOD, path template): sorted tuple of the 2xx status keys} of an
+    OpenAPI file (same subset of YAML as parse_spec_ops: `responses:` at six
+    spaces of indent, status keys at eight; a YAML anchor `responses: &name`
+    and its alias `responses: *name` are followed). An operation without a 2xx
+    maps to ()."""
+    lines = text.splitlines()
+    try:
+        start = next(i for i, line in enumerate(lines) if line.rstrip() == "paths:")
+    except StopIteration:
+        raise ValueError("no `paths:` section") from None
+    out, path, cur, in_resp, anchors, anchor = {}, None, None, False, {}, None
+    for line in lines[start + 1:]:
+        if line and not line[0].isspace() and not line.startswith("#"):
+            break
+        m = _PATH_KEY.match(line)
+        if m:
+            path, cur, in_resp = m.group(1), None, False
+            continue
+        m = _METHOD_KEY.match(line)
+        if m and path:
+            cur, in_resp = (m.group(1).upper(), path), False
+            out[cur] = ()
+            continue
+        if cur is None:
+            continue
+        m = _RESPONSES.match(line)
+        if m:
+            if m.group(1) == "*":
+                out[cur] = anchors.get(m.group(2), ())
+                in_resp, anchor = False, None
+            else:
+                in_resp, anchor = True, m.group(2)
+                if anchor:
+                    anchors[anchor] = ()
+            continue
+        if in_resp and line.startswith("      ") and not line.startswith("       ") and line.strip():
+            in_resp, anchor = False, None             # the next key of the operation
+        m = _STATUS_KEY.match(line) if in_resp else None
+        if m and m.group(1).startswith("2"):
+            out[cur] = tuple(sorted(set(out[cur]) | {int(m.group(1))}))
+            if anchor:
+                anchors[anchor] = out[cur]
+    return out
+
+
+def success_mismatches(ops, spec_success):
+    """[(METHOD, path, table success, spec 2xx codes)] where the table's
+    `success` is not the lowest declared 2xx (or the spec declares none)."""
+    bad = []
+    for op in ops:
+        codes = spec_success.get(op.key)
+        if codes is None:
+            continue                                   # a route difference: diff_ops reports it
+        if not codes or op.success != codes[0]:
+            bad.append((op.method, op.path, op.success, codes))
+    return sorted(bad)
+
+
+def compare_spec_success(directory):
+    """{"web": mismatches, "admin": mismatches} of the declared success statuses
+    (success_mismatches) against the two spec files in `directory`."""
+    from dvtest import api_admin
+    out = {}
+    for name, ops in (("web", WEB_OPS + WEB_ROOT_OPS), ("admin", api_admin.ADMIN_OPS)):
+        with open(os.path.join(directory, "openapi-%s.yaml" % name), encoding="utf-8") as fh:
+            out[name] = success_mismatches(ops, parse_spec_success(fh.read()))
+    return out
 
 
 def diff_ops(table, spec):
