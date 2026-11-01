@@ -295,3 +295,17 @@ def test_json_set_lenient_open(server):
         assert c.op(op="reset")["modes"]["lenient_open"] is False
     finally:
         c.close()
+
+
+def test_control_client_uses_the_fixed_source_port_range():
+    """The control client must not take an ephemeral source port: one of them
+    (34003) once matched a USRP port of the rig and dvcheck flagged the JSON."""
+    import socket
+    from dvtest import fake_ctl
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        port = fake_ctl.bind_source(sock)
+        assert port in fake_ctl.SOURCE_PORTS
+        assert sock.getsockname()[1] == port
+    finally:
+        sock.close()

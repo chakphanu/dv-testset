@@ -8,6 +8,8 @@ with one line; the host watcher answers with <id>.ack ("ok", "error <rc>" or
   "<action> <service>"                       stop | start | restart | kill
   "kill-proc <service> <process> <signal>"   signal one process by name INSIDE
                                              a rig container (allow-list below)
+  "mark begin|end <tag>"                     only logged: brackets traffic a case
+                                             makes abnormal on purpose (dvcheck)
 
 KILL_PROC_ALLOWED is the tester's copy of the allow-list in
 scripts/lib/killproc.sh (the host enforces it; cases/unit/test_control.py
@@ -16,6 +18,7 @@ signalled process "pid=<pid>" (pid inside the container's pid namespace) and
 "t_kill=<epoch seconds>", taken inside the container right after the
 signals were sent (same host clock as time.time() of the tester).
 """
+import itertools
 import os
 import time
 from dataclasses import dataclass, field
@@ -79,6 +82,10 @@ class RigControl:
     through the run.sh watcher: a request file in $DVT_OUT/control, answered
     by an .ack file."""
 
+    # one counter for every instance of the process: a fixture and a helper that
+    # each hold a RigControl must never issue the same request name
+    _next_id = itertools.count(1)
+
     def __init__(self, directory):
         self.dir = Path(directory)
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -87,7 +94,7 @@ class RigControl:
     def _request(self, line, timeout):
         """Send one request line; the request name once it is acked "ok"."""
         self.count += 1
-        name = "%d-%d" % (os.getpid(), self.count)
+        name = "%d-%d" % (os.getpid(), next(RigControl._next_id))
         tmp = self.dir / (name + ".tmp")
         tmp.write_text(line + "\n")
         tmp.rename(self.dir / (name + ".req"))
@@ -104,6 +111,14 @@ class RigControl:
 
     def __call__(self, action, service, timeout=30.0):
         self._request("%s %s" % (action, service), timeout)
+
+    def mark(self, phase, tag, timeout=10.0):
+        """Log "mark begin|end <tag>" in control.log for dvcheck (tag chars
+        A-Za-z0-9._-; ValueError otherwise)."""
+        if phase not in ("begin", "end") or not tag or not all(c.isalnum() or c in "._-" for c in tag) \
+                or not tag.isascii():
+            raise ValueError("bad mark %r %r" % (phase, tag))
+        self._request("mark %s %s" % (phase, tag), timeout)
 
     def kill_proc(self, service, process, signal, timeout=30.0):
         """Signal the process called `process` (exact comm) inside `service`

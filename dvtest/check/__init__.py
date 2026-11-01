@@ -103,6 +103,14 @@ PEER_CUT_MARKS = {"xlx-cut-stream"}
 # record that); the copy goes to the tester inside the same mark window
 FORWARDED_CODES = ("m17.m17p_type", "m17.m17p_length")
 PEER_SUFFIX = " (peer)"
+# a case that injects a fault into the fake transcoder (docs/ambed-fake.md)
+# brackets it with the tag "ambed-fault-<mode>"; its window is bound to the
+# transcoder-sut address instead of the tester's, excuses only ambed.*
+# errors on the system under test <-> transcoder link, and keeps AMBED_FAULT_
+# SETTLE s after the end so late worker reactions (CS after 400 ms, CAPS
+# re-probe, restart) still fall inside
+AMBED_FAULT_PREFIX = "ambed-fault-"
+AMBED_FAULT_SETTLE = 5.0
 
 
 def marks(run_dir, hosts):
@@ -113,7 +121,7 @@ def marks(run_dir, hosts):
     than the next mark's begin."""
     path = os.path.join(run_dir, "control", "control.log")
     ip = hosts.get("tester")
-    if not ip or not os.path.isfile(path):
+    if not os.path.isfile(path):
         return []
     begun, out = {}, []
     with open(path) as fh:
@@ -126,8 +134,14 @@ def marks(run_dir, hosts):
             if edge == "begin" and m.group(2):
                 begun.setdefault(tag, ts)
             elif edge == "end" and m.group(5) == "0" and tag in begun:
-                out.append((ip, begun.pop(tag), ts + MARK_SETTLE, "mark " + tag))
-    out += [(ip, t0, float("inf"), "mark " + tag) for tag, t0 in begun.items()]
+                t0 = begun.pop(tag)
+                if tag.startswith(AMBED_FAULT_PREFIX):
+                    out.append((hosts.get("ambed_sut"), t0, ts + AMBED_FAULT_SETTLE, "mark " + tag))
+                else:
+                    out.append((ip, t0, ts + MARK_SETTLE, "mark " + tag))
+    out += [(hosts.get("ambed_sut") if tag.startswith(AMBED_FAULT_PREFIX) else ip, t0, float("inf"), "mark " + tag)
+            for tag, t0 in begun.items()]
+    out = [w for w in out if w[0]]
     # a case that cuts a stream on an XLX peer on purpose (no closing frame)
     # also marks the stream-end findings of the peers' own flows
     for ip_, t0, t1, label in list(out):
@@ -219,7 +233,13 @@ def _excuse(report, frame_ts, windows):
         for ip, t0, t1, svc in windows:
             if not (start <= t1 and ts >= t0 and re.search(r"(^|[<>])%s[:<]" % re.escape(ip), f.flow)):
                 continue
-            if svc.startswith("mark "):
+            if svc.startswith("mark " + AMBED_FAULT_PREFIX):
+                # an injected transcoder fault: only the ambed findings on
+                # the link to transcoder-sut (the window's address) count
+                if not f.code.startswith("ambed."):
+                    continue
+                note = " [expected during %s]" % svc
+            elif svc.startswith("mark "):
                 note = " [during %s]" % svc
                 if not f.flow.startswith(ip + ":"):
                     # the sut forwards a datagram the case made malformed on

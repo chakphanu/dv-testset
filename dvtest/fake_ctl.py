@@ -2,10 +2,28 @@
 """Client of the JSON control socket of the fake AMBEd (dvtest/fake_ambed.py,
 docs/ambed-fake.md): one UDP datagram per request and per reply."""
 import json
+import random
 import socket
 import time
 
 CONTROL_PORT = 10190
+# Source ports of the control client: a fixed range far from every protocol port
+# of the rig. An ephemeral source port can land on a protocol port (34003 is a
+# USRP port of the rig) and the wire checker then reads the JSON as that protocol.
+SOURCE_PORTS = range(10300, 10400)
+
+
+def bind_source(sock):
+    """Bind sock to a free port of SOURCE_PORTS; on failure of all, leave it to the OS."""
+    start = random.randrange(len(SOURCE_PORTS))
+    for i in range(len(SOURCE_PORTS)):
+        port = SOURCE_PORTS[(start + i) % len(SOURCE_PORTS)]
+        try:
+            sock.bind(("0.0.0.0", port))
+            return port
+        except OSError:
+            continue
+    return None
 
 
 class FakeCtlError(RuntimeError):
@@ -25,6 +43,7 @@ class FakeCtl:
         last = None
         for _ in range(self.tries):
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            bind_source(sock)
             try:
                 sock.settimeout(self.timeout)
                 sock.sendto(data, self.dest)

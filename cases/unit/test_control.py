@@ -282,3 +282,50 @@ def test_rig_control_kill_proc_no_process(tmp_path):
     with pytest.raises(RuntimeError, match="error 3"):
         ctl.kill_proc("xlxd-sut", "dv-edge-p25", "KILL", timeout=5)
     thread.join(5)
+
+
+def test_mark_request_line(tmp_path):
+    """RigControl.mark sends "mark begin|end <tag>" and refuses odd tags."""
+    rc = control.RigControl(tmp_path)
+
+    def watcher():
+        while not list(tmp_path.glob("*.req")):
+            time.sleep(0.01)
+        req = next(tmp_path.glob("*.req"))
+        lines.append(req.read_text().strip())
+        req.with_suffix(".ack").write_text("ok\n")
+
+    lines = []
+    thread = threading.Thread(target=watcher)
+    thread.start()
+    rc.mark("begin", "ambed-fault-data-delay-100")
+    thread.join()
+    assert lines == ["mark begin ambed-fault-data-delay-100"]
+    for phase, tag in (("start", "x"), ("begin", ""), ("begin", "a b"), ("end", "a;b"), ("end", "x\ny")):
+        with pytest.raises(ValueError):
+            rc.mark(phase, tag)
+
+
+def test_request_names_are_unique_across_instances(tmp_path):
+    """Two RigControl objects in one process (a fixture and a helper) must never
+    issue the same request name: a clash makes one request overwrite the .ack or
+    .out of the other (seen as a missing .out in the T14 caps-changed case)."""
+    a = control.RigControl(tmp_path)
+    b = control.RigControl(tmp_path)
+    names = []
+
+    def answer():
+        deadline = time.monotonic() + 5
+        while len(names) < 6 and time.monotonic() < deadline:
+            for req in sorted(tmp_path.glob("*.req")):
+                names.append(req.stem)
+                req.rename(req.with_suffix(".done"))
+                req.with_suffix(".ack").write_text("ok\n")
+            time.sleep(0.005)
+
+    thread = threading.Thread(target=answer)
+    thread.start()
+    for ctl in (a, b, a, b, a, b):
+        ctl.mark("begin", "t")
+    thread.join(10)
+    assert len(names) == 6 and len(set(names)) == 6, names

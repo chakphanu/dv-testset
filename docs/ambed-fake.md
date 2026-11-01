@@ -221,8 +221,20 @@ CS 0.40 s after the first unanswered request; exit status 3 on `caps=changed`;
 `dv-codec-ambed` restarted 0.5 s after a KILL. Open points: a DPlus link header
 opens a transcode session for its end unit alone (FINDING `dplus-join-stream`);
 the USRP listener gets exactly the voice units (the document is silent on a PCM
-end unit). The capture check (`check.txt`) flags the injected transcoder faults as
-errors, so a run with the failure cases exits 1 although pytest passes.
+end unit).
+
+Injected faults and the capture check: every failure case brackets its fault
+with the control channel mark `ambed-fault-<mode>` (`Fake.set(**modes)` opens it
+with the tag built by `fault_tag`, for example `ambed-fault-open-busy`,
+`ambed-fault-data-delay-600`, `ambed-fault-caps-changed-open-silent`,
+`ambed-fault-max_sessions-1`; `Fake.fault("worker-kill")` for the KILL; the
+`fake` fixture ends it after the recovery). `dvtest.check.marks` binds such a
+window to the transcoder-sut address and keeps it `AMBED_FAULT_SETTLE` (5 s) past
+the end, so the late reactions fall inside. Inside it the `ambed.*` errors of the
+sut <-> transcoder link (`no_reply`, `reply_missing`, `reply_bad`, `tx_mismatch`)
+become warnings tagged `[expected during mark ambed-fault-<mode>]`; the same
+findings outside any window, and every other protocol, stay errors. The exact
+cases inject nothing and are not marked.
 
 ## Tests
 

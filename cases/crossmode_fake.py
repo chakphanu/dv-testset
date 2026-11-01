@@ -10,9 +10,17 @@ Fixtures (import them into a test module):
             `stats`; waits until the worker has been through CAPS
   fake      per case: modes reset before, the Fake handle (counters, log,
             sessions, findings), modes reset again after
+
+A case that injects a fault (Fake.set, or Fake.fault for a fault made some
+other way, like a worker KILL) is bracketed with the control channel mark
+"ambed-fault-<mode>" from the injection to the end of the case's recovery:
+dvcheck then reports the ambed.* errors of the sut <-> transcoder-sut link
+inside that window (plus a few seconds) as expected warnings. Cases that
+inject nothing are not marked, so any finding in them stays an error.
 """
 import json
 import os
+import re
 import socket
 import time
 from pathlib import Path
@@ -20,6 +28,8 @@ from pathlib import Path
 import pytest
 
 from dvtest import clients, crossmode, specs
+from dvtest.check import AMBED_FAULT_PREFIX
+from dvtest.control import RigControl
 from dvtest.audio import signals
 from dvtest.fake_ctl import FakeCtl, FakeCtlError
 from dvtest.net import pace
@@ -151,12 +161,43 @@ def fake_ctl(target):
             pass
 
 
+def fault_tag(**modes):
+    """Mark tag of a fault made by Fake.set(**modes): ambed-fault-open-busy,
+    ambed-fault-data-delay-100, ambed-fault-caps-changed-open-silent."""
+    parts = ["%s-%s" % (key, re.sub(r"[^A-Za-z0-9._-]", "-", str(modes[key]))) for key in sorted(modes)]
+    return AMBED_FAULT_PREFIX + "-".join(parts)
+
+
 class Fake:
     """One case's view of the fake: counters, log, sessions, findings."""
 
-    def __init__(self, ctl, case):
+    def __init__(self, ctl, case, control=None):
         self.ctl, self.case = ctl, case
+        self.control = control             # RigControl for the dvcheck marks, or None
         self.dirty = False
+        self.marked = None                 # tag of the open mark window
+
+    def fault(self, name):
+        """Open the dvcheck window "ambed-fault-<name>" (once per case; the
+        fixture closes it after the recovery). No-op without the control
+        channel; a failing mark never fails the case."""
+        tag = name if name.startswith(AMBED_FAULT_PREFIX) else AMBED_FAULT_PREFIX + name
+        if self.marked is not None or self.control is None:
+            return
+        try:
+            self.control.mark("begin", tag)
+            self.marked = tag
+        except (RuntimeError, TimeoutError, ValueError, OSError) as exc:
+            print("mark begin %s failed: %s" % (tag, exc))
+
+    def end_fault(self):
+        if self.marked is None:
+            return
+        tag, self.marked = self.marked, None
+        try:
+            self.control.mark("end", tag)
+        except (RuntimeError, TimeoutError, ValueError, OSError) as exc:
+            print("mark end %s failed: %s" % (tag, exc))
 
     def counters(self):
         return self.ctl.counters()
@@ -173,6 +214,7 @@ class Fake:
 
     def set(self, **modes):
         self.dirty = True
+        self.fault(fault_tag(**modes))
         return self.ctl.set(**modes)
 
     def recover(self):
@@ -206,15 +248,19 @@ class Fake:
 
 
 @pytest.fixture
-def fake(fake_ctl, request):
+def fake(fake_ctl, request, target):
     fake_ctl.wait_for(lambda s: s["streams_live"] == 0, 4.0)
     fake_ctl.reset()
-    handle = Fake(fake_ctl, request.node.name)
-    yield handle
-    if handle.dirty:
-        handle.recover()
-    else:
-        fake_ctl.reset()
+    control = RigControl(Path(target.out) / "control") if os.environ.get("DVT_RIG_CONTROL") == "1" else None
+    handle = Fake(fake_ctl, request.node.name, control)
+    try:
+        yield handle
+        if handle.dirty:
+            handle.recover()
+        else:
+            fake_ctl.reset()
+    finally:
+        handle.end_fault()
 
 
 # ---- scenario ------------------------------------------------------------------

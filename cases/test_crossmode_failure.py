@@ -300,6 +300,7 @@ def test_worker_killed_mid_stream(rig, fake, rig_control):
     Capacity: token loss ends the target streams at once; passthrough is
     untouched; the launcher restarts the worker; the next grant opens a new
     session)."""
+    fake.fault("worker-kill")
     frames = prng(TALKER, 150, seed="kill")
     marks = {}
 
