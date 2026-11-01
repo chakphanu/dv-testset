@@ -33,6 +33,11 @@ and milliseconds. Headers, cookies and bodies are never logged.
 
   python -m dvtest.tools.tls_proxy --listen 0.0.0.0:443 --upstream 172.30.0.11:8081 \\
       --ca-out /out/<run>/web/ca.pem --san-dns dvt-web --san-dns localhost --san-ip 172.30.0.90
+
+More listeners (one process, one certificate, one CA): --route LISTEN=UPSTREAM,
+repeatable, for example the admin host of DV-Router (dv-svc-admin) on a second
+TLS port:  --route 0.0.0.0:8443=172.30.0.11:8080  (the SAN list must name that
+host too). Each route is its own server with its own connection cap.
 """
 import argparse
 import http.client
@@ -96,6 +101,14 @@ def make_certs(workdir, san_dns, san_ip, ca_out, days=2):
     os.chmod(tmp, 0o644)
     os.replace(tmp, ca_out)
     return crt, key
+
+
+def parse_route(value):
+    """((listen host, port), (upstream host, port)) of a LISTEN=UPSTREAM route."""
+    left, eq, right = value.partition("=")
+    if not eq:
+        raise ValueError("expected LISTEN=UPSTREAM (HOST:PORT=HOST:PORT), got %r" % value)
+    return parse_hostport(left), parse_hostport(right)
 
 
 def parse_hostport(value):
@@ -333,6 +346,8 @@ def main(argv=None):
     ap.add_argument("--listen", default="0.0.0.0:443")
     ap.add_argument("--upstream", required=True, help="HOST:PORT of the plain HTTP service")
     ap.add_argument("--ca-out", required=True, help="where the CA certificate (PEM) is written")
+    ap.add_argument("--route", action="append", default=[], metavar="LISTEN=UPSTREAM",
+                    help="an extra TLS listener to another plain HTTP service (repeatable)")
     ap.add_argument("--san-dns", action="append", default=[])
     ap.add_argument("--san-ip", action="append", default=[])
     ap.add_argument("--max-conns", type=int, default=MAX_CONNS)
@@ -340,6 +355,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
     try:
         listen, upstream = parse_hostport(args.listen), parse_hostport(args.upstream)
+        routes = [parse_route(r) for r in args.route]
     except ValueError as exc:
         print("tls_proxy: %s" % exc, file=sys.stderr)
         return 2
@@ -349,10 +365,15 @@ def main(argv=None):
         cert, key = make_certs(workdir, args.san_dns, args.san_ip, args.ca_out)
         srv = make_server(listen, upstream, cert, key, max_conns=args.max_conns,
                           upstream_timeout=args.upstream_timeout)
+        extra = [make_server(lst, up, cert, key, max_conns=args.max_conns, upstream_timeout=args.upstream_timeout)
+                 for lst, up in routes]
     except (RuntimeError, OSError) as exc:
         print("tls_proxy: %s" % exc, file=sys.stderr)
         return 2
     print("tls_proxy: listening on %s:%d, upstream %s:%d, CA %s" % (listen + upstream + (args.ca_out,)), flush=True)
+    for (lst, up), server in zip(routes, extra):
+        print("tls_proxy: listening on %s:%d, upstream %s:%d" % (lst + up), flush=True)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

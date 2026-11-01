@@ -47,7 +47,7 @@ internet, and every address is fixed.
 | xlxd-peer-sut / xlxd-peer-ref | 172.30.0.12 / .13 | interlink | XLX998, interlinked with xlxd-sut / xlxd-ref on `DVT_INTERLINK_MODULES` |
 | urfd | 172.30.0.70 | urfd | URFd (`URF999`, modules A-Z), a second reference reflector; see "URFd as the reference" |
 | mrefd | 172.30.0.80 | mrefd | mrefd (`M17-REF`, modules `MNOP`), the M17 Project reflector, with interlink peers M17-DVT / M17-DVU at the tester; see "mrefd as an extra reference" |
-| web-proxy | 172.30.0.90 (alias `dvt-web`) | web | TLS reverse proxy (HTTPS 443) to dv-svc-web of the SUT (`<net>.11:8081`), self-signed CA in `out/<run>/web/ca.pem`; see "Web profile" |
+| web-proxy | 172.30.0.90 (aliases `dvt-web`, `dvt-admin`) | web | TLS reverse proxy: HTTPS 443 to dv-svc-web of the SUT (`<net>.11:8081`) and HTTPS 8443 to dv-svc-admin (`<net>.11:8080`), self-signed CA in `out/<run>/web/ca.pem`; see "Web profile" |
 | load nodes | 172.30.0.128/25 | load | `DVT_LOAD_MODULES` tester replicas running `DVT_LOAD_CMD` against xlxd-sut |
 | capture-* | (shares the netns) | capture | dumpcap on xlxd-ref, xlxd-sut, transcoder-sut, allstar, nxdn-*, p25-*, urfd, mrefd |
 
@@ -65,7 +65,9 @@ internet, and every address is fixed.
 | UDP 41000 | P25Reflector network (xlxd connects out) | p25-ref, p25-sut |
 | UDP 10002 | XLX interlink | xlxd-*, xlxd-peer-* |
 | TCP 443 | HTTPS (TLS proxy, `dvt-web`) | web-proxy (profile web) |
+| TCP 8443 | HTTPS (TLS proxy, admin host `dvt-admin:8443`) | web-proxy (profile web) |
 | TCP 8081 | HTTP, dv-svc-web (plain; only the proxy is trusted) | xlxd-sut native with `web.toml` |
+| TCP 8080 | HTTP, dv-svc-admin (plain; answers only for the host `dvt-admin:8443`) | xlxd-sut native with `admin.toml` |
 | UDP 50000 | WebRTC media (one port, ICE-lite, `public_ips` = `<net>.11`) | xlxd-sut native with `web.toml` |
 
 `DVT_SUBNET` (a /24) or `DVT_NET` (the prefix) moves the whole rig, and
@@ -340,16 +342,17 @@ XLXD_SUT_IMAGE=<dv-router image> DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-router
   scripts/run.sh -m rig --capture --profile web -- cases/test_web_smoke.py
 ```
 
-`--profile web` adds `rig/config/dv-router/web.toml` to `DVT_SUT_CONFIG_EXTRA`
-(naming it yourself is harmless) and does five things:
+`--profile web` adds `rig/config/dv-router/web.toml` and `admin.toml` to `DVT_SUT_CONFIG_EXTRA`
+(naming them yourself is harmless; the admin service is always on in this profile) and does six things:
 
 | What | Detail |
 |------|--------|
 | config | `web.toml` merges into the template: `[node] state_dir = "/var/lib/dv"`; `[web] enable = true`, `bind = "0.0.0.0:8081"`, `trusted_proxies = ["<WEB_PROXY_IP>"]`, `operator_totp = true` (false would make dv-svc-web exit 2 on a non-loopback bind); `[edges.webrtc] enable = true`, `public_ips = ["<OWN_IP>"]` (the edge is ICE-lite and advertises exactly that; media is the one UDP port 50000, no range, no remap) |
 | state dir | `out/<utc>/sut-state/` (mode 0700, created by `run.sh`) mounted read-write at `/var/lib/dv`; the SUT container runs as the host uid/gid (`user:` in the generated override) so the files stay removable. Without a persistent state dir that is not the run dir, accounts are off and RTC offers answer 503. It holds `accounts.jsonl` (password hashes, TOTP secrets), `audit.jsonl` and `web/` circuits: local to `out/`, never publish it |
 | first operator | `sut-state/secrets/web-bootstrap` (`N0CALL:<password>`, mode 0600; dv-svc-web consumes and removes it at its first account) and the same login for the tester in `out/<utc>/web/operator.env` (`DVT_WEB_OPERATOR`, `DVT_WEB_OPERATOR_PASSWORD`, mode 0600). The password is `secrets.token_urlsafe(24)` per run and appears in no log, argument or compose file |
-| `web-proxy` | service at `<net>.90`, network alias `dvt-web` (`DVT_WEB_HOST`), HTTPS on 443; limits set `medium` (`init: true`, read-only root, all capabilities dropped, runs as the host uid). Image `dvt-web-proxy:local` from `rig/Dockerfile.web-proxy`: `TESTER_BASE_IMAGE` (python and the openssl CLI are in it) plus the stdlib `dvtest` package; no new pin, no new image pulled |
-| tester | `DVT_WEB=on`, `DVT_WEB_URL=https://dvt-web`, `DVT_WEB_PROXY=<net>.90` |
+| admin service | `admin.toml` merges `[admin] enable = true`, `bind = "0.0.0.0:8080"`, `trusted_proxies = [<WEB_PROXY_IP>]`, `host = "dvt-admin:8443"`, `allow_from = [<TESTER_IP>]` (the `/admin/` prefix mount is served only to listed addresses), `totp = true`. Users: `run.sh` writes `sut-state/admin/users` (mode 0600; `admin`, `operator`, `viewer`, random passwords, pure-Python Argon2id hashes from `dvtest/argon2_pure.py`, no `:totp=` field so each enrols at its first login) and the same logins for the tester in `out/<utc>/web/admin.env` (mode 0600). The bootstrap file `secrets/admin-bootstrap` is not used: it creates only one admin, and the role matrix needs a viewer and an operator too |
+| `web-proxy` | service at `<net>.90`, network aliases `dvt-web` (`DVT_WEB_HOST`) and `dvt-admin` (`DVT_ADMIN_HOST`), HTTPS on 443 (web) and `DVT_ADMIN_PORT` 8443 (admin, `--route`, same certificate and CA); limits set `medium` (`init: true`, read-only root, all capabilities dropped, runs as the host uid). Image `dvt-web-proxy:local` from `rig/Dockerfile.web-proxy`: `TESTER_BASE_IMAGE` (python and the openssl CLI are in it) plus the stdlib `dvtest` package; no new pin, no new image pulled |
+| tester | `DVT_WEB=on`, `DVT_WEB_URL=https://dvt-web`, `DVT_ADMIN_URL=https://dvt-admin:8443`, `DVT_WEB_PROXY=<net>.90` |
 
 **The proxy** (`dvtest/tools/tls_proxy.py`, unit tests `cases/unit/test_tls_proxy.py`
 against a fake backend) is repo-owned stdlib Python rather than nginx or caddy: it
@@ -393,19 +396,21 @@ method, path without the query, status, bytes, ms.
   step-up window open) and `web_user(callsign=None, may_tx=False)` (registers and
   logs in `N0CALL1`, `N0CALL2`, ...). All skip with the reason unless
   `DVT_WEB=on` and the service answers.
+- `dvtest/admin.py` (`AdminClient`: host mount `/api/v1/admin/...` with `__Host-dv_admin`, prefix mount `/admin/api/v1/admin/...` with `__Secure-dv_admin` by presenting another host name, login with TOTP enrolment), fixtures `web_url_admin`, `admin_session(role, mount)` and `web_operator2` (a second operator, `N0OP`), and the API cases `cases/test_web_api.py` (stage 2; route tables `dvtest/api_web.py` and `dvtest/api_admin.py`, verdicts `dvtest/api_probe.py`; results in `docs/web-api-cases.md`).
 - `cases/test_web_smoke.py` (markers `rig`, `web`; about 20 s of cases): what it checks
   and what it only records is in its header. Differences from the documents are
   printed as `FINDING:` warnings and appended to `out/<utc>/web-findings.txt`;
   they are never encoded as assertions.
 
 **Limits.** The TLS proxy and lockouts: login/register limits and lockouts live
-in the SUT's memory, so a case that needs a clean budget restarts the SUT (RTC
-answers 503 for about 36 s after a web restart). The WebRTC media path is
-configured (UDP 50000 on `<net>.11`) but not exercised yet. The admin host
-(`dv-svc-admin`, 8080, `/health`) is off in the template; the smoke case probes
-`<net>.11:8080` and skips with the reason when nothing listens. State is per run:
-a new `out/<utc>/sut-state` every time, so the first-operator flow always starts
-from a bootstrap file.
+in the SUT's memory, so a case that needs a clean budget restarts the web service
+(control channel `kill-proc xlxd-sut dv-svc-web KILL`; the launcher respawns it
+within a second, sessions are gone, RTC answers 503 for about 36 s). The WebRTC
+media path is configured (UDP 50000 on `<net>.11`) but not exercised yet. The
+legacy direct admin mount (no `[admin] host`, loopback only, cookie `dv_admin`)
+cannot be reached from the tester and is not covered. State is per run: a new
+`out/<utc>/sut-state` every time, so the first-operator flow always starts from a
+bootstrap file.
 
 ## Control channel
 
@@ -434,7 +439,7 @@ namespace (`docker run --pid container:<id>`, `dvtest.limits.docker_run_args()`
 caps, no network, only CAP_KILL) and walks `/proc/<pid>/comm`: a process is
 signalled only when its comm equals `<process>` exactly and it is not a zombie.
 Allow-list: `dv-edge-xlx`, `dv-edge-nxdn`, `dv-edge-p25` with `KILL` or `USR1` (quiet restart: the edge saves its sessions, exits and the
-launcher respawns it) and the codec worker `dv-codec-ambed` with `KILL` only; the launcher `dv-router` is never signalled (no handler, a
+launcher respawns it) the codec worker `dv-codec-ambed` and the web service `dv-svc-web` (its in-memory login/register limits and lockouts) with `KILL` only; the launcher `dv-router` is never signalled (no handler, a
 stray signal kills the node); anything else
 is `error refused`. `<id>.out` has `pid=<n>` per process and `t_kill=<epoch s>`
 (taken in the container right after the signals); `error 3` = no such process.

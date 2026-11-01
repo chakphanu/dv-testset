@@ -276,3 +276,35 @@ def test_parse_hostport_and_cli_errors(capsys):
             tls_proxy.parse_hostport(bad)
     assert tls_proxy.main(["--upstream", "nonsense", "--ca-out", "/nonexistent/ca.pem"]) == 2
     assert "HOST:PORT" in capsys.readouterr().err
+
+
+def test_parse_route():
+    assert tls_proxy.parse_route("0.0.0.0:8443=172.30.0.11:8080") == (("0.0.0.0", 8443), ("172.30.0.11", 8080))
+    for bad in ("0.0.0.0:8443", "0.0.0.0:8443=", "=172.30.0.11:8080", "a:1=b:x"):
+        with pytest.raises(ValueError):
+            tls_proxy.parse_route(bad)
+    assert tls_proxy.main(["--upstream", "127.0.0.1:1", "--route", "oops", "--ca-out", "/nonexistent/ca.pem"]) == 2
+
+
+def test_extra_route_serves_its_own_upstream(stack):
+    """A second server over the same certificate forwards to another backend (the admin host)."""
+    other = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Backend)
+    other.daemon_threads = True
+    threading.Thread(target=other.serve_forever, daemon=True).start()
+    cert = str(stack["work"] / "server.crt")
+    key = str(stack["work"] / "server.key")
+    second = tls_proxy.make_server(("127.0.0.1", 0), other.server_address, cert, key, quiet=True, upstream_timeout=10)
+    threading.Thread(target=second.serve_forever, daemon=True).start()
+    try:
+        ctx = ssl.create_default_context(cafile=stack["ca"])
+        c = http.client.HTTPSConnection("127.0.0.1", second.server_address[1], timeout=10, context=ctx)
+        c.request("GET", "/who", headers={"Host": "dvt-admin:8443"})
+        r = c.getresponse()
+        got = json.loads(r.read())
+        c.close()
+        assert r.status == 200 and got["headers"]["host"] == "dvt-admin:8443"
+        assert got["headers"]["x-forwarded-host"] == "dvt-admin:8443"
+        assert got["headers"]["x-forwarded-proto"] == "https"
+    finally:
+        second.shutdown()
+        other.shutdown()

@@ -14,6 +14,14 @@ conftest.py. Every fixture skips with the reason unless the profile is up.
                  and registers the account through the operator, logs it in; one
                  account per callsign for the whole session (each registration
                  waits for the server's register budget, dvtest.web.Pacer)
+  web_operator2  a second operator (N0OP, own TOTP): the destructive and "authenticated
+                 but throwaway" checks of cases/test_web_api.py use it, so the run's
+                 first operator never loses its session
+  web_url_admin  "https://dvt-admin:8443" (DVT_ADMIN_URL): the admin host answered /health
+  admin_session  factory admin_session(role, mount="host") -> AdminClient logged in as
+                 the run's admin / operator / viewer account (random passwords in
+                 $DVT_OUT/web/admin.env), TOTP enrolled; skips with the reason when the
+                 admin service is not reachable or the account file is missing
 """
 import itertools
 import os
@@ -23,6 +31,7 @@ from pathlib import Path
 
 import pytest
 
+from dvtest import admin as admin_mod
 from dvtest import web
 
 WAIT_S = 90.0
@@ -117,4 +126,72 @@ def web_user(web_operator):
         made[callsign] = WebUser(callsign, password, bool(may_tx), client)
         return made[callsign]
 
+    return factory
+
+
+@pytest.fixture(scope="session")
+def web_operator2(web_operator, web_base_url, web_ca):
+    """A second operator account with its own TOTP (the first one stays untouched)."""
+    password = web.new_password()
+    web_operator.hide(password)
+    web_operator.register_user("N0OP", password, may_tx=True, role="operator")
+    client = web.WebClient(web_base_url, web_ca)
+    client.hide(password)
+    ident = client.login("N0OP", password)
+    if ident.get("totp") != "enrol":
+        pytest.fail("second operator first login: totp state %r, wanted 'enrol'" % (ident.get("totp"),))
+    client.enrol_totp()
+    return WebUser("N0OP", password, True, client)
+
+
+@pytest.fixture(scope="session")
+def web_url_admin(web_base_url, web_ca):
+    if os.environ.get("DVT_WEB") != "on":
+        pytest.skip("web profile not up")
+    url = os.environ.get("DVT_ADMIN_URL") or "https://dvt-admin:8443"
+    client = web.WebClient(url, web_ca, timeout=5)
+    deadline = time.monotonic() + 45
+    last = "no answer"
+    while time.monotonic() < deadline:
+        try:
+            resp = client.get("/health", pace=False)
+            if resp.status == 200:
+                return client.base_url
+            last = "HTTP %d" % resp.status
+        except web.WebError as exc:
+            last = str(exc)
+        time.sleep(1.0)
+    pytest.skip("the admin host %s does not answer /health with 200 within 45 s (last: %s)" % (url, last))
+
+
+@pytest.fixture(scope="session")
+def admin_session(web_url_admin, web_ca):
+    path = _out_dir() / "web" / admin_mod.ACCOUNTS_ENV
+    if not path.is_file():
+        pytest.skip("no admin logins at %s (run.sh writes them with --profile web)" % path)
+    accounts = admin_mod.read_accounts(path)
+    made = {}
+
+    def factory(role, mount="host"):
+        if role not in accounts:
+            pytest.skip("%s has no %s account" % (path, role))
+        key = (role, mount)
+        if key not in made:
+            user, password = accounts[role]
+            client = admin_mod.AdminClient(web_url_admin, web_ca, mount=mount)
+            client.hide(password)
+            if mount == "host":
+                ident = client.login(user, password)
+                if ident.get("totp") == "enrol":
+                    client.enrol_totp()
+            else:
+                # the account is enrolled by the host-mount session: same authenticator, a code with the password
+                base = factory(role, "host")
+                client.authenticator = base.authenticator
+                client.login(user, password, base.authenticator.next_code())
+                client.session()
+            made[key] = (client, user, password)
+        return made[key][0]
+
+    factory.credentials = lambda role: accounts[role]
     return factory

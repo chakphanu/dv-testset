@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/rig.md): the admin service
+# of DV-Router (dv-svc-admin) for `scripts/run.sh --profile web`, which adds this
+# file by itself (always, together with web.toml). dvtest/sut_config.py MERGES the
+# [admin] table into the template's own ([admin] enable = false there).
+#
+# The admin host is reached through the rig's TLS proxy: web-proxy listens on
+# :8443 (alias dvt-admin) and forwards to <OWN_IP>:8080. The effective host
+# (X-Forwarded-Host, else Host) must equal `host` below, and an Origin sent must
+# be https://dvt-admin:8443, or the answer is 404 (fail closed). The users file
+# <state>/admin/users is written by run.sh (admin, operator, viewer; no TOTP yet).
+#
+# allow_from is the tester only: the client IP that dv-svc-admin believes is the
+# right-most X-Forwarded-For hop outside trusted_proxies, which is the tester
+# (the proxy appends nothing but the peer). It makes the /admin/ prefix mount on
+# another host name usable (that mount is never served with an empty list).
+# totp stays true: an exposed bind with totp off makes dv-svc-admin exit 2.
+[admin]
+enable = true
+bind = "0.0.0.0:8080"
+trusted_proxies = ["<WEB_PROXY_IP>"]
+host = "dvt-admin:8443"
+allow_from = ["<TESTER_IP>"]
+totp = true

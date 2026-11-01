@@ -263,3 +263,21 @@ def test_finding_writes_the_file_and_warns(tmp_path):
     with pytest.warns(UserWarning, match="FINDING: observed x"):
         web.finding("observed x", out_dir=str(tmp_path))
     assert (tmp_path / "web-findings.txt").read_text() == "FINDING: observed x\n"
+
+
+def test_host_header_and_removed_default_headers():
+    """A client can present another host name (virtual host of one listener) and drop default headers."""
+    cli = web.WebClient("https://dvt-admin:8443", host_header="other.example")
+    assert cli.origin == "https://other.example" and cli.base_url == "https://dvt-admin:8443"
+    headers = cli._headers("POST", {"Origin": None, "X-Extra": "1"}, True)
+    assert headers["Host"] == "other.example" and "Origin" not in headers and headers["X-Extra"] == "1"
+    plain = web.WebClient("https://dvt-web")
+    assert plain.origin == "https://dvt-web" and "Host" not in plain._headers("GET", None, False)
+
+
+def test_classify_knows_the_admin_budgets():
+    assert web.classify("POST", "/api/v1/admin/session") == "login"
+    assert web.classify("POST", "/admin/api/v1/admin/session") == "login"
+    assert web.classify("GET", "/ready") == "public" and web.classify("GET", "/admin/health") == "public"
+    assert web.classify("GET", "/api/v1/admin/status") == "session"
+    assert web.classify("POST", "/api/v1/admin/config/changes") == "action"

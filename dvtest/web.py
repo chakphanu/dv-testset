@@ -153,8 +153,12 @@ PACER = Pacer()
 def classify(method, path):
     """The pacer bucket of a request."""
     route = path.split("?", 1)[0]
-    if route == "/api/v1/auth/session" and method == "POST":
+    if route.startswith("/admin/"):                      # the admin prefix mount: same budgets, shorter path
+        route = route[len("/admin"):]
+    if route in ("/api/v1/auth/session", "/api/v1/admin/session") and method == "POST":
         return "login"
+    if route in ("/health", "/ready", "/api/v1/admin/health", "/api/v1/admin/ready", "/api/v1/admin/version"):
+        return "public"
     if route == "/api/v1/auth/register":
         return "register"
     if route.startswith("/api/v1/public/"):
@@ -205,12 +209,16 @@ def parse_set_cookie(value):
 class WebClient:
     """One browser-like session against `base_url` (https://host[:port])."""
 
-    def __init__(self, base_url, ca_file=None, timeout=20.0, user_agent=USER_AGENT, pacer=None):
+    def __init__(self, base_url, ca_file=None, timeout=20.0, user_agent=USER_AGENT, pacer=None, host_header=None):
+        """`host_header` (host[:port]) makes the client present another host name
+        than the one it connects to (Host and Origin), which is how a second
+        virtual host of the same listener is reached (the admin prefix mount)."""
         url = urllib.parse.urlsplit(base_url)
         if url.scheme != "https" or not url.hostname:
             raise ValueError("base_url must be https://host[:port], got %r" % base_url)
         self.base_url = "%s://%s" % (url.scheme, url.netloc)
-        self.origin = self.base_url
+        self.host_header = host_header
+        self.origin = "https://%s" % host_header if host_header else self.base_url
         self.host, self.port = url.hostname, url.port or 443
         self.timeout, self.user_agent = timeout, user_agent
         self.pacer = PACER if pacer is None else pacer
@@ -219,6 +227,7 @@ class WebClient:
         self.csrf = None
         self.identity = None
         self.authenticator = None
+        self.last_sse_headers = {}           # headers of the last sse() answer
         self._secrets = set()
         self._ctx = ssl.create_default_context(cafile=ca_file) if ca_file else ssl.create_default_context()
 
@@ -245,8 +254,10 @@ class WebClient:
             h["Content-Type"] = "application/json"
         if self.cookies:
             h["Cookie"] = "; ".join("%s=%s" % kv for kv in self.cookies.items())
+        if self.host_header:
+            h["Host"] = self.host_header
         h.update(headers or {})
-        return h
+        return {k: v for k, v in h.items() if v is not None}        # None removes a default header
 
     def _connect(self):
         return http.client.HTTPSConnection(self.host, self.port, timeout=self.timeout, context=self._ctx)
@@ -265,7 +276,9 @@ class WebClient:
 
     def request(self, method, path, json_body=None, headers=None, expect=None, pace=True, raw_body=None):
         """One request; returns Response. `expect` (an int or a collection) makes
-        any other status a WebError. The body is JSON from `json_body`."""
+        any other status a WebError. The body is JSON from `json_body`, or the
+        bytes of `raw_body` (set Content-Type in `headers`). A header whose value
+        is None is left out (for example Origin)."""
         if pace:
             self.pacer.wait(classify(method, path))
         body = raw_body
@@ -316,6 +329,7 @@ class WebClient:
             conn.request("GET", path, headers=self._headers("GET", {"Accept": "text/event-stream"}, False))
             resp = conn.getresponse()
             ctype = resp.getheader("Content-Type", "")
+            self.last_sse_headers = {k.lower(): v for k, v in resp.getheaders()}
             if resp.status != 200:
                 raise self.error("GET", path, Response(resp.status, {}, resp.read(4096)))
             cur = {}
@@ -407,10 +421,10 @@ class WebClient:
         self.hide(code)
         return code
 
-    def register_user(self, callsign, password, may_tx=False, name=None):
+    def register_user(self, callsign, password, may_tx=False, name=None, role="user"):
         """Invite `callsign` (this client must be an operator) and redeem the
         code from a fresh anonymous client. Returns the registration status."""
-        code = self.create_invite(callsign, "user", may_tx)
+        code = self.create_invite(callsign, role, may_tx)
         anon = WebClient(self.base_url, timeout=self.timeout, user_agent=self.user_agent, pacer=self.pacer)
         anon._ctx = self._ctx
         anon.hide(code, password)

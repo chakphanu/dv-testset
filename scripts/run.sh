@@ -30,7 +30,9 @@
 #                      dir out/<utc>/sut-state for the sut and a random operator
 #                      login (out/<utc>/web/operator.env, mode 600, never printed);
 #                      needs DVT_SUT_LAUNCH=native; adds rig/config/dv-router/web.toml
-#                      to DVT_SUT_CONFIG_EXTRA by itself; the tester gets DVT_WEB=on
+#                      and admin.toml (admin host https://dvt-admin:8443, logins in
+#                      out/<utc>/web/admin.env) to DVT_SUT_CONFIG_EXTRA by itself;
+#                      the tester gets DVT_WEB=on
 #                      (docs/rig.md "Web profile")
 #   DVT_XLXD_BLACKLIST callsigns written to both reflectors' xlxd.blacklist
 #                      (default empty; P-G3-05 uses N0G3X, no other suite does)
@@ -108,7 +110,8 @@
 # file on that node, i.e. keys its USRP channel toward xlxd-sut).
 # or "kill-proc xlxd-sut <process> <signal>": signal one process INSIDE the sut
 # container by exact /proc comm (scripts/lib/killproc.sh): dv-edge-xlx,
-# dv-edge-nxdn, dv-edge-p25 with KILL or USR1 (quiet restart); never dv-router; anything
+# dv-edge-nxdn, dv-edge-p25 with KILL or USR1 (quiet restart), dv-codec-ambed and dv-svc-web
+# with KILL only (the web cases reset its in-memory limits); never dv-router; anything
 # else is refused. <id>.out gets "pid=<n>" per process and "t_kill=<epoch s>";
 # exit 3 (error 3) when no process has that name.
 # or "metrics xlxd-sut" (no other word): <id>.out gets the Prometheus text of the
@@ -240,6 +243,11 @@ if [ "$has_web" = 1 ]; then
   case ":${DVT_SUT_CONFIG_EXTRA:-}:" in
     *:rig/config/dv-router/web.toml:*) ;;
     *) DVT_SUT_CONFIG_EXTRA="${DVT_SUT_CONFIG_EXTRA:+$DVT_SUT_CONFIG_EXTRA:}rig/config/dv-router/web.toml" ;;
+  esac
+  # the admin service (dv-svc-admin, host dvt-admin:8443 behind the same proxy) is always on in the web profile
+  case ":${DVT_SUT_CONFIG_EXTRA:-}:" in
+    *:rig/config/dv-router/admin.toml:*) ;;
+    *) DVT_SUT_CONFIG_EXTRA="$DVT_SUT_CONFIG_EXTRA:rig/config/dv-router/admin.toml" ;;
   esac
   export DVT_SUT_CONFIG_EXTRA
 fi
@@ -508,7 +516,12 @@ if [ "$has_web" = 1 ]; then
    printf 'N0CALL:%s\n' "$web_pw" > "$out/sut-state/secrets/web-bootstrap"
    printf 'DVT_WEB_OPERATOR=N0CALL\nDVT_WEB_OPERATOR_PASSWORD=%s\n' "$web_pw" > "$out/web/operator.env")
   unset web_pw
-  echo "run.sh: web profile: operator login in $out/web/operator.env (mode 600), CA will be $out/web/ca.pem"
+  # admin accounts (admin, operator, viewer; random passwords, pure-python argon2id hashes in the users
+  # file, no totp field: each enrols at its first login); logins for the tester in web/admin.env
+  (cd "$DVT_ROOT" && PYTHONPATH="$DVT_ROOT" python3 -m dvtest.tools.admin_users \
+    --users-file "$DVT_ROOT/$out/sut-state/admin/users" --env-file "$DVT_ROOT/$out/web/admin.env") \
+    || { echo "run.sh: could not write the admin users file" >&2; exit 2; }
+  echo "run.sh: web profile: operator login in $out/web/operator.env, admin logins in $out/web/admin.env (mode 600), CA will be $out/web/ca.pem"
 fi
 
 # Prebuilt reflector images (XLXD_REF_IMAGE / XLXD_SUT_IMAGE): another

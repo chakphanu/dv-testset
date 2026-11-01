@@ -304,6 +304,7 @@ services:
       DVT_WEB: ${DVT_WEB:-off}
       DVT_WEB_URL: https://${DVT_WEB_HOST:-dvt-web}
       DVT_WEB_PROXY: ${DVT_NET:-172.30.0}.90
+      DVT_ADMIN_URL: https://${DVT_ADMIN_HOST:-dvt-admin}:${DVT_ADMIN_PORT:-8443}
       # how xlxd-sut starts (direct | import | native); the M17 peer cases skip with import
       DVT_SUT_LAUNCH: ${DVT_SUT_LAUNCH:-direct}
       # [data] require_ident of the native config (rig/config/dv-router/data-ident.toml); cases/test_data_ident.py
@@ -588,7 +589,8 @@ services:
   # throwaway CA made at start and writes the CA certificate to out/<run>/web/ca.pem
   # (the only place it can write); it forwards to the sut's :8081 with
   # X-Forwarded-Proto https and streams (SSE). The host name DVT_WEB_HOST is a
-  # network alias; the certificate names it, localhost and the address.
+  # network alias; the certificate names it, localhost and the address. A second
+# listener (8443, host dvt-admin) forwards to the admin service of the sut (:8080).
   web-proxy:
     <<: *limits-medium
     profiles: [web]
@@ -624,6 +626,12 @@ services:
       - 127.0.0.1
       - --max-conns
       - ${DVT_WEB_PROXY_CONNS:-256}
+      # the admin host of DV-Router (dv-svc-admin, rig/config/dv-router/admin.toml,
+      # host = dvt-admin:8443): second TLS listener, same certificate and CA
+      - --route
+      - 0.0.0.0:${DVT_ADMIN_PORT:-8443}=${DVT_NET:-172.30.0}.11:8080
+      - --san-dns
+      - ${DVT_ADMIN_HOST:-dvt-admin}
     volumes:
       - ../out/${DVT_RUN_ID:-manual}/web:/webout
     networks:
@@ -631,6 +639,7 @@ services:
         ipv4_address: "${DVT_NET:-172.30.0}.90"
         aliases:
           - ${DVT_WEB_HOST:-dvt-web}
+          - ${DVT_ADMIN_HOST:-dvt-admin}
 
   capture-mrefd:
     <<: *capture

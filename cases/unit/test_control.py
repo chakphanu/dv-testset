@@ -21,7 +21,7 @@ LIB = Path(__file__).resolve().parents[2] / "scripts" / "lib" / "killproc.sh"
 METRICS_LIB = Path(__file__).resolve().parents[2] / "scripts" / "lib" / "metrics.sh"
 
 SERVICES = ["xlxd-sut", "xlxd-ref", "tester", "transcoder-sut", "allstar", "XLXD-SUT", "", "xlxd-sut ", "*"]
-PROCESSES = ["dv-edge-xlx", "dv-edge-nxdn", "dv-edge-p25", "dv-router", "dv-codec-ambed", "dv-codec", "dv-codec-ambed2", "dv-codec-*", "dv-edge-dextra", "dv-edge-*", "dv-edge",
+PROCESSES = ["dv-edge-xlx", "dv-edge-nxdn", "dv-edge-p25", "dv-router", "dv-codec-ambed", "dv-svc-web", "dv-svc-admin", "dv-codec", "dv-codec-ambed2", "dv-codec-*", "dv-edge-dextra", "dv-edge-*", "dv-edge",
              "dv-router2", "DV-ROUTER", "xlxd", "sh", "", "dv-edge-xlx;id", "../dv-router", "-1", "1"]
 SIGNALS = ["KILL", "USR1", "TERM", "SIGKILL", "kill", "9", "HUP", "USR2", "INT", "STOP", "", "-9", "KILL;id"]
 
@@ -50,7 +50,11 @@ def test_python_table():
     for sig in ("USR1", "TERM", "HUP", "INT", "STOP"):
         assert not control.kill_proc_allowed("xlxd-sut", "dv-codec-ambed", sig)
     assert not control.kill_proc_allowed("xlxd-ref", "dv-codec-ambed", "KILL")
-    assert sum(len(v) for v in control.KILL_PROC_ALLOWED.values()) == 7
+    assert control.kill_proc_allowed("xlxd-sut", "dv-svc-web", "KILL")
+    for sig in ("USR1", "TERM", "HUP", "INT", "STOP"):
+        assert not control.kill_proc_allowed("xlxd-sut", "dv-svc-web", sig)
+    assert not control.kill_proc_allowed("xlxd-ref", "dv-svc-web", "KILL")
+    assert sum(len(v) for v in control.KILL_PROC_ALLOWED.values()) == 8
     assert not any(proc == "dv-router" for _svc, proc in control.KILL_PROC_ALLOWED)
 
 
@@ -70,7 +74,7 @@ def test_bash_and_python_agree_on_every_combination():
     allowed_bash = {combos[int(i)] for v, i in verdicts if v == "1"}
     allowed_py = {c for c in combos if control.kill_proc_allowed(*c)}
     assert allowed_bash == allowed_py
-    assert len(allowed_py) == 7
+    assert len(allowed_py) == 8
     assert not any(p == "dv-router" for _s, p, _g in allowed_bash)
 
 

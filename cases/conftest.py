@@ -25,7 +25,8 @@ from crossmode_fake import fake, fake_ctl  # noqa: E402,F401
 # fixtures of the M17 stage 2 (reflector peer) cases: cases/proto and cases/test_data_ident.py
 from m17_peer_fixtures import m17_peer_hubs, m17_peers  # noqa: E402,F401
 # fixtures of the web unit (profile web): TLS base URL and CA, operator, users
-from web_fixtures import web_base_url, web_ca, web_client, web_operator, web_user  # noqa: E402,F401
+from web_fixtures import (  # noqa: E402,F401
+    admin_session, web_base_url, web_ca, web_client, web_operator, web_operator2, web_url_admin, web_user)
 
 
 def pytest_addoption(parser):

@@ -33,6 +33,7 @@ KILL_PROC_ALLOWED = {
     ("xlxd-sut", "dv-edge-nxdn"): ("KILL", "USR1"),
     ("xlxd-sut", "dv-edge-p25"): ("KILL", "USR1"),
     ("xlxd-sut", "dv-codec-ambed"): ("KILL",),
+    ("xlxd-sut", "dv-svc-web"): ("KILL",),       # resets the web service's in-memory limits and lockouts
 }
 
 

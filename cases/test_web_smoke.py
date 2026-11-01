@@ -12,7 +12,7 @@ takes well under two minutes. Browser-level behaviour (the signed-out dashboard
 not fetching authenticated history, the cookie in a real browser) is stage 3.
 
   a  test_public_state_is_json           /api/v1/public/state: JSON, ETag, CORS *, 304; lastheard
-  b  test_public_events_stream           /api/v1/public/events: SSE, first event `hello`, through the proxy
+  b  test_public_events_stream           /api/v1/public/events: SSE, prelude `retry: 3000`, first event `hello`, through the proxy
   c  test_old_public_paths_are_gone      the pre-API3 paths answer 404
   d  test_operator_enrolment             first login asks for enrolment, TOTP confirm rotates the session
   e  test_session_cookie                 __Host-dv_web, Secure, HttpOnly, SameSite=Strict, Path=/, no Domain
@@ -20,11 +20,8 @@ not fetching authenticated history, the cookie in a real browser) is stage 3.
   g  test_users_register_and_login       may_tx false and true: register, no auto sign-in, login, /user/me
   h  test_roles                          anonymous 401 on user routes, user 403 on operator routes
   i  test_wrong_password                 documented 401 for a wrong password (own account: lockout)
-  j  test_admin_health                   GET /health on the admin host, when it is reachable
+  j  test_admin_health                   GET /health and /ready on the admin host (https://dvt-admin:8443)
 """
-import http.client
-import socket
-
 import pytest
 
 from dvtest import web
@@ -57,12 +54,11 @@ def test_public_events_stream(web_client):
     status, ctype, frames = web_client().sse("/api/v1/public/events", max_events=5, timeout=15, until="hello")
     assert status == 200 and ctype.startswith("text/event-stream"), (status, ctype)
     assert frames, "no SSE frame within 15 s (proxy buffering the stream?)"
-    names = [f.get("event") for f in frames]
-    assert "hello" in names, "no `hello` event among the first frames: %r" % (frames,)
-    if names[0] != "hello":
-        # web.md lists `hello` first; the framing section does not mention a retry field
-        web.finding("GET /api/v1/public/events: first frame is %r, then %r; documented: the stream starts "
-                    "with `hello`" % (sorted(frames[0]), names[1:]))
+    # DV-Router (answer of 2026-11-01): the stream prelude is `retry: 3000` (the shared SSE library; admin.md says
+    # "first line retry: 3000"; web.md and the OpenAPI do not mention it), then `event: hello` is the first event
+    assert frames[0].get("retry") == "3000", "the stream starts with `retry: 3000`, first frame is %r" % (frames[0],)
+    events = [f for f in frames if "event" in f]
+    assert events and events[0]["event"] == "hello", "first event frame is %r" % (events[:1],)
 
 
 @pytest.mark.parametrize("path", [
@@ -151,17 +147,11 @@ def test_wrong_password(web_operator, web_client):
     assert unknown.status == 401, "unknown account: HTTP %d, documented as the same failure" % unknown.status
 
 
-def test_admin_health(target, web_base_url):
-    # dv-svc-admin is off in the template ([admin] enable = false); when it is on,
-    # its probe /health answers on 8080 of the SUT
-    host = target.xlxd_sut
-    try:
-        conn = http.client.HTTPConnection(host, 8080, timeout=3)
-        conn.request("GET", "/health")
-        resp = conn.getresponse()
-        resp.read()
-        conn.close()
-    except (OSError, socket.timeout) as exc:
-        pytest.skip("admin host %s:8080 not reachable (%s): [admin] is disabled in the template and "
-                    "needs more than the state dir" % (host, type(exc).__name__))
+def test_admin_health(web_url_admin, web_ca):
+    # dv-svc-admin is on in the web profile (rig/config/dv-router/admin.toml); it answers only for its host name,
+    # so the cases reach it through the proxy's second listener (https://dvt-admin:8443)
+    client = web.WebClient(web_url_admin, web_ca, timeout=5)
+    resp = client.get("/health")
     assert resp.status == 200, "GET /health on the admin host: HTTP %d" % resp.status
+    ready = client.get("/ready")
+    assert ready.status in (200, 503), "GET /ready on the admin host: HTTP %d" % ready.status
