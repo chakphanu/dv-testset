@@ -2,7 +2,7 @@
 """M17 stage 2, group 1 (docs/protocols/m17.md, rows P-M17-46 .. P-M17-60):
 the configured reflector peer. The tester plays the peers M17-DVT (module M)
 and M17-DVU (modules N, O) of the reflector under test (dvtest/m17_peer.py,
-fixture m17_peers of cases/proto/conftest.py).
+fixture m17_peers of cases/m17_peer_fixtures.py).
 
   B.a  P-M17-46 .. 55  handshake, keepalive, teardown of a peer link
   B.d  P-M17-56 .. 60  ingress admission: what a peer endpoint that is not

@@ -5,6 +5,7 @@ DVT_SUT_CONFIG names a TEMPLATE; scripts/run.sh renders it on the host with
 
   python3 -m dvtest.sut_config TEMPLATE OUTPUT --net 172.30.0 [--own 11]
                                [--transcoder 21] [--tester 30]
+                               [--require-ident true|false] [--extra FILE ...]
 
 Plain text replacement of these tokens (a token is <UPPER_CASE_NAME>):
 
@@ -12,18 +13,28 @@ Plain text replacement of these tokens (a token is <UPPER_CASE_NAME>):
   <TRANSCODER_IP>   the SUT's transcoder, <net>.<transcoder> (rig: .21)
   <TESTER_IP>       the tester, <net>.<tester>            (rig: .30)
   <NET>             the /24 prefix, e.g. 172.30.0
+  <REQUIRE_IDENT>   true or false: the value of --require-ident, else the env
+                    DVT_REQUIRE_IDENT, else true (rig/config/dv-router/data-ident.toml)
+
+Extras (DVT_SUT_CONFIG_EXTRA=<file>[:<file>...], --extra): each file is appended
+after the template, in order, and goes through the same token substitution. A
+repo-owned snippet adds a table to a template that lives outside the repository
+without copying it (rig/config/dv-router/). A table the template already defines
+must not be repeated in an extra (TOML refuses a duplicate key).
 
 Any other <UPPER_CASE_NAME> left over is an error (exit 2, nothing written),
 so a template that wants a rig address not listed above is refused instead of
 being mounted half rendered. Lower case text such as <net> is not a token.
 """
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
 
 TOKEN = re.compile(r"<([A-Z][A-Z0-9_]*)>")
-KNOWN = ("OWN_IP", "TRANSCODER_IP", "TESTER_IP", "NET")
+KNOWN = ("OWN_IP", "TRANSCODER_IP", "TESTER_IP", "NET", "REQUIRE_IDENT")
+BOOLS = ("true", "false")
 _OCTET = r"(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])"
 _NET = re.compile(r"^%s\.%s\.%s$" % (_OCTET, _OCTET, _OCTET))
 
@@ -41,12 +52,31 @@ def tokens(text):
     return seen
 
 
-def render(text, net, own=11, transcoder=21, tester=30):
-    """The template text with the four tokens replaced; ConfigError for a
-    bad /24 prefix, a host octet outside 1..254 or an unknown token."""
+def require_ident_value(value=None):
+    """"true" or "false" from `value`, else env DVT_REQUIRE_IDENT, else
+    "true" (the DV-Router default); ConfigError for anything else."""
+    if value is None:
+        value = os.environ.get("DVT_REQUIRE_IDENT") or "true"
+    if value not in BOOLS:
+        raise ConfigError("require_ident must be true or false (got %r)" % (value,))
+    return value
+
+
+def split_extras(value):
+    """The files of a DVT_SUT_CONFIG_EXTRA value ("a:b", empty items skipped)."""
+    return [item for item in (value or "").split(":") if item]
+
+
+def render(text, net, own=11, transcoder=21, tester=30, require_ident=None, extras=()):
+    """The template text with the tokens replaced; `extras` are texts appended
+    after it (each after a newline, in order) before the substitution.
+    ConfigError for a bad /24 prefix, a host octet outside 1..254, a bad
+    require_ident or an unknown token."""
     if not _NET.match(net):
         raise ConfigError("net must be a /24 prefix like 172.30.0 (got %r)" % net)
-    values = {"NET": net}
+    values = {"NET": net, "REQUIRE_IDENT": require_ident_value(require_ident)}
+    for extra in extras:
+        text = text.rstrip("\n") + "\n\n" + extra
     for name, octet in (("OWN_IP", own), ("TRANSCODER_IP", transcoder), ("TESTER_IP", tester)):
         if not isinstance(octet, int) or isinstance(octet, bool) or not 1 <= octet <= 254:
             raise ConfigError("%s octet must be 1..254 (got %r)" % (name, octet))
@@ -59,15 +89,20 @@ def render(text, net, own=11, transcoder=21, tester=30):
     return TOKEN.sub(lambda m: values[m.group(1)], text)
 
 
-def render_file(template, output, net, own=11, transcoder=21, tester=30):
-    """Read TEMPLATE, write OUTPUT (mode 0644; the container reads it as any
-    user). Returns the output path; ConfigError when TEMPLATE is missing,
-    unreadable, not UTF-8 or has an unknown token."""
+def _read(path, what):
     try:
-        text = Path(template).read_text(encoding="utf-8")
+        return Path(path).read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
-        raise ConfigError("cannot read template %s: %s" % (template, exc)) from exc
-    rendered = render(text, net, own, transcoder, tester)
+        raise ConfigError("cannot read %s %s: %s" % (what, path, exc)) from exc
+
+
+def render_file(template, output, net, own=11, transcoder=21, tester=30, require_ident=None, extras=()):
+    """Read TEMPLATE (and the files of `extras`), write OUTPUT (mode 0644; the
+    container reads it as any user). Returns the output path; ConfigError when
+    a file is missing, unreadable, not UTF-8 or the text has an unknown token."""
+    text = _read(template, "template")
+    texts = [_read(path, "extra") for path in extras]
+    rendered = render(text, net, own, transcoder, tester, require_ident, texts)
     out = Path(output)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(rendered, encoding="utf-8")
@@ -83,13 +118,18 @@ def main(argv=None):
     ap.add_argument("--own", type=int, default=11)
     ap.add_argument("--transcoder", type=int, default=21)
     ap.add_argument("--tester", type=int, default=30)
+    ap.add_argument("--require-ident", default=None, help="true or false (default: env DVT_REQUIRE_IDENT, else true)")
+    ap.add_argument("--extra", action="append", default=[], metavar="FILE",
+                    help="appended after the template, token substituted (repeatable)")
     args = ap.parse_args(argv)
     try:
         if args.output == "-":
-            text = Path(args.template).read_text(encoding="utf-8")
-            render(text, args.net, args.own, args.transcoder, args.tester)
+            text = _read(args.template, "template")
+            render(text, args.net, args.own, args.transcoder, args.tester, args.require_ident,
+                   [_read(path, "extra") for path in args.extra])
         else:
-            render_file(args.template, args.output, args.net, args.own, args.transcoder, args.tester)
+            render_file(args.template, args.output, args.net, args.own, args.transcoder, args.tester,
+                        args.require_ident, args.extra)
     except (ConfigError, OSError, UnicodeDecodeError) as exc:
         print("sut_config: %s" % exc, file=sys.stderr)
         return 2

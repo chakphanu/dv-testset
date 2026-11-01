@@ -84,7 +84,7 @@ def peer_env(env):
 
 def peer_binds(sides, env, tester):
     """{side: {"dvt": ip, "dvu": ip}}: the local address each hub of a judged
-    side binds ("sut" / "ref", as cases/proto/conftest.py names them).
+    side binds ("sut" / "ref", as cases/m17_peer_fixtures.py names them).
 
     mrefd keys its interlink peers by IP only (the port is ignored), so its
     two peers need two tester addresses: the "ref" side binds M17-DVT to

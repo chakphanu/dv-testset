@@ -39,6 +39,9 @@ allstar .40, urfd .70, mrefd .80.
   DVT_OUT            results directory (out)
   DVT_NO_RADIO_ID    drop | fallback | local: how the sut's id-based edges
                      treat a talker without a real radio id (unset = drop)
+  DVT_SUT_LAUNCH     how xlxd-sut starts: direct (default), import or native (DV-Router with its own TOML)
+  DVT_REQUIRE_IDENT  true (default) or false: [data] require_ident the native config was rendered with
+                     (rig/config/dv-router/data-ident.toml; cases/test_data_ident.py)
   DVT_SUT_PROFILE    behaviour rule for the sut: xlxd (default, sut == ref) or a
                      dvtest/specs/<name>.py spec
   DVT_SUT_DIVERGENCES  legacy: declared divergences of the sut (dvtest/divergences.py)

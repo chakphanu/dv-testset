@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/rig.md): turns the
+# DV-Router data worker on and sets its identity policy. Appended after the
+# template, so the template must not define [data] itself.
+#
+# The token on the require_ident line becomes true or false, from DVT_REQUIRE_IDENT
+# (default true).
+#
+# true: an item without an identity (relayed by a peer reflector) is denied by the
+# room controller (reason 14, "unidentified"); direct clients and web identities
+# are unchanged. false: such an item is admitted at identity 0.
+[data]
+enable = true
+require_ident = <REQUIRE_IDENT>
+xlx_text_overs = true

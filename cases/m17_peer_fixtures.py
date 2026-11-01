@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: MIT
 """Fixtures of the M17 stage 2 cases: the fake reflector peers M17-DVT and
-M17-DVU the tester plays for the reflector under test (dvtest/m17_peer.py)."""
+M17-DVU the tester plays for the reflector under test (dvtest/m17_peer.py).
+cases/conftest.py imports m17_peer_hubs and m17_peers, so cases/proto/ and
+cases/test_data_ident.py share one pool of hubs (one bind of the peer ports
+per session). Moved here unchanged from cases/proto/conftest.py."""
 import errno
 import os
 import time

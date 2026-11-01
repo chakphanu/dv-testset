@@ -262,6 +262,7 @@ into `out/<run>/xlxd-config/xlxd-sut/dv-router.toml` and mounts it read-only at
 | `<TRANSCODER_IP>` | `<net>.21`, the SUT's transcoder |
 | `<TESTER_IP>` | `<net>.30`, the tester (plays the peers) |
 | `<NET>` | the /24 prefix, e.g. `172.30.0` (rig peers are `<NET>.12` XLX, `<NET>.51` NXDN, `<NET>.61` P25) |
+| `<REQUIRE_IDENT>` | `true` or `false`: `DVT_REQUIRE_IDENT`, default `true` (any other value is exit 2) |
 
 Any other `<UPPER_CASE>` token left over is an error (exit 2, before anything
 starts). Everything else stays as in the other modes: the `/xlxd` file mounts
@@ -274,6 +275,46 @@ NXDN and P25 peers. `run.sh` warns when `DVT_NXDN`, `DVT_P25`, `DVT_INTERLINK`,
 `DVT_SUT_USRP` or `DVT_XLXD_BLACKLIST` is set in this mode and refuses
 `DVT_UNSERVED_MODULE=M|N` (exit 2). The tester sees the mode in
 `DVT_SUT_LAUNCH` (the M17 peer cases skip with `import` only).
+
+### Extending the template (`DVT_SUT_CONFIG_EXTRA`)
+
+The DV-Router template lives outside this repository and is never copied in.
+`DVT_SUT_CONFIG_EXTRA=<file>[:<file>...]` (paths relative to the repository root
+or absolute) appends repo-owned snippets after the rendered template, in the
+order given, with the same token substitution (`dvtest/sut_config.py`, option
+`--extra`; `run.sh` checks them before anything starts: a missing file or an
+unknown token is exit 2). A snippet must not repeat a table the template already
+defines (TOML refuses duplicate keys). Only `native` reads a config file; with
+another launch mode the variable draws a warning. Snippets in
+`rig/config/dv-router/`:
+
+| File | Adds |
+|------|------|
+| `data-ident.toml` | `[data] enable = true`, `require_ident = <REQUIRE_IDENT>`, `xlx_text_overs = true`: the data worker on, with the identity policy of the run |
+| `xlx-peer.toml` | `[[edges.xlx.peer]]` XLX998 at `<NET>.12` on modules `DE` |
+
+The XLX peer row names `xlxd-peer-sut` (`<NET>.12`, XLX998), not `xlxd-peer-ref`
+(`.13`): `xlxd-peer-sut` is configured to link with `xlxd-sut` (`.11`, XLX999),
+`xlxd-peer-ref` only with `xlxd-ref` (`.10`), so only `.12` can answer the SUT.
+It needs `--profile interlink` (native launch ignores `DVT_INTERLINK` for the
+SUT, but the tester still gets it from the profile) and its modules must be
+served by `[node] rooms`. The remote port is `edges.xlx.port` (10002); there is
+no per-peer port key. Run with and without the identity requirement:
+
+```sh
+XLXD_SUT_IMAGE=<image> DVT_SUT_PROFILE=dvrouter DVT_SUT_LAUNCH=native \
+  DVT_SUT_CONFIG=<template path> \
+  DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/data-ident.toml:rig/config/dv-router/xlx-peer.toml \
+  DVT_REQUIRE_IDENT=true scripts/run.sh -m rig --capture --profile interlink -- cases/test_data_ident.py
+# again with DVT_REQUIRE_IDENT=false
+```
+
+`cases/test_data_ident.py` (DV-Router MS3: the identity of data items) skips
+unless the profile is `dvrouter`, the launch `native` and the hub metrics have
+a `dv_room_data_total` or `dv_pkt_items_total` family (the `[data]` table is on).
+It reads the setting from `DVT_REQUIRE_IDENT` in the tester environment
+(`rig/compose.yml`, default `true`) and writes what it observed to
+`out/<run>/data-ident.txt`.
 
 ## Control channel
 
@@ -309,6 +350,23 @@ is `error refused`. `<id>.out` has `pid=<n>` per process and `t_kill=<epoch s>`
 Tester side: `rig_control.kill_proc(service, process, signal)` returns the pids
 and `t_kill` (`dvtest/control.py`; `KILL_PROC_ALLOWED` mirrors
 `scripts/lib/killproc.sh`, a unit test checks both agree).
+
+`metrics xlxd-sut` returns the Prometheus text of the system under test's hub in
+`<id>.out`. The DV-Router image is `FROM scratch` (no shell, no `curl`) and the
+hub listens on `127.0.0.1:19108` of the container's own network namespace, which
+the tester cannot reach. The host starts a throwaway container of the tester
+image that joins that namespace (`docker run --network container:<id>`,
+`dvtest.limits.docker_run_args()` caps, all capabilities dropped, read-only root,
+no new privileges) and does one `GET http://127.0.0.1:19108/metrics` with python
+`urllib` (5 s timeout, no proxy). Allow-list: service `xlxd-sut` and no further
+word (`scripts/lib/metrics.sh`); `error 1` = the GET failed (hub off, or a
+`<state>/secrets/metrics-token` file makes it answer 401). Tester side:
+`rig_control.metrics("xlxd-sut")` returns the text (`dvtest/control.py`,
+`METRICS_ALLOWED` mirrors the bash function, a unit test checks both agree);
+`dvtest/metrics.py` reads the format (`total(text, name, **labels)` sums the
+samples whose labels contain the given ones, in any label order). The hub
+refreshes the counters every 10 s, so a case polls for a change for up to about
+25 s.
 
 ## Capture
 

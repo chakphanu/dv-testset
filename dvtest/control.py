@@ -10,6 +10,9 @@ with one line; the host watcher answers with <id>.ack ("ok", "error <rc>" or
                                              a rig container (allow-list below)
   "mark begin|end <tag>"                     only logged: brackets traffic a case
                                              makes abnormal on purpose (dvcheck)
+  "metrics xlxd-sut"                         the Prometheus text of the sut hub
+                                             (127.0.0.1:19108 inside its network
+                                             namespace) in <id>.out
 
 KILL_PROC_ALLOWED is the tester's copy of the allow-list in
 scripts/lib/killproc.sh (the host enforces it; cases/unit/test_control.py
@@ -31,6 +34,22 @@ KILL_PROC_ALLOWED = {
     ("xlxd-sut", "dv-edge-p25"): ("KILL", "USR1"),
     ("xlxd-sut", "dv-codec-ambed"): ("KILL",),
 }
+
+
+# services whose hub the host will scrape (scripts/lib/metrics.sh), no arguments
+METRICS_ALLOWED = ("xlxd-sut",)
+
+
+def metrics_allowed(service):
+    """True when the host watcher would run `metrics service`."""
+    return service in METRICS_ALLOWED
+
+
+def metrics_line(service):
+    """The request line, or ValueError for a service outside the allow-list."""
+    if not metrics_allowed(service):
+        raise ValueError("metrics %s is not allow-listed" % service)
+    return "metrics %s" % service
 
 
 def kill_proc_allowed(service, process, signal):
@@ -129,3 +148,12 @@ class RigControl:
         line = kill_proc_line(service, process, signal)
         name = self._request(line, timeout)
         return parse_kill_out((self.dir / (name + ".out")).read_text())
+
+    def metrics(self, service="xlxd-sut", timeout=30.0):
+        """The Prometheus text of the hub of `service` (allow-list:
+        METRICS_ALLOWED), fetched on the host from inside its network
+        namespace. ValueError before sending when not allow-listed,
+        RuntimeError("... error 1") when the GET failed, TimeoutError when the
+        host does not answer in `timeout` seconds."""
+        name = self._request(metrics_line(service), timeout)
+        return (self.dir / (name + ".out")).read_text(encoding="utf-8", errors="replace")

@@ -18,6 +18,7 @@ from dvtest import control
 pytestmark = pytest.mark.unit
 
 LIB = Path(__file__).resolve().parents[2] / "scripts" / "lib" / "killproc.sh"
+METRICS_LIB = Path(__file__).resolve().parents[2] / "scripts" / "lib" / "metrics.sh"
 
 SERVICES = ["xlxd-sut", "xlxd-ref", "tester", "transcoder-sut", "allstar", "XLXD-SUT", "", "xlxd-sut ", "*"]
 PROCESSES = ["dv-edge-xlx", "dv-edge-nxdn", "dv-edge-p25", "dv-router", "dv-codec-ambed", "dv-codec", "dv-codec-ambed2", "dv-codec-*", "dv-edge-dextra", "dv-edge-*", "dv-edge",
@@ -25,10 +26,10 @@ PROCESSES = ["dv-edge-xlx", "dv-edge-nxdn", "dv-edge-p25", "dv-router", "dv-code
 SIGNALS = ["KILL", "USR1", "TERM", "SIGKILL", "kill", "9", "HUP", "USR2", "INT", "STOP", "", "-9", "KILL;id"]
 
 
-def bash(script, *args):
+def bash(script, *args, lib=LIB):
     if not shutil.which("bash"):
         pytest.skip("bash is not installed")
-    return subprocess.run(["bash", "-c", 'source "$1"; shift; ' + script, "x", str(LIB), *args],
+    return subprocess.run(["bash", "-c", 'source "$1"; shift; ' + script, "x", str(lib), *args],
                           capture_output=True, text=True, timeout=30)
 
 
@@ -329,3 +330,123 @@ def test_request_names_are_unique_across_instances(tmp_path):
         ctl.mark("begin", "t")
     thread.join(10)
     assert len(names) == 6 and len(set(names)) == 6, names
+
+
+# ---- metrics: "metrics xlxd-sut" (scripts/lib/metrics.sh), python table and bash agree
+
+METRICS_SERVICES = ["xlxd-sut", "xlxd-ref", "tester", "transcoder-sut", "allstar", "XLXD-SUT", "", "xlxd-sut ", "*", "xlxd-sut;id",
+                    "container:abc", "http://127.0.0.1:19108/metrics"]
+
+
+def test_metrics_python_table():
+    assert control.METRICS_ALLOWED == ("xlxd-sut",)
+    assert control.metrics_allowed("xlxd-sut")
+    for service in METRICS_SERVICES[1:]:
+        assert not control.metrics_allowed(service), service
+    assert control.metrics_line("xlxd-sut") == "metrics xlxd-sut"
+    for service in ("xlxd-ref", "tester", "", "xlxd-sut extra"):
+        with pytest.raises(ValueError):
+            control.metrics_line(service)
+
+
+def test_metrics_bash_and_python_agree():
+    feed = "".join("%s\n" % s for s in METRICS_SERVICES if "\n" not in s)
+    script = 'while IFS= read -r s; do if dvt_metrics_allowed "$s"; then echo "1 $s"; else echo "0 $s"; fi; done'
+    if not shutil.which("bash"):
+        pytest.skip("bash is not installed")
+    run = subprocess.run(["bash", "-c", 'source "$1"; ' + script, "x", str(METRICS_LIB)], input=feed,
+                         capture_output=True, text=True, timeout=30)
+    assert run.returncode == 0, run.stderr
+    allowed_bash = {line[2:] for line in run.stdout.splitlines() if line.startswith("1 ")}
+    allowed_py = {s for s in METRICS_SERVICES if control.metrics_allowed(s)}
+    assert allowed_bash == allowed_py == {"xlxd-sut"}
+
+
+def test_metrics_bash_allowed_takes_exactly_one_word():
+    assert bash('dvt_metrics_allowed xlxd-sut', lib=METRICS_LIB).returncode == 0
+    assert bash('dvt_metrics_allowed xlxd-sut extra', lib=METRICS_LIB).returncode == 1
+    assert bash('dvt_metrics_allowed', lib=METRICS_LIB).returncode == 1
+    assert bash('dvt_metrics_allowed xlxd-ref', lib=METRICS_LIB).returncode == 1
+
+
+@pytest.mark.parametrize("line,out", [
+    ("metrics xlxd-sut", "xlxd-sut"),
+    ("metrics  xlxd-sut\t ", "xlxd-sut"),
+])
+def test_metrics_parse_accepts(line, out):
+    run = bash('dvt_metrics_parse "$1"', line, lib=METRICS_LIB)
+    assert run.returncode == 0 and run.stdout == out + "\n", run.stderr
+
+
+@pytest.mark.parametrize("line", [
+    "", "metrics", "metrics xlxd-ref", "metrics tester", "metrics xlxd-sut extra",
+    "metrics xlxd-sut http://127.0.0.1:19108/metrics", "metrics xlxd-sut;id", "METRICS xlxd-sut",
+    "metric xlxd-sut", "kill-proc xlxd-sut dv-edge-xlx KILL", "stop xlxd-sut", "metrics *",
+])
+def test_metrics_parse_refuses(line):
+    run = bash('dvt_metrics_parse "$1"', line, lib=METRICS_LIB)
+    assert run.returncode == 1 and run.stdout == ""
+
+
+def test_metrics_helper_fetches_one_fixed_url():
+    """The helper script has the URL as argv only; the allow-list function and
+    the exec wrapper pass the fixed constant, never request data."""
+    script = bash('printf "%s" "$DVT_METRICS_URL"', lib=METRICS_LIB).stdout
+    assert script == "http://127.0.0.1:19108/metrics"
+    body = bash('printf "%s" "$DVT_METRICS_SCRIPT"', lib=METRICS_LIB).stdout
+    assert "urlopen" not in body and "opener.open(sys.argv[1], timeout=5)" in body
+    assert "ProxyHandler({})" in body
+
+
+def test_metrics_helper_script_reads_a_local_server():
+    """The python of the helper container, run against a local HTTP server."""
+    import http.server
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):                       # noqa: N802
+            body = b"dv_up 1\n" if self.path == "/metrics" else b"nope"
+            self.send_response(200 if self.path == "/metrics" else 404)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        body = bash('printf "%s" "$DVT_METRICS_SCRIPT"', lib=METRICS_LIB).stdout
+        url = "http://127.0.0.1:%d/metrics" % server.server_address[1]
+        run = subprocess.run([sys.executable, "-I", "-c", body, url], capture_output=True, text=True, timeout=30)
+        assert run.returncode == 0 and run.stdout == "dv_up 1\n", run.stderr
+        run = subprocess.run([sys.executable, "-I", "-c", body, url.replace("/metrics", "/other")],
+                             capture_output=True, text=True, timeout=30)
+        assert run.returncode != 0 and run.stdout == ""
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_rig_control_metrics(tmp_path):
+    ctl = control.RigControl(tmp_path / "control")
+    seen, thread = watcher(ctl.dir, "ok", out='dv_room_data_total{room="m",result="accepted"} 3\n')
+    text = ctl.metrics("xlxd-sut", timeout=5)
+    thread.join(5)
+    assert seen == ["metrics xlxd-sut"] and "dv_room_data_total" in text
+
+
+def test_rig_control_metrics_not_allowed_sends_nothing(tmp_path):
+    ctl = control.RigControl(tmp_path / "control")
+    for service in ("xlxd-ref", "tester", "xlxd-sut extra"):
+        with pytest.raises(ValueError):
+            ctl.metrics(service)
+    assert not list(ctl.dir.iterdir())
+
+
+def test_rig_control_metrics_failure(tmp_path):
+    ctl = control.RigControl(tmp_path / "control")
+    seen, thread = watcher(ctl.dir, "error 1", out="")
+    with pytest.raises(RuntimeError, match="error 1"):
+        ctl.metrics("xlxd-sut", timeout=5)
+    thread.join(5)

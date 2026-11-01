@@ -85,6 +85,10 @@ and hashes; never publish raw captures.
   reason in a fixture when its prerequisite is missing.
 - Stopping a backend during a rig case: use the control channel described in
   the header of `scripts/run.sh` (allow-listed services and actions only).
+  The same channel reads the hub metrics of the DV-Router SUT (`metrics
+  xlxd-sut`, `dvtest/metrics.py`); extra config for the native launch comes from
+  `DVT_SUT_CONFIG_EXTRA` snippets in `rig/config/dv-router/` (`docs/rig.md`),
+  never from a copy of the template.
 
 ## Known traps
 

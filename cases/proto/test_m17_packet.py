@@ -3,7 +3,7 @@
 datagrams between clients and the configured reflector peers M17-DVT and
 M17-DVU, which the tester plays (dvtest/m17_peer.py).
 
-Every judged side (cases/proto/conftest.py m17_peers: "sut" = the system under
+Every judged side (cases/m17_peer_fixtures.py m17_peers: "sut" = the system under
 test with M17 peering, "ref" = mrefd as a calibration reference) is probed in
 parallel with the same datagrams. A sweep sends every variant of a family once,
 each carrying its own marker in the LSF META field, waits once, and the cases

@@ -7,7 +7,7 @@ module trailer (68-73): the 55 B stream with the originating module letter,
 the destination rewrite, the bare 54 B body of a one-module peer, a trailer
 outside the peer's set.
 
-Judged per side (cases/proto/conftest.py m17_peers): "sut" against the profile
+Judged per side (cases/m17_peer_fixtures.py m17_peers): "sut" against the profile
 (dvtest/specs, SPEC["m17"]) and "ref" (mrefd) as calibration. A check both
 agree on is asserted on both sides; where mrefd differs (module-less
 timeout closing packets, the destination rewrite beyond 'M17-', the bare

@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/rig.md): the XLX interlink
+# peer the SUT can really reach on the rig, xlxd-peer-sut (XLX998, host NET.12 of the rig). That
+# peer is built to link with xlxd-sut (.11, XLX999) on the modules of
+# DVT_INTERLINK_MODULES (default DE); xlxd-peer-ref (.13) only links with xlxd-ref
+# (.10) and is not reachable as a peer of the SUT. Start the peer with
+# scripts/run.sh --profile interlink. The remote port is edges.xlx.port (10002);
+# there is no per-peer port key. The modules must be served by [node] rooms.
+[[edges.xlx.peer]]
+callsign = "XLX998"
+host = "<NET>.12"
+modules = "DE"

@@ -80,8 +80,11 @@
 # mounted read-only at /etc/dv-router/dv-router.toml and the image starts as
 # "--config /etc/dv-router/dv-router.toml XLX999 <net>.11 <net>.21" (no importer).
 # The /xlxd file mounts and the DV_* env stay (the template's [ids] reads
-# /xlxd/dmrid.dat and nxdn.csv; the env pins win over the file). The launcher
-# reads no other xlxd.* file: DVT_NXDN, DVT_P25, DVT_INTERLINK, DVT_SUT_USRP and
+# /xlxd/dmrid.dat and nxdn.csv; the env pins win over the file).
+# DVT_SUT_CONFIG_EXTRA=<file>[:<file>...] appends repo-owned snippets (rig/config/dv-router/)
+# after the rendered template, with the same tokens plus <REQUIRE_IDENT> (env
+# DVT_REQUIRE_IDENT, true or false, default true); docs/rig.md.
+# The launcher reads no other xlxd.* file: DVT_NXDN, DVT_P25, DVT_INTERLINK, DVT_SUT_USRP and
 # DVT_XLXD_BLACKLIST only draw a warning, and DVT_UNSERVED_MODULE=M|N is refused
 # (exit 2; a template may name peers on other modules too).
 #
@@ -100,6 +103,10 @@
 # dv-edge-nxdn, dv-edge-p25 with KILL or USR1 (quiet restart); never dv-router; anything
 # else is refused. <id>.out gets "pid=<n>" per process and "t_kill=<epoch s>";
 # exit 3 (error 3) when no process has that name.
+# or "metrics xlxd-sut" (no other word): <id>.out gets the Prometheus text of the
+# sut hub, fetched from inside its network namespace by a throwaway tester-image
+# container (scripts/lib/metrics.sh; the DV-Router image has no shell or curl and
+# the hub listens on its loopback only). error 1 = the GET failed.
 # "mark begin|end <tag>" only logs: a case brackets deliberately malformed
 # traffic so the capture check can tell it from a fault.
 # The answer is <id>.ack: "ok", "error <rc>" or "error refused" (anything else
@@ -113,6 +120,7 @@ set -euo pipefail
 
 . "$(dirname "$0")/lib/env.sh"
 . "$(dirname "$0")/lib/killproc.sh"
+. "$(dirname "$0")/lib/metrics.sh"
 dvt_load_env
 cd "$DVT_ROOT"
 
@@ -207,9 +215,28 @@ if [ "$instance" != 0 ]; then
   suffix="-i$instance"
 fi
 export DVT_SUBNET="${DVT_NET:-172.30.0}.0/24"
+# DVT_REQUIRE_IDENT (true | false, default true): value of the <REQUIRE_IDENT> token
+# of the native config (rig/config/dv-router/data-ident.toml) and the setting the
+# tester's data-ident cases expect
+case "${DVT_REQUIRE_IDENT:-true}" in
+  true|false) ;;
+  *) echo "run.sh: DVT_REQUIRE_IDENT must be true or false" >&2; exit 2 ;;
+esac
+# DVT_SUT_CONFIG_EXTRA=<file>[:<file>...]: repo-owned snippets (rig/config/dv-router/)
+# appended after the rendered template, token substituted like the template
+cfg_opts=(--require-ident "${DVT_REQUIRE_IDENT:-true}")
+if [ -n "${DVT_SUT_CONFIG_EXTRA:-}" ]; then
+  IFS=: read -r -a cfg_extra_files <<< "$DVT_SUT_CONFIG_EXTRA"
+  for f in "${cfg_extra_files[@]}"; do
+    [ -z "$f" ] || cfg_opts+=(--extra "$f")
+  done
+  if [ "${DVT_SUT_LAUNCH:-direct}" != native ]; then
+    echo "run.sh: warning: DVT_SUT_CONFIG_EXTRA is set but only DVT_SUT_LAUNCH=native reads a config file" >&2
+  fi
+fi
 # native launch: refuse a template with an unknown token before anything starts
 if [ "${DVT_SUT_LAUNCH:-direct}" = native ]; then
-  python3 -m dvtest.sut_config "$DVT_SUT_CONFIG" - --net "${DVT_NET:-172.30.0}" || exit 2
+  python3 -m dvtest.sut_config "$DVT_SUT_CONFIG" - --net "${DVT_NET:-172.30.0}" "${cfg_opts[@]}" || exit 2
   # the template's M17 peer rows name modules M and N: the sut would exit 2 without them
   case "${DVT_UNSERVED_MODULE:-}" in
     M|N) echo "run.sh: DVT_UNSERVED_MODULE=$DVT_UNSERVED_MODULE is refused with DVT_SUT_LAUNCH=native (the peer rows need M and N)" >&2; exit 2 ;;
@@ -474,7 +501,7 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
   cp rig/config/dmrid.dat rig/config/nxdn.csv "$cfg/"
   if [ "$svc" = xlxd-sut ] && [ "${DVT_SUT_LAUNCH:-direct}" = native ]; then
     python3 -m dvtest.sut_config "$DVT_SUT_CONFIG" "$cfg/dv-router.toml" --net "$net" --own "$3" --transcoder "$4" --tester 30 \
-      || exit 2
+      "${cfg_opts[@]}" || exit 2
   fi
   for f in xlxd.whitelist xlxd.blacklist xlxd.terminal ysfnode.dat; do : > "$cfg/$f"; done
   [ -z "${DVT_XLXD_BLACKLIST:-}" ] || printf '%s\n' $DVT_XLXD_BLACKLIST > "$cfg/xlxd.blacklist"
@@ -569,7 +596,7 @@ for row in sys.stdin:
 control="$out/control"
 
 watch_control() {
-  local req id line action svc extra rc sniffer args target node
+  local req id line action svc extra rc sniffer args target node mt mcid mimg kp ksvc kproc ksig kcid kimg
   while :; do
     for req in "$control"/*.req; do
       [ -e "$req" ] || continue
@@ -608,6 +635,18 @@ watch_control() {
             echo "kill-proc: no running $ksvc or tester container" > "$control/$id.out"; rc=4
           else
             dvt_killproc_exec "$kcid" "$kimg" "$kproc" "$ksig" > "$control/$id.out" 2>> "$control/control.log" || rc=$?
+          fi
+        fi
+      elif [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$action" = metrics ]; then
+        # "metrics xlxd-sut": see scripts/lib/metrics.sh (allow-list, fixed URL)
+        if mt="$(dvt_metrics_parse "$line")"; then
+          mcid="$("${compose[@]}" ps -q "$mt" 2>/dev/null | head -n 1 || true)"
+          mimg="$(docker inspect -f '{{.Image}}' "$("${compose[@]}" ps -q tester 2>/dev/null | head -n 1 || true)" 2>/dev/null || true)"
+          rc=0
+          if [ -z "$mcid" ] || [ -z "$mimg" ]; then
+            echo "metrics: no running $mt or tester container" > "$control/$id.out"; rc=4
+          else
+            dvt_metrics_exec "$mcid" "$mimg" > "$control/$id.out" 2>> "$control/control.log" || rc=$?
           fi
         fi
       elif [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$action" = asl ] && [ -z "$extra" ]; then

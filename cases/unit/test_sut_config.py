@@ -77,6 +77,75 @@ def test_render_file(tmp_path):
     assert src.read_text() == TEMPLATE          # the template is never touched
 
 
+EXTRA_DATA = '[data]\nenable = true\nrequire_ident = <REQUIRE_IDENT>\n'
+EXTRA_PEER = '[[edges.xlx.peer]]\ncallsign = "XLX998"\nhost = "<NET>.12"\nmodules = "DE"\n'
+
+
+def test_require_ident_token_default_and_values(monkeypatch):
+    monkeypatch.delenv("DVT_REQUIRE_IDENT", raising=False)
+    assert sut_config.render("r = <REQUIRE_IDENT>\n", "172.30.0") == "r = true\n"
+    assert sut_config.render("r = <REQUIRE_IDENT>\n", "172.30.0", require_ident="false") == "r = false\n"
+    monkeypatch.setenv("DVT_REQUIRE_IDENT", "false")
+    assert sut_config.render("r = <REQUIRE_IDENT>\n", "172.30.0") == "r = false\n"
+    assert sut_config.render("r = <REQUIRE_IDENT>\n", "172.30.0", require_ident="true") == "r = true\n"
+    monkeypatch.setenv("DVT_REQUIRE_IDENT", "")
+    assert sut_config.render("r = <REQUIRE_IDENT>\n", "172.30.0") == "r = true\n"
+
+
+@pytest.mark.parametrize("value", ["TRUE", "yes", "1", "0", "False", " true"])
+def test_bad_require_ident(value):
+    with pytest.raises(sut_config.ConfigError):
+        sut_config.render("x\n", "172.30.0", require_ident=value)
+
+
+def test_extras_are_appended_in_order_with_tokens(tmp_path):
+    out = sut_config.render(TEMPLATE, "172.30.0", require_ident="false", extras=[EXTRA_DATA, EXTRA_PEER])
+    assert out.startswith(sut_config.render(TEMPLATE, "172.30.0").rstrip("\n"))
+    assert out.index("[data]") < out.index("[[edges.xlx.peer]]")
+    assert "require_ident = false" in out and 'host = "172.30.0.12"' in out
+    assert not sut_config.tokens(out)
+    # an extra with an unknown token is refused like the template
+    with pytest.raises(sut_config.ConfigError) as exc:
+        sut_config.render(TEMPLATE, "172.30.0", extras=['x = "<WHO>"\n'])
+    assert "<WHO>" in str(exc.value)
+    # no extras: byte for byte the old result
+    assert sut_config.render(TEMPLATE, "172.30.0", extras=[]) == sut_config.render(TEMPLATE, "172.30.0")
+
+
+def test_split_extras():
+    assert sut_config.split_extras("a.toml:b.toml") == ["a.toml", "b.toml"]
+    assert sut_config.split_extras(":a.toml::") == ["a.toml"]
+    assert sut_config.split_extras("") == [] and sut_config.split_extras(None) == []
+
+
+def test_render_file_with_extras_and_missing_extra(tmp_path):
+    src = tmp_path / "t.toml"
+    src.write_text(TEMPLATE)
+    one, two = tmp_path / "one.toml", tmp_path / "two.toml"
+    one.write_text(EXTRA_DATA)
+    two.write_text(EXTRA_PEER)
+    out = sut_config.render_file(src, tmp_path / "o.toml", "172.30.0", require_ident="true", extras=[one, two])
+    text = out.read_text()
+    assert "require_ident = true" in text and 'host = "172.30.0.12"' in text
+    assert src.read_text() == TEMPLATE and one.read_text() == EXTRA_DATA
+    with pytest.raises(sut_config.ConfigError, match="extra"):
+        sut_config.render_file(src, tmp_path / "p.toml", "172.30.0", extras=[tmp_path / "none.toml"])
+    assert not (tmp_path / "p.toml").exists()
+
+
+def test_repo_snippets_render_to_valid_toml(tmp_path):
+    import tomllib
+    base = TEMPLATE.replace("[[worker]]", "[worker]").replace("[[peer]]", "[peer]")
+    snippets = [ROOT / "rig" / "config" / "dv-router" / "data-ident.toml",
+                ROOT / "rig" / "config" / "dv-router" / "xlx-peer.toml"]
+    for value in ("true", "false"):
+        text = sut_config.render(base + "[edges.xlx]\nenable = true\n", "172.30.0", require_ident=value,
+                                 extras=[p.read_text() for p in snippets])
+        doc = tomllib.loads(text)
+        assert doc["data"] == {"enable": True, "require_ident": value == "true", "xlx_text_overs": True}
+        assert doc["edges"]["xlx"]["peer"] == [{"callsign": "XLX998", "host": "172.30.0.12", "modules": "DE"}]
+
+
 def test_missing_template_and_nothing_written(tmp_path):
     with pytest.raises(sut_config.ConfigError):
         sut_config.render_file(tmp_path / "nope.toml", tmp_path / "o.toml", "172.30.0")
@@ -110,6 +179,20 @@ def test_cli_errors_exit_2(tmp_path):
     assert run.returncode == 2 and "<BOGUS>" in run.stderr and not (tmp_path / "o.toml").exists()
     assert cli(str(tmp_path / "none.toml"), "-", "--net", "172.30.0").returncode == 2
     assert cli(str(src), "-", "--net", "nonsense").returncode == 2
+
+
+def test_cli_extra_and_require_ident(tmp_path):
+    src = tmp_path / "t.toml"
+    src.write_text(TEMPLATE)
+    one = tmp_path / "one.toml"
+    one.write_text(EXTRA_DATA)
+    run = cli(str(src), str(tmp_path / "o.toml"), "--net", "172.30.0", "--require-ident", "false", "--extra", str(one))
+    assert run.returncode == 0, run.stderr
+    assert (tmp_path / "o.toml").read_text().rstrip().endswith("require_ident = false")
+    run = cli(str(src), "-", "--net", "172.30.0", "--extra", str(tmp_path / "none.toml"))
+    assert run.returncode == 2 and "extra" in run.stderr
+    run = cli(str(src), "-", "--net", "172.30.0", "--require-ident", "maybe")
+    assert run.returncode == 2 and "require_ident" in run.stderr
 
 
 # ---- scripts/run.sh refuses a bad native launch before it touches docker
@@ -165,3 +248,23 @@ def test_run_sh_native_warns_about_ignored_settings(tmp_path):
     err = run.stderr
     assert "DVT_NXDN is set" in err and "DVT_INTERLINK is set" in err and "DVT_XLXD_BLACKLIST is set" in err
     assert "DVT_SUT_USRP is set" not in err and "DVT_P25 is set" not in err
+
+
+def test_run_sh_rejects_a_bad_require_ident(tmp_path):
+    cfg = tmp_path / "t.toml"
+    cfg.write_text(TEMPLATE)
+    run = run_sh(tmp_path, XLXD_SUT_IMAGE="img:x", DVT_SUT_CONFIG=str(cfg), DVT_REQUIRE_IDENT="maybe")
+    assert run.returncode == 2 and "DVT_REQUIRE_IDENT must be true or false" in run.stderr
+
+
+def test_run_sh_native_checks_the_extras_before_docker(tmp_path):
+    cfg = tmp_path / "t.toml"
+    cfg.write_text(TEMPLATE)
+    run = run_sh(tmp_path, XLXD_SUT_IMAGE="img:x", DVT_SUT_CONFIG=str(cfg),
+                 DVT_SUT_CONFIG_EXTRA=str(tmp_path / "missing.toml"))
+    assert run.returncode == 2 and "extra" in run.stderr and "missing.toml" in run.stderr
+    bad = tmp_path / "bad.toml"
+    bad.write_text('x = "<NOPE>"\n')
+    run = run_sh(tmp_path, XLXD_SUT_IMAGE="img:x", DVT_SUT_CONFIG=str(cfg), DVT_SUT_CONFIG_EXTRA=str(bad))
+    assert run.returncode == 2 and "<NOPE>" in run.stderr
+

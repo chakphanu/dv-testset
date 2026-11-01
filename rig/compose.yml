@@ -299,6 +299,8 @@ services:
       DVT_M17_PEER_DVU_HOST: ${DVT_M17_PEER_DVU_HOST:-${DVT_NET:-172.30.0}.32}
       # how xlxd-sut starts (direct | import | native); the M17 peer cases skip with import
       DVT_SUT_LAUNCH: ${DVT_SUT_LAUNCH:-direct}
+      # [data] require_ident of the native config (rig/config/dv-router/data-ident.toml); cases/test_data_ident.py
+      DVT_REQUIRE_IDENT: ${DVT_REQUIRE_IDENT:-true}
       DVT_XLXD_SUT: ${DVT_NET:-172.30.0}.11
       DVT_AMBED_REF: ${DVT_NET:-172.30.0}.20
       DVT_AMBED_SUT: ${DVT_NET:-172.30.0}.21

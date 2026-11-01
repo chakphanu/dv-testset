@@ -353,7 +353,7 @@ def test_hub_pool_binds_per_ip_and_waits_for_a_late_address():
     import importlib.util
     from pathlib import Path
     spec = importlib.util.spec_from_file_location(
-        "m17_proto_conftest", Path(__file__).resolve().parents[1] / "proto" / "conftest.py")
+        "m17_peer_fixtures_by_path", Path(__file__).resolve().parents[1] / "m17_peer_fixtures.py")
     conf = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(conf)
     config = {"dvt": {"port": 0, "modules": "M"}, "dvu": {"port": 0, "modules": "NO"}}

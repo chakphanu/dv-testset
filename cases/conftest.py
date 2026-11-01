@@ -22,6 +22,8 @@ from dvtest.proto import ambed  # noqa: E402
 
 # fixtures of the cross-mode cases against the fake AMBEd (docs/ambed-fake.md)
 from crossmode_fake import fake, fake_ctl  # noqa: E402,F401
+# fixtures of the M17 stage 2 (reflector peer) cases: cases/proto and cases/test_data_ident.py
+from m17_peer_fixtures import m17_peer_hubs, m17_peers  # noqa: E402,F401
 
 
 def pytest_addoption(parser):
