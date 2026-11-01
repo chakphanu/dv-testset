@@ -30,7 +30,13 @@ class Checker:
         self.overs = Live(self._ended)
 
     def claims(self, d):
-        return d.payload[:4] == b"USRP" or d.sport in self.ports or d.dport in self.ports
+        if d.payload[:4] == b"USRP":
+            return True
+        if os.environ.get("DVT_WEB") == "on":
+            # --profile web: the WebRTC edge of the SUT listens on UDP 50000, a port the rig's USRP link rows
+            # also use; STUN, DTLS and SRTP there are not USRP frames (they stay unclassified)
+            return False
+        return d.sport in self.ports or d.dport in self.ports
 
     def feed(self, d):
         r, p = self.report, d.payload

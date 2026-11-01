@@ -318,6 +318,8 @@ services:
       DVT_ADMIN_URL: https://${DVT_ADMIN_HOST:-dvt-admin}:${DVT_ADMIN_PORT:-8443}
       # profile browser (cases/browser_fixtures.py): on when the browser service runs
       DVT_BROWSER: ${DVT_BROWSER:-off}
+      # on when rig/config/dv-router/recorder.toml is part of DVT_SUT_CONFIG_EXTRA (run.sh)
+      DVT_RECORDER: ${DVT_RECORDER:-off}
       DVT_BROWSER_WS: ws://${DVT_NET:-172.30.0}.91:${DVT_BROWSER_PORT:-3000}/
       # how xlxd-sut starts (direct | import | native); the M17 peer cases skip with import
       DVT_SUT_LAUNCH: ${DVT_SUT_LAUNCH:-direct}
@@ -679,7 +681,15 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=512m
-    command: ["--host", "0.0.0.0", "--port", "${DVT_BROWSER_PORT:-3000}"]
+      # WebKit buffers media in /var/tmp/WebKit-Media-* (playback fails with "Could not create temp file" on a read-only root)
+      - /var/tmp:size=256m
+    # --unsafe: lets a client pass launch args and Firefox prefs (the fake microphone of the listen/talk
+    # cases: --use-fake-device-for-media-stream, media.navigator.streams.fake). The rig network is
+    # internal and the container is the boundary; the server takes no connection from outside it.
+    command: ["--host", "0.0.0.0", "--port", "${DVT_BROWSER_PORT:-3000}", "--unsafe"]
+    volumes:
+      # fake microphone file written by the tester at run time (read-only here, never committed)
+      - ../out/${DVT_RUN_ID:-manual}/media:/media:ro
     networks:
       rig:
         ipv4_address: "${DVT_NET:-172.30.0}.91"

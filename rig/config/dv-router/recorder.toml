@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/rig.md): the recorder of DV-Router
+# (K14b) with an archive directory of its own. Naming this file in DVT_SUT_CONFIG_EXTRA is the
+# switch: scripts/run.sh then creates the host directory out/<run>/recorder (mode 0700, owned by
+# the host user the sut container runs as) and mounts it read-write at /var/lib/dv-recorder.
+# It needs --profile web (the recordings routes are on the web service) and an active fabric ACL
+# (the template's default; with acl = false the recorder records but exports nothing, web.md).
+#
+# The directory must be neither inside nor a parent of the state dir (/var/lib/dv, web.toml) or of
+# the run dir: hence a sibling mount, never a sub-directory of sut-state. The pcm-s16le-8k archives
+# of USRP and WebRTC overs play without a codec worker; AMBE archives need the vocoder (K14c).
+[recorder]
+dir = "/var/lib/dv-recorder"
+keep_days = 7
+max_gb = 1
+play_jobs = 2

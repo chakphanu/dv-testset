@@ -28,7 +28,9 @@
 #   --profile browser  the Playwright browser service (browser, .91, ws://<net>.91:3000/:
 #                      chromium, firefox, WebKit of the pinned official Playwright image),
 #                      used together with web (--profile web,browser; exit 2 without it);
-#                      the tester gets DVT_BROWSER=on (docs/rig.md "Browser profile")
+#                      the tester gets DVT_BROWSER=on (docs/rig.md "Browser profile");
+#                      out/<utc>/media is mounted read-only at /media of the browser service
+#                      (the fake microphone file of the talk cases)
 #   --profile web      DV-Router's web service behind a TLS proxy: web-proxy (.90,
 #                      https://dvt-web, CA out/<utc>/web/ca.pem), a persistent state
 #                      dir out/<utc>/sut-state for the sut and a random operator
@@ -37,7 +39,9 @@
 #                      and admin.toml (admin host https://dvt-admin:8443, logins in
 #                      out/<utc>/web/admin.env) to DVT_SUT_CONFIG_EXTRA by itself;
 #                      the tester gets DVT_WEB=on
-#                      (docs/rig.md "Web profile")
+#                      (docs/rig.md "Web profile"). With rig/config/dv-router/recorder.toml in
+#                      DVT_SUT_CONFIG_EXTRA the recorder is on too: host directory
+#                      out/<utc>/recorder mounted read-write at /var/lib/dv-recorder (DVT_RECORDER=on)
 #   DVT_XLXD_BLACKLIST callsigns written to both reflectors' xlxd.blacklist
 #                      (default empty; P-G3-05 uses N0G3X, no other suite does)
 #   --capture          sniffers on xlxd-ref/xlxd-sut/transcoder-sut (+allstar/nxdn/p25): pcapng in
@@ -240,6 +244,7 @@ esac
 # --profile web: dv-svc-web is DV-Router's, so the launch is native and the snippet
 # rig/config/dv-router/web.toml is part of the config (added unless already listed)
 has_web=0
+has_recorder=0
 case ",$profile," in *,web,*) has_web=1 ;; esac
 if [ "$has_web" = 1 ]; then
   [ "${DVT_SUT_LAUNCH:-direct}" = native ] \
@@ -254,6 +259,11 @@ if [ "$has_web" = 1 ]; then
     *) DVT_SUT_CONFIG_EXTRA="$DVT_SUT_CONFIG_EXTRA:rig/config/dv-router/admin.toml" ;;
   esac
   export DVT_SUT_CONFIG_EXTRA
+  # rig/config/dv-router/recorder.toml named in DVT_SUT_CONFIG_EXTRA switches the recorder on: its
+  # directory is a host directory out/<run>/recorder (separate from the state dir), mounted read-write
+  case ":${DVT_SUT_CONFIG_EXTRA:-}:" in
+    *:rig/config/dv-router/recorder.toml:*) has_recorder=1 ;;
+  esac
 fi
 # DVT_SUT_CONFIG_EXTRA=<file>[:<file>...]: repo-owned snippets (rig/config/dv-router/)
 # appended after the rendered template, token substituted like the template
@@ -521,6 +531,16 @@ if [ "$has_web" = 1 ]; then
   mkdir -p "$out/web"
   (umask 077; mkdir -p "$out/sut-state/secrets")
   chmod 700 "$out/sut-state" "$out/sut-state/secrets"
+  # recorder dir (only with recorder.toml): host directory, own mount, never inside sut-state; the
+  # sut container runs as the host uid so the files stay removable
+  if [ "$has_recorder" = 1 ]; then
+    (umask 077; mkdir -p "$out/recorder")
+    chmod 700 "$out/recorder"
+    export DVT_RECORDER=on
+  fi
+  # media dir: the tester writes the fake microphone file here at run time (never committed), the
+  # browser service mounts it read-only (cases/browser_fixtures.py, dvtest/browser.py)
+  mkdir -p "$out/media"
   web_pw="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
   (umask 077
    printf 'N0CALL:%s\n' "$web_pw" > "$out/sut-state/secrets/web-bootstrap"
@@ -616,6 +636,9 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
     fi
     if [ "$svc" = xlxd-sut ] && [ "$has_web" = 1 ]; then
       printf '      - "%s/%s/sut-state:/var/lib/dv"\n' "$DVT_ROOT" "$out"
+    fi
+    if [ "$svc" = xlxd-sut ] && [ "$has_recorder" = 1 ]; then
+      printf '      - "%s/%s/recorder:/var/lib/dv-recorder"\n' "$DVT_ROOT" "$out"
     fi
   } >> "$override"
   prebuilt+=("$svc")

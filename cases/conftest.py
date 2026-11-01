@@ -29,8 +29,9 @@ from web_fixtures import (  # noqa: E402,F401
     admin_session, web_base_url, web_ca, web_client, web_operator, web_operator2, web_url_admin, web_user)
 # fixtures of the browser cases (profile browser, with web): Playwright over a websocket, a page per case
 from browser_fixtures import (  # noqa: E402,F401
-    br_login_operator, br_operator, br_user, browser_page, browser_ws, dashboard_page, engine, engine_browsers, operator_page,
-    operator_state, playwright_driver, pytest_runtest_makereport, user_page, web_origin)
+    br_login_operator, br_operator, br_rx, br_tx2, br_user, browser_page, browser_ws, dashboard_page, engine, engine_browsers,
+    fake_mic_file, operator_page, operator_state, playwright_driver, pytest_runtest_makereport, rtc_rx_page, rtc_tx2_page,
+    rtc_tx_page, user_page, web_origin)
 
 
 def pytest_addoption(parser):

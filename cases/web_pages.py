@@ -13,6 +13,9 @@ Pages (web/site of DV-Router, served as /; docs/design/web.md "Hostnames and rou
   /totp.html       operator authenticator set-up
   /ops/            operator pages, hash routes #/clients #/events #/accounts #/invites #/audit #/ids
   admin host       https://dvt-admin:8443/ the admin SPA (sign-in form only here)
+  /recordings/     recordings list and player (K14b), needs a recorder in the SUT (recorder.toml)
+
+Stage 3b: the Listen / Talk panel of the dashboard route `#/` (section "Listen") and the recordings page.
 """
 import re
 
@@ -155,3 +158,84 @@ def ops_toolbar_total(page):
 # ---- admin SPA
 def admin_sign_in_heading(page):
     return page.get_by_text("Sign in to the admin interface")
+
+
+# ---- Listen / Talk panel of the dashboard (public.js ListenPanel; shown on route #/ to a signed-in user)
+RECORDINGS = "/recordings/"
+LISTEN_IDLE_TEXT = "Idle"
+TALK_READY_TEXT = "Ready"
+TALK_HELP_START = "Listen first. Hold Talk, Space or Enter to transmit."
+RECORDING_NOTICE = "Recording is enabled. Room transmissions may be retained."
+
+
+def listen_panel(page):
+    return page.locator("section.listen-panel")
+
+
+def listen_room_select(page):
+    return page.locator("#listen-room")
+
+
+def listen_button(page):
+    """'Listen / Connect' while idle, 'Disconnect' while a circuit is active."""
+    return listen_panel(page).locator(".listen-controls button")
+
+
+def listen_status(page):
+    """The first status line of the panel: 'Idle', 'Connecting to module X', 'Listening on module X',
+    'Switching to module X' or the error text."""
+    return listen_panel(page).locator("p[role=status]").first
+
+
+def talk_button(page):
+    return page.locator("#talk-button")
+
+
+def talk_status(page):
+    """'Ready', 'Requesting', 'Pending - queued / waiting for the floor', 'On air', 'Denied: ...', 'Ended: ...'."""
+    return page.locator("#talk-status")
+
+
+def module_audio(page):
+    return page.get_by_label("Module audio")
+
+
+# ---- recordings page (web/site/recordings/recordings.js)
+def recordings_heading(page):
+    return page.locator("#recordings-title")
+
+
+def recording_notice(page):
+    return page.locator(".callout-warning")
+
+
+def recording_rows(page):
+    return page.locator("table.recording-table tbody tr")
+
+
+def recording_play_button(page, rec_id):
+    return page.locator("button[data-play='%s']" % rec_id)
+
+
+def recording_player(page):
+    return page.get_by_label("Recording audio")
+
+
+def recording_player_status(page):
+    return page.locator("section.recording-player p[role=status]")
+
+
+def recording_alert(page):
+    return page.locator("p.alert-danger")
+
+
+def recording_room_filter(page):
+    return page.locator("#recording-room")
+
+
+def recording_day_filter(page):
+    return page.locator("#recording-day")
+
+
+def recording_apply(page):
+    return page.get_by_role("button", name="Apply filters")

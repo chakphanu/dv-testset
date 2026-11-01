@@ -1,0 +1,168 @@
+# SPDX-License-Identifier: MIT
+"""The audio judgement of the WebRTC browser cases (dvtest/browser.py): the Goertzel scan on synthetic
+data, the same algorithm as the JavaScript that runs in the page (executed with node when it is on the
+host), the fake microphone file, the launch options and the getStats verdicts."""
+import json
+import math
+import random
+import shutil
+import struct
+import subprocess
+import wave
+import io
+
+import pytest
+
+from dvtest import browser as b
+
+pytestmark = pytest.mark.unit
+
+
+def sine(freq, rate, seconds, amp=0.5, phase=0.0):
+    return [amp * math.sin(2 * math.pi * freq * i / rate + phase) for i in range(int(rate * seconds))]
+
+
+@pytest.mark.parametrize("rate", [8000, 48000])
+@pytest.mark.parametrize("freq", [300, 700, 1235, 3000])
+def test_scan_finds_the_tone(rate, freq):
+    peak, amp, frac, level = b.scan_peak(sine(freq, rate, 0.25), rate, step=5.0)
+    assert abs(peak - freq) <= 5.0
+    assert amp == pytest.approx(0.5, rel=0.2)
+    assert frac > 0.9
+    assert level == pytest.approx(0.5 / math.sqrt(2), rel=0.01)
+
+
+def test_amplitude_reads_the_sine_amplitude():
+    x = sine(700, 8000, 1.0, amp=0.25)
+    assert b.goertzel_amplitude(x, 8000, 700) == pytest.approx(0.25, rel=0.01)
+    assert b.goertzel_amplitude(x, 8000, 1500) < 0.002
+
+
+def test_two_tones_the_louder_wins():
+    x = [a + 0.3 * c for a, c in zip(sine(700, 8000, 1.0), sine(1900, 8000, 1.0))]
+    assert abs(b.scan_peak(x, 8000)[0] - 700) <= 10
+
+
+def test_silence_and_noise_are_not_a_tone():
+    assert b.scan_peak([0.0] * 8000, 8000) == (0.0, 0.0, 0.0, 0.0)
+    assert b.scan_peak([], 8000) == (0.0, 0.0, 0.0, 0.0)
+    rng = random.Random(7)
+    noise = [rng.uniform(-0.3, 0.3) for _ in range(16000)]
+    assert b.scan_peak(noise, 8000)[2] < 0.1          # most of the power is not in one bin
+
+
+def test_tone_with_noise_still_found():
+    rng = random.Random(3)
+    x = [v + rng.uniform(-0.05, 0.05) for v in sine(700, 8000, 1.0)]
+    peak, _a, frac, _l = b.scan_peak(x, 8000)
+    assert abs(peak - 700) <= 10 and frac > 0.8
+
+
+def test_wav_is_a_16_bit_mono_sine():
+    data = b.tone_wav_bytes(700.0, 1.0, rate=48000)
+    with wave.open(io.BytesIO(data)) as w:
+        assert (w.getnchannels(), w.getsampwidth(), w.getframerate(), w.getnframes()) == (1, 2, 48000, 48000)
+        pcm = w.readframes(w.getnframes())
+    samples = [v / 32768.0 for v in struct.unpack("<%dh" % 48000, pcm)]
+    assert abs(b.scan_peak(samples[:24000], 48000, step=2.0)[0] - 700) <= 2.0
+    assert max(samples) < 0.51 and min(samples) > -0.51
+
+
+def test_launch_options_per_engine():
+    chromium = b.launch_options("chromium", "/media/x.wav")
+    assert "--use-fake-device-for-media-stream" in chromium["args"]
+    assert "--use-fake-ui-for-media-stream" in chromium["args"]
+    assert "--use-file-for-fake-audio-capture=/media/x.wav" in chromium["args"]
+    assert b.launch_options("firefox")["firefoxUserPrefs"]["media.navigator.streams.fake"] is True
+    assert b.launch_options("webkit") == {}
+
+
+def test_launch_options_url():
+    assert b.with_launch_options("ws://h:3000/", {}) == "ws://h:3000/"
+    url = b.with_launch_options("ws://h:3000/", {"args": ["--a=b c"]})
+    assert url.startswith("ws://h:3000/?launch-options=")
+    from urllib.parse import parse_qs, urlsplit
+    assert json.loads(parse_qs(urlsplit(url).query)["launch-options"][0]) == {"args": ["--a=b c"]}
+    assert "&launch-options=" in b.with_launch_options("ws://h:3000/?browser=x", {"a": 1})
+
+
+def snap(t, packets, nbytes, lost=0):
+    return {"t": t, "packetsReceived": packets, "bytesReceived": nbytes, "packetsLost": lost}
+
+
+def test_inbound_verdict_good_20ms_pcmu():
+    growth, problems = b.inbound_verdict(snap(0, 100, 16000), snap(2000, 200, 32000))
+    assert problems == []
+    assert growth["packets_per_s"] == 50.0 and growth["bytes_per_packet"] == 160.0 and growth["interval_ms"] == 20.0
+
+
+def test_inbound_verdict_problems():
+    _g, p = b.inbound_verdict(snap(0, 100, 16000), snap(2000, 100, 16000))
+    assert p and "no packets" in p[0]
+    _g, p = b.inbound_verdict(snap(0, 100, 16000), snap(2000, 150, 24000))       # 25 packets/s
+    assert any("packets/s" in x for x in p)
+    _g, p = b.inbound_verdict(snap(0, 0, 0), snap(2000, 100, 16000, lost=20))
+    assert any("packetsLost" in x for x in p)
+
+
+def test_summarize_stats():
+    entries = [
+        {"id": "I1", "type": "inbound-rtp", "kind": "audio", "codecId": "C1", "packetsReceived": 5},
+        {"id": "C1", "type": "codec", "mimeType": "audio/PCMU"},
+        {"id": "O1", "type": "outbound-rtp", "mediaType": "audio", "codecId": "C2"},
+        {"id": "C2", "type": "codec", "mimeType": "audio/PCMA"},
+        {"id": "P1", "type": "candidate-pair", "state": "succeeded", "nominated": True},
+    ]
+    s = b.summarize_stats(entries)
+    assert s["inbound"]["packetsReceived"] == 5 and s["codec_in"] == "audio/PCMU"
+    assert s["codec_out"] == "audio/PCMA" and s["pair"]["id"] == "P1"
+    assert b.summarize_stats([]) == {"inbound": None, "outbound": None, "codec_in": None, "codec_out": None, "pair": None}
+
+
+NODE = shutil.which("node")
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed (the page JavaScript is checked against the Python reference with it)")
+@pytest.mark.parametrize("rate,freq", [(8000, 700), (48000, 700), (44100, 1234)])
+def test_page_javascript_agrees_with_the_python_reference(rate, freq):
+    rng = random.Random(freq)
+    x = [v + rng.uniform(-0.02, 0.02) for v in sine(freq, rate, 0.25)]
+    py = b.scan_peak(x, rate, 200.0, 3600.0, 10.0)
+    script = (
+        "globalThis.window = globalThis; globalThis.performance = {now: () => 0};\n"
+        "globalThis.RTCPeerConnection = class {};\n"
+        "globalThis.document = {addEventListener() {}};\n" + b.RTC_PROBE_JS +
+        "\nconst x = JSON.parse(process.argv[1]);\n"
+        "console.log(JSON.stringify(window.__dvtTap.analyseSamples(x, %d, 200, 3600, 10)));\n" % rate)
+    script = script.replace("process.argv[1]", "require('fs').readFileSync(0, 'utf8')")
+    out = subprocess.run([NODE, "-e", script], input=json.dumps(x), capture_output=True, text=True, timeout=60, check=True)
+    js = json.loads(out.stdout)
+    assert js["peak_hz"] == py[0]
+    assert js["peak_amp"] == pytest.approx(py[1], rel=1e-3)
+    assert js["fraction"] == pytest.approx(py[2], rel=1e-3)
+    assert js["rms"] == pytest.approx(py[3], rel=1e-3)
+
+
+def test_no_non_ascii_in_the_probe():
+    assert b.RTC_PROBE_JS.isascii()
+
+
+def test_patch_fragments_makes_every_fragment_a_component():
+    src = "const a = html`<>one</>`;\nconst b = html`<><${A}/><>inner</></>`;\n"
+    out = b.patch_fragments_js(src)
+    assert out.startswith("const __dvtFragment")
+    assert "<>" not in out.split("\n", 1)[1] and "</>" not in out
+    assert out.count("<${__dvtFragment}>") == 3 and out.count("<//>") == 3
+    assert b.patch_fragments_js("const a = html`<div></div>`;") is None
+
+
+def test_usrp_check_leaves_webrtc_media_alone_in_the_web_profile(monkeypatch):
+    from types import SimpleNamespace
+    from dvtest.check import usrp
+    stun = SimpleNamespace(payload=b"\x00\x01\x00\x00", sport=50332, dport=50000)
+    hdr = SimpleNamespace(payload=b"USRP" + bytes(40), sport=50332, dport=50000)
+    chk = usrp.Checker(report=None, endpoints=[(("172.30.0.30", 50000), ("172.30.0.11", 50000))])
+    monkeypatch.delenv("DVT_WEB", raising=False)
+    assert chk.claims(stun) and chk.claims(hdr)            # the rig's own USRP port: as before
+    monkeypatch.setenv("DVT_WEB", "on")
+    assert not chk.claims(stun) and chk.claims(hdr)

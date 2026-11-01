@@ -30,6 +30,7 @@ markers = [
     "interlink: needs the docker rig with profile interlink",
     "web: needs the docker rig with profile web (DV-Router web service behind the TLS proxy)",
     "browser: needs the docker rig with profiles web and browser (Playwright browsers; cases/test_web_browser.py)",
+    "webrtc: browser cases of WebRTC Listen/Talk and recorder playback (cases/test_web_webrtc.py, cases/test_web_recorder.py)",
     "speech: needs the fetched speech corpus (scripts/pre-fetch-speech.sh)",
     "slow: long-running cases (minutes), e.g. tot_180s",
     "interop: protocol interop, always judged against xlxd-ref",

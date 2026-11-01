@@ -13,9 +13,17 @@ unit-tested (cases/unit/test_browser_helpers.py).
   * parse_csp / csp_problems, cookie_problems: header and cookie judgements.
   * patch_public_js: the one-line workaround that lets the dashboard script render (a finding).
   * artifact_dir / safe_name: where failure artifacts go ($DVT_OUT/web/browser/).
+  * Stage 3b (WebRTC listen and talk): goertzel_amplitude / scan_peak (the frequency judgement),
+    RTC_PROBE_JS (the same algorithm as plain JavaScript, installed in the page: it taps the received
+    MediaStream and reads getStats), tone_wav_bytes (the fake microphone file), launch_options (how an
+    engine is started with a fake microphone through `playwright run-server --unsafe`),
+    summarize_stats / inbound_verdict (what getStats says about the audio).
 """
+import json
+import math
 import os
 import re
+import struct
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
@@ -150,6 +158,16 @@ def patch_public_js(source):
     return "const __dvtFragment = (p) => p.children;\n" + out
 
 
+def patch_fragments_js(source):
+    """Every html`<>...</>` fragment of a page script made a component that returns its children (the
+    defect of patch_public_js, in a script with several fragments such as recordings/recordings.js,
+    where fragments also nest). Returns None when the script has no `<>` (fixed upstream)."""
+    if "<>" not in source:
+        return None
+    out = source.replace("<>", "<${__dvtFragment}>").replace("</>", "<//>")
+    return "const __dvtFragment = (p) => p.children;\n" + out
+
+
 # ---------------------------------------------------------------------- CSP
 
 def parse_csp(header):
@@ -216,3 +234,286 @@ def safe_name(text):
 def artifact_dir(out_dir, engine, test_name):
     """$DVT_OUT/web/browser/<engine>-<test>/ (never committed: out/ is ignored)."""
     return os.path.join(out_dir, "web", "browser", "%s-%s" % (engine, safe_name(test_name)))
+
+
+# ============================================================ stage 3b: audio in the page
+
+# Frequency judgement. The page taps the MediaStream it receives (a ScriptProcessorNode on an
+# AudioContext: an AudioWorklet module would have to come from a blob: URL, which the page's CSP
+# default-src 'self' forbids) and keeps the last seconds of float samples. Both the page (JavaScript,
+# RTC_PROBE_JS) and the cases (Python, here) use the SAME algorithm: a Hann window and the Goertzel
+# filter on a frequency grid; the amplitude of a bin is 2*sqrt(P)/sum(window), so a sine of amplitude A
+# reads A. The unit tests run both on the same synthetic data (cases/unit/test_browser_audio.py).
+
+def hann(n):
+    """Hann window of n points (periodic form: w[i] = 0.5 - 0.5 cos(2 pi i / n))."""
+    return [0.5 - 0.5 * math.cos(2.0 * math.pi * i / n) for i in range(n)]
+
+
+def goertzel_amplitude(samples, rate, freq, window=None):
+    """Amplitude of the sinusoid at `freq` Hz in `samples` (floats), Hann-windowed by default."""
+    n = len(samples)
+    if n == 0:
+        return 0.0
+    win = hann(n) if window is None else window
+    w = 2.0 * math.pi * freq / rate
+    coeff = 2.0 * math.cos(w)
+    s1 = s2 = 0.0
+    for i in range(n):
+        s0 = samples[i] * win[i] + coeff * s1 - s2
+        s2 = s1
+        s1 = s0
+    power = max(s1 * s1 + s2 * s2 - coeff * s1 * s2, 0.0)
+    return 2.0 * math.sqrt(power) / sum(win)
+
+
+def rms(samples):
+    return math.sqrt(sum(x * x for x in samples) / len(samples)) if samples else 0.0
+
+
+def scan_peak(samples, rate, lo=200.0, hi=3600.0, step=10.0):
+    """(peak_hz, peak_amplitude, tone_fraction, rms): the strongest bin of a Goertzel scan from lo to hi
+    in `step` Hz; tone_fraction = (peak_amplitude^2 / 2) / rms^2, about 1 for a pure tone and near 0 for
+    noise. Silence (rms 0) gives (0, 0, 0, 0)."""
+    n = len(samples)
+    level = rms(samples)
+    if n == 0 or level == 0.0:
+        return (0.0, 0.0, 0.0, 0.0)
+    win = hann(n)
+    best_f, best_a = lo, -1.0
+    f = lo
+    while f <= hi + 1e-9:
+        a = goertzel_amplitude(samples, rate, f, win)
+        if a > best_a:
+            best_f, best_a = f, a
+        f += step
+    return (best_f, best_a, (best_a * best_a / 2.0) / (level * level), level)
+
+
+def tone_wav_bytes(freq=700.0, seconds=30.0, rate=48000, amp=0.5):
+    """A mono 16-bit PCM WAV of one sine, for the fake microphone of Chromium
+    (--use-file-for-fake-audio-capture). Generated at run time, never committed."""
+    n = int(rate * seconds)
+    pcm = struct.pack("<%dh" % n, *[int(round(32767 * amp * math.sin(2.0 * math.pi * freq * i / rate))) for i in range(n)])
+    head = b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVE" + b"fmt " + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate * 2, 2, 16)
+    return head + b"data" + struct.pack("<I", len(pcm)) + pcm
+
+
+# Engine start options for a fake microphone, sent as the `launch-options` query of the run-server URL
+# (the browser service runs with --unsafe, rig/compose.yml). Chromium plays the given file in a loop;
+# Firefox has only its built-in fake source (a beep of about 1 kHz); Playwright WebKit has no flag here
+# (permissions are granted per context, whether it offers a fake device is recorded by the cases).
+CHROMIUM_FAKE_ARGS = ("--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream",
+                      "--autoplay-policy=no-user-gesture-required")
+FIREFOX_FAKE_PREFS = {"media.navigator.streams.fake": True, "media.navigator.permission.disabled": True,
+                      "media.autoplay.default": 0, "media.autoplay.blocking_policy": 0,
+                      "media.autoplay.block-webaudio": False,
+                      # no sound card in the container: a null audio context keeps media clocks running (no OnMediaSinkAudioError)
+                      "media.cubeb.force_null_context": True}
+MIC_FILE_IN_BROWSER = "/media/fake-mic.wav"      # out/<run>/media mounted read-only at /media
+
+
+def launch_options(engine, mic_path=MIC_FILE_IN_BROWSER):
+    """The launch options dict for one engine ({} for WebKit)."""
+    if engine == "chromium":
+        return {"args": list(CHROMIUM_FAKE_ARGS) + ["--use-file-for-fake-audio-capture=" + mic_path]}
+    if engine == "firefox":
+        return {"firefoxUserPrefs": dict(FIREFOX_FAKE_PREFS)}
+    return {}
+
+
+def with_launch_options(ws_url, options):
+    """ws://host:3000/ + {"args": [...]} -> ws://host:3000/?launch-options=<json> (unchanged when empty)."""
+    if not options:
+        return ws_url
+    from urllib.parse import quote
+    sep = "&" if "?" in ws_url else "?"
+    return ws_url + sep + "launch-options=" + quote(json.dumps(options, separators=(",", ":")), safe="")
+
+
+# What getStats says (a list of dicts: [...report.values()]).
+def summarize_stats(entries):
+    """{'inbound': {...}, 'outbound': {...}, 'codec_in': mime, 'codec_out': mime, 'pair': {...}} of the
+    audio parts of an RTCStatsReport; absent parts are None."""
+    by_id = {e.get("id"): e for e in entries}
+    out = {"inbound": None, "outbound": None, "codec_in": None, "codec_out": None, "pair": None}
+    for e in entries:
+        kind = e.get("kind") or e.get("mediaType")
+        if e.get("type") == "inbound-rtp" and kind == "audio":
+            out["inbound"] = e
+            out["codec_in"] = (by_id.get(e.get("codecId")) or {}).get("mimeType")
+        elif e.get("type") == "outbound-rtp" and kind == "audio":
+            out["outbound"] = e
+            out["codec_out"] = (by_id.get(e.get("codecId")) or {}).get("mimeType")
+        elif e.get("type") == "candidate-pair" and (e.get("nominated") or e.get("state") == "succeeded"):
+            if out["pair"] is None or e.get("nominated"):
+                out["pair"] = e
+    return out
+
+
+def inbound_verdict(first, second, interval_ms=20.0, tolerance=0.15):
+    """Compare two inbound-rtp snapshots ({'t': ms, 'packetsReceived', 'bytesReceived', 'packetsLost',
+    'jitter'} each) taken while the sender talks. Returns (growth dict, problems list): packets and bytes
+    grew, loss is under 2 %, the packet rate matches `interval_ms` within `tolerance`, payload per packet
+    is constant (bytesReceived / packetsReceived)."""
+    problems = []
+    dt = (second["t"] - first["t"]) / 1000.0
+    dp = second["packetsReceived"] - first["packetsReceived"]
+    db = second["bytesReceived"] - first["bytesReceived"]
+    dl = max(second.get("packetsLost", 0) - first.get("packetsLost", 0), 0)
+    growth = {"seconds": round(dt, 3), "packets": dp, "bytes": db, "lost": dl,
+              "packets_per_s": round(dp / dt, 1) if dt > 0 else 0.0,
+              "bytes_per_packet": round(db / dp, 1) if dp > 0 else 0.0,
+              "interval_ms": round(1000.0 * dt / dp, 2) if dp > 0 else 0.0}
+    if dt <= 0 or dp <= 0:
+        problems.append("no packets received between the snapshots")
+        return growth, problems
+    if db <= 0:
+        problems.append("bytesReceived did not grow")
+    if dl > 0.02 * (dp + dl):
+        problems.append("packetsLost grew by %d of %d" % (dl, dp + dl))
+    want = 1000.0 / interval_ms
+    if abs(growth["packets_per_s"] - want) > tolerance * want:
+        problems.append("%.1f packets/s, a %g ms packet interval is %.0f/s" % (growth["packets_per_s"], interval_ms, want))
+    return growth, problems
+
+
+# The page side. Installed with context.add_init_script before the first navigation. It wraps
+# RTCPeerConnection so the page's own peer can be reached (window.__dvtTap), records connection
+# state changes with a timestamp (performance.now()), taps the received audio and answers
+# getStats. The Goertzel code below is the algorithm of goertzel_amplitude / scan_peak above.
+RTC_PROBE_JS = r"""
+(() => {
+  if (window.__dvtTap) return;
+  const Orig = window.RTCPeerConnection || window.webkitRTCPeerConnection;
+  const tap = { pcs: [], channels: [], msgs: [], events: [], ctx: null, buf: [], have: 0, rate: 0, proc: null, el: null, sources: 0 };
+  window.__dvtTap = tap;
+  const now = () => performance.now();
+  document.addEventListener('click', (e) => tap.events.push({ t: now(), what: 'click',
+    target: (e.target && (e.target.id || e.target.textContent || '')).toString().slice(0, 30) }), true);
+  document.addEventListener('pointerdown', (e) => tap.events.push({ t: now(), what: 'pointerdown',
+    target: (e.target && (e.target.id || '')).toString().slice(0, 30) }), true);
+  if (!Orig) { tap.missing = true; return; }
+  function Wrapped(...args) {
+    const pc = new Orig(...args);
+    const n = tap.pcs.length;
+    tap.pcs.push(pc);
+    tap.events.push({ t: now(), pc: n, what: 'new', config: JSON.stringify((args[0] && args[0].iceServers) || []) });
+    for (const ev of ['connectionstatechange', 'iceconnectionstatechange', 'signalingstatechange', 'icegatheringstatechange']) {
+      pc.addEventListener(ev, () => tap.events.push({ t: now(), pc: n, what: ev,
+        state: ev === 'connectionstatechange' ? pc.connectionState : ev === 'iceconnectionstatechange' ? pc.iceConnectionState
+             : ev === 'signalingstatechange' ? pc.signalingState : pc.iceGatheringState }));
+    }
+    const makeChannel = pc.createDataChannel.bind(pc);
+    pc.createDataChannel = (...a) => {
+      const ch = makeChannel(...a);
+      tap.channels.push(ch);
+      ch.addEventListener('open', () => tap.events.push({ t: now(), pc: n, what: 'channel-open', label: ch.label }));
+      ch.addEventListener('close', () => tap.events.push({ t: now(), pc: n, what: 'channel-close', label: ch.label }));
+      ch.addEventListener('message', (ev) => tap.msgs.push({ t: now(), pc: n, label: ch.label, data: String(ev.data).slice(0, 200) }));
+      return ch;
+    };
+    pc.addEventListener('track', (e) => tap.events.push({ t: now(), pc: n, what: 'track', kind: e.track.kind }));
+    pc.addEventListener('datachannel', (e) => tap.events.push({ t: now(), pc: n, what: 'datachannel', label: e.channel.label }));
+    return pc;
+  }
+  Wrapped.prototype = Orig.prototype;
+  Object.setPrototypeOf(Wrapped, Orig);
+  window.RTCPeerConnection = Wrapped;
+  if (window.webkitRTCPeerConnection) window.webkitRTCPeerConnection = Wrapped;
+
+  tap.live = () => tap.pcs.filter((p) => p.connectionState !== 'closed');
+  tap.last = () => tap.pcs[tap.pcs.length - 1] || null;
+  tap.state = () => { const p = tap.last(); return p ? { connection: p.connectionState, ice: p.iceConnectionState, signaling: p.signalingState } : null; };
+  tap.sdp = () => { const p = tap.last(); return p ? { local: p.localDescription && p.localDescription.sdp, remote: p.remoteDescription && p.remoteDescription.sdp } : null; };
+  tap.receivers = () => { const p = tap.last(); return p ? p.getReceivers().map((r) => ({ kind: r.track && r.track.kind, state: r.track && r.track.readyState, muted: r.track && r.track.muted })) : []; };
+  tap.senders = () => { const p = tap.last(); return p ? p.getSenders().map((r) => ({ kind: r.track && r.track.kind, state: r.track && r.track.readyState })) : []; };
+  tap.stats = async () => {
+    const p = tap.last();
+    if (!p) return [];
+    const rep = await p.getStats();
+    const out = [];
+    rep.forEach((v) => out.push(JSON.parse(JSON.stringify(v))));
+    return out;
+  };
+
+  // the received audio: a ScriptProcessorNode keeps the last 10 s of samples (mono, context rate)
+  tap.start = async () => {
+    if (tap.proc) return { rate: tap.rate, reused: true };
+    const p = tap.last();
+    const track = p && p.getReceivers().map((r) => r.track).find((t) => t && t.kind === 'audio');
+    if (!track) return { error: 'no audio receiver' };
+    const stream = new MediaStream([track]);
+    const AC = window.AudioContext || window.webkitAudioContext;
+    tap.ctx = new AC();
+    try { await Promise.race([tap.ctx.resume(), new Promise((r) => setTimeout(r, 1500))]); } catch (e) { /* needs a gesture */ }
+    tap.rate = tap.ctx.sampleRate;
+    // a remote stream only flows into Web Audio in Chromium when a media element has it too
+    tap.el = document.createElement('audio');
+    tap.el.muted = true;
+    tap.el.srcObject = stream;
+    // not awaited: play() of a stream without data can stay pending (Firefox)
+    try { tap.el.play().catch((e) => { tap.playError = String(e); }); } catch (e) { tap.playError = String(e); }
+    const src = tap.ctx.createMediaStreamSource(stream);
+    tap.proc = tap.ctx.createScriptProcessor(4096, 1, 1);
+    tap.proc.onaudioprocess = (e) => {
+      const x = e.inputBuffer.getChannelData(0);
+      tap.buf.push(new Float32Array(x));
+      tap.have += x.length;
+      while (tap.have - tap.buf[0].length >= tap.rate * 10) { tap.have -= tap.buf[0].length; tap.buf.shift(); }
+    };
+    src.connect(tap.proc);
+    tap.proc.connect(tap.ctx.destination);
+    return { rate: tap.rate, state: tap.ctx.state };
+  };
+  // a raw frame on the page's own control channel (the page itself only sends well-formed ones)
+  tap.sendControl = (text) => {
+    const ch = tap.channels[tap.channels.length - 1];
+    if (!ch || ch.readyState !== 'open') return false;
+    ch.send(text);
+    return true;
+  };
+  tap.clear = () => { tap.buf = []; tap.have = 0; };
+  tap.window = (seconds) => {
+    const want = Math.min(Math.floor(seconds * tap.rate), tap.have);
+    const out = new Float32Array(want);
+    let at = want;
+    for (let i = tap.buf.length - 1; i >= 0 && at > 0; i--) {
+      const b = tap.buf[i];
+      const take = Math.min(b.length, at);
+      out.set(b.subarray(b.length - take), at - take);
+      at -= take;
+    }
+    return out;
+  };
+  const goertzel = (x, win, wsum, rate, f) => {
+    const w = 2 * Math.PI * f / rate, c = 2 * Math.cos(w);
+    let s1 = 0, s2 = 0;
+    for (let i = 0; i < x.length; i++) { const s0 = x[i] * win[i] + c * s1 - s2; s2 = s1; s1 = s0; }
+    return 2 * Math.sqrt(Math.max(s1 * s1 + s2 * s2 - c * s1 * s2, 0)) / wsum;
+  };
+  tap.analyse = (seconds, lo, hi, step) => {
+    const x = tap.window(seconds);
+    const n = x.length;
+    if (!n) return { n: 0, rate: tap.rate, rms: 0, peak_hz: 0, peak_amp: 0, fraction: 0 };
+    let e = 0;
+    for (let i = 0; i < n; i++) e += x[i] * x[i];
+    const level = Math.sqrt(e / n);
+    if (level === 0) return { n, rate: tap.rate, rms: 0, peak_hz: 0, peak_amp: 0, fraction: 0 };
+    const win = new Float64Array(n);
+    let wsum = 0;
+    for (let i = 0; i < n; i++) { win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / n); wsum += win[i]; }
+    let bf = lo, ba = -1;
+    for (let f = lo; f <= hi + 1e-9; f += step) {
+      const a = goertzel(x, win, wsum, tap.rate, f);
+      if (a > ba) { ba = a; bf = f; }
+    }
+    return { n, rate: tap.rate, rms: level, peak_hz: bf, peak_amp: ba, fraction: (ba * ba / 2) / (level * level) };
+  };
+  // for the unit tests of the algorithm in node: analyse a given array instead of the tap buffer
+  tap.analyseSamples = (arr, rate, lo, hi, step) => {
+    tap.rate = rate; tap.buf = [Float32Array.from(arr)]; tap.have = arr.length;
+    return tap.analyse(arr.length / rate, lo, hi, step);
+  };
+})();
+"""

@@ -306,6 +306,7 @@ another launch mode the variable draws a warning. Snippets in
 | `data-ident.toml` | `[data] enable = true`, `require_ident = <REQUIRE_IDENT>`, `xlx_text_overs = true`: the data worker on, with the identity policy of the run |
 | `xlx-peer.toml` | `[[edges.xlx.peer]]` XLX998 at `<NET>.12` on modules `DE` |
 | `web.toml` | the web service, a persistent state dir and the WebRTC edge; added by `--profile web` itself (next section) |
+| `recorder.toml` | the recorder (K14b): `[recorder] dir = "/var/lib/dv-recorder"`, `keep_days = 7`, `max_gb = 1`; naming it in `DVT_SUT_CONFIG_EXTRA` is the switch (see "Recorder" in the web profile section) |
 
 The XLX peer row names `xlxd-peer-sut` (`<NET>.12`, XLX998), not `xlxd-peer-ref`
 (`.13`): `xlxd-peer-sut` is configured to link with `xlxd-sut` (`.11`, XLX999),
@@ -379,6 +380,16 @@ deletes the CA key at once and writes the CA certificate to
 the container's tmpfs. The log (`logs/web-proxy.log`) has one line per request:
 method, path without the query, status, bytes, ms.
 
+**Recorder (stage 3b).** `DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/recorder.toml` switches the
+recorder of DV-Router on (it is not part of the web profile by default: stage 2 expects 503 from the recordings routes). `run.sh`
+then makes the host directory `out/<utc>/recorder` (mode 0700), mounts it read-write at `/var/lib/dv-recorder` (the SUT runs as
+the host uid, like the state dir) and the tester gets `DVT_RECORDER=on`. The directory is a sibling of the state dir
+`/var/lib/dv`, never inside it (DV-Router refuses a recorder dir that is inside or a parent of the state or run dir).
+`[recorder] dir` is the only key that matters for the switch; `keep_days = 7` is what the dashboard notice says ("Recordings are
+kept for 7 days."). It needs the fabric ACL on (the template's default). Archives hold the source profile of an over
+(`pcm-s16le-8k` for USRP and WebRTC overs, served as WAV with no codec worker); overs of the vocoder profiles need the
+decoder worker (K14c, the fake AMBEd, later).
+
 **Tester side**
 - `dvtest/web.py` (stdlib): `WebClient` (HTTPS with the run's CA, cookie jar with
   the cookie attributes, CSRF token, Origin, JSON, SSE reader, `WebError` with
@@ -408,7 +419,7 @@ method, path without the query, status, bytes, ms.
 in the SUT's memory, so a case that needs a clean budget restarts the web service
 (control channel `kill-proc xlxd-sut dv-svc-web KILL`; the launcher respawns it
 within a second, sessions are gone, RTC answers 503 for about 36 s). The WebRTC
-media path is configured (UDP 50000 on `<net>.11`) but not exercised yet. The
+media path (UDP 50000 on `<net>.11`) is exercised by the browser cases of stage 3b (`cases/test_web_webrtc.py`). The
 legacy direct admin mount (no `[admin] host`, loopback only, cookie `dv_admin`)
 cannot be reached from the tester and is not covered. State is per run: a new
 `out/<utc>/sut-state` every time, so the first-operator flow always starts from a
@@ -435,6 +446,8 @@ XLXD_SUT_IMAGE=<dv-router image> DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-router
 | caps | own set `x-limits-browser`: memory 3g = swap 3g (`DVT_MEM_BROWSER`; three browsers at once, each about 0.5-1 GiB with a page open), cpus 2, pids 1024 (browsers are multi-process; chromium, firefox and WebKit together stayed below that), `shm_size` 1g (`DVT_SHM_BROWSER`, chromium needs a large /dev/shm; it is memory and counted in the 3g; `dvtest/limits.py` refuses a `shm_size` larger than `mem_limit`), tmpfs `/tmp` 512m. Sizes are settings in `.env.example`; `run.sh` refuses an uncapped service as for every other one |
 | hardening | non-root `pwuser` of the image, `init: true`, `cap_drop: ALL`, `no-new-privileges`, read-only root filesystem. Chromium runs without its own sandbox (Playwright's default `chromiumSandbox=false`; the container is the boundary) so no capability or seccomp profile is needed |
 | trust | the proxy certificate is self-signed and the browsers are not given the run CA: the cases create every context with `ignore_https_errors=True`, and that is the only TLS relaxation (the Python test clients keep verifying against `out/<run>/web/ca.pem`) |
+| launch options | the cases connect with `browser_type.connect(ws://<net>.91:3000/?launch-options=<json>)`; `playwright run-server` takes `args` and `firefoxUserPrefs` from a client only when started with `--unsafe` (the `browser` service is: its network is internal and the container is the boundary). Used for the fake microphone of the talk cases: Chromium `--use-fake-ui-for-media-stream --use-fake-device-for-media-stream --use-file-for-fake-audio-capture=/media/fake-mic.wav --autoplay-policy=no-user-gesture-required`; Firefox prefs `media.navigator.streams.fake`, `media.navigator.permission.disabled`, `media.autoplay.default=0`; Playwright WebKit has no such option (microphone permission is granted per context; whether a fake device exists is recorded by the cases). `dvtest/browser.py` `launch_options()` |
+| media dir | `out/<utc>/media/` (made by `run.sh`) is mounted read-only at `/media` of the browser service. The tester writes the fake microphone file `fake-mic.wav` there at run time (a 700 Hz sine, 48 kHz mono 16 bit, 30 s, looped by Chromium); it is generated, never committed (`*.wav` is ignored) |
 | artifacts | on a failed case: `out/<run>/web/browser/<engine>-<case>/` with `page.png`, `trace.zip` (Playwright trace viewer), `page.har.zip` (HAR without bodies) and `log.json` (console, page errors, request list); `engines.txt` lists the browser builds that answered. Local to `out/`, never committed; a trace holds the values the case typed (throwaway run passwords) |
 | engine names | the WebKit of Playwright is the engine of Safari but not Safari (a Linux build without Safari's behaviour and without iOS): results are labelled "Playwright WebKit" everywhere |
 

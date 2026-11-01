@@ -124,10 +124,31 @@ def _note_engine(engine, version):
         pass
 
 
+MIC_TONE_HZ = 700.0                      # the tone of the fake microphone file of the talk cases
+MIC_FILE = "fake-mic.wav"                # $DVT_OUT/media/fake-mic.wav = /media/fake-mic.wav in the browser service
+
+
 @pytest.fixture(scope="session")
-def engine_browsers(playwright_driver, browser_ws):
+def fake_mic_file():
+    """Write the fake microphone file (a 700 Hz sine, 48 kHz mono 16 bit, 30 s, looped by Chromium) into
+    $DVT_OUT/media/ at run time. The browser service mounts that directory read-only at /media. The file is
+    generated, never committed (*.wav is ignored). Returns the path as the tester sees it."""
+    path = Path(_out_dir()) / "media" / MIC_FILE
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(brlib.tone_wav_bytes(MIC_TONE_HZ, 30.0))
+    except OSError as exc:
+        pytest.skip("cannot write the fake microphone file %s: %s" % (path, exc))
+    return str(path)
+
+
+@pytest.fixture(scope="session")
+def engine_browsers(playwright_driver, browser_ws, fake_mic_file):
     """engine -> connected Browser, connected on first use and kept for the session (a context per
-    case isolates the cases; one connection per engine keeps the service at three browsers)."""
+    case isolates the cases; one connection per engine keeps the service at three browsers).
+    Each engine starts with a fake microphone (dvtest.browser.launch_options: Chromium flags and the
+    file above, Firefox prefs) passed in the `launch-options` query of the run-server URL; the service
+    runs `playwright run-server --unsafe` for that (rig/compose.yml)."""
     made = {}
 
     def get(engine):
@@ -136,7 +157,8 @@ def engine_browsers(playwright_driver, browser_ws):
             last = None
             for _ in range(3):
                 try:
-                    made[engine] = kind.connect(browser_ws, timeout=60000)
+                    made[engine] = kind.connect(brlib.with_launch_options(browser_ws, brlib.launch_options(engine)),
+                                                timeout=60000)
                     _note_engine(engine, made[engine].version)
                     break
                 except Exception as exc:       # the service may still be starting its driver
@@ -224,7 +246,7 @@ def wait_for_stream_slots(need=2):
 class BrowserPage:
     """One page in one new context, with its log."""
 
-    def __init__(self, engine, browser, base_url, name, storage_state=None):
+    def __init__(self, engine, browser, base_url, name, storage_state=None, context_options=None):
         wait_for_stream_slots()
         self.engine = engine
         self.base = base_url.rstrip("/")
@@ -236,14 +258,21 @@ class BrowserPage:
                     viewport={"width": 1280, "height": 800}, service_workers="block")
         if storage_state is not None:
             opts["storage_state"] = storage_state
+        self.permissions_error = ""
+        if context_options:
+            opts.update(context_options)
         os.makedirs(os.path.dirname(self.art), exist_ok=True)
         self._har_tmp = self.art + ".har"
         try:
             self.context = browser.new_context(record_har_path=self._har_tmp, record_har_content="omit", **opts)
             self.har = True
-        except Exception:                              # HAR over a remote connection unsupported: go without
+        except Exception as exc:                       # HAR over a remote connection unsupported: go without
             self._har_tmp = None
             self.har = False
+            if "permissions" in opts and "ermission" in str(exc):
+                # an engine that does not know the permission: keep going without and say so
+                self.permissions_error = str(exc).splitlines()[0][:160]
+                opts.pop("permissions")
             self.context = browser.new_context(**opts)
         self.context.set_default_timeout(ACTION_TIMEOUT_MS)
         self.context.set_default_navigation_timeout(NAV_TIMEOUT_MS)
@@ -317,6 +346,11 @@ class BrowserPage:
     def problems(self, expected=()):
         return self.log.problems(expected)
 
+    def install_rtc_probe(self):
+        """Wrap RTCPeerConnection and tap the received audio (dvtest.browser.RTC_PROBE_JS) in every page of
+        the context loaded from now on. Call before the first navigation."""
+        self.context.add_init_script(brlib.RTC_PROBE_JS)
+
     def apply_fragment_workaround(self):
         """Serve /public.js with `<>` replaced (patch_public_js); True when the script needed it. Call before
         the first navigation of the case. Only the cases that look at the rendered dashboard use it; the case
@@ -337,6 +371,26 @@ class BrowserPage:
             route.fulfill(status=resp.status, headers=headers, body=data)
 
         self.context.route("**/public.js", handler)
+
+    def apply_recordings_workaround(self):
+        """The same fragment defect (finding 1) is in recordings.js: serve it with every `<>` made a
+        component (dvtest.browser.patch_fragments_js); True through self.patched_recordings when needed."""
+        self.patched_recordings = False
+
+        def handler(route):
+            resp = route.fetch()
+            body = resp.text()
+            new = brlib.patch_fragments_js(body)
+            if new is None:
+                route.fulfill(response=resp)
+                return
+            self.patched_recordings = True
+            data = new.encode("utf-8")
+            headers = {k: v for k, v in resp.headers.items() if k.lower() not in ("content-length", "content-encoding", "etag")}
+            headers["content-length"] = str(len(data))
+            route.fulfill(status=resp.status, headers=headers, body=data)
+
+        self.context.route("**/recordings/recordings.js", handler)
 
     def seen(self, path_prefix, method=None):
         return self.log.paths(path_prefix, method)
@@ -511,3 +565,62 @@ def operator_page(engine, engine_browsers, web_base_url, request, operator_state
                      storage_state=operator_state(engine))
     yield bp
     bp.finish(_failed(request))
+
+
+# ---------------------------------------------------------- stage 3b: Listen / Talk pages
+
+@pytest.fixture(scope="session")
+def br_rx(web_user):
+    """A user without may_tx: it can listen, the page shows no Talk controls."""
+    return web_user("N0BRX", may_tx=False)
+
+
+@pytest.fixture(scope="session")
+def br_tx2(web_user):
+    """A second user with may_tx (the second talker of the floor cases)."""
+    return web_user("N0BRT", may_tx=True)
+
+
+def _rtc_page(engine, engine_browsers, web_base_url, request, user, talk):
+    """Signed in as `user` (API login inside the browser, the session is bound to its User-Agent), with the
+    RTCPeerConnection probe and the dashboard workaround. `talk` grants the microphone permission to the
+    engines that take it as a context permission (Chromium, WebKit; Firefox uses its prefs)."""
+    ctx = {"permissions": ["microphone"]} if talk and engine in ("chromium", "webkit") else None
+    bp = BrowserPage(engine, engine_browsers(engine), web_base_url, request.node.name.replace("[", "-").rstrip("]"),
+                     context_options=ctx)
+    bp.install_rtc_probe()
+    bp.apply_fragment_workaround()
+    status = bp.api_login(user.callsign, user.password)
+    if status != 200:
+        bp.finish(True)
+        pytest.fail("browser API login of %s: HTTP %s" % (user.callsign, status))
+    return bp
+
+
+def _rtc_end(bp, request):
+    try:
+        bp.api_logout()
+    except Exception:
+        pass
+    bp.finish(_failed(request))
+
+
+@pytest.fixture
+def rtc_rx_page(engine, engine_browsers, web_base_url, request, br_rx):
+    bp = _rtc_page(engine, engine_browsers, web_base_url, request, br_rx, talk=False)
+    yield bp
+    _rtc_end(bp, request)
+
+
+@pytest.fixture
+def rtc_tx_page(engine, engine_browsers, web_base_url, request, br_user):
+    bp = _rtc_page(engine, engine_browsers, web_base_url, request, br_user, talk=True)
+    yield bp
+    _rtc_end(bp, request)
+
+
+@pytest.fixture
+def rtc_tx2_page(engine, engine_browsers, web_base_url, request, br_tx2):
+    bp = _rtc_page(engine, engine_browsers, web_base_url, request, br_tx2, talk=True)
+    yield bp
+    _rtc_end(bp, request)
