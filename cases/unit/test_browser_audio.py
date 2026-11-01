@@ -166,3 +166,51 @@ def test_usrp_check_leaves_webrtc_media_alone_in_the_web_profile(monkeypatch):
     assert chk.claims(stun) and chk.claims(hdr)            # the rig's own USRP port: as before
     monkeypatch.setenv("DVT_WEB", "on")
     assert not chk.claims(stun) and chk.claims(hdr)
+
+
+# ---- NAT stage: selected candidate pair, arrival deviations ----
+
+def test_selected_pair_prefers_the_transport_choice():
+    entries = [
+        {"id": "T", "type": "transport", "selectedCandidatePairId": "P2"},
+        {"id": "P1", "type": "candidate-pair", "state": "succeeded", "nominated": True, "localCandidateId": "L1", "remoteCandidateId": "R1"},
+        {"id": "P2", "type": "candidate-pair", "state": "succeeded", "nominated": True, "localCandidateId": "L2", "remoteCandidateId": "R1"},
+        {"id": "L1", "type": "local-candidate", "candidateType": "host", "protocol": "udp"},
+        {"id": "L2", "type": "local-candidate", "candidateType": "relay", "protocol": "udp", "relayProtocol": "udp"},
+        {"id": "R1", "type": "remote-candidate", "candidateType": "host"},
+    ]
+    got = b.selected_pair(entries)
+    assert got["local"] == "relay" and got["remote"] == "host" and got["via"] == "transport" and got["relay_protocol"] == "udp"
+    # no transport entry: the nominated pair
+    got = b.selected_pair([e for e in entries if e["type"] != "transport"])
+    assert got["via"] == "nominated" and got["local"] == "host"
+    assert b.selected_pair([]) is None
+    assert b.selected_pair([{"id": "P", "type": "candidate-pair", "state": "failed"}]) is None
+
+
+def _samples(times_ms, with_ts=True, base=1000.0, start_rtp=0):
+    return [(base + t + 0.3, (start_rtp + 160 * i) % (1 << 32), 5000.0 + t if with_ts else None) for i, t in enumerate(times_ms)]
+
+
+def test_arrival_deviations_of_a_perfect_and_a_jittery_stream():
+    perfect = [i * 20.0 for i in range(200)]
+    got = b.arrival_deviations(_samples(perfect))
+    assert got["max"] == 0.0 and got["p99"] == 0.0 and got["n"] == 199 and got["source"] == "engine receive time"
+    jit = list(perfect)
+    jit[100] += 35.0                           # one late packet: two intervals deviate by 35 and 15 (the next one is early)
+    got = b.arrival_deviations(_samples(jit))
+    assert got["max"] == 35.0 and got["p50"] == 0.0
+    # without engine receive times the sampler's time is used
+    assert b.arrival_deviations(_samples(perfect, with_ts=False))["source"] == "sample time"
+
+
+def test_arrival_deviations_skip_lost_packets_and_survive_the_rtp_wrap():
+    times = [i * 20.0 for i in range(60)]
+    samples = _samples(times, start_rtp=(1 << 32) - 160 * 30)        # the RTP timestamp wraps in the middle
+    assert b.arrival_deviations(samples)["n"] == 59
+    # packet 30 never came: the pair around the hole is not an interval of one packet
+    samples = samples[:30] + samples[31:]
+    got = b.arrival_deviations(samples)
+    assert got["n"] == 57 and got["max"] == 0.0
+    assert b.arrival_deviations(samples[:10]) is None
+    assert b.arrival_deviations([]) is None

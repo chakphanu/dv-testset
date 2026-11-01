@@ -374,3 +374,9 @@ def test_browser_ip_token_is_the_browser_service_address():
     assert "BROWSER_IP" in sut_config.KNOWN
     with pytest.raises(sut_config.ConfigError):
         sut_config.render('x = "<BROWSER_IP>"\n', "172.30.7", browser=0)
+
+
+def test_coturn_token_is_the_nat_profile_turn_server():
+    out = sut_config.render('turn = "turn:<COTURN_IP>:3478"\n', "172.30.0")
+    assert out == 'turn = "turn:172.30.0.94:3478"\n'
+    assert "COTURN_IP" in sut_config.KNOWN

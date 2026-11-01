@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/rig.md "NAT profile"): owner-run TURN for the
+# browser ICE configuration (GET /api/v1/rtc/ice). Used with --profile web,browser,nat; naming it in
+# DVT_SUT_CONFIG_EXTRA is the switch (run.sh then generates the per-run secret and mounts it). Without
+# this snippet /api/v1/rtc/ice answers 404 and the page connects direct.
+#
+# The URL names the coturn rig service (<COTURN_IP> = <net>.94) by address (no DNS in the rig). The
+# secret file is generated per run by run.sh (out/<run>/web/turn.secret, mode 0600, owned by the SUT's
+# uid), mounted read-only at the absolute path below and is the same secret coturn's
+# static-auth-secret has. turn_ttl 120 is the shortest useful value (the minimum is 60 s), so the
+# expiry case of the NAT cases needs minutes, not an hour.
+[web]
+turn_urls = ["turn:<COTURN_IP>:3478?transport=udp"]
+turn_secret_file = "/run/secrets/turn-secret"
+turn_ttl = 120

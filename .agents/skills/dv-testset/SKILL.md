@@ -27,6 +27,7 @@ rig (`rig/`; the service names `xlxd-ref` / `xlxd-sut` are historical).
 | Rig, DV-Router API cases (native launch) | same as the web row with `cases/test_web_api.py` (about 4 minutes; `docs/web-api-cases.md`) | as above; also restarts `dv-svc-web` through the control channel |
 | Rig, DV-Router web UI in browsers (native launch) | `... scripts/run.sh -m rig --capture --profile web,browser -- cases/test_web_browser.py` (Playwright Chromium, Firefox and Playwright WebKit; `docs/web-browser-cases.md`) | as above; `docker pull` of `BROWSER_BASE_IMAGE` once (the only internet use); `docs/rig.md` "Browser profile" |
 | Rig, DV-Router WebRTC Listen/Talk and recorder in browsers (native launch) | `DVT_USRP_DYNAMIC=1 ... DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/recorder.toml scripts/run.sh -m rig --capture --profile web,browser -- cases/test_web_webrtc.py cases/test_web_recorder.py` (`docs/web-browser-cases.md`, "Stage 3b") | as above; a USRP dynamic hub (`DVT_USRP_DYNAMIC=1`) for the protocol talker; `recorder.toml` for the recorder cases |
+| Rig, DV-Router NAT behaviour of WebRTC in browsers (native launch) | `DVT_USRP_DYNAMIC=1 ... DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/turn.toml scripts/run.sh -m rig --capture --profile web,browser,nat -- cases/test_web_nat.py` (NAT router, coturn, per-run TURN secret; about 1 hour; `docs/web-nat-cases.md`) | as above; `docker pull` of `COTURN_IMAGE` once; without `turn.toml` only the direct and 404 cases run; `docs/rig.md` "NAT profile" |
 | Rig + AllStarLink | `scripts/run.sh -m "rig or allstar" --profile allstar` | as above, `scripts/gen-local.sh` once |
 
 First time: `scripts/pre-fetch-xlxd.sh`, `scripts/pre-fetch-codec2.sh`,
@@ -60,7 +61,7 @@ limits"):
   log or copy secret values; `Target.iax_secret` is hidden from repr.
 - `dvtest/target.py` documents every `DVT_*` variable. Rig addresses default
   to 172.30.0.0/24: xlxd-ref .10, xlxd-sut .11, transcoder-ref .20,
-  transcoder-sut .21, tester .30, allstar .40, web-proxy .90, browser .91.
+  transcoder-sut .21, tester .30, allstar .40, web-proxy .90, browser .91 (profile nat: router .92 / alias .93, coturn .94, reflectors .95 / .96).
 
 ## Results
 
@@ -118,6 +119,12 @@ and hashes; never publish raw captures.
   chromium / firefox / webkit) and put every selector in `cases/web_pages.py`. WebKit is "Playwright WebKit",
   never "Safari". The Playwright pin (`PLAYWRIGHT_VERSION`) feeds both the server and the tester client; keep
   the two equal. Failure artifacts (`out/<run>/web/browser/`) can hold typed run passwords: local to `out/`.
+
+- NAT cases: `cases/test_web_nat.py` and `cases/nat_support.py`; the NAT type is set through the router control
+  channel (`dvtest/nat.py`), never by editing iptables by hand. The TURN secret (`out/<run>/web/turn.secret`) is
+  never printed, logged or copied; `run.sh` scans the run directory for it and fails the run on a hit. Record
+  differences from DV-Router's documents with `web.finding()`; the adopted criteria of `docs/project/testing.md`
+  ("Browser/NAT rig criteria") are asserted.
 
 ## Before committing
 

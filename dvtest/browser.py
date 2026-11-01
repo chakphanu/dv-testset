@@ -351,6 +351,53 @@ def summarize_stats(entries):
     return out
 
 
+def selected_pair(entries):
+    """The candidate pair in use of a getStats list: {'local': type, 'remote': type, 'protocol': udp|tcp,
+    'relay_protocol': ..., 'state': ..., 'via': 'transport'|'nominated'} or None. Prefers the pair the
+    transport names (selectedCandidatePairId), else a nominated succeeded pair, else a succeeded one."""
+    by_id = {e.get("id"): e for e in entries}
+    pair = None
+    via = None
+    for e in entries:
+        if e.get("type") == "transport" and by_id.get(e.get("selectedCandidatePairId")):
+            pair, via = by_id[e["selectedCandidatePairId"]], "transport"
+            break
+    if pair is None:
+        cands = [e for e in entries if e.get("type") == "candidate-pair" and e.get("state") == "succeeded"]
+        nominated = [e for e in cands if e.get("nominated") or e.get("selected")]
+        pair = (nominated or cands or [None])[0]
+        via = "nominated" if nominated else "succeeded"
+    if pair is None:
+        return None
+    local = by_id.get(pair.get("localCandidateId")) or {}
+    remote = by_id.get(pair.get("remoteCandidateId")) or {}
+    return {"local": local.get("candidateType"), "remote": remote.get("candidateType"), "protocol": local.get("protocol"),
+            "relay_protocol": local.get("relayProtocol"), "state": pair.get("state"), "via": via}
+
+
+def arrival_deviations(samples, interval_ms=20.0, rtp_step=160):
+    """Per-packet arrival timing of the received stream from RTC_PROBE_JS tap.arrivals samples [(t_ms,
+    rtpTimestamp, receive_time_ms or None), ...]: one entry per new RTP timestamp seen. Two entries whose RTP
+    timestamps differ by exactly one packet (`rtp_step`, 160 for 20 ms of PCMU at 8 kHz; the 32 bit counter
+    wraps) are consecutive packets, and the deviation is |receive time difference - interval_ms|; the engine's own
+    receive time is used when every entry has one, else the time the sampler noticed the packet. Returns
+    {'n', 'p50', 'p99', 'max', 'resolution_ms', 'source'} (ms) or None when fewer than 20 pairs were seen."""
+    if not samples:
+        return None
+    use_ts = all(s[2] is not None for s in samples)
+    devs = []
+    for a, b in zip(samples, samples[1:]):
+        if (b[1] - a[1]) % (1 << 32) != rtp_step:
+            continue
+        step = (b[2] - a[2]) if use_ts else (b[0] - a[0])
+        devs.append(abs(step - interval_ms))
+    if len(devs) < 20:
+        return None
+    devs.sort()
+    return {"n": len(devs), "p50": round(devs[len(devs) // 2], 2), "p99": round(devs[min(len(devs) - 1, int(len(devs) * 0.99))], 2),
+            "max": round(devs[-1], 2), "source": "engine receive time" if use_ts else "sample time"}
+
+
 def inbound_verdict(first, second, interval_ms=20.0, tolerance=0.15):
     """Compare two inbound-rtp snapshots ({'t': ms, 'packetsReceived', 'bytesReceived', 'packetsLost',
     'jitter'} each) taken while the sender talks. Returns (growth dict, problems list): packets and bytes
@@ -398,7 +445,13 @@ RTC_PROBE_JS = r"""
     const pc = new Orig(...args);
     const n = tap.pcs.length;
     tap.pcs.push(pc);
-    tap.events.push({ t: now(), pc: n, what: 'new', config: JSON.stringify((args[0] && args[0].iceServers) || []) });
+    // the TURN credential is never recorded: urls only (docs/web-nat-cases.md, "no credential in the page")
+    const urlsOf = (cfg) => JSON.stringify(((cfg && cfg.iceServers) || []).map((s) => s.urls));
+    tap.events.push({ t: now(), pc: n, what: 'new', config: urlsOf(args[0]) });
+    const setConfig = pc.setConfiguration.bind(pc);
+    pc.setConfiguration = (cfg) => { tap.events.push({ t: now(), pc: n, what: 'setConfiguration', config: urlsOf(cfg) }); return setConfig(cfg); };
+    const setRemote = pc.setRemoteDescription.bind(pc);
+    pc.setRemoteDescription = (d) => { tap.events.push({ t: now(), pc: n, what: 'setRemoteDescription', type: d && d.type }); return setRemote(d); };
     for (const ev of ['connectionstatechange', 'iceconnectionstatechange', 'signalingstatechange', 'icegatheringstatechange']) {
       pc.addEventListener(ev, () => tap.events.push({ t: now(), pc: n, what: ev,
         state: ev === 'connectionstatechange' ? pc.connectionState : ev === 'iceconnectionstatechange' ? pc.iceConnectionState
@@ -466,6 +519,36 @@ RTC_PROBE_JS = r"""
     tap.proc.connect(tap.ctx.destination);
     return { rate: tap.rate, state: tap.ctx.state };
   };
+  // arrival times of the received audio packets: the receiver's synchronization source (RTCRtpReceiver.
+  // getSynchronizationSources: the RTP timestamp of the newest packet and its receive time) polled in a
+  // MessageChannel loop (no timer clamping) for `ms`. getStats is no use here: Chromium serves it from a cache
+  // of about 50 ms. One entry [performance.now(), rtpTimestamp, receive time or null] per new rtpTimestamp.
+  tap.arrivals = (ms) => new Promise((resolve) => {
+    const out = [];
+    const end = now() + ms;
+    let last = null;
+    const mc = new MessageChannel();
+    mc.port1.onmessage = () => {
+      const t = now();
+      const p = tap.last();
+      let seen = false;
+      if (p && p.connectionState !== 'closed') {
+        for (const r of p.getReceivers()) {
+          if (!r.track || r.track.kind !== 'audio' || !r.getSynchronizationSources) continue;
+          seen = true;
+          const s = r.getSynchronizationSources();
+          if (s.length && s[0].rtpTimestamp !== last) {
+            last = s[0].rtpTimestamp;
+            out.push([t, s[0].rtpTimestamp, s[0].timestamp == null ? null : s[0].timestamp]);
+          }
+        }
+      }
+      if (t >= end) resolve(out);
+      else if (seen) mc.port2.postMessage(0);
+      else setTimeout(() => mc.port2.postMessage(0), 5);
+    };
+    mc.port2.postMessage(0);
+  });
   // a raw frame on the page's own control channel (the page itself only sends well-formed ones)
   tap.sendControl = (text) => {
     const ch = tap.channels[tap.channels.length - 1];

@@ -366,6 +366,12 @@ def test_talk_reaches_a_protocol_listener(engine, rtc_tx_page, target, web_clien
         if not paths and "N0BRU" not in talkers:
             web.finding("%s: the callsign of the web talker (N0BRU) is neither in the public state during the over "
                         "nor in a SET_INFO to a USRP client" % brlib.label(engine))
+        # CORRECT behaviour: a held button keeps the over alive for the whole hold. DV-Router unit TALK1 (after
+        # DASH1) fixes the 4 s watchdog; until then this is an expected failure, judged last so that every
+        # check above still ran. It passes silently once the page is fixed.
+        if released_by_page is not None:
+            pytest.xfail("TALK1: the page left 'On air' after %.1f s of a %.0f s hold (watchdog not refreshed by "
+                         "lease renewals)" % (released_by_page, HOLD_S))
     finally:
         listener.close()
 

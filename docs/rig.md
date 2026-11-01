@@ -49,6 +49,9 @@ internet, and every address is fixed.
 | mrefd | 172.30.0.80 | mrefd | mrefd (`M17-REF`, modules `MNOP`), the M17 Project reflector, with interlink peers M17-DVT / M17-DVU at the tester; see "mrefd as an extra reference" |
 | web-proxy | 172.30.0.90 (aliases `dvt-web`, `dvt-admin`) | web | TLS reverse proxy: HTTPS 443 to dv-svc-web of the SUT (`<net>.11:8081`) and HTTPS 8443 to dv-svc-admin (`<net>.11:8080`), self-signed CA in `out/<run>/web/ca.pem`; see "Web profile" |
 | browser | 172.30.0.91 | browser | Playwright browsers (`playwright run-server`, chromium + firefox + WebKit) for the browser cases, used with `web`; see "Browser profile" |
+| nat-router | 172.30.0.92 (alias .93; inside 172.31.0.2) | nat | NAT router in front of the browser, control server (JSON lines) on TCP 9100; see "NAT profile" |
+| coturn | 172.30.0.94 | nat | TURN server (official image, pinned), per-run shared secret |
+| nat-ref-a / nat-ref-b | 172.30.0.95 / .96 | nat | UDP reflectors of the NAT classification self-test |
 | load nodes | 172.30.0.128/25 | load | `DVT_LOAD_MODULES` tester replicas running `DVT_LOAD_CMD` against xlxd-sut |
 | capture-* | (shares the netns) | capture | dumpcap on xlxd-ref, xlxd-sut, transcoder-sut, allstar, nxdn-*, p25-*, urfd, mrefd |
 
@@ -70,6 +73,9 @@ internet, and every address is fixed.
 | TCP 3000 | Playwright websocket server (`DVT_BROWSER_PORT`) | browser (profile browser) |
 | TCP 8081 | HTTP, dv-svc-web (plain; only the proxy is trusted) | xlxd-sut native with `web.toml` |
 | TCP 8080 | HTTP, dv-svc-admin (plain; answers only for the host `dvt-admin:8443`) | xlxd-sut native with `admin.toml` |
+| TCP 9100 | NAT router control (JSON lines, tester only) | nat-router (profile nat) |
+| UDP 3478, 49160-49180 | TURN listener, relay ports | coturn (profile nat) |
+| UDP 3479 / 3480 / 3481 | NAT reflector echo ports, poke source port | nat-ref-a, nat-ref-b |
 | UDP 50000 | WebRTC media (one port, ICE-lite, `public_ips` = `<net>.11`) | xlxd-sut native with `web.toml` |
 
 `DVT_SUBNET` (a /24) or `DVT_NET` (the prefix) moves the whole rig, and
@@ -456,6 +462,80 @@ The fixtures (`cases/browser_fixtures.py`): `engine` (chromium, firefox, webkit)
 log (console, page errors, every request with its status, dialogs, CSP reports) and `problems()`.
 All selectors are in `cases/web_pages.py` (role, text, aria-label, ids; DV-Router's `data-testid`
 hooks, WEB2, are not on `wip-f3adb62` yet: a later switch is a change of that one module).
+
+## NAT profile
+
+`scripts/run.sh --profile web,browser,nat` puts the browser behind a Linux NAT router and adds a TURN server, for the
+NAT cases of the web unit (`cases/test_web_nat.py`, results and findings in `docs/web-nat-cases.md`). `nat` alone is
+exit 2: it needs `web` and `browser`. With `rig/config/dv-router/turn.toml` in `DVT_SUT_CONFIG_EXTRA` the SUT also
+hands out TURN credentials (`GET /api/v1/rtc/ice`); without it that route answers 404 (the "no TURN" run).
+
+```sh
+XLXD_SUT_IMAGE=<dv-router image> DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-router DVT_SUT_LAUNCH=native \
+  DVT_USRP_DYNAMIC=1 DVT_SUT_CONFIG=<template path> \
+  DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/turn.toml \
+  scripts/run.sh -m rig --capture --profile web,browser,nat -- cases/test_web_nat.py
+```
+
+```
+   rig network 172.30.0.0/24 (internal)                                nat-inside 172.31.0.0/24 (internal)
+   ------------------------------------------------------------        ---------------------------------
+   xlxd-sut .11  UDP 50000 (ICE-lite edge)
+   web-proxy .90 TCP 443   (https://dvt-web)
+   coturn    .94 UDP 3478, relay 49160-49180
+   nat-ref-a .95 / nat-ref-b .96  UDP 3479 3480 (3481 poke)
+   tester    .30 --- ws :3000 and probe :3001 (DNAT) ---+
+                 --- control :9100 ------------------+   |
+                                                      v   v
+                                           +-----------------------+            +--------------------+
+                                           | nat-router            |   inside   | browser  .91       |
+                                           |  outside .92 (+ .93)  |<---------->|  chromium, firefox,|
+                                           |  inside  .2           |   .2       |  WebKit            |
+                                           |  iptables NAT         |            | + nat-edge (route  |
+                                           +-----------------------+            |   via .2, probe)   |
+                                                                                +--------------------+
+   media, direct:  browser -> router (NAT) -> xlxd-sut:50000
+   media, TURN:    browser -> router (NAT) -> coturn:3478 ... coturn relay -> xlxd-sut:50000
+```
+
+| Service | Address | Role |
+|---------|---------|------|
+| `nat-router` | outside `<net>.92` (alias `<net>.93`), inside `<nat-net>.2` | iptables NAT between the two networks, forwarding on (`net.ipv4.ip_forward=1` is a sysctl of the service only), JSON-line control server on `<net>.92:9100` (tester only), TCP forwards `<net>.92:3000` and `:3001` to the browser. Only capability: `NET_ADMIN` |
+| `browser` | `<nat-net>.91` (`DVT_NAT_NET`, default `172.31.0`) | the stage 3a browser service moved to the internal network `nat-inside` by `rig/compose.nat.yml` (`networks: !override`, `extra_hosts` for `dvt-web` / `dvt-admin` since compose DNS does not cross networks). It cannot reach anything except through the router |
+| `nat-edge` | shares the namespace of `browser` | sets the browser's default route via `<nat-net>.2` (Docker gives an internal network none), then runs the probe server `:3001` as nobody; caps `NET_ADMIN SETUID SETGID` (the last two only to drop root) |
+| `nat-ref-a`, `nat-ref-b` | `<net>.95`, `<net>.96` | UDP reflectors for the classification self-test: they answer with the source address they saw, and send a datagram from a second port on request |
+| `coturn` | `<net>.94` | the official coturn image, UDP 3478, relay ports 49160-49180, `use-auth-secret`, no TLS (the rig is offline), user quota 4 / total 20, RFC 1918 ranges denied and `allowed-peer-ip` = the SUT address only (it is in 172.16.0.0/12; coturn lets an explicit allow entry override a denied range). Capability `NET_BIND_SERVICE` only: `/usr/bin/turnserver` carries it as a file capability and cannot be executed without it |
+
+Images: `dvt-nat:local` from `rig/Dockerfile.nat` (`TESTER_BASE_IMAGE` + iptables, conntrack, iproute2 at the exact versions
+`NAT_*_VERSION` of `.env.example` + the stdlib `dvtest` package); coturn is `COTURN_IMAGE`, tag AND digest, pulled once
+by hand (`docker pull coturn/coturn:4.18.0`), never by `run.sh`. All five services have limit sets (`x-limits-small`,
+coturn `x-limits-medium`).
+
+**NAT types** (`dvtest/nat.py`, rules in `mode_commands`; switched at run time with the control op `nat_mode`):
+
+| Type | iptables | Mapping / filtering (RFC 4787) |
+|------|----------|--------------------------------|
+| `full_cone` | `SNAT -s <browser> --to-source <net>.93` + `DNAT -d <net>.93 --to-destination <browser>` (static 1:1) | endpoint-independent / endpoint-independent |
+| `port_restricted` (default) | `MASQUERADE` | endpoint-independent (source port kept) / address-and-port-dependent |
+| `symmetric` | `MASQUERADE --random` for UDP, plain for TCP | address-and-port-dependent / address-and-port-dependent |
+| `none` | no rules | nothing is routable back: the browser reaches nothing |
+
+Control ops (one JSON line per TCP connection, `dvtest/nat.py` docstring): `nat_mode`, `flush` (deletes the UDP conntrack entries
+only: `conntrack -F` would also kill the Playwright websocket and the page's HTTPS flows), `blackhole on|off|for N` (drops all UDP
+between inside and outside, both directions, TCP untouched; `for` switches itself off and records the dropped datagrams),
+`drop_direct on|off` (drops UDP from inside to the SUT's media address:port, so only the TURN path can work), `status`, `reset`.
+The control server listens on the outside address only and answers the tester's address only; the browser cannot reconfigure it.
+
+**TURN secret.** `run.sh` makes `out/<utc>/web/turn.secret` (random, mode 0600, no trailing newline, never printed) and coturn's
+private `out/<utc>/coturn/turnserver.conf` (mode 0600, holds the same secret as `static-auth-secret`) with `python3 -m dvtest.turn make`.
+With `turn.toml` the secret is mounted read-only into the SUT at `/run/secrets/turn-secret` (the SUT runs as the host uid, the file is
+owned by it with mode 0600) and `[web] turn_urls = ["turn:<net>.94:3478?transport=udp"]`, `turn_secret_file`, `turn_ttl = 120`
+come from the snippet. After the run `dvtest.turn scan` looks for the secret in every file under `out/<utc>/` except those two
+(captures included) and fails the run (exit 5) if it finds it.
+
+**Tester side.** `DVT_NAT=on`, `DVT_NAT_CTL`, `DVT_NAT_PROBE`, `DVT_NAT_REFLECTORS`, `DVT_NAT_ALIAS`, `DVT_NAT_INSIDE`, `DVT_TURN`,
+`DVT_TURN_SECRET_FILE`, `DVT_TURN_TTL`, `DVT_NAT_EXPIRY_S`; `DVT_BROWSER_WS` points at `ws://<net>.92:3000/` (the router's forward).
+`cases/nat_support.py` has the client and the page helpers. Unit tests: `cases/unit/test_nat.py`, `cases/unit/test_turn.py`.
 
 ## Control channel
 

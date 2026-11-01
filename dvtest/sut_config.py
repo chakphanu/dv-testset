@@ -19,6 +19,8 @@ Plain text replacement of these tokens (a token is <UPPER_CASE_NAME>):
                     profile web; rig/config/dv-router/web.toml)
   <BROWSER_IP>      the browser service, <net>.<browser> (rig: .91, profile browser;
                     rig/config/dv-router/admin.toml lets it reach the admin host)
+  <COTURN_IP>       the TURN server of the NAT profile, <net>.<coturn> (rig: .94;
+                    rig/config/dv-router/turn.toml)
 
 Extras (DVT_SUT_CONFIG_EXTRA=<file>[:<file>...], --extra): each file is appended
 after the template, in order, and goes through the same token substitution. A
@@ -46,7 +48,7 @@ import tomllib
 from pathlib import Path
 
 TOKEN = re.compile(r"<([A-Z][A-Z0-9_]*)>")
-KNOWN = ("OWN_IP", "TRANSCODER_IP", "TESTER_IP", "NET", "REQUIRE_IDENT", "WEB_PROXY_IP", "BROWSER_IP")
+KNOWN = ("OWN_IP", "TRANSCODER_IP", "TESTER_IP", "NET", "REQUIRE_IDENT", "WEB_PROXY_IP", "BROWSER_IP", "COTURN_IP")
 BOOLS = ("true", "false")
 _OCTET = r"(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])"
 _NET = re.compile(r"^%s\.%s\.%s$" % (_OCTET, _OCTET, _OCTET))
@@ -165,7 +167,7 @@ def merge_extra(base, extra):
     return out
 
 
-def render(text, net, own=11, transcoder=21, tester=30, require_ident=None, extras=(), web_proxy=90, browser=91):
+def render(text, net, own=11, transcoder=21, tester=30, require_ident=None, extras=(), web_proxy=90, browser=91, coturn=94):
     """The template text with the tokens replaced; `extras` are texts appended
     after it (each after a newline, in order) before the substitution.
     ConfigError for a bad /24 prefix, a host octet outside 1..254, a bad
@@ -176,7 +178,7 @@ def render(text, net, own=11, transcoder=21, tester=30, require_ident=None, extr
     for extra in extras:
         text = merge_extra(text.rstrip("\n") + "\n", extra)
     for name, octet in (("OWN_IP", own), ("TRANSCODER_IP", transcoder), ("TESTER_IP", tester),
-                        ("WEB_PROXY_IP", web_proxy), ("BROWSER_IP", browser)):
+                        ("WEB_PROXY_IP", web_proxy), ("BROWSER_IP", browser), ("COTURN_IP", coturn)):
         if not isinstance(octet, int) or isinstance(octet, bool) or not 1 <= octet <= 254:
             raise ConfigError("%s octet must be 1..254 (got %r)" % (name, octet))
         values[name] = "%s.%d" % (net, octet)

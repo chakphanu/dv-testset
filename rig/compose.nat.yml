@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+# Added by scripts/run.sh (-f) for --profile web,browser,nat only: the browser leaves the rig network and
+# lives alone behind the NAT router (docs/rig.md "NAT profile"). It is reachable from the rig only through
+# the router's TCP forwards (Playwright websocket :3000, probe server :3001). The inside network is
+# internal and compose DNS does not cross networks, so the web proxy's host names are written to
+# /etc/hosts; its default route comes from the nat-edge sidecar.
+services:
+  browser:
+    networks: !override
+      nat-inside:
+        ipv4_address: "${DVT_NAT_NET:-172.31.0}.91"
+    extra_hosts:
+      - "${DVT_WEB_HOST:-dvt-web}:${DVT_NET:-172.30.0}.90"
+      - "${DVT_ADMIN_HOST:-dvt-admin}:${DVT_NET:-172.30.0}.90"

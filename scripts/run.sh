@@ -42,6 +42,19 @@
 #                      (docs/rig.md "Web profile"). With rig/config/dv-router/recorder.toml in
 #                      DVT_SUT_CONFIG_EXTRA the recorder is on too: host directory
 #                      out/<utc>/recorder mounted read-write at /var/lib/dv-recorder (DVT_RECORDER=on)
+#   --profile nat      NAT behaviour of the browser path (docs/rig.md "NAT profile"), used together with
+#                      web and browser (--profile web,browser,nat; exit 2 otherwise): nat-router (.92,
+#                      outside, alias .93) between the rig network and the internal network nat-inside
+#                      (DVT_NAT_NET, default 172.31.0) where the browser lives alone (rig/compose.nat.yml),
+#                      nat-edge (probe in the browser's namespace), reflectors nat-ref-a/-b (.95/.96) and
+#                      coturn (.94, the image COTURN_IMAGE of .env.example; run.sh never pulls it). The
+#                      tester reaches the browser server at <net>.92:3000 and gets DVT_NAT=on. run.sh makes
+#                      the per-run TURN secret out/<utc>/web/turn.secret (mode 600, never printed) and
+#                      coturn's config out/<utc>/coturn/turnserver.conf (mode 600). With
+#                      rig/config/dv-router/turn.toml in DVT_SUT_CONFIG_EXTRA the SUT uses that secret as
+#                      [web] turn_secret_file (mounted read-only at /run/secrets/turn-secret, DVT_TURN=on);
+#                      without it GET /api/v1/rtc/ice answers 404. After the run the output directory is
+#                      scanned for the secret: a hit fails the run
 #   DVT_XLXD_BLACKLIST callsigns written to both reflectors' xlxd.blacklist
 #                      (default empty; P-G3-05 uses N0G3X, no other suite does)
 #   --capture          sniffers on xlxd-ref/xlxd-sut/transcoder-sut (+allstar/nxdn/p25): pcapng in
@@ -160,7 +173,7 @@ while [ "$#" -gt 0 ]; do
     --netem) [ "$#" -ge 2 ] || { echo "run.sh: --netem needs a preset or netem arguments" >&2; exit 2; }; netem_cli="$2"; netem_set=1; shift 2 ;;
     --down) down_only=1; shift ;;
     --) shift; break ;;
-    -h|--help) sed -n '3,111p' "$0"; exit 0 ;;
+    -h|--help) sed -n '3,123p' "$0"; exit 0 ;;
     *) echo "run.sh: unknown argument '$1' (see --help)" >&2; exit 2 ;;
   esac
 done
@@ -234,6 +247,9 @@ if [ "$instance" != 0 ]; then
   suffix="-i$instance"
 fi
 export DVT_SUBNET="${DVT_NET:-172.30.0}.0/24"
+# profile nat: the network behind the NAT router; an instance replaces its third octet like the rig network's
+export DVT_NAT_NET="${DVT_NAT_NET:-172.31.0}"
+[ "$instance" = 0 ] || export DVT_NAT_NET="${DVT_NAT_NET%.*}.$instance"
 # DVT_REQUIRE_IDENT (true | false, default true): value of the <REQUIRE_IDENT> token
 # of the native config (rig/config/dv-router/data-ident.toml) and the setting the
 # tester's data-ident cases expect
@@ -264,6 +280,20 @@ if [ "$has_web" = 1 ]; then
   case ":${DVT_SUT_CONFIG_EXTRA:-}:" in
     *:rig/config/dv-router/recorder.toml:*) has_recorder=1 ;;
   esac
+fi
+# --profile nat: needs web and browser; rig/config/dv-router/turn.toml in DVT_SUT_CONFIG_EXTRA switches the SUT's TURN on
+has_nat=0
+has_turn=0
+case ",$profile," in *,nat,*) has_nat=1 ;; esac
+case ":${DVT_SUT_CONFIG_EXTRA:-}:" in *:rig/config/dv-router/turn.toml:*) has_turn=1 ;; esac
+if [ "$has_nat" = 1 ]; then
+  case ",$profile," in
+    *,web,*,browser,*|*,browser,*,web,*|*,web,browser,*|*,browser,web,*) ;;
+    *) echo "run.sh: --profile nat needs --profile web,browser,nat (the NAT router sits in front of the browsers)" >&2; exit 2 ;;
+  esac
+fi
+if [ "$has_turn" = 1 ] && [ "$has_nat" = 0 ]; then
+  echo "run.sh: rig/config/dv-router/turn.toml needs --profile nat (coturn and the secret file come with it)" >&2; exit 2
 fi
 # DVT_SUT_CONFIG_EXTRA=<file>[:<file>...]: repo-owned snippets (rig/config/dv-router/)
 # appended after the rendered template, token substituted like the template
@@ -312,7 +342,8 @@ compose_all=(docker compose -p "${COMPOSE_PROJECT_NAME:-dvt}" "${compose_files[@
   --profile core --profile allstar --profile nxdn --profile capture --profile capture-allstar
   --profile capture-nxdn --profile p25 --profile capture-p25 --profile interlink
   --profile capture-interlink --profile load --profile netem --profile g3
-  --profile urfd --profile capture-urfd --profile mrefd --profile capture-mrefd --profile web --profile browser)
+  --profile urfd --profile capture-urfd --profile mrefd --profile capture-mrefd --profile web --profile browser
+  --profile nat)
 
 if [ "$down_only" = 1 ]; then
   take_lock
@@ -387,13 +418,19 @@ for p in "${wanted[@]}"; do
       profiles+=(--profile browser)
       export DVT_BROWSER=on
       ;;
+    nat)
+      # checked above (needs web and browser); the browser moves behind the router (rig/compose.nat.yml)
+      profiles+=(--profile nat)
+      compose_files+=(-f rig/compose.nat.yml)
+      export DVT_NAT=on DVT_BROWSER_HOST="${DVT_NET:-172.30.0}.92"
+      ;;
     urfd)
       has_urfd=1
       ;;
     mrefd)
       has_mrefd=1
       ;;
-    *) echo "run.sh: --profile takes core, allstar, nxdn, p25, interlink, load, g3, urfd, mrefd, web, browser or a comma list" >&2; exit 2 ;;
+    *) echo "run.sh: --profile takes core, allstar, nxdn, p25, interlink, load, g3, urfd, mrefd, web, browser, nat or a comma list" >&2; exit 2 ;;
   esac
 done
 # native launch reads no xlxd.* file: these settings only change the reference side
@@ -551,6 +588,17 @@ if [ "$has_web" = 1 ]; then
   (cd "$DVT_ROOT" && PYTHONPATH="$DVT_ROOT" python3 -m dvtest.tools.admin_users \
     --users-file "$DVT_ROOT/$out/sut-state/admin/users" --env-file "$DVT_ROOT/$out/web/admin.env") \
     || { echo "run.sh: could not write the admin users file" >&2; exit 2; }
+  # --profile nat: the per-run TURN secret (also coturn's static-auth-secret) and coturn's private config, both
+  # mode 600 and written by dvtest.turn (never printed). The SUT mounts the secret only with turn.toml.
+  if [ "$has_nat" = 1 ]; then
+    mkdir -p "$out/coturn"
+    chmod 700 "$out/coturn"
+    (cd "$DVT_ROOT" && PYTHONPATH="$DVT_ROOT" python3 -m dvtest.turn make --secret-file "$DVT_ROOT/$out/web/turn.secret" \
+       --conf "$DVT_ROOT/$out/coturn/turnserver.conf" --listen-ip "${DVT_NET:-172.30.0}.94" --allowed-peer "${DVT_NET:-172.30.0}.11") \
+      || { echo "run.sh: could not write the TURN secret and coturn config" >&2; exit 2; }
+    [ "$has_turn" = 0 ] || export DVT_TURN=on
+    echo "run.sh: nat profile: TURN secret in $out/web/turn.secret (mode 600, turn $([ "$has_turn" = 1 ] && echo on || echo off) for the SUT), coturn $COTURN_IMAGE"
+  fi
   echo "run.sh: web profile: operator login in $out/web/operator.env, admin logins in $out/web/admin.env (mode 600), CA will be $out/web/ca.pem"
 fi
 
@@ -639,6 +687,10 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
     fi
     if [ "$svc" = xlxd-sut ] && [ "$has_recorder" = 1 ]; then
       printf '      - "%s/%s/recorder:/var/lib/dv-recorder"\n' "$DVT_ROOT" "$out"
+    fi
+    # --profile nat with turn.toml: the per-run TURN secret (mode 600, the SUT's uid) at the absolute path of turn_secret_file
+    if [ "$svc" = xlxd-sut ] && [ "$has_turn" = 1 ]; then
+      printf '      - "%s/%s/web/turn.secret:/run/secrets/turn-secret:ro"\n' "$DVT_ROOT" "$out"
     fi
   } >> "$override"
   prebuilt+=("$svc")
@@ -836,6 +888,7 @@ printf 'markers=%s profile=%s xlxd_ref=%s xlxd_sut=%s transcoder=%s sut_divergen
   "${DVT_SUT_DIVERGENCES:-}" "${DVT_SUT_NAME:-}" "${DVT_SUT_PROFILE:-xlxd}" "${DVT_NO_RADIO_ID:-}" "${DVT_REF_KIND:-xlxd}" "${DVT_SUT_LAUNCH:-direct}" \
   > "$out/run.txt"
 [ "$has_web" = 0 ] || echo "web=on sut_config_extra=${DVT_SUT_CONFIG_EXTRA}" >> "$out/run.txt"
+[ "$has_nat" = 0 ] || echo "nat=on turn=$([ "$has_turn" = 1 ] && echo on || echo off) coturn_image=${COTURN_IMAGE} nat_net=${DVT_NAT_NET}" >> "$out/run.txt"
 cat ".cache/xlxd/${XLXD_REF_DIR:-ref}.fetched" ".cache/xlxd/${XLXD_SUT_DIR:-sut}.fetched" >> "$out/run.txt" 2>/dev/null || true
 
 # Images are shared by all instances: one build at a time (fd 8, own lock).
@@ -878,6 +931,17 @@ echo "run.sh: pytest exit $rc, results in $out/"
 # sniffers stopped and rig down before the capture check reads the files
 trap - EXIT
 collect
+# --profile nat: the TURN secret must be in no file of the output directory except its own two (nor in a capture:
+# the secret never goes on the wire, only the HMAC credential does). The scan prints paths, never the value.
+if [ "$has_nat" = 1 ]; then
+  scan_rc=0
+  PYTHONPATH="$DVT_ROOT" python3 -m dvtest.turn scan --secret-file "$out/web/turn.secret" --root "$out" \
+    --skip web/turn.secret --skip coturn/turnserver.conf || scan_rc=$?
+  if [ "$scan_rc" != 0 ]; then
+    echo "run.sh: the TURN secret was found in the output above (exit $scan_rc)" >&2
+    [ "$rc" != 0 ] || rc=5
+  fi
+fi
 if [ "$capture" = 1 ]; then
   if [ -x scripts/dvcheck.sh ]; then
     check_rc=0

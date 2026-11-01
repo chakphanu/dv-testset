@@ -36,6 +36,13 @@
 #            official Playwright image, rig/Dockerfile.browser) for the browser cases; used
 #            together with web (--profile web,browser); the tester gets DVT_BROWSER=on and
 #            DVT_BROWSER_WS=ws://<net>.91:3000/. Its own limit set x-limits-browser
+#   nat      NAT behaviour of the browser path (used with web,browser: --profile web,browser,nat; docs/rig.md
+#            "NAT profile"): nat-router (.92, outside; alias .93 for the full cone NAT) between the rig network
+#            and the internal network nat-inside (DVT_NAT_NET, default 172.31.0.0/24) where the browser
+#            lives alone (rig/compose.nat.yml moves it there); nat-edge (the probe server in the browser's
+#            namespace), nat-ref-a / nat-ref-b (.95 / .96, UDP reflectors of the classification self-test),
+#            coturn (.94, TURN, per-run secret). The tester reaches the browser server at <net>.92:3000
+#            (DNAT) and gets DVT_NAT=on
 #   capture  sniffers on xlxd-ref, xlxd-sut, transcoder-sut (capture-allstar: on
 #            allstar, capture-nxdn: on nxdn-*, capture-p25: on p25-*)
 #
@@ -61,7 +68,8 @@
 # TRANSCODER_SUT_IMAGE; transcoder-ref stays the real image.
 #
 # Fixed addresses: xlxd-ref .10, xlxd-sut .11, transcoder-ref .20,
-# transcoder-sut .21, tester .30, allstar .40, web-proxy .90, browser .91.
+# transcoder-sut .21, tester .30, allstar .40, web-proxy .90, browser .91 (profile nat: nat-router .92,
+# alias .93, coturn .94, nat-ref-a .95, nat-ref-b .96; the browser is then at <DVT_NAT_NET>.91 behind the router).
 
 name: dvt
 
@@ -69,7 +77,7 @@ name: dvt
 # swap equal to it, so no swap; cpus quota; pids). run.sh refuses to start a
 # rig in which a service lacks them (dvtest/limits.py). Sizes are settings in
 # .env.example (DVT_MEM_*, DVT_CPUS_*, DVT_PIDS_*); README, "Resource limits".
-#   small   sniffers, netem sidecars, NXDN/P25 reflectors, G3 relay, load nodes
+#   small   sniffers, netem sidecars, NXDN/P25 reflectors, G3 relay, load nodes, the NAT router and its helpers
 #   medium  xlxd, transcoders, URFd, mrefd, AllStarLink (the systems under test)
 #   tester  the pytest runner
 #   browser the Playwright browsers (chromium + firefox + WebKit at once; shm_size is part of the memory cap)
@@ -120,6 +128,37 @@ x-netem: &netem
       IPROUTE2_VERSION: ${IPROUTE2_VERSION:-}
   cap_drop: [ALL]
   cap_add: [NET_ADMIN]
+
+# NAT profile (docs/rig.md "NAT profile"): router, probe sidecar and reflectors are one image (rig/Dockerfile.nat:
+# python, iptables, conntrack, iproute2, the dvtest package). The router and the probe sidecar need NET_ADMIN
+# and nothing else; the sidecar and the router run as root (iptables, ip route) and the sidecar drops to nobody.
+x-nat: &nat
+  <<: *limits-small
+  profiles: [nat]
+  init: true
+  restart: "no"
+  image: dvt-nat:local
+  build:
+    context: .
+    dockerfile: Dockerfile.nat
+    args:
+      TESTER_BASE_IMAGE: ${TESTER_BASE_IMAGE:-error-set-tester-base-image-see-env-example}
+      NAT_IPTABLES_VERSION: ${NAT_IPTABLES_VERSION:-}
+      NAT_CONNTRACK_VERSION: ${NAT_CONNTRACK_VERSION:-}
+      NAT_IPROUTE2_VERSION: ${NAT_IPROUTE2_VERSION:-}
+    additional_contexts:
+      dvtest: ../dvtest
+  cap_drop: [ALL]
+  cap_add: [NET_ADMIN]
+  security_opt: ["no-new-privileges:true"]
+  read_only: true
+  tmpfs:
+    - /tmp
+    - /run
+x-nat-helper: &nat-helper
+  <<: *nat
+  cap_add: []
+  user: "${DVT_UID:-1000}:${DVT_GID:-1000}"
 
 # One sniffer per watched service: shares its network namespace and writes
 # out/<run>/capture/<service>.pcapng (dumpcap stops at CAPTURE_FILESIZE_KB).
@@ -320,7 +359,20 @@ services:
       DVT_BROWSER: ${DVT_BROWSER:-off}
       # on when rig/config/dv-router/recorder.toml is part of DVT_SUT_CONFIG_EXTRA (run.sh)
       DVT_RECORDER: ${DVT_RECORDER:-off}
-      DVT_BROWSER_WS: ws://${DVT_NET:-172.30.0}.91:${DVT_BROWSER_PORT:-3000}/
+      # profile nat: the browser is behind the NAT router, the tester reaches its server through the router's forward
+      DVT_BROWSER_WS: ws://${DVT_BROWSER_HOST:-${DVT_NET:-172.30.0}.91}:${DVT_BROWSER_PORT:-3000}/
+      # profile nat (cases/nat_support.py): router control, probe server, reflectors, TURN secret of the run
+      DVT_NAT: ${DVT_NAT:-off}
+      DVT_NAT_CTL: ${DVT_NET:-172.30.0}.92:9100
+      DVT_NAT_PROBE: ${DVT_NET:-172.30.0}.92:3001
+      DVT_NAT_REFLECTORS: ${DVT_NET:-172.30.0}.95,${DVT_NET:-172.30.0}.96
+      DVT_NAT_ALIAS: ${DVT_NET:-172.30.0}.93
+      DVT_NAT_INSIDE: ${DVT_NAT_NET:-172.31.0}.91
+      DVT_TURN: ${DVT_TURN:-off}
+      DVT_TURN_SECRET_FILE: /dvt/out/${DVT_RUN_ID:-manual}/web/turn.secret
+      DVT_TURN_TTL: "120"
+      # seconds the credential expiry case watches a relay session (cases/test_web_nat.py)
+      DVT_NAT_EXPIRY_S: ${DVT_NAT_EXPIRY_S:-660}
       # how xlxd-sut starts (direct | import | native); the M17 peer cases skip with import
       DVT_SUT_LAUNCH: ${DVT_SUT_LAUNCH:-direct}
       # [data] require_ident of the native config (rig/config/dv-router/data-ident.toml); cases/test_data_ident.py
@@ -694,6 +746,100 @@ services:
       rig:
         ipv4_address: "${DVT_NET:-172.30.0}.91"
 
+  # ---- NAT profile (docs/rig.md "NAT profile", docs/web-nat-cases.md) ----
+  # nat-router sits between the rig network (outside) and the internal network nat-inside, where only the
+  # browser lives (rig/compose.nat.yml). Linux iptables NAT, switchable at run time by the JSON-line control
+  # server (dvtest/tools/nat_router.py, outside address only, tester only). NET_ADMIN is its only capability.
+  nat-router:
+    <<: *nat
+    sysctls:
+      net.ipv4.ip_forward: "1"
+    command:
+      - python
+      - -m
+      - dvtest.tools.nat_router
+      - --listen
+      - ${DVT_NET:-172.30.0}.92:9100
+      - --allow
+      - ${DVT_NET:-172.30.0}.30
+      - --inside-net
+      - ${DVT_NAT_NET:-172.31.0}.0/24
+      - --out-ip
+      - ${DVT_NET:-172.30.0}.92
+      - --in-ip
+      - ${DVT_NAT_NET:-172.31.0}.2
+      - --alias-ip
+      - ${DVT_NET:-172.30.0}.93
+      - --browser-ip
+      - ${DVT_NAT_NET:-172.31.0}.91
+      - --sut-ip
+      - ${DVT_NET:-172.30.0}.11
+      - --forward
+      - "${DVT_BROWSER_PORT:-3000}"
+      - --forward
+      - "3001"
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.92"}
+      nat-inside: {ipv4_address: "${DVT_NAT_NET:-172.31.0}.2"}
+
+  # The probe server of the classification self-test and the default route of the browser: shares the network
+  # namespace of the browser (the inside network is internal, so Docker gives the browser no gateway; this
+  # sidecar adds the route through nat-router as root with NET_ADMIN, then drops to nobody).
+  nat-edge:
+    <<: *nat
+    # SETUID/SETGID only to drop to nobody after the route is set (all capabilities go with the uid change)
+    cap_add: [NET_ADMIN, SETUID, SETGID]
+    network_mode: "service:browser"
+    depends_on:
+      browser: {condition: service_started, restart: false}
+    command:
+      - python
+      - -m
+      - dvtest.tools.nat_probe
+      - --listen
+      - 0.0.0.0:3001
+      - --gateway
+      - ${DVT_NAT_NET:-172.31.0}.2
+
+  # UDP reflectors of the self-test (two outside addresses, so the mapping per destination address can be told)
+  nat-ref-a:
+    <<: *nat-helper
+    command: [python, -m, dvtest.tools.nat_reflector, --listen, "${DVT_NET:-172.30.0}.95", --ports, "3479,3480", --poke-port, "3481"]
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.95"}
+
+  nat-ref-b:
+    <<: *nat-helper
+    command: [python, -m, dvtest.tools.nat_reflector, --listen, "${DVT_NET:-172.30.0}.96", --ports, "3479,3480", --poke-port, "3481"]
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.96"}
+
+  # TURN server (the official coturn image, pinned by tag and digest in .env.example, never pulled by run.sh).
+  # Its config is generated by run.sh (dvtest/turn.py) with the per-run secret that is also the SUT's
+  # turn_secret_file; mode 0600, owned by the host user this container runs as. UDP 3478 and the relay ports
+  # 49160-49180 are on the rig network; no TLS (the network is offline).
+  coturn:
+    <<: *limits-medium
+    profiles: [nat]
+    init: true
+    restart: "no"
+    image: ${COTURN_IMAGE:-error-set-coturn-image-see-env-example}
+    pull_policy: never
+    user: "${DVT_UID:-1000}:${DVT_GID:-1000}"
+    cap_drop: [ALL]
+    # /usr/bin/turnserver carries the file capability cap_net_bind_service: the exec fails (EPERM) unless it is in
+    # the bounding set. coturn listens on 3478, an unprivileged port, so nothing more than that is needed.
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp
+    command: ["-c", "/etc/coturn/turnserver.conf"]
+    volumes:
+      - ../out/${DVT_RUN_ID:-manual}/coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.94"}
+
   capture-mrefd:
     <<: *capture
     profiles: [capture-mrefd]
@@ -854,6 +1000,13 @@ services:
       rig: {ipv4_address: "${DVT_NET:-172.30.0}.31"}
 
 networks:
+  # profile nat: the network behind the NAT router. internal: Docker gives its containers no gateway and no
+  # way out; only nat-router (attached to both networks) routes between them
+  nat-inside:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${DVT_NAT_NET:-172.31.0}.0/24
   rig:
     # internal: no route out; nothing in the rig may reach the internet
     internal: true

@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# NAT rig image (profile nat): the NAT router (dvtest.tools.nat_router), the two UDP reflectors of the
+# classification self-test (dvtest.tools.nat_reflector) and the probe server that runs in the browser's
+# network namespace (dvtest.tools.nat_probe). One image, one Python: TESTER_BASE_IMAGE plus iptables,
+# conntrack and iproute2 at the exact Debian versions of .env.example (NAT_IPTABLES_VERSION,
+# NAT_CONNTRACK_VERSION, NAT_IPROUTE2_VERSION) and the stdlib-only dvtest package (named build context
+# "dvtest"). Entry points come from rig/compose.yml.
+ARG TESTER_BASE_IMAGE
+FROM ${TESTER_BASE_IMAGE}
+ARG NAT_IPTABLES_VERSION
+ARG NAT_CONNTRACK_VERSION
+ARG NAT_IPROUTE2_VERSION
+RUN test -n "$NAT_IPTABLES_VERSION" && test -n "$NAT_CONNTRACK_VERSION" && test -n "$NAT_IPROUTE2_VERSION" \
+      || { echo "NAT_* version build args missing (see .env.example)" >&2; exit 1; } \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends "iptables=${NAT_IPTABLES_VERSION}" "conntrack=${NAT_CONNTRACK_VERSION}" \
+         "iproute2=${NAT_IPROUTE2_VERSION}" \
+    && rm -rf /var/lib/apt/lists/* \
+    && iptables --version && conntrack --version
+COPY --from=dvtest . /app/dvtest/
+ENV PYTHONPATH=/app PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
