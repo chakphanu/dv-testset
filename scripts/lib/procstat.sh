@@ -28,6 +28,9 @@
 #   stdout: pid=, comm=, utime=, stime= (ticks), clk_tck=, threads=, vmhwm_kb=, vmrss_kb=, fds= (-1 when not
 #   readable), starttime= (clock ticks after boot: with the pid it names the process), t=<epoch seconds, taken
 #   right after the reads>; exit 0 ok, 3 no such process, 5 no limits.
+#   Optional, from /proc/<pid>/smaps_rollup (KiB, a key is left out when the file or the line is missing or
+#   unreadable): smaps_rss_kb= (Rss), smaps_anon_kb= (Anonymous), smaps_private_dirty_kb= (Private_Dirty),
+#   smaps_pss_anon_kb= (Pss_Anon). dvtest.webload.parse_procstat_out reads them into ProcSample.smaps.
 
 # Explicit list, never a pattern: every edge is its own binary (no combined edge); aprsis, ax25, codec-ambed and
 # the svc-* ones exist only when enabled. Keep in step with PROC_STAT_NAMES of dvtest/control.py (unit test).
@@ -63,6 +66,7 @@ DVT_PROCSTAT_SCRIPT='
 import os, sys, time
 want = sys.argv[1]
 me = os.getpid()
+SMAPS = (("Rss", "smaps_rss_kb"), ("Anonymous", "smaps_anon_kb"), ("Private_Dirty", "smaps_private_dirty_kb"), ("Pss_Anon", "smaps_pss_anon_kb"))
 if want == "list":
     for name in sorted((d for d in os.listdir("/proc") if d.isdigit()), key=int):
         try:
@@ -101,6 +105,16 @@ for name in sorted((d for d in os.listdir("/proc") if d.isdigit()), key=int):
         fds = len(os.listdir("/proc/%d/fd" % pid))
     except OSError:
         fds = -1
+    smaps = {}
+    try:
+        with open("/proc/%d/smaps_rollup" % pid) as fh:
+            for line in fh:
+                key, _, value = line.partition(":")
+                for want_key, out_key in SMAPS:
+                    if key == want_key and value.split():
+                        smaps[out_key] = value.split()[0]
+    except OSError:
+        pass
     now = time.time()
     # one block of key=value lines per process, each starting with pid= (dv-room runs one process per module)
     print("pid=%d" % pid)
@@ -112,6 +126,9 @@ for name in sorted((d for d in os.listdir("/proc") if d.isdigit()), key=int):
     print("vmhwm_kb=%s" % mem.get("VmHWM", "0"))
     print("vmrss_kb=%s" % mem.get("VmRSS", "0"))
     print("fds=%d" % fds)
+    for _want_key, out_key in SMAPS:
+        if out_key in smaps:
+            print("%s=%s" % (out_key, smaps[out_key]))
     print("starttime=%s" % rest[19])
     print("t=%.6f" % now)
     found += 1
