@@ -424,6 +424,18 @@ def test_timing_short_mode_and_overrides():
     assert soak.timing({"DVT_SOAK_SHORT": "0"})["short"] is False
 
 
+def test_timing_ga_profile_is_judged_like_the_real_run_with_scaled_limits():
+    tm = soak.timing({"DVT_SOAK_GA": "1"})
+    assert (tm["warmup_s"], tm["measured_s"], tm["sample_s"]) == (600.0, 2400.0, 30.0)
+    assert tm["ga"] and not tm["smoke"] and not tm["short"]
+    assert tm["rss_scale"] == pytest.approx(0.8) and tm["median_window_s"] == pytest.approx(soak.MEDIAN_WINDOW_S * 0.8)
+    assert soak.timing({"DVT_SOAK_GA": ""})["ga"] is False and soak.timing({})["ga"] is False
+    assert soak.timing({"DVT_SOAK_GA": "1", "DVT_SOAK_SHORT": "1"})["ga"] is False                  # short wins
+    tm = soak.timing({"DVT_SOAK_GA": "1", "DVT_SOAK_MEASURE_S": "1800"})                           # an override: a validation again
+    assert tm["measured_s"] == 1800.0 and tm["smoke"] and not tm["ga"]
+    assert soak.timing({"DVT_SOAK_GA": "1", "DVT_SOAK_MEASURE_S": "3000"})["smoke"] is False        # the full timing stays the real run
+
+
 @pytest.mark.parametrize("env", [{"DVT_SOAK_WARMUP_S": "x"}, {"DVT_SOAK_MEASURE_S": "-5"}, {"DVT_SOAK_MEASURE_S": "50"},
                                  {"DVT_SOAK_SAMPLE_S": "0"}, {"DVT_SOAK_MEASURE_S": "nan"}])
 def test_timing_refuses_nonsense(env):

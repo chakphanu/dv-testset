@@ -215,6 +215,22 @@ values are validation runs and say so; see "Short mode"), `DVT_SOAK_SAMPLE_S`, `
 may not share a module). With `interlink`, add `xlx-peer.toml` to `DVT_SUT_CONFIG_EXTRA` and keep modules D and E in `DVT_INTERLINK_MODULES`.
 Stop early: `touch out/<run>/web/soak.stop`. One rig at a time; nothing else on the host that needs the SUT's cpu.
 
+### The GA profile (`DVT_SOAK_GA=1`, about 60 minutes)
+
+For the GA candidate the owner wants the soak shorter than the full 72 minutes. `DVT_SOAK_GA=1` keeps the 10 minute warmup and measures 40 minutes
+instead of 50 (`DVT_SOAK_MEASURE_S=2400`), everything else unchanged: the same lanes and listeners, the 170 s settle, the 2 minute idle window, smaps
+series, hub events and streams counters. It is judged like the full run (the RSS slopes ARE a verdict, unlike `DVT_SOAK_SHORT`), with every limit
+scaled by 2400/3000 = 0.8 as in the short profile: the RSS growth bound is a rate (max(5 MiB, 10 percent) per 3000 s, so 4 MiB or 8 percent for the
+2400 s), the thread and fd median windows are 480 s instead of 600 s; the restart, flat-counter and drop-reason rules do not depend on the length.
+A `FINDING: SOAK1 GA profile ...` line says so and `soak.json` has `"ga": true`. An explicit `DVT_SOAK_WARMUP_S` / `DVT_SOAK_MEASURE_S` other than 600 / 2400
+makes the run a validation again. The default (no variable) stays the full 50 minutes. Duration: about 62 minutes (set-up and joins inside the
+warmup, 10 + 40 minutes, up to 3 minutes of stopping, 170 s settle, 2 minutes idle, teardown).
+
+```sh
+DVT_SOAK=1 DVT_SOAK_GA=1 DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/soak-edges.toml \
+  scripts/run.sh -m rig --profile web,webload -- cases/test_web_soak.py
+```
+
 ## The short runs (2026-11-02, image dv-router:wip-dbedd14, native launch)
 
 Two validation runs (`DVT_SOAK_SHORT=1`, about 14 minutes each with set-up and teardown). Results that shaped the code:

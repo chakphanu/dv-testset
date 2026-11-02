@@ -64,6 +64,22 @@ LISTENERS = "dv_edge_webrtc_listeners"
 _SEEN = set()
 
 
+def _error_code(resp):
+    """The short error code or name of an error answer body (nothing else of the body), or None."""
+    try:
+        body = resp.json()
+    except Exception:                                       # noqa: BLE001
+        return None
+    if not isinstance(body, dict):
+        return None
+    inner = body.get("error") if isinstance(body.get("error"), dict) else body
+    for key in ("code", "error", "kind"):
+        val = inner.get(key)
+        if isinstance(val, str) and len(val) <= 40:
+            return val
+    return None
+
+
 def note(key, value):
     """A measurement: appended to $DVT_OUT/web/k22-results.jsonl and shown once as a FINDING line."""
     path = Path(os.environ.get("DVT_OUT", "out")) / "web" / "k22-results.jsonl"
@@ -536,7 +552,7 @@ def test_closing_only_the_ctl_channel_removes_the_peer(make_page, proto_peer, ri
 
 # ---------------------------------------------------------------------------------------- d
 
-def test_foreign_and_malformed_circuits(make_page, k22_users):
+def test_foreign_and_malformed_circuits(make_page, k22_users, web_base_url, web_ca):
     """Ownership: "Unknown or removed circuits and another login or different guest IP/User-Agent all receive 403
     forbidden"; invalid hexadecimal ids receive 400; a login cannot use a guest circuit and a guest cannot use a login's."""
     guest = make_page("guest")
@@ -552,8 +568,26 @@ def test_foreign_and_malformed_circuits(make_page, k22_users):
         "guest alive on login circuit": guest.alive(su),
         "guest close of login circuit": guest.close(su),
     }
-    other_login = k22_users["N0KB"].client.request("POST", "/api/v1/rtc/alive", json_body={"sess_id": su}, headers=None)
+    # N0KB's tester login of the fixture is the OLDEST session of the account by now: the earlier cases log N0KB in
+    # three times through the browser and an account keeps at most 3 sessions (the oldest ends, its next request is
+    # 401). So the foreign login is a FRESH one made right before the request (same client, same User-Agent).
+    kb = k22_users["N0KB"]
+    stale = kb.client.request("GET", "/api/v1/user/me", headers=None)
+    fresh = web.WebClient(web_base_url, web_ca)
+    fresh.hide(kb.password)
+    fresh.login(kb.callsign, kb.password)
+    me = fresh.request("GET", "/api/v1/user/me", headers=None)
+    sessions = fresh.request("GET", "/api/v1/user/me/sessions", headers=None)
+    other_login = fresh.request("POST", "/api/v1/rtc/alive", json_body={"sess_id": su}, headers=None)
     answers["other login (tester) alive on login circuit"] = other_login.status
+    count = None
+    if sessions.status == 200:
+        body = sessions.json()
+        items = body.get("sessions", body.get("items")) if isinstance(body, dict) else body
+        count = len(items) if isinstance(items, list) else None
+    note("foreign circuits: the other login", {"fixture_login_user_me": stale.status, "fresh_user_me": me.status,
+                                               "account_sessions": count, "alive_status": other_login.status,
+                                               "alive_code": _error_code(other_login)})
     answers["never-seen id"] = guest.alive("0" * 64)
     answers["bad id"] = guest.alive("zz")
     note("foreign circuits", answers)

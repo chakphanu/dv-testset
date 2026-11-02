@@ -41,6 +41,7 @@ pytest.importorskip("playwright.sync_api", reason="the playwright Python package
 import web_pages as pages  # noqa: E402
 from browser_fixtures import _rtc_end, _rtc_page  # noqa: E402
 from dvtest import browser as brlib  # noqa: E402
+from dvtest import nat_plan  # noqa: E402
 from dvtest import k22, nat, turn, web  # noqa: E402
 from nat_support import (  # noqa: E402
     CONNECT_BUDGET_S, JITTER_MAX_MS, JITTER_P99_MS, NAT_TYPES, IcePacer, NatRtc, rig_client, turn_on, turn_secret, turn_ttl)
@@ -58,7 +59,11 @@ BLACKHOLE_SHORT = (2, 3, 5)          # must resume without a new offer
 BLACKHOLE_GRACE = (12,)              # the page's 12 s grace (ICE1a): recorded, the interrupted text is asserted
 BLACKHOLE_EDGE_ZONE = (16,)          # between the edge's 15 s STUN timeout and the end of the page's grace: recorded
 BLACKHOLE_LONG = (20,)               # clearly longer than the grace: must end with "Connection lost. Connect again manually."
-EXPIRY_OBSERVE_S = int(os.environ.get("DVT_NAT_EXPIRY_S", "660"))
+# DVT_NAT_SHORT=1: the short profile for a final-tag check, at most 20 minutes with TURN on (docs/web-nat-cases.md "Short
+# profile"): the same cases, fewer combinations (SHORT_PLAN below), the mapping-expiry observation 120 s unless
+# DVT_NAT_EXPIRY_S says otherwise. Unset: the whole matrix, about an hour.
+SHORT = os.environ.get("DVT_NAT_SHORT") == "1"
+EXPIRY_OBSERVE_S = int(os.environ.get("DVT_NAT_EXPIRY_S") or ("120" if SHORT else "660"))
 _SEEN = set()
 _PACER = IcePacer()
 needs_turn = pytest.mark.skipif(os.environ.get("DVT_TURN") != "on",
@@ -85,6 +90,25 @@ def note(engine, nat_type, key, value):
 
 # ---------------------------------------------------------------------------------------- fixtures
 
+def blackhole_breaks(engine, nat_type):
+    return nat_plan.breaks(engine, nat_type, BLACKHOLE_SHORT + BLACKHOLE_GRACE + BLACKHOLE_EDGE_ZONE + BLACKHOLE_LONG, SHORT)
+
+
+def short_wanted(test, engine, nat_type):
+    return nat_plan.wanted(test, engine, nat_type, SHORT)
+
+
+@pytest.fixture(autouse=True)
+def nat_short_profile(request):
+    """DVT_NAT_SHORT=1: skip the combinations the short profile leaves out before any browser or account is touched."""
+    if not SHORT:
+        return
+    params = request.node.callspec.params if hasattr(request.node, "callspec") else {}
+    engine, nat_type = params.get("engine"), params.get("nat_type")
+    if not short_wanted(request.node.originalname, engine, nat_type):
+        pytest.skip("DVT_NAT_SHORT=1: not part of the short profile")
+
+
 @pytest.fixture(scope="session")
 def nat_users(web_operator, web_user):
     """Every listener account of this module, made at the start: the operator session that registers them does not
@@ -92,10 +116,14 @@ def nat_users(web_operator, web_user):
     if os.environ.get("DVT_NAT") != "on":
         pytest.skip("nat profile not up")
     for i in range(1, len(brlib.ENGINES) * len(NAT_TYPES) + 1):
+        if SHORT and i not in _short_user_indexes():
+            continue
         web_user("N0NA%d" % i, may_tx=False)
     for i in range(1, len(brlib.ENGINES) + 1):
         web_user("N0NB%d" % i, may_tx=False)
     for i in range(1, len(brlib.ENGINES) + 1):
+        if SHORT:
+            break                                       # the Talk case is not part of the short profile
         web_user("N0NT%d" % i, may_tx=True)
 
 
@@ -125,6 +153,13 @@ def nat_ctl(nat_rig, nat_type):
         nat_rig.ctl("reset")
     except Exception:                                   # noqa: BLE001
         pass
+
+
+def _short_user_indexes():
+    """Accounts N0NA<i> the short profile uses (each registration costs pacer time at the start of the run)."""
+    return {user_index(e, t) for e in brlib.ENGINES for t in NAT_TYPES
+            if any(short_wanted(name, e, t) for name in ("test_turn_relay", "test_blackhole_resume_and_failure",
+                                                         "test_turn_credential_expiry"))}
 
 
 def user_index(engine, nat_type):
@@ -475,7 +510,7 @@ def _blackhole_body(engine, nat_type, bp, rtc, nat_ctl, target, peer):
     assert ok, "no audio before the first blackhole (%d packets)" % got
 
     short_bad, other_bad, results = [], [], []
-    for seconds in BLACKHOLE_SHORT + BLACKHOLE_GRACE + BLACKHOLE_EDGE_ZONE + BLACKHOLE_LONG:
+    for seconds in blackhole_breaks(engine, nat_type):
         w = window(rtc, nat_ctl, seconds)
         results.append(w)
         if not w["lost"]:

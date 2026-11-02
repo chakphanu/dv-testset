@@ -266,7 +266,93 @@ def mic_unavailable(engine, rtc, text):
     pytest.skip("%s: no fake microphone (talk status %r)" % (brlib.label(engine), text))
 
 
-def hold_talk(engine, bp, target, web_client, room, hold_s, min_acks, label):
+TRACE_KEYS = ("op", "state", "code", "reason", "kind", "type")
+
+
+def _digest(msgs, since_ms):
+    """ctl frames reduced to their op/state/code/reason fields (no tokens, no ids), page-clock ms relative to `since_ms`."""
+    rows = []
+    for m in msgs:
+        if m.get("label") != "ctl":
+            continue
+        try:
+            body = json.loads(m.get("data") or "")
+        except ValueError:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        row = {k: body[k] for k in TRACE_KEYS if k in body and isinstance(body[k], (str, int, bool))}
+        row["t_ms"] = round(m["t"] - since_ms, 1)
+        rows.append(row)
+    return rows
+
+
+PAIR_KEYS = ("id", "state", "nominated", "selected", "bytesSent", "bytesReceived", "requestsSent", "requestsReceived",
+             "responsesReceived", "responsesSent", "consentRequestsSent", "packetsSent", "packetsReceived",
+             "currentRoundTripTime", "totalRoundTripTime", "lastPacketSentTimestamp", "lastPacketReceivedTimestamp")
+CAND_KEYS = ("candidateType", "protocol", "relayProtocol", "networkType")
+EDGE_FAMILIES = ("dv_edge_webrtc_unrouted_total", "dv_edge_webrtc_audio_dropped_total")
+
+
+def pair_trace(rtc):
+    """getStats of the page reduced to the ICE state: the transport's selectedCandidatePairId and EVERY candidate pair with
+    its counters and the ip/port/type of both candidates. Local to out/ (rig addresses only), never copied into docs."""
+    try:
+        entries = rtc.ev("window.__dvtTap.stats()")
+    except Exception as exc:                                # noqa: BLE001
+        return {"error": type(exc).__name__}
+    by_id = {e.get("id"): e for e in entries}
+
+    def cand(cid):
+        c = by_id.get(cid) or {}
+        out = {k: c[k] for k in CAND_KEYS if k in c}
+        out["addr"] = "%s:%s" % (c.get("address", c.get("ip", "?")), c.get("port", "?"))
+        return out
+
+    selected = next((e.get("selectedCandidatePairId") for e in entries if e.get("type") == "transport"), None)
+    pairs = []
+    for e in entries:
+        if e.get("type") != "candidate-pair":
+            continue
+        row = {k: e[k] for k in PAIR_KEYS if k in e}
+        row["local"] = cand(e.get("localCandidateId"))
+        row["remote"] = cand(e.get("remoteCandidateId"))
+        pairs.append(row)
+    return {"selectedCandidatePairId": selected, "pairs": pairs}
+
+
+def edge_counters(rig_control):
+    """Samples of the edge drop families in the hub metrics ([] = absent: the counter exists only on newer images)."""
+    if rig_control is None:
+        return None
+    try:
+        samples = metrics.parse(rig_control.metrics("xlxd-sut"))
+    except Exception as exc:                                # noqa: BLE001
+        return {"error": type(exc).__name__}
+    return [{"name": m.name, "labels": dict(m.labels), "value": m.value} for m in samples if m.name in EDGE_FAMILIES]
+
+
+def dump_talk_trace(engine, label, hold_s, wall_air, wall_release, page_air, page_release, timeline, received, sent,
+                    extra=None):
+    """Additive diagnostics of a Hold Talk run (webkit bisect): $DVT_OUT/web/talk-trace-<engine>.jsonl gets one row with
+    the wall-clock UTC of On air and release (to line up with the container logs), the page status timeline (s after
+    On air) and the ctl frames in both directions (page clock ms after On air; op/state/code/reason only)."""
+    def utc(t):
+        return time.strftime("%H:%M:%S", time.gmtime(t)) + ".%03d" % int((t % 1) * 1000)
+    row = {"engine": brlib.label(engine), "label": label, "hold_s": hold_s, "air_utc": utc(wall_air),
+           "release_utc": utc(wall_release), "release_after_ms": round(page_release - page_air, 1),
+           "timeline": timeline, "ctl_received": _digest(received, page_air), "ctl_sent": _digest(sent, page_air)}
+    row.update(extra or {})
+    path = Path(os.environ.get("DVT_OUT", "out")) / "web" / ("talk-trace-%s.jsonl" % engine)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, sort_keys=True) + "\n")
+    except OSError:
+        pass
+
+
+def hold_talk(engine, bp, target, web_client, room, hold_s, min_acks, label, rig_control=None):
     """TALK1 (DV-Router web.md "PTT", wip-13e7e70): Listen on `room`, hold the Talk button for `hold_s` seconds
     after the page shows "On air", release. Asserted: the page stays "On air" for the whole hold (the edge
     acknowledges each accepted lease renewal with {"op":"ptt","state":"renewed","code":"ok"} and the page resets
@@ -284,6 +370,7 @@ def hold_talk(engine, bp, target, web_client, room, hold_s, min_acks, label):
     try:
         listening(rtc, room)
         assert pages.talk_button(bp.page).is_enabled()
+        counters_before = edge_counters(rig_control)
         rtc.tap_start()
         press(rtc)
         text, took = wait_talk_text(rtc, on_air_or_end, 30.0)
@@ -293,7 +380,9 @@ def hold_talk(engine, bp, target, web_client, room, hold_s, min_acks, label):
         note(engine, "%s: press to On air" % label, {"seconds": round(took, 2) if took else None, "status": text})
         assert text == pages.TALK_ON_AIR_TEXT, "talk status %r after pressing (panel %r)" % (text, rtc.status())
         t_air = time.monotonic()
+        wall_air = time.time()
         page_air = rtc.clock()
+        pairs_air = pair_trace(rtc)
         seen_paths = []
         timeline = []
 
@@ -304,9 +393,11 @@ def hold_talk(engine, bp, target, web_client, room, hold_s, min_acks, label):
 
         pump_while(listener, max(0.0, hold_s - (time.monotonic() - t_air)), poll, poll_every=0.5)
         left_on_air = next(((t, st) for t, st in timeline if st != pages.TALK_ON_AIR_TEXT), None)
+        pairs_end = pair_trace(rtc)
         note(engine, "%s: status while the button is held" % label, {"timeline": timeline, "left On air": left_on_air})
         outbound = rtc.stats()["outbound"] or {}
         page_release = rtc.clock()
+        wall_release = time.time()
         t_release = release(rtc)
         on_air_s = t_release - t_air
         ended, took_end = wait_talk_text(rtc, lambda s: s != pages.TALK_ON_AIR_TEXT, 8.0)
@@ -330,6 +421,9 @@ def hold_talk(engine, bp, target, web_client, room, hold_s, min_acks, label):
                   and page_air <= m["t"] <= page_release]
         note(engine, "%s: ctl renewal acks" % label, {k: acks[k] for k in ("acks", "min_interval_ms", "other_ptt", "odd_acks")}
              | {"leases_sent": len(leases), "intervals_ms": acks["intervals_ms"][:12]})
+        dump_talk_trace(engine, label, hold_s, wall_air, wall_release, page_air, page_release, timeline, received, sent,
+                        extra={"ice_at_on_air": pairs_air, "ice_at_end_of_hold": pairs_end,
+                               "edge_counters_before": counters_before, "edge_counters_after": edge_counters(rig_control)})
 
         # TALK1: a held button keeps the over until it is released
         assert left_on_air is None, "%s: the page left 'On air' after %.1f s of a %.0f s hold (status %r)" % (
@@ -368,25 +462,28 @@ def hold_talk(engine, bp, target, web_client, room, hold_s, min_acks, label):
 
 
 @pytest.mark.slow
-def test_talk_reaches_a_protocol_listener(engine, rtc_tx_page, target, web_client):
+def test_talk_reaches_a_protocol_listener(engine, rtc_tx_page, target, web_client, rig_control):
     """A 6 s hold (stage 3b: the page ended it by itself after about 4 s, fixed by TALK1): on air for the
     whole hold, the USRP listener hears it, release ends it."""
-    hold_talk(engine, rtc_tx_page, target, web_client, ROOM_TALK, 6.0, min_acks=2, label="6 s hold")
+    hold_talk(engine, rtc_tx_page, target, web_client, ROOM_TALK, 6.0, min_acks=2, label="6 s hold",
+              rig_control=rig_control)
 
 
 @pytest.mark.slow
-def test_talk_hold_10_s_stays_on_air_until_release(engine, rtc_tx_page, target, web_client):
+def test_talk_hold_10_s_stays_on_air_until_release(engine, rtc_tx_page, target, web_client, rig_control):
     """TALK1: a 10 s hold, more than twice the page's 4 s watchdog: the 'renewed' acks of about one lease per
     second keep it alive (at least 4 acks asked for, about 9 expected), the router hears about 10 s of frames,
     the over ends on release with "Ended: Button released."."""
-    hold_talk(engine, rtc_tx_page, target, web_client, ROOM_HOLD10, 10.0, min_acks=4, label="10 s hold")
+    hold_talk(engine, rtc_tx_page, target, web_client, ROOM_HOLD10, 10.0, min_acks=4, label="10 s hold",
+              rig_control=rig_control)
 
 
 @pytest.mark.slow
-def test_talk_release_inside_the_watchdog_window(engine, rtc_tx_page, target, web_client):
+def test_talk_release_inside_the_watchdog_window(engine, rtc_tx_page, target, web_client, rig_control):
     """A 2 s hold, released well inside the 4 s watchdog: "Ended: Button released." (finding 10 of stage 3b:
     not seen before because the watchdog always came first)."""
-    hold_talk(engine, rtc_tx_page, target, web_client, ROOM_SHORT, 2.0, min_acks=0, label="2 s hold")
+    hold_talk(engine, rtc_tx_page, target, web_client, ROOM_SHORT, 2.0, min_acks=0, label="2 s hold",
+              rig_control=rig_control)
 
 
 @pytest.mark.slow

@@ -373,6 +373,7 @@ services:
       # cases/test_web_soak.py: 1 starts the 60 minute soak; timing, seed and modules of the mix (docs/web-soak-cases.md)
       DVT_SOAK: ${DVT_SOAK:-}
       DVT_SOAK_SHORT: ${DVT_SOAK_SHORT:-}
+      DVT_SOAK_GA: ${DVT_SOAK_GA:-}
       DVT_SOAK_WARMUP_S: ${DVT_SOAK_WARMUP_S:-}
       DVT_SOAK_MEASURE_S: ${DVT_SOAK_MEASURE_S:-${DVT_SOAK_MEASURED_S:-}}
       DVT_SOAK_SAMPLE_S: ${DVT_SOAK_SAMPLE_S:-}
@@ -394,7 +395,11 @@ services:
       DVT_TURN_SECRET_FILE: /dvt/out/${DVT_RUN_ID:-manual}/web/turn.secret
       DVT_TURN_TTL: "120"
       # seconds the credential expiry case watches a relay session (cases/test_web_nat.py)
-      DVT_NAT_EXPIRY_S: ${DVT_NAT_EXPIRY_S:-660}
+      DVT_NAT_EXPIRY_S: ${DVT_NAT_EXPIRY_S:-}
+      DVT_NAT_SHORT: ${DVT_NAT_SHORT:-}
+      # the short WebKit talk repro (cases/test_web_talk_cycles.py)
+      DVT_TALK_CYCLES: ${DVT_TALK_CYCLES:-}
+      DVT_TALK_CYCLES_ENGINE: ${DVT_TALK_CYCLES_ENGINE:-}
       # how xlxd-sut starts (direct | import | native); the M17 peer cases skip with import
       DVT_SUT_LAUNCH: ${DVT_SUT_LAUNCH:-direct}
       # [data] require_ident of the native config (rig/config/dv-router/data-ident.toml); cases/test_data_ident.py

@@ -155,13 +155,17 @@ def test_soak_sixty_minutes(soak_on, load_gen, load_ready, rig_control, target, 
     def should_stop():
         return stop_file.exists() or time.monotonic() > cap
 
+    if tm["ga"]:
+        web.finding("SOAK1 GA profile: warmup %d s + measured %d s (the full run is %d s), a sample every %g s; every limit scaled by %.2f "
+                    "(RSS bound %.0f percent of the 3000 s one, median windows %.0f s); judged like the full run"
+                    % (warmup_s, measured_s, soak.MEASURED_S, sample_s, tm["rss_scale"], 100 * tm["rss_scale"], tm["median_window_s"]))
     if smoke:
         web.finding("SOAK1: a shortened run (warmup %d s, measured %d s, a sample every %g s, RSS bound x%.3f) is a validation, not the criterion"
                     % (warmup_s, measured_s, sample_s, tm["rss_scale"]))
     modules = ss.parse_modules(env.get("DVT_SOAK_MODULES", ""), env.get("DVT_NXDN_MODULE"), env.get("DVT_P25_MODULE"))
     names, unlisted = ss.discover(rig_control)
     report.update(children=names, children_unsampled=unlisted, seed=seed, warmup_s=warmup_s, measured_s=measured_s,
-                  modules=modules, smoke=smoke, short=tm["short"], sample_s=sample_s, rss_scale=tm["rss_scale"],
+                  modules=modules, smoke=smoke, ga=tm["ga"], short=tm["short"], sample_s=sample_s, rss_scale=tm["rss_scale"],
                   wall_cap_s=soak.WALL_CAP_S, settle_s=SETTLE_S, median_window_s=tm["median_window_s"])
     if unlisted:
         web.finding("SOAK1: children of the launcher that are not in the proc-stat allow-list (not sampled): %s" % unlisted)

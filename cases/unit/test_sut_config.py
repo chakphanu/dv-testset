@@ -341,6 +341,15 @@ def test_the_web_snippet_merges_into_a_template_that_switches_web_off():
     assert cfg["edges"]["webrtc"] == {"enable": True, "public_ips": ["172.30.7.11"]}
 
 
+@pytest.mark.parametrize("template", ['[log]\nlevel = "info"\n\n[policy]\ntransit = "all"\n', ""])
+def test_the_debug_log_snippet_sets_the_level_in_the_existing_table_or_adds_it(template):
+    import tomllib
+    snippet = (ROOT / "rig" / "config" / "dv-router" / "debug-log.toml").read_text()
+    cfg = tomllib.loads(sut_config.render(template, "172.30.7", extras=[snippet]))
+    assert cfg["log"] == {"level": "debug"}
+    assert cfg.get("policy", {}).get("transit", "all") == "all"
+
+
 @pytest.mark.parametrize("template_tables", ['[edges.nxdn]\nenable = "auto"\n\n[edges.p25]\nenable = "auto"\n', ""])
 def test_the_soak_edges_snippet_merges_key_by_key_or_adds_the_tables(template_tables):
     import tomllib

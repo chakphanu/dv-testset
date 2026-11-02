@@ -315,6 +315,7 @@ another launch mode the variable draws a warning. Snippets in
 | `web.toml` | the web service, a persistent state dir and the WebRTC edge; added by `--profile web` itself (next section) |
 | `recorder.toml` | the recorder (K14b): `[recorder] dir = "/var/lib/dv-recorder"`, `keep_days = 7`, `max_gb = 1`; naming it in `DVT_SUT_CONFIG_EXTRA` is the switch (see "Recorder" in the web profile section) |
 | `guest.toml` | `[web] guest_listen = true`: anonymous guests may Listen (two per IPv4, no Talk); used by the K22 cases (`docs/web-k22-cases.md`); name it after `web.toml` |
+| `debug-log.toml` | `[log] level = "debug"`: debug lines of every SUT process in `out/<run>/logs/xlxd-sut.log` (chatty; short reruns only) |
 | `soak-edges.toml` | `[edges.nxdn]` (`enable`, `tg_modules = "31672:F"`) and `[edges.p25]` (`enable`, `server_module = "G"`, `server_tg = 31672`): the SUT's own NXDN (41400) and P25 (41000) client ports for the soak (`docs/web-soak-cases.md`); the template's own tables are merged key by key |
 
 The XLX peer row names `xlxd-peer-sut` (`<NET>.12`, XLX998), not `xlxd-peer-ref`
@@ -550,7 +551,7 @@ come from the snippet. After the run `dvtest.turn scan` looks for the secret in 
 (captures included) and fails the run (exit 5) if it finds it.
 
 **Tester side.** `DVT_NAT=on`, `DVT_NAT_CTL`, `DVT_NAT_PROBE`, `DVT_NAT_REFLECTORS`, `DVT_NAT_ALIAS`, `DVT_NAT_INSIDE`, `DVT_TURN`,
-`DVT_TURN_SECRET_FILE`, `DVT_TURN_TTL`, `DVT_NAT_EXPIRY_S`; `DVT_BROWSER_WS` points at `ws://<net>.92:3000/` (the router's forward).
+`DVT_TURN_SECRET_FILE`, `DVT_TURN_TTL`, `DVT_NAT_EXPIRY_S`, `DVT_NAT_SHORT` (the short profile, docs/web-nat-cases.md); `DVT_BROWSER_WS` points at `ws://<net>.92:3000/` (the router's forward).
 `cases/nat_support.py` has the client and the page helpers. Unit tests: `cases/unit/test_nat.py`, `cases/unit/test_turn.py`.
 
 ## Control channel

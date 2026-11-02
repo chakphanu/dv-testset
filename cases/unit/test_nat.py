@@ -303,3 +303,32 @@ def test_probe_refuses_a_bad_target():
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+# ---- the short NAT profile (dvtest/nat_plan.py, DVT_NAT_SHORT=1)
+
+def test_short_plan_blackhole_breaks():
+    from dvtest import nat_plan
+    every = (2, 3, 5, 12, 16, 20)
+    for engine in ("chromium", "firefox", "webkit"):
+        for nat_type in ("full_cone", "port_restricted", "symmetric"):
+            assert nat_plan.breaks(engine, nat_type, every, False) == every           # the whole matrix without the switch
+    full = [(e, t) for e in ("chromium", "firefox", "webkit") for t in ("full_cone", "port_restricted", "symmetric")
+            if nat_plan.breaks(e, t, every, True) == every]
+    assert full == [("chromium", "port_restricted"), ("webkit", "symmetric")]          # one NAT type per engine, none for firefox
+    assert nat_plan.breaks("firefox", "full_cone", every, True) == (2, 20)
+    assert nat_plan.breaks("chromium", "symmetric", every, True) == (2, 20)
+
+
+def test_short_plan_cases():
+    from dvtest import nat_plan
+    engines, types = ("chromium", "firefox", "webkit"), ("full_cone", "port_restricted", "symmetric")
+    for test in ("test_nat_classification", "test_blackhole_resume_and_failure", "test_ice_429_goes_direct", "test_turn_relay",
+                 "test_direct_listen", "test_turn_credential_expiry"):
+        assert all(nat_plan.wanted(test, e, t, False) for e in engines for t in types)
+    short = lambda test: [(e, t) for e in engines for t in types if nat_plan.wanted(test, e, t, True)]   # noqa: E731
+    assert short("test_direct_listen") == []
+    assert short("test_talk_is_released_at_disconnected_and_needs_a_fresh_press") == []
+    assert short("test_turn_relay") == [("chromium", "symmetric")]
+    assert short("test_turn_credential_expiry") == [("chromium", "symmetric")]
+    assert len(short("test_blackhole_resume_and_failure")) == 9

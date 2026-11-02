@@ -41,6 +41,7 @@ from . import webload as wl
 
 WARMUP_S = 600.0
 MEASURED_S = 3000.0
+GA_MEASURED_S = 2400.0          # the GA profile (DVT_SOAK_GA=1): 10 min warmup + 40 min measured, limits scaled by 0.8
 SAMPLE_S = 30.0
 IDLE_S = 120.0
 # Settle between the last client leaving and the start of the idle window: the longest link timeout of the SUT plus
@@ -145,20 +146,24 @@ def timing(env):
     part of 240 s gets 240/3000 of the bytes; it is as sharp as the real one in KiB per minute and noisier, so a
     failure of the RSS check in a short run is a lead, not a verdict. `median_window_s` = the first / last
     window of the thread and fd median rule: 600 s of the real 3000 s measured part, scaled by the same factor
-    (240 s measured: 48 s). ValueError for a bad number or fewer than 6 samples in the measured part (a slope needs
+    (240 s measured: 48 s). DVT_SOAK_GA=1 is the GA profile: 600 s + 2400 s, every limit scaled by 0.8 (RSS bound as a
+    rate, median windows 480 s), judged like the real run (RSS slopes are a verdict; `ga` true, `smoke` false); an
+    explicit DVT_SOAK_WARMUP_S / DVT_SOAK_MEASURE_S other than that makes it a validation again. ValueError for a bad number or fewer than 6 samples in the measured part (a slope needs
     MIN_SAMPLES)."""
     short = (env.get("DVT_SOAK_SHORT") or "").strip() == "1"
+    ga = (env.get("DVT_SOAK_GA") or "").strip() == "1" and not short
     warmup = _env_float(env, "DVT_SOAK_WARMUP_S")
     measured = _env_float(env, "DVT_SOAK_MEASURE_S", "DVT_SOAK_MEASURED_S")
     sample = _env_float(env, "DVT_SOAK_SAMPLE_S")
     warmup = warmup if warmup is not None else (SHORT_WARMUP_S if short else WARMUP_S)
-    measured = measured if measured is not None else (SHORT_MEASURED_S if short else MEASURED_S)
+    measured = measured if measured is not None else (SHORT_MEASURED_S if short else GA_MEASURED_S if ga else MEASURED_S)
     sample = sample if sample is not None else (SHORT_SAMPLE_S if short else SAMPLE_S)
     if sample < 0.05 or measured < (MIN_SAMPLES + 1) * sample:
         raise ValueError("measured %g s with a sample every %g s gives fewer than %d samples" % (measured, sample, MIN_SAMPLES + 1))
-    smoke = (warmup, measured) != (WARMUP_S, MEASURED_S)
+    ga = ga and (warmup, measured) == (WARMUP_S, GA_MEASURED_S)          # an override of the timing makes it a validation again
+    smoke = (warmup, measured) != (WARMUP_S, MEASURED_S) and not ga
     scale = min(1.0, measured / MEASURED_S)
-    return {"warmup_s": warmup, "measured_s": measured, "sample_s": sample, "short": short, "smoke": smoke,
+    return {"warmup_s": warmup, "measured_s": measured, "sample_s": sample, "short": short, "smoke": smoke, "ga": ga,
             "rss_scale": scale, "median_window_s": MEDIAN_WINDOW_S * scale}
 
 

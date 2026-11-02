@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/rig.md): debug log level for the whole SUT, to read the edge,
+# room and router lines of a failing window in out/<run>/logs (xlxd-sut.log). Very chatty: use it for short reruns only.
+# [log] is merged into the template's own table (dvtest/sut_config.py), so only the level changes.
+[log]
+level = "debug"

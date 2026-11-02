@@ -286,6 +286,42 @@ Other FINDING lines (arrival statistics, pairs, connection times) are measuremen
 | ice 503 | not reachable (see above) |
 | ICE failure under packet loss or latency (netem) instead of a blackhole | netem sidecars exist but are not combined with the NAT profile |
 
+### Short profile (`DVT_NAT_SHORT=1`, TURN on, about 19 minutes)
+
+For a check of a final tag the whole matrix (about an hour) is too long. `DVT_NAT_SHORT=1` keeps every case but runs fewer combinations
+(`dvtest/nat_plan.py`, unit tests in `cases/unit/test_nat.py`); the skipped combinations say "not part of the short profile" before any browser or
+account is touched.
+
+```sh
+export XLXD_SUT_IMAGE=dv-router:wip-<tag> DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-router DVT_SUT_LAUNCH=native \
+  DVT_USRP_DYNAMIC=1 DVT_SUT_CONFIG=<template path>
+DVT_NAT_SHORT=1 DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/turn.toml \
+  scripts/run.sh -m rig --profile web,browser,nat -- cases/test_web_nat.py
+```
+
+| Case | Whole matrix | Short profile | Estimated seconds (short) |
+|------|--------------|---------------|---------------------------|
+| `test_nat_classification` | 3 NAT types | the same (the first one includes the account setup) | 70 |
+| `test_direct_listen` | 9 (engine x type) | left out (every blackhole case starts with a direct connect, first audio and ICE pair) | 0 |
+| `test_turn_relay` | 9 | Chromium / symmetric | 32 |
+| `test_blackhole_resume_and_failure` | 9 x (2, 3, 5, 12, 16, 20 s) | every break for Chromium / port restricted and Playwright WebKit / symmetric; the other 7 combinations (Firefox x 3, Chromium x 2, WebKit x 2) only 2 s and 20 s | 2 x 175 + 7 x 75 (Firefox 85) = 880 |
+| `test_talk_is_released_at_disconnected_and_needs_a_fresh_press` | 3 | left out (about 15 s each in the whole run) | 0 |
+| `test_turn_credential_expiry` | 3 x 660 s | Chromium / symmetric, 120 s (`DVT_NAT_EXPIRY_S` still overrides) | 135 |
+| `test_ice_404_goes_direct` | skipped with TURN | skipped | 0 |
+| `test_ice_429_goes_direct` | 3 | the same | 20 |
+| | | total | about 1140 (19 min) |
+
+The estimates come from the junit times of the TURN-on run `20261102T004117Z` (a whole blackhole case 175 s on Chromium and WebKit, 215 s on Firefox;
+a direct or relay case 32 s; classification 71 s with the account setup) and from the case code (a 2 s plus a 20 s break with the connect and the manual
+reconnect is about 70 s). The first short run on a tag measures them; adjust `nat_plan.py` if it is over 20 minutes.
+
+What the short profile still proves: the NAT types are what they claim; a relay session through the symmetric NAT works; the ICE1a requirement (a 2 s
+blackhole resumes without a new offer) on every engine and every NAT type; "Connection interrupted. Waiting to resume." and the 12 s grace, and the
+12 s and 16 s observations (resume, or lost from which side) on Chromium and WebKit, one NAT type each; a 20 s break ends with "Connection lost. Connect
+again manually." and a manual reconnect sends one new offer on every combination; the relay credential survives its 120 s TTL (it does not show the
+effect after 5 minutes, which needs the 660 s observation); the 429 fallback. Not covered: Firefox at 3, 5, 12 and 16 s, the direct-path arrival-timing
+numbers (jitter p99, tone) of `test_direct_listen`, Talk during a blackhole, TURN relay on Firefox and WebKit, the 5 minute TURN permission expiry.
+
 ## Rerun
 
 ```sh
