@@ -251,3 +251,8 @@ def test_soak_is_skipped_without_the_switch(monkeypatch):
     monkeypatch.delenv("DVT_SOAK", raising=False)
     with pytest.raises(pytest.skip.Exception):
         ts.soak_on.__wrapped__()
+
+
+def test_the_real_settle_covers_the_longest_link_timeout():
+    """DV-Router ruling: 170 s (imrs link timeout 150 s + sweep tick) between the last client and the idle window."""
+    assert ts.SETTLE_S >= soak.SETTLE_MIN_S == 170

@@ -9,12 +9,13 @@ renewal bucket), plus protocol clients on one module each (DExtra talker with DP
 YSF, M17, USRP into rooms A and B which the WebRTC listeners hear, NXDN and P25 when the rig serves them, and the
 XLX interlink peer as one more listener when profile interlink is up) with one over of about 10 s per module
 every minute and every fifth minute all at once. ACL on (the launcher default). 10 minutes warmup, 50 minutes
-measured, then all traffic stops and the SUT idles for 2 minutes.
+measured, then all traffic stops, 170 s settle (every link of a departed client times out) and the SUT idles for 2 minutes.
 
 Every 30 s the case reads RSS, threads, open fds and the start time of EVERY child of the launcher through the
 read-only `proc-stat` control action and keeps the raw samples in out/<run>/web/soak-samples.jsonl. The verdict is
-dvtest.soak.evaluate (restarts, RSS slope, threads, fds, idle fds, error counters, the idle public event stream,
-the idle gauge); the table per child is printed and written to out/<run>/web/soak.json. The run ends by itself
+dvtest.soak.evaluate (restarts, RSS slope, threads and fds as the median of the last 10 minutes against the median of
+the first 10 minutes after warmup, idle fds, error counters, the idle public event stream, the idle gauge; smaps_rollup
+values are recorded when the proc-stat reply carries them); `python3 -m dvtest.soak out/<run>` judges a finished run again; the table per child is printed and written to out/<run>/web/soak.json. The run ends by itself
 after 75 minutes at the latest (hard wall clock cap) and can be stopped with `touch out/<run>/web/soak.stop`;
 the teardown is the same in both cases, and in a failure.
 
@@ -44,7 +45,7 @@ WORKERS = 2
 ROOMS_HEARD_MIN_PACKETS = 50
 IDLE0_TICKS = 3                     # samples of the quiet SUT before any traffic, IDLE0_GAP_S apart
 IDLE0_GAP_S = 10.0
-SETTLE_S = 120.0                    # after the listeners are gone, before the idle window (DV-Router: idle = 2 min after all clients left; lets link_timeout of departed clients age out)
+SETTLE_S = 170.0                    # after the last client left, before the idle window: longest link timeout (imrs 150 s) + sweep tick; soak.LINK_TIMEOUTS_S
 GAUGE_BUDGET_S = 150.0              # for the listener gauge to reach zero after the generator finished
 SAMPLE_PERIOD_S = None              # None: dvtest.soak.timing(env) (the offline rehearsal shortens it)
 
@@ -156,7 +157,7 @@ def test_soak_sixty_minutes(soak_on, load_gen, load_ready, rig_control, target, 
     names, unlisted = ss.discover(rig_control)
     report.update(children=names, children_unsampled=unlisted, seed=seed, warmup_s=warmup_s, measured_s=measured_s,
                   modules=modules, smoke=smoke, short=tm["short"], sample_s=sample_s, rss_scale=tm["rss_scale"],
-                  wall_cap_s=soak.WALL_CAP_S)
+                  wall_cap_s=soak.WALL_CAP_S, settle_s=SETTLE_S, median_window_s=tm["median_window_s"])
     if unlisted:
         web.finding("SOAK1: children of the launcher that are not in the proc-stat allow-list (not sampled): %s" % unlisted)
     lanes, skipped = ss.make_lanes(target, env, modules)
@@ -258,7 +259,8 @@ def test_soak_sixty_minutes(soak_on, load_gen, load_ready, rig_control, target, 
         rows, bad = soak.parse_jsonl(text)
         # a short run is a validation: its RSS slopes are leads (warmup), not a verdict; the real run judges them
         result = soak.evaluate(rows, events=events, expected=names,
-                               params={"rss_scale": tm["rss_scale"], "rss_judged": not tm["short"], "measured_s": measured_s})
+                               params={"rss_scale": tm["rss_scale"], "rss_judged": not tm["short"], "measured_s": measured_s,
+                                       "median_window_s": tm["median_window_s"]})
         gsum, gchecks = soak.generator_summary(gen_rows, min_packets=ROOMS_HEARD_MIN_PACKETS)
         tsum = traffic.summary()
         # the lanes that stayed in the mix (the required ones, and NXDN / P25 when their probe over worked) must deliver
@@ -270,7 +272,7 @@ def test_soak_sixty_minutes(soak_on, load_gen, load_ready, rig_control, target, 
         report.update(state="done", result=result.as_dict(), events=events, generator=gsum, traffic=tsum,
                       extra_checks=[{"name": c.name, "ok": c.ok, "detail": c.detail} for c in extra],
                       table=soak.table(result).splitlines(), counters_table=soak.counters_table(result).splitlines(),
-                      attribution_table=soak.attribution_table(result).splitlines(), warnings=result.warnings,
+                      attribution_table=soak.attribution_table(result).splitlines(), smaps_table=soak.smaps_table(result).splitlines(), warnings=result.warnings,
                       gauge_families={r["phase"]: r["gauges"] for r in rows if r.get("kind") == "metrics" and "gauges" in r},
                       metric_families=next((r["families"] for r in rows if r.get("kind") == "metrics" and "families" in r), []), samples=len(rows), sampling_errors=sampler.errors[:10],
                       slow_ticks=sampler.slow_ticks, loadavg_end=loadavg(), wall_s=round(time.monotonic() - t_wall))
@@ -298,6 +300,7 @@ def test_soak_sixty_minutes(soak_on, load_gen, load_ready, rig_control, target, 
     print("\n" + soak.table(result))
     print("\n" + soak.counters_table(result))
     print("\n" + soak.attribution_table(result))
+    print("\n" + soak.smaps_table(result))
     for note in result.warnings:
         print("WARN %s" % note)
     for c in list(result.checks) + extra:

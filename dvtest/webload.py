@@ -407,11 +407,16 @@ class ProcSample:
     threads: int = 0
     fds: int = -1               # open file descriptors (/proc/<pid>/fd); -1 when the helper could not read them
     starttime: int = 0          # field 22 of /proc/<pid>/stat: start in clock ticks after boot (with pid: the process identity)
+    smaps: dict = field(default_factory=dict)       # optional smaps_rollup values in KiB: {"rss", "anon", "private_dirty", "pss_anon"}; {} when the reply has none
     raw: dict = field(default_factory=dict, repr=False)
 
     @property
     def cpu_s(self):
         return self.ticks / float(self.clk_tck)
+
+
+# optional keys of a `proc-stat` reply (scripts/lib/procstat.sh reads /proc/<pid>/smaps_rollup): reply key -> ProcSample.smaps key
+PROCSTAT_SMAPS_KEYS = {"smaps_rss_kb": "rss", "smaps_anon_kb": "anon", "smaps_private_dirty_kb": "private_dirty", "smaps_pss_anon_kb": "pss_anon"}
 
 
 def split_procstat_out(text):
@@ -438,12 +443,18 @@ def parse_procstat_out(text):
         key, sep, value = line.strip().partition("=")
         if sep:
             kv[key] = value
+    smaps = {}
+    for key, short in PROCSTAT_SMAPS_KEYS.items():
+        try:
+            smaps[short] = int(kv[key])
+        except (KeyError, ValueError):                  # absent or garbled: the values are optional, never an error
+            pass
     try:
         return ProcSample(pid=int(kv["pid"]), comm=kv["comm"], t=float(kv["t"]),
                           ticks=int(kv["utime"]) + int(kv["stime"]), clk_tck=int(kv["clk_tck"]),
                           vmhwm_kib=int(kv["vmhwm_kb"]), vmrss_kib=int(kv["vmrss_kb"]),
                           threads=int(kv.get("threads", 0)), fds=int(kv.get("fds", -1)),
-                          starttime=int(kv.get("starttime", 0)), raw=kv)
+                          starttime=int(kv.get("starttime", 0)), smaps=smaps, raw=kv)
     except KeyError as exc:
         raise ValueError("proc-stat reply lacks %s: %r" % (exc, text[:200])) from exc
     except ValueError as exc:

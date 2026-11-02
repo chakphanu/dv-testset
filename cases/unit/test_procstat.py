@@ -139,6 +139,41 @@ def test_helper_script_reads_exact_comm_only_and_parses():
             p.wait(5)
 
 
+def test_helper_script_smaps_keys_are_optional_and_consistent():
+    """The reply may carry smaps_rollup values (smaps_*_kb); a reply without them is fine (older script, no smaps_rollup
+    file), one with them must parse and be self-consistent. Runs the script of the repo on this process's own /proc."""
+    if not Path("/proc/self/stat").exists() or not shutil.which("bash"):
+        pytest.skip("/proc or bash missing")
+    code = "import ctypes, sys, time; ctypes.CDLL(None).prctl(15, b'dvt-procsmaps'); x = bytearray(16 << 20); time.sleep(30)"
+    p = subprocess.Popen([sys.executable, "-c", code])
+    try:
+        for _ in range(100):
+            try:
+                if Path("/proc/%d/comm" % p.pid).read_text().strip() == "dvt-procsmaps":
+                    break
+            except OSError:
+                pass
+            time.sleep(0.05)
+        else:
+            pytest.skip("cannot set the process name with prctl here")
+        script = bash('printf "%s" "$DVT_PROCSTAT_SCRIPT"').stdout
+        run = subprocess.run([sys.executable, "-c", script, "dvt-procsmaps"], capture_output=True, text=True, timeout=30)
+        assert run.returncode == 0, run.stderr
+        sample = webload.parse_procstat_out(run.stdout)              # parses with or without the optional keys
+        assert set(sample.smaps) <= set(webload.PROCSTAT_SMAPS_KEYS.values())
+        keys = [line.split("=", 1)[0] for line in run.stdout.splitlines()]
+        assert len(keys) == len(set(keys))
+        if sample.smaps:
+            assert Path("/proc/%d/smaps_rollup" % p.pid).exists()
+            if "rss" in sample.smaps and "anon" in sample.smaps:
+                assert sample.smaps["rss"] >= sample.smaps["anon"] >= 0
+            if "private_dirty" in sample.smaps and "rss" in sample.smaps:
+                assert sample.smaps["private_dirty"] <= sample.smaps["rss"]
+    finally:
+        p.kill()
+        p.wait(5)
+
+
 def test_helper_script_list_mode_names_every_process_but_itself():
     if not Path("/proc/self/stat").exists() or not shutil.which("bash"):
         pytest.skip("/proc or bash missing")

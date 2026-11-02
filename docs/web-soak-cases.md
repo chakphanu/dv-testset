@@ -6,7 +6,7 @@
 `cases/unit/test_soak_support.py`, and `cases/unit/test_soak_case.py`, which runs the real case function against fakes in seconds), the
 generator's soak mode (`dvtest/tools/webload_gen.py`) and the read-only control action `proc-stat` (`scripts/lib/procstat.sh`,
 `dvtest/control.py`). Spec from DV-Router (2026-11-02): 60 minutes = 10 minutes warmup + 50 minutes measured, ACL on (the launcher
-default). Adjusted to DV-Router's rulings of 2026-11-02 (thresholds, child names, flat counters, NXDN/P25 recipe) and to the later rulings of the DV-Router owner (lazy counters, `dv_edge_drops_total` by reason, RSS attribution; see "Rulings of DV-Router"). **Status: the short
+default). Adjusted to DV-Router's rulings of 2026-11-02 (thresholds, child names, flat counters, NXDN/P25 recipe) and to the later rulings of the DV-Router owner (lazy counters, `dv_edge_drops_total` by reason, RSS attribution, the 170 s settle, the median rule for threads and fds, smaps_rollup; see "Rulings of DV-Router"). **Status: the short
 mode (below) was run on a rig to validate the lanes and the sampling; the full 60 minute run has not been made.** The first full run must
 be watched, see "What the first run must watch".
 
@@ -58,8 +58,8 @@ and the lane is dropped with a reason (`soak.json` `lanes_dropped`, a `FINDING:`
 3. Warmup 600 s, measured 3000 s, one sample of every child every 30 s on an absolute schedule in a thread (phases `warmup`, `measured`),
    counter snapshots at the end of warmup and of the measured part (the flat families, their series, the per-reason values of `dv_edge_drops_total` and, once, the names of all families on /metrics). Each sample: pid, start time, VmRSS, VmHWM, threads, open fds, cpu ticks.
    Also per tick: the edge listener gauge, the attribution row (the size gauges of the hub, see "RSS attribution") and, every five minutes, the generator's status.
-4. Stop: the protocol overs end, the generator finishes (every listener revokes and closes), the gauge must read 0 within 150 s, 30 s of
-   settling, then the idle window of 120 s (phase `idle`): `GET /api/v1/public/events` is sampled (resumed every 30 s with the last event
+4. Stop: the protocol overs end, the generator finishes (every listener revokes and closes), the gauge must read 0 within 150 s, then a
+   settle of 170 s (`SETTLE_S`, see "Settle before the idle window"), then the idle window of 120 s (phase `idle`): `GET /api/v1/public/events` is sampled (resumed every 30 s with the last event
    id, as `test_status_stream_is_quiet_while_idle`), samples continue, a last sample and the counter snapshots close it.
 5. The raw samples are ONE file, `out/<run>/web/soak-samples.jsonl` (one JSON object per line, kinds `proc`, `metrics`, `gauge`, `attr`, `mark`,
    flushed per row, about 1500 rows). The verdict is computed by re-reading that file (`soak.parse_jsonl`, `soak.evaluate`), so the
@@ -75,9 +75,9 @@ and the lane is dropped with a reason (`soak.json` `lanes_dropped`, a `FINDING:`
 |---|-----------|------|
 | 1 | no child restarts | one (pid, start time) per child over every phase; a child that vanishes or first appears after warmup fails |
 | 2 | RSS | growth over the measured window = least-squares slope x the measured window (3000 s, not the span of the samples), must be <= max(5 MiB, 10 percent of the RSS at the end of warmup, the median of the last 3 warmup samples); the last sample is not judged. In a short run (`DVT_SOAK_SHORT=1`) the RSS slope is NOT a verdict (warmup dominates): the check `rss:<child>` is recorded as a lead (detail starts with `LEAD ONLY`, a warning `RSS lead <child>` when over the scaled bound) and never fails the case; the full run judges it. See "RSS attribution" and "Short mode" |
-| 3 | threads, fds | ruling of DV-Router: limit = max(10 percent, +2 threads, +4 fds) over the end-of-warmup value (median of the last 3 warmup samples); judged on the median of the last 5 measured samples. After the traffic stopped the fd count is <= the quiet value of `idle0` (before any traffic) + 5 |
+| 3 | threads, fds | ruling of DV-Router (2026-11-02, later): NOT judged by the last sample. Per child the median over the last 10 minutes of the measured part against the median over the first 10 minutes after warmup; FAIL only when the later median exceeds the earlier by more than max(10 percent of the earlier, 3 threads) (fds: max(10 percent, 4 fds)). A last sample above the old limit (end of warmup + max(10 percent, +2 threads / +4 fds)) is only FLAGGED (`FLAG threads <child>` / `FLAG fds <child>` warning, `children.<name>.flags` in `soak.json`). After the traffic stopped the fd count is <= the quiet value of `idle0` (before any traffic) + 5 (unchanged). See "Threads and fds: the median rule" |
 | 4 | flat counters | the 11 families below are FLAT over the measured part: value at the end of warmup == value at the end, absolute zero growth, summed over all labels and processes. A series that is not on /metrics counts as 0 (status `absent`, no assertion): `dv_edge_tx_refused_total`, `dv_recorder_dropped_total` and `dv_room_shell_errors_total` are created at their first increment, so they are never required to be present, they only must not APPEAR or grow in the window (appearing is growth from 0). A family on /metrics at the end of warmup and gone at the end is `vanished` (recorded). On growth the check `flat:<family>` fails with the family, the delta and the series that grew. `soak.FLAT_OVERRIDES` (per family, starts empty) holds a family that grows with the traffic mix: it is recorded with name and growth (`override`), not asserted. All other error-like families (name contains drop, refus, reject, denied, panic, error, overflow, overrun, lost, fail, timeout, discard) are recorded with their deltas, `counters.growing` lists those that grew; nothing else is asserted |
-| 4b | `dv_edge_drops_total` | counts legitimate events of the lane mix, so it is NOT flat. Legit reasons (`soak.DROPS_LEGIT`): `link_timeout`, `no_session`, `rx_ignored`, `x_stale`. `drops-idle`: in the idle window (2 minutes after all clients left) no reason grows (any reason, a missing series is 0). `drops-reasons`: in the measured window the check fails only when a reason OUTSIDE the four appears or grows. The four are recorded with delta and rate per second (table after the flat families, `counters.drops` in `soak.json`); when their total rate exceeds 1 per second (`soak.DROPS_RATE_FLAG_PER_S`) the summary carries a `FLAG dv_edge_drops_total` warning (a `FINDING:` line, `warnings` in `soak.json`), not a failure. `dv_edge_queue_drops_total` and `dv_edge_webrtc_audio_dropped_total` stay strict (flat family list, missing = 0) |
+| 4b | `dv_edge_drops_total` | counts legitimate events of the lane mix, so it is NOT flat. Legit reasons (`soak.DROPS_LEGIT`): `link_timeout`, `no_session`, `rx_ignored`, `x_stale`. `drops-idle`: in the idle window (it starts 170 s after the last client left, see "Settle before the idle window") no reason grows (any reason, a missing series is 0). `drops-reasons`: in the measured window the check fails only when a reason OUTSIDE the four appears or grows. The four are recorded with delta and rate per second (table after the flat families, `counters.drops` in `soak.json`); when their total rate exceeds 1 per second (`soak.DROPS_RATE_FLAG_PER_S`) the summary carries a `FLAG dv_edge_drops_total` warning (a `FINDING:` line, `warnings` in `soak.json`), not a failure. `dv_edge_queue_drops_total` and `dv_edge_webrtc_audio_dropped_total` stay strict (flat family list, missing = 0) |
 | 5 | idle event stream | `k22.idle_stream_verdict`: no whole minute after the first holds more than 2 events |
 | + | idle | the listener gauge reads 0 in every idle sample |
 | + | generator | at most 2 percent of the sessions failed, at most 2 percent of the lease answers other than 204, and the listeners of each room heard at least 50 packets (this is how the USRP lanes are seen) |
@@ -93,6 +93,55 @@ Flat families (`soak.FLAT_FAMILIES`, DV-Router `docs/design/status.md` "Metrics"
 `dv_status_telemetry_rejected_total`, `dv_status_input_dropped_total`, `dv_fabric_put_dropped_total`, `dv_recorder_dropped_total`,
 `dv_codec_dropped_total`, `dv_edge_tx_refused_total`. The table of the flat families (and of the drop reasons) is printed after the table per child and kept in `soak.json`
 (`counters_table`, `metric_families`).
+
+## Settle before the idle window
+
+The idle window must show no growth of any `dv_edge_drops_total` reason, so every link of a departed client has to be gone before it starts.
+The case therefore waits `SETTLE_S` = 170 s after the last client left (listener gauge 0, protocol overs ended) and takes the `idle_start` snapshot
+only then. 170 s = the longest link timeout (imrs, 150 s) plus a sweep tick (`soak.SETTLE_MIN_S`; a unit test keeps `SETTLE_S` at or above it).
+Link timeouts of the SUT (DV-Router ruling, `soak.LINK_TIMEOUTS_S`):
+
+| Protocol (edge) | Link timeout |
+|-----------------|--------------|
+| imrs (link) | 150 s |
+| mmdvm | 100 s |
+| dextra, dcs, ysf | 60 s |
+| xlx, dplus, m17, nxdn, p25 | 30 s |
+| usrp (dynamic) | never expires |
+
+## Threads and fds: the median rule
+
+The `dv-edge-*` thread counts are not constant: the tokio blocking pool spawns threads lazily and keeps one about 10 s, so a single sample (the last)
+says little. Per child, over the measured samples of the child:
+
+- early = median over the FIRST 10 minutes after warmup, late = median over the LAST 10 minutes of the measured part;
+- `threads:<child>` fails only when late > early + max(10 percent of early, 3 threads); `fds:<child>` when late > early + max(10 percent of early, 4 fds);
+- a last sample above the old limit (the median of the last 3 warmup samples + max(10 percent, +2 threads / +4 fds)) is only a warning (`FLAG ...`);
+- the fds-idle check (`fds-idle:<child>`, <= `idle0` + 5 after the traffic) is unchanged.
+
+The 10 minute windows are for the 50 minute measured part. In a shorter run they are scaled with it (10/50 of the measured part, `median_window_s`
+in `soak.json`): 48 s of the 240 s of `DVT_SOAK_SHORT=1`. A window that then holds fewer than 3 samples (a tick takes 19 s) takes the first / last 3
+samples instead, so the short run is a rough check of the sampling, not of the criterion. The detail of every check names both medians, their sample
+counts, the limit, the maximum and the last sample.
+
+## smaps_rollup (recorded, not asserted)
+
+When the `proc-stat` reply of a process carries `smaps_rss_kb`, `smaps_anon_kb`, `smaps_private_dirty_kb` and `smaps_pss_anon_kb` (the host helper reads
+`/proc/<pid>/smaps_rollup`: Rss, Anonymous, Private_Dirty, Pss_Anon; the keys are left out when the file is missing), the sampler stores them in the
+`proc` rows of `soak-samples.jsonl` as `smaps_rss_kib`, `smaps_anon_kib`, `smaps_private_dirty_kib`, `smaps_pss_anon_kib` (`dvtest.webload.ProcSample.smaps`).
+`soak.json` keeps per child (`result.children.<name>.smaps`) first, last, min, max and the least-squares slope per minute over the measured part, and
+`smaps_table` prints them (the dv-router and dv-svc-status rows tell anonymous growth from file-backed or shared pages next to the RSS slope). Absent keys
+are normal: older helpers and runs have none, nothing is asserted. The host side is `scripts/lib/procstat.sh` (a unit test accepts a reply with or without the keys).
+
+## Re-judging a finished run offline
+
+`python3 -m dvtest.soak out/<run>` (read only; also accepts `out/<run>/web` or the `soak-samples.jsonl`; `--all` lists the passing per-child checks,
+`--measured-s` and `--short` replace the missing `soak.json`; exit status 1 on a failing verdict) re-evaluates `web/soak-samples.jsonl` with the
+current rules and prints the table per child, the counter, attribution and smaps tables, the warnings, the checks and the verdict. `soak.json` next to the
+samples supplies the timing, the children, the idle event stream verdict and the checks of the parts that are not re-judged from the samples (generator,
+protocol mix, sampling, drained; shown "as saved"), and the line "failed before / failed now" compares with the saved verdict. A run made with an
+older settle cannot be fixed offline: the tool prints the settle it had (from the marks of the sample file) and says so when `drops-idle` was measured on a
+window that started early. The same function is `soak.rejudge(path)`.
 
 ## RSS attribution (recorded, not asserted)
 
@@ -125,12 +174,11 @@ in this image (the `/metrics` of the hub has none), so those cannot be attribute
 ## Short mode (validation)
 
 `DVT_SOAK_SHORT=1`: 180 s warmup + 240 s measured, a sample every 15 s, about 10 minutes in all, the same mix, lanes, churn rate and criteria.
-Individual settings: `DVT_SOAK_WARMUP_S`, `DVT_SOAK_MEASURE_S` (`DVT_SOAK_MEASURED_S` is the same), `DVT_SOAK_SAMPLE_S`. Any other timing than
+The thread and fd medians use windows of 10/50 of the measured part (48 s here, see "Threads and fds: the median rule"). Individual settings: `DVT_SOAK_WARMUP_S`, `DVT_SOAK_MEASURE_S` (`DVT_SOAK_MEASURED_S` is the same), `DVT_SOAK_SAMPLE_S`. Any other timing than
 600 + 3000 is a validation run (`smoke`, a `FINDING:` line), never the criterion. The RSS bound is a rate: max(5 MiB, 10 percent) per 3000 s,
 so a measured part of T seconds gets T/3000 of it (240 s: 8 percent, 410 KiB for a small child). In a short run (`DVT_SOAK_SHORT=1`) the RSS
 slope is not a verdict at all: warmup dominates four minutes (state tables fill after the listeners joined), so `rss:<child>` is a lead that is
-recorded and warned about (`RSS lead ...`), never a failure; the attribution series next to it say what grew. The thread and fd rules, the
-restart rule, the flat counters and the drop-reason rules are unchanged. The real run stays the 60 minute default. Set
+recorded and warned about (`RSS lead ...`), never a failure; the attribution series next to it say what grew. The restart rule, the flat counters and the drop-reason rules are unchanged. The real run stays the 60 minute default. Set
 `DVT_SOAK_SHORT=1` only for validation: the evidence of a short run says nothing about a leak of 1 KiB a minute.
 
 ## Run it
@@ -142,8 +190,8 @@ DVT_SOAK=1 DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-rout
   scripts/run.sh -m rig --profile web,webload[,interlink] -- cases/test_web_soak.py      # add DVT_SOAK_SHORT=1 for the 10 minute validation
 ```
 
-Without `DVT_SOAK=1` the case skips. Expected duration: 70 minutes (about 2 minutes of set-up and initial joins inside the warmup,
-60 minutes of traffic, up to 3 minutes of stopping, 2 minutes idle). No `--capture` (a pcap of an hour would fill the disk); check the disk
+Without `DVT_SOAK=1` the case skips. Expected duration: about 72 minutes (about 2 minutes of set-up and initial joins inside the warmup,
+60 minutes of traffic, up to 3 minutes of stopping, the 170 s settle, 2 minutes idle; the cap is 75). No `--capture` (a pcap of an hour would fill the disk); check the disk
 with `touch` first. Optional settings (passed to the tester by `rig/compose.yml`): `DVT_SOAK_WARMUP_S`, `DVT_SOAK_MEASURE_S` (shorter
 values are validation runs and say so; see "Short mode"), `DVT_SOAK_SAMPLE_S`, `DVT_SOAK_SHORT`, `DVT_SOAK_SEED`, `DVT_SOAK_MODULES` (`dstar=D,dmr=E,ysf=C,m17=J,usrp-a=A,usrp-b=B,nxdn=F,p25=G`; two lanes
 may not share a module). With `interlink`, add `xlx-peer.toml` to `DVT_SUT_CONFIG_EXTRA` and keep modules D and E in `DVT_INTERLINK_MODULES`.
@@ -211,9 +259,9 @@ One validation run after the three rulings below (`DVT_SOAK_SHORT=1`, 180 s + 24
 - `drops-reasons` passed: `link_timeout` 12, `no_session` 16, `rx_ignored` 8, `x_stale` 15 in 240 s (0.21/s in all, no flag); `id_held` stayed at 7 (no growth).
 - `drops-idle` FAILED: `link_timeout` grew by 3 in the 147 s idle window (it starts 45 s after the measured part ended, 30 s settle after the listeners were zero).
   A link that timed out after its client's last over is the likely source; for DV-Router to rule on (a longer settle before the idle window, or `link_timeout` allowed while idle).
-  Decision (stage SOAK1 full run): SETTLE_S is now 120 s, so the idle window starts 2 minutes after the last client left and a link that ages out after its client left is not counted as idle growth.
+  Decision (stage SOAK1 full run): SETTLE_S was raised to 120 s, then by ruling 8 to 170 s (the longest link timeout, imrs 150 s, plus a sweep tick), so that a link that ages out after its client left is not counted as idle growth.
 - RSS is a lead only: `dv-router` about 155 to 170 KiB/min, `dv-svc-status` about 123 to 127 KiB/min (warnings, not failures), the 26 `dv-room` about 18 KiB/min, the rest flat.
-- `threads:dv-edge-dextra` FAILED (end 11, end-of-warmup 8, limit 10): the end-of-warmup value was 8 here and 11 in the earlier runs, so the thread pool of that edge is demand driven; not related to the rulings.
+- `threads:dv-edge-dextra` FAILED (end 11, end-of-warmup 8, limit 10): the end-of-warmup value was 8 here and 11 in the earlier runs, so the thread pool of that edge is demand driven; this is what ruling 9 (median rule) addresses. Re-judged with the median rule (`python3 -m dvtest.soak out/20261102T051539Z`) the check passes (11 vs 11 over 48 s windows) and the last sample of 11 is only flagged; `drops-idle` still fails (that run settled 31 s).
 - Attribution: the scrape held 3051 to 3057 series (flat); none of the attributed gauges moved with the RSS (only the client counts of the lane mix), see "Attribution names".
 
 ## What the first full run must watch
@@ -243,3 +291,6 @@ Rulings of the DV-Router owner session (2026-11-02, later):
 5. `dv_edge_tx_refused_total`, `dv_recorder_dropped_total` and `dv_room_shell_errors_total` are created at their first increment: a missing series counts as 0; assert only that none of them appears or grows in the window. No "must be present" expectation, no zero-initialisation asked for. Done (`soak.LAZY_FAMILIES`, status `absent` = 0).
 6. `dv_edge_drops_total` is not flat: legit reasons `link_timeout`, `no_session`, `rx_ignored`, `x_stale`. Idle window: no reason grows. Measured window: fail only on a reason outside the four; record the four with their rate per second; flag (warning) above 1/s in total. `dv_edge_queue_drops_total` and `dv_edge_webrtc_audio_dropped_total` stay strict (missing = 0). Done (`soak.judge_drops`).
 7. The RSS slope in the short run is not a verdict (warmup). The full-run rule stays: least-squares slope over the 50 measured minutes after 10 minutes of warmup <= max(5 MiB, 10 percent of the end-of-warmup RSS); the code now multiplies the slope by the whole measured window (3000 s), not by the span of the samples. Next to the RSS the case records the attribution series every tick (recorded, not asserted). Done.
+8. Settle: `SETTLE_S` is 170 s after the last client left (imrs link timeout 150 s + sweep tick; other timeouts xlx/dplus/m17/nxdn/p25 30 s, dextra/dcs/ysf 60 s, mmdvm 100 s, usrp dynamic never expires, table in "Settle before the idle window"). The idle window starts there and no reason of `dv_edge_drops_total` may grow in it. Done.
+9. Threads and fds are judged by the median of the last 10 minutes against the median of the first 10 minutes after warmup, FAIL only above max(10 percent, 3 threads) resp. max(10 percent, 4 fds); a single end sample above the old limit is only flagged; the window is scaled proportionally in the short run; the idle fds check (+5 over `idle0`) stays. Done (`soak.window_medians`).
+10. Next to the RSS the case records the smaps_rollup values (Rss, Anonymous, Private_Dirty, Pss_Anon) of every process whose `proc-stat` reply carries them: first, last, slope per minute, not asserted. Tester side done; the host side is a patch of `scripts/lib/procstat.sh` that the main session applies after the live run.

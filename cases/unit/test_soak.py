@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: MIT
 """dvtest/soak.py: the verdict of the web soak case on synthetic series, the sample file reader and the
 deterministic traffic mix."""
+import json
+
 import pytest
 
 from dvtest import metrics, soak
@@ -158,7 +160,7 @@ def test_fds_that_stay_after_the_traffic_fail_the_idle_check():
 
 
 def test_a_thread_leak_fails_and_a_small_wobble_does_not():
-    assert verdict(series(threads=lambda t: 8 if t < 1800 else 9)).ok      # floor of 2 threads
+    assert verdict(series(threads=lambda t: 8 if t < 1800 else 9)).ok      # floor of 3 threads
     res = verdict(series(threads=lambda t: 8 + max(0, t - 600) // 300))
     assert "threads:dv-edge-webrtc" in failed(res)
 
@@ -381,17 +383,18 @@ def test_flat_snapshot_sums_series_over_procs_and_marks_absent_families():
 
 # ---- thresholds of the ruling: max(10 percent, +2 threads, +4 fds) over the end-of-warmup value
 
-@pytest.mark.parametrize("base,end,ok", [(8, 10, True), (8, 11, False), (3, 5, True), (3, 6, False), (100, 110, True), (100, 111, False),
+@pytest.mark.parametrize("base,end,ok", [(8, 11, True), (8, 12, False), (3, 6, True), (3, 7, False), (100, 110, True), (100, 111, False),
                                          (30, 33, True), (30, 34, False)])
-def test_thread_limit_is_the_larger_of_ten_percent_and_two(base, end, ok):
-    res = verdict(series(threads=lambda t: base if t < 600 else end))
+def test_thread_limit_is_the_larger_of_ten_percent_and_three(base, end, ok):
+    # first 10 minutes of the measured part at `base`, the last 10 minutes at `end`
+    res = verdict(series(threads=lambda t: base if t < 2000 else end))
     assert ("threads:dv-edge-webrtc" not in failed(res)) is ok, res.children["dv-edge-webrtc"]["threads"]
 
 
 @pytest.mark.parametrize("base,end,ok", [(20, 24, True), (20, 25, False), (0 + 3, 7, True), (3, 8, False), (100, 110, True), (100, 111, False),
                                          (50, 55, True), (50, 56, False)])
 def test_fd_limit_is_the_larger_of_ten_percent_and_four(base, end, ok):
-    res = verdict(series(fds=lambda t: base if t < 600 else end, idle_fds=base, idle0_fds=base))
+    res = verdict(series(fds=lambda t: base if t < 2000 else end, idle_fds=base, idle0_fds=base))
     assert ("fds:dv-edge-webrtc" not in failed(res)) is ok, res.children["dv-edge-webrtc"]["fds"]
 
 
@@ -712,3 +715,119 @@ def test_generator_summary_catches_failures_refusals_and_silent_rooms():
         r["packets"] = 3
     assert [c.name for c in soak.generator_summary(rows)[1] if not c.ok] == ["heard:room-B"]
     assert not soak.generator_summary([])[1][0].ok
+
+
+# ---- threads and fds are judged by medians of windows, a single end sample is only flagged (ruling 2026-11-02)
+
+def test_a_single_end_sample_above_the_old_limit_is_flagged_not_failed():
+    end = 3570                                                              # the last measured sample
+    res = verdict(series(threads=lambda t: 20 if t == end else 8, fds=lambda t: 60 if t == end else 30))
+    assert res.ok, failed(res)
+    flags = [w for w in res.warnings if w.startswith("FLAG ")]
+    assert any("FLAG threads dv-edge-webrtc: the last sample is 20" in w for w in flags)
+    assert any("FLAG fds dv-edge-webrtc: the last sample is 60" in w for w in flags)
+    assert res.children["dv-edge-webrtc"]["threads"]["last"] == 20 and res.children["dv-edge-webrtc"]["threads"]["end"] == 8
+    assert not [w for w in verdict(series()).warnings if w.startswith("FLAG ")]
+
+
+def test_a_spiky_pool_that_comes_back_does_not_fail_and_a_raised_plateau_does():
+    def spiky(t):                                                           # a burst of 6 extra threads every 3.5 minutes
+        return 8 + (6 if (t // 30) % 7 == 0 else 0)
+
+    assert verdict(series(threads=spiky)).ok
+    res = verdict(series(threads=lambda t: 8 if t < 2400 else 13))          # the later 10 minutes sit 5 above the first
+    assert "threads:dv-edge-webrtc" in failed(res)
+    res = verdict(series(fds=lambda t: 30 if t < 2400 else 35, idle_fds=30))
+    assert "fds:dv-edge-webrtc" in failed(res)
+
+
+def test_median_windows_use_the_first_and_last_ten_minutes_and_scale_for_a_short_run():
+    rows = [{"t": 100.0 + 30 * i, "threads": 5 if i < 20 else 9} for i in range(100)]          # 50 minutes, 30 s apart
+    m = soak.window_medians(rows, "threads", 600.0)
+    assert m == {"early": 5.0, "late": 9.0, "n_early": 21, "n_late": 21}
+    sparse = [{"t": 100.0 + 19 * i, "threads": i} for i in range(13)]                          # a short run: ticks of 19 s
+    m = soak.window_medians(sparse, "threads", 48.0)
+    assert m["n_early"] == 3 and m["n_late"] == 3 and m["early"] == 1.0 and m["late"] == 11.0
+    m = soak.window_medians(sparse, "threads", 5.0)                                            # window with 1 row: the 3 first / last
+    assert m["n_early"] == 3 and m["n_late"] == 3
+    assert soak.timing({})["median_window_s"] == 600.0
+    assert soak.timing({"DVT_SOAK_SHORT": "1"})["median_window_s"] == 48.0                    # 600 x 240 / 3000
+
+
+def test_the_idle_settle_covers_the_longest_link_timeout():
+    assert soak.SETTLE_MIN_S == 170 and soak.LINK_TIMEOUTS_S["imrs"] == 150 and soak.LINK_TIMEOUTS_S["mmdvm"] == 100
+    rows = [soak.mark_row(T0 + 100, "stopping", "listeners zero: True [0]"), soak.mark_row(T0 + 130, "idle", "start")]
+    assert soak.settle_observed(rows) == 30.0 and soak.settle_observed([]) is None
+
+
+# ---- smaps_rollup: optional, recorded, never asserted
+
+SMAPS_REPLY = PROC_REPLY + "smaps_rss_kb=30000\nsmaps_anon_kb=21000\nsmaps_private_dirty_kb=20000\nsmaps_pss_anon_kb=20500\n"
+
+
+def test_smaps_keys_are_parsed_when_present_and_tolerated_when_absent():
+    assert wl.parse_procstat_out(PROC_REPLY).smaps == {}
+    got = wl.parse_procstat_out(SMAPS_REPLY).smaps
+    assert got == {"rss": 30000, "anon": 21000, "private_dirty": 20000, "pss_anon": 20500}
+    part = wl.parse_procstat_out(PROC_REPLY + "smaps_anon_kb=5\nsmaps_rss_kb=oops\n").smaps          # garbled value: dropped, not fatal
+    assert part == {"anon": 5}
+    row = soak.proc_row(wl.parse_procstat_out(SMAPS_REPLY), "measured", 1)
+    assert row["smaps_rss_kib"] == 30000 and row["smaps_pss_anon_kib"] == 20500 and row["rss_kib"] == 33000
+    assert not [k for k in soak.proc_row(wl.parse_procstat_out(PROC_REPLY), "measured", 1) if k.startswith("smaps_")]
+    back, bad = soak.parse_jsonl(soak.dump_line(row))
+    assert bad == 0 and back == [row]
+
+
+def test_smaps_series_are_recorded_with_first_last_and_slope_and_never_fail():
+    rows = series("dv-svc-status")
+    for r in rows:
+        if r["phase"] == "measured":
+            minutes = (r["t"] - T0 - 600) / 60.0
+            r["smaps_anon_kib"] = int(10000 + 50 * minutes)
+            r["smaps_rss_kib"] = 12000
+    res = verdict(rows)
+    assert res.ok, failed(res)
+    sm = res.children["dv-svc-status"]["smaps"]
+    assert set(sm) == {"anon", "rss"} and sm["rss"]["slope_per_min"] == 0.0 and sm["rss"]["first"] == 12000
+    assert 49.0 < sm["anon"]["slope_per_min"] < 51.0 and sm["anon"]["first"] == 10000 and sm["anon"]["last"] > 12000
+    assert "anon" in soak.smaps_table(res) and "dv-svc-status" in soak.smaps_table(res)
+    plain = verdict(series())
+    assert "smaps" not in plain.children["dv-edge-webrtc"] and "not in the proc-stat replies" in soak.smaps_table(plain)
+
+
+# ---- the offline re-judgement of a finished run
+
+def write_run(tmp_path, rows, saved=None):
+    web = tmp_path / "web"
+    web.mkdir()
+    (web / "soak-samples.jsonl").write_text("".join(soak.dump_line(r) + "\n" for r in rows))
+    if saved is not None:
+        (web / "soak.json").write_text(json.dumps(saved))
+    return web
+
+
+def test_rejudge_reads_a_run_directory_and_applies_the_current_rules(tmp_path):
+    rows = series() + gauge_rows() + counter_rows()
+    rows += [soak.mark_row(T0 + 3700, "stopping", "listeners zero: True [0]"), soak.mark_row(T0 + 3730, "idle", "start")]
+    saved = {"measured_s": 3000.0, "short": False, "children": ["dv-edge-webrtc"], "events": events_ok(),
+             "result": {"checks": [{"name": "threads:dv-edge-webrtc", "ok": False}]},
+             "extra_checks": [{"name": "drained", "ok": True, "detail": "x"}]}
+    write_run(tmp_path, rows, saved)
+    for path in (tmp_path, tmp_path / "web", tmp_path / "web" / "soak-samples.jsonl"):
+        text, ok = soak.rejudge(str(path))
+        assert ok and "VERDICT: PASS" in text and "dv-edge-webrtc" in text
+    assert "changed:       fixed ['threads:dv-edge-webrtc'], new none" in text
+    assert "settle before the idle window in this run: 30 s (rule: >= 170 s)" in text
+    # a failing run exits non-zero through main()
+    bad = series(threads=lambda t: 8 if t < 2400 else 14) + gauge_rows() + counter_rows()
+    other = tmp_path / "bad"
+    other.mkdir()
+    write_run(other, bad)
+    text, ok = soak.rejudge(str(other))
+    assert not ok and "VERDICT: FAIL" in text and "threads:dv-edge-webrtc" in text
+    assert soak.main([str(other)]) == 1 and soak.main([str(tmp_path)]) == 0
+
+
+def test_rejudge_without_samples_is_an_error(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        soak.rejudge(str(tmp_path))

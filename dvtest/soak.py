@@ -16,10 +16,13 @@ Lead defaults of the criteria (DV-Router, 2026-11-02), all constants below:
      params["rss_judged"] False). Next to the RSS the case records the gauge-style series of dv-svc-status and
      dv-router (ATTR_INCLUDE) and the number of series of the scrape, every tick, for attribution (recorded,
      never asserted: attribution())
-  3  threads and fds at the end of the measured part <= max(end of warmup + 10 percent, +2 threads, +4 fds) over
-     the end-of-warmup value (the floor applies next to the 10 percent rule: 10 percent of 8 threads is 0.8); after
-     all traffic stopped the fds are within +5 of the idle value taken before any traffic (rulings of DV-Router,
-     2026-11-02)
+  3  threads and fds are NOT judged by the last sample (the tokio blocking pool spawns threads lazily and keeps one
+     about 10 s): per child the median over the LAST 10 minutes of the measured part against the median over the
+     FIRST 10 minutes after warmup (both windows scaled with a shorter measured part: 10/50 of it), FAIL only when
+     the later median exceeds the earlier by more than max(10 percent of the earlier, 3 threads) resp. max(10 percent,
+     4 fds). A single last sample above the old limit (end of warmup + max(10 percent, +2 threads / +4 fds)) is only
+     FLAGGED (a warning). After all traffic stopped the fds are within +5 of the idle value taken before any traffic
+     (rulings of DV-Router, 2026-11-02)
   4  the counters of FLAT_FAMILIES are FLAT over the measured part (value at the end of warmup == value at the
      end, absolute zero growth); a series that is not on /metrics counts as 0 (LAZY_FAMILIES are created at their
      first increment: they must not appear or grow, and are never required to be present); a family that grows and
@@ -40,6 +43,13 @@ WARMUP_S = 600.0
 MEASURED_S = 3000.0
 SAMPLE_S = 30.0
 IDLE_S = 120.0
+# Settle between the last client leaving and the start of the idle window: the longest link timeout of the SUT plus
+# one sweep tick (DV-Router ruling 2026-11-02: imrs link timeout 150 s + sweep tick). The idle window must show no
+# growth of any dv_edge_drops_total reason, so every link of a departed client must have aged out before it starts.
+LINK_TIMEOUTS_S = {"imrs": 150, "mmdvm": 100, "dextra": 60, "dcs": 60, "ysf": 60, "xlx": 30, "dplus": 30, "m17": 30, "nxdn": 30,
+                   "p25": 30}                   # usrp (dynamic) never expires
+SWEEP_TICK_S = 20
+SETTLE_MIN_S = max(LINK_TIMEOUTS_S.values()) + SWEEP_TICK_S        # 170 s; cases/test_web_soak.py SETTLE_S must be >= this
 WALL_CAP_S = 75 * 60.0
 SEATS = 100                     # receive-only WebRTC listeners held at any time
 CHURN_PER_MIN = 5
@@ -48,9 +58,13 @@ OVER_S = 10.0
 RSS_FLOOR_KIB = 5 * 1024
 RSS_FRACTION = 0.10
 THREADS_FRACTION = 0.10
-THREADS_FLOOR = 2
+THREADS_FLOOR = 3               # median rule: later median may exceed the earlier by max(10 percent, 3 threads)
 FDS_FRACTION = 0.10
-FDS_FLOOR = 4
+FDS_FLOOR = 4                   # ... and by max(10 percent, 4 fds)
+MEDIAN_WINDOW_S = 600.0         # first / last 10 minutes of the real measured part (scaled for a shorter one, see timing())
+MEDIAN_MIN_SAMPLES = 3          # a window with fewer samples takes the first / last this many samples instead
+FLAG_THREADS_FLOOR = 2          # the OLD end-sample limit (end of warmup + max(10 percent, 2 / 4)): now only a flag
+FLAG_FDS_FLOOR = 4
 IDLE_FDS_SLACK = 5
 MIN_SAMPLES = 5                 # measured samples a child needs for a slope
 
@@ -101,6 +115,10 @@ ATTR_EXCLUDE = (r"_total$", r"_bucket$", r"_sum$", r"_count$", r"_up$", r"timest
 ATTR_MAX_SERIES = 400               # series kept per scrape; the rest is counted (attr row "truncated")
 ATTR_KEY_SERIES_TOTAL = "scrape:series_total"
 
+# smaps_rollup of a process (KiB), recorded next to the RSS when the proc-stat reply carries it (scripts/lib/procstat.sh
+# keys smaps_rss_kb, smaps_anon_kb, smaps_private_dirty_kb, smaps_pss_anon_kb): never asserted, absent is fine.
+SMAPS_SERIES = ("rss", "anon", "private_dirty", "pss_anon")
+
 
 # ------------------------------------------------------------------ timing (real run and short mode)
 
@@ -125,8 +143,10 @@ def timing(env):
     and DVT_SOAK_SAMPLE_S override either. `smoke` = not the real timing. `rss_scale` scales the RSS growth bound of
     a measured part shorter than the real one: the bound is a RATE (max(5 MiB, 10 percent) per 3000 s), so a measured
     part of 240 s gets 240/3000 of the bytes; it is as sharp as the real one in KiB per minute and noisier, so a
-    failure of the RSS check in a short run is a lead, not a verdict. ValueError for a bad number or fewer than 6
-    samples in the measured part (a slope needs MIN_SAMPLES)."""
+    failure of the RSS check in a short run is a lead, not a verdict. `median_window_s` = the first / last
+    window of the thread and fd median rule: 600 s of the real 3000 s measured part, scaled by the same factor
+    (240 s measured: 48 s). ValueError for a bad number or fewer than 6 samples in the measured part (a slope needs
+    MIN_SAMPLES)."""
     short = (env.get("DVT_SOAK_SHORT") or "").strip() == "1"
     warmup = _env_float(env, "DVT_SOAK_WARMUP_S")
     measured = _env_float(env, "DVT_SOAK_MEASURE_S", "DVT_SOAK_MEASURED_S")
@@ -137,8 +157,9 @@ def timing(env):
     if sample < 0.05 or measured < (MIN_SAMPLES + 1) * sample:
         raise ValueError("measured %g s with a sample every %g s gives fewer than %d samples" % (measured, sample, MIN_SAMPLES + 1))
     smoke = (warmup, measured) != (WARMUP_S, MEASURED_S)
+    scale = min(1.0, measured / MEASURED_S)
     return {"warmup_s": warmup, "measured_s": measured, "sample_s": sample, "short": short, "smoke": smoke,
-            "rss_scale": min(1.0, measured / MEASURED_S)}
+            "rss_scale": scale, "median_window_s": MEDIAN_WINDOW_S * scale}
 
 
 # ------------------------------------------------------------------ small maths
@@ -167,10 +188,14 @@ def least_squares(xs, ys):
 # ------------------------------------------------------------------ the sample file
 
 def proc_row(sample, phase, seq, label=None):
-    """The raw row of a dvtest.webload.ProcSample; `label` replaces the comm as the child's name (dv-room.01 ...)."""
-    return {"kind": "proc", "t": round(sample.t, 3), "seq": seq, "phase": phase, "name": label or sample.comm, "pid": sample.pid,
-            "start": sample.starttime, "rss_kib": sample.vmrss_kib, "hwm_kib": sample.vmhwm_kib, "threads": sample.threads,
-            "fds": sample.fds, "ticks": sample.ticks}
+    """The raw row of a dvtest.webload.ProcSample; `label` replaces the comm as the child's name (dv-room.01 ...). The
+    smaps_rollup values (SMAPS_SERIES, KiB) are added as smaps_<name>_kib only when the proc-stat reply carried them."""
+    row = {"kind": "proc", "t": round(sample.t, 3), "seq": seq, "phase": phase, "name": label or sample.comm, "pid": sample.pid,
+           "start": sample.starttime, "rss_kib": sample.vmrss_kib, "hwm_kib": sample.vmhwm_kib, "threads": sample.threads,
+           "fds": sample.fds, "ticks": sample.ticks}
+    for short, value in sorted((getattr(sample, "smaps", None) or {}).items()):         # optional: only when the reply carried them
+        row["smaps_%s_kib" % short] = value
+    return row
 
 
 def absent_row(name, t, phase, seq):
@@ -469,6 +494,35 @@ def _limit(base, fraction, floor_abs):
     return max(base * (1.0 + fraction), base + floor_abs)
 
 
+def window_medians(rows, key, window_s, min_samples=MEDIAN_MIN_SAMPLES):
+    """Medians of rows[key] over the first and the last `window_s` seconds of the rows (time order, each with "t"):
+    {"early", "late", "n_early", "n_late"}. A window that holds fewer than `min_samples` rows takes the first / last
+    `min_samples` rows instead (a short run with a sample every 15 to 19 s has 2 or 3 rows in 48 s)."""
+    pts = [(r["t"], r[key]) for r in rows]
+    t0, t1 = pts[0][0], pts[-1][0]
+    early = [v for t, v in pts if t <= t0 + window_s]
+    late = [v for t, v in pts if t >= t1 - window_s]
+    if len(early) < min_samples:
+        early = [v for _t, v in pts[:min_samples]]
+    if len(late) < min_samples:
+        late = [v for _t, v in pts[-min_samples:]]
+    return {"early": median(early), "late": median(late), "n_early": len(early), "n_late": len(late)}
+
+
+def smaps_stats(rows):
+    """{series: {"n", "first", "last", "min", "max", "slope_per_min"}} (KiB) of the smaps_<series>_kib values of the
+    measured rows of one child, only for the series the rows carry; {} when none do. Recorded, never asserted."""
+    out = {}
+    for short in SMAPS_SERIES:
+        pts = [(r["t"], r["smaps_%s_kib" % short]) for r in rows if isinstance(r.get("smaps_%s_kib" % short), (int, float))]
+        if not pts:
+            continue
+        xs, ys = [t for t, _ in pts], [v for _, v in pts]
+        slope, _ = least_squares(xs, ys) if len(pts) > 1 else (0.0, ys[0])
+        out[short] = {"n": len(pts), "first": ys[0], "last": ys[-1], "min": min(ys), "max": max(ys), "slope_per_min": round(slope * 60.0, 3)}
+    return out
+
+
 def judge_child(name, rows, params):
     """(record, checks) of one child; `rows` are all its proc rows in time order."""
     checks = []
@@ -520,23 +574,49 @@ def judge_child(name, rows, params):
     checks.append(Check("rss:" + name, growth <= limit or not judged, "%sslope %.2f KiB/min x %.0f s = %.0f KiB, limit %.0f KiB%s (start %.0f KiB)"
                         % (lead, slope * 60.0, window, growth, limit, scaled, base_rss)))
 
-    base_thr = median([r["threads"] for r in warm[-3:]])
-    end_thr = median([r["threads"] for r in meas[-5:]])
-    lim_thr = _limit(base_thr, p["threads_fraction"], p["threads_floor"])
-    rec["threads"] = {"start": base_thr, "end": end_thr, "max": max(r["threads"] for r in meas), "limit": round(lim_thr, 1)}
-    checks.append(Check("threads:" + name, end_thr <= lim_thr, "end %.0f, start %.0f, limit %.1f" % (end_thr, base_thr, lim_thr)))
+    flags = []
+    window_s = p.get("median_window_s") or MEDIAN_WINDOW_S * min(1.0, (p.get("measured_s") or span) / MEASURED_S)
+    smaps = smaps_stats(meas)
+    if smaps:
+        rec["smaps"] = smaps
 
+    # threads: median of the last window against the median of the first window of the measured part (not the last sample)
+    thr = window_medians(meas, "threads", window_s)
+    lim_thr_extra = max(p["threads_fraction"] * thr["early"], p["threads_floor"])
+    lim_thr = thr["early"] + lim_thr_extra
+    base_thr = median([r["threads"] for r in warm[-3:]])
+    old_thr = _limit(base_thr, p["threads_fraction"], p["flag_threads_floor"])
+    last_thr = meas[-1]["threads"]
+    rec["threads"] = {"start": thr["early"], "end": thr["late"], "max": max(r["threads"] for r in meas), "limit": round(lim_thr, 1),
+                      "window_s": round(window_s, 1), "n_early": thr["n_early"], "n_late": thr["n_late"], "warmup_end": base_thr,
+                      "last": last_thr, "old_limit": round(old_thr, 1)}
+    checks.append(Check("threads:" + name, thr["late"] <= lim_thr,
+                        "median of the last %.0f s %.1f (n %d) vs the first %.0f s %.1f (n %d), limit %.1f; max %d, last %d"
+                        % (window_s, thr["late"], thr["n_late"], window_s, thr["early"], thr["n_early"], lim_thr, rec["threads"]["max"], last_thr)))
+    if last_thr > old_thr:
+        flags.append("FLAG threads %s: the last sample is %d, above the old end-sample limit %.1f (end of warmup %.0f); median rule: %.1f vs %.1f, limit %.1f"
+                     % (name, last_thr, old_thr, base_thr, thr["late"], thr["early"], lim_thr))
+
+    fds_m = [r for r in meas if r.get("fds", -1) >= 0]
     fds_w = [r["fds"] for r in warm[-3:] if r.get("fds", -1) >= 0]
-    fds_m = [r["fds"] for r in meas if r.get("fds", -1) >= 0]
     if not fds_w or not fds_m:
         rec["fds"] = {"available": False}
         rec["unmeasured"] = "fds unreadable (fds=-1)"
     else:
+        fd = window_medians(fds_m, "fds", window_s)
+        lim_fds = fd["early"] + max(p["fds_fraction"] * fd["early"], p["fds_floor"])
         base_fds = median(fds_w)
-        end_fds = median(fds_m[-5:])
-        lim_fds = _limit(base_fds, p["fds_fraction"], p["fds_floor"])
-        rec["fds"] = {"available": True, "start": base_fds, "end": end_fds, "max": max(fds_m), "limit": round(lim_fds, 1)}
-        checks.append(Check("fds:" + name, end_fds <= lim_fds, "end %.0f, start %.0f, limit %.1f" % (end_fds, base_fds, lim_fds)))
+        old_fds = _limit(base_fds, p["fds_fraction"], p["flag_fds_floor"])
+        last_fds = fds_m[-1]["fds"]
+        rec["fds"] = {"available": True, "start": fd["early"], "end": fd["late"], "max": max(r["fds"] for r in fds_m), "limit": round(lim_fds, 1),
+                      "window_s": round(window_s, 1), "n_early": fd["n_early"], "n_late": fd["n_late"], "warmup_end": base_fds,
+                      "last": last_fds, "old_limit": round(old_fds, 1)}
+        checks.append(Check("fds:" + name, fd["late"] <= lim_fds,
+                            "median of the last %.0f s %.1f (n %d) vs the first %.0f s %.1f (n %d), limit %.1f; max %d, last %d"
+                            % (window_s, fd["late"], fd["n_late"], window_s, fd["early"], fd["n_early"], lim_fds, rec["fds"]["max"], last_fds)))
+        if last_fds > old_fds:
+            flags.append("FLAG fds %s: the last sample is %d, above the old end-sample limit %.1f (end of warmup %.0f); median rule: %.1f vs %.1f, limit %.1f"
+                         % (name, last_fds, old_fds, base_fds, fd["late"], fd["early"], lim_fds))
         base0 = [r["fds"] for r in idle0 if r.get("fds", -1) >= 0]
         last = [r["fds"] for r in idle if r.get("fds", -1) >= 0]
         if base0 and last:
@@ -546,6 +626,8 @@ def judge_child(name, rows, params):
                                 % (last[-1], base0[-1], idle_limit)))
         else:
             rec.setdefault("unmeasured", "no idle fds sample (before: %d, after: %d)" % (len(base0), len(last)))
+    if flags:
+        rec["flags"] = flags
     return rec, checks
 
 
@@ -759,7 +841,8 @@ def assign_phases(rows):
 def default_params():
     return {"min_samples": MIN_SAMPLES, "rss_floor_kib": RSS_FLOOR_KIB, "rss_fraction": RSS_FRACTION,
             "threads_fraction": THREADS_FRACTION, "threads_floor": THREADS_FLOOR, "fds_fraction": FDS_FRACTION,
-            "fds_floor": FDS_FLOOR, "idle_fds_slack": IDLE_FDS_SLACK, "rss_scale": 1.0, "flat_overrides": None,
+            "fds_floor": FDS_FLOOR, "flag_threads_floor": FLAG_THREADS_FLOOR, "flag_fds_floor": FLAG_FDS_FLOOR,
+            "median_window_s": None, "idle_fds_slack": IDLE_FDS_SLACK, "rss_scale": 1.0, "flat_overrides": None,
             "rss_judged": True, "measured_s": None}
 
 
@@ -799,6 +882,8 @@ def evaluate(rows, events=None, params=None, expected=()):
         if r.get("over_limit") and not r.get("judged", True):
             res.warnings.append("RSS lead %s: slope %.1f KiB/min, growth %.0f KiB over the window, limit %.0f KiB (short run: not a verdict)"
                                 % (name, r["slope_kib_per_min"], r["growth_kib"], r["limit_kib"]))
+    for name, c in sorted(res.children.items()):
+        res.warnings.extend(c.get("flags", []))
     res.attribution = attribution(rows)
     if events is None:
         res.add("events-quiet", False, "the public event stream was not sampled while idle")
@@ -864,7 +949,128 @@ def attribution_table(result, top=25):
     return "\n".join(lines)
 
 
+def smaps_table(result):
+    """Plain-text table of the smaps_rollup values (KiB) of the children whose proc-stat replies carried them: first, last
+    and the least-squares slope per minute over the measured part (recorded, not asserted). One line when none did."""
+    rows = [(name, c["smaps"]) for name, c in sorted(result.children.items()) if c.get("smaps")]
+    if not rows:
+        return "smaps_rollup: not in the proc-stat replies (scripts/lib/procstat.sh without smaps keys)"
+    lines = ["%-16s %-14s %10s %10s %11s" % ("smaps (KiB)", "series", "first", "last", "slope/min")]
+    for name, ser in rows:
+        for short in SMAPS_SERIES:
+            if short in ser:
+                v = ser[short]
+                lines.append("%-16s %-14s %10s %10s %11s" % (name, short, _f(v["first"]), _f(v["last"]), _f(v["slope_per_min"])))
+    return "\n".join(lines)
+
+
+def settle_observed(rows):
+    """Seconds between the mark "listeners zero" (the last client is gone) and the mark that opens the idle window, from
+    the mark rows of a sample file; None when either is missing. The case waits SETTLE_S in between (plus the counter
+    snapshot), so this is what a finished run really had: it must be >= SETTLE_MIN_S."""
+    zero = [r["t"] for r in rows if r.get("kind") == "mark" and str(r.get("note", "")).startswith("listeners zero")]
+    start = [r["t"] for r in rows if r.get("kind") == "mark" and r.get("phase") == "idle" and r.get("note") == "start"]
+    if not zero or not start or start[-1] < zero[-1]:
+        return None
+    return start[-1] - zero[-1]
+
+
 def _f(value):
     if value is None:
         return "-"
     return ("%d" % value) if float(value).is_integer() else ("%.1f" % value)
+
+
+# ------------------------------------------------------------------ offline re-judgement of a finished run
+
+def find_samples(path):
+    """The soak-samples.jsonl of a run: `path` may be the file, the web directory, or the run directory (out/<utc>)."""
+    from pathlib import Path
+    p = Path(path)
+    for cand in (p, p / "soak-samples.jsonl", p / "web" / "soak-samples.jsonl"):
+        if cand.is_file():
+            return cand
+    raise FileNotFoundError("no soak-samples.jsonl under %s" % path)
+
+
+def params_of_run(saved, override=None):
+    """Judgement params of a finished run from its soak.json (`saved`, may be {}): the measured part, the RSS scale and
+    whether the RSS slope is a verdict (not in a short run), like the case passes them; `override` {measured_s,
+    short} wins. A run without soak.json is judged as the real run."""
+    override = override or {}
+    measured = override.get("measured_s") or saved.get("measured_s") or MEASURED_S
+    short = override["short"] if override.get("short") is not None else bool(saved.get("short"))
+    scale = min(1.0, measured / MEASURED_S)
+    return {"rss_scale": scale, "rss_judged": not short, "measured_s": measured, "median_window_s": MEDIAN_WINDOW_S * scale}
+
+
+CHILD_CHECKS = ("no-restart", "rss", "threads", "fds", "fds-idle", "samples")
+
+
+def rejudge(path, override=None, verbose=False):
+    """(report text, ok) of a finished run re-evaluated with the current rules from its saved samples. The file's
+    soak.json (next to the samples) supplies the timing, the children, the idle event verdict and the checks of the
+    parts that are not rejudged (generator, traffic mix, sampling, drained), which are shown as saved."""
+    from pathlib import Path
+    samples = find_samples(path)
+    saved = {}
+    sj = samples.parent / "soak.json"
+    if sj.is_file():
+        try:
+            saved = json.loads(sj.read_text(encoding="utf-8"))
+        except ValueError:
+            saved = {}
+    rows, bad = parse_jsonl(samples.read_text(encoding="utf-8"))
+    params = params_of_run(saved, override)
+    res = evaluate(rows, events=saved.get("events"), params=params, expected=saved.get("children") or ())
+    out = ["run: %s (%d rows, %d damaged lines); measured %g s, median window %g s, short %s"
+           % (Path(samples).resolve().parent, len(rows), bad, params["measured_s"], params["median_window_s"], not params["rss_judged"]),
+           "", table(res), "", counters_table(res), "", attribution_table(res), "", smaps_table(res), ""]
+    for w in res.warnings:
+        out.append("WARN %s" % w)
+    quiet = 0
+    for c in res.checks:
+        if c.ok and not verbose and c.name.split(":")[0] in CHILD_CHECKS:
+            quiet += 1                                          # 5 lines per child (26 rooms): only the failing ones are listed
+            continue
+        out.append("%-4s %-34s %s" % ("ok" if c.ok else "FAIL", c.name, c.detail))
+    if quiet:
+        out.append("ok   (%d passing per-child checks not listed: %s; --all lists them)" % (quiet, ", ".join(CHILD_CHECKS)))
+    extra = saved.get("extra_checks") or []
+    for c in extra:
+        out.append("%-4s %-34s %s" % ("ok" if c.get("ok") else "FAIL", c.get("name"), "(as saved) " + str(c.get("detail"))))
+    settle = settle_observed(rows)
+    if settle is not None:
+        out.append("")
+        out.append("NOTE settle before the idle window in this run: %.0f s (rule: >= %d s)%s" % (
+            settle, SETTLE_MIN_S, "" if settle >= SETTLE_MIN_S else "; drops-idle was measured on a window that started too early, "
+                                                                    "so it cannot be re-judged offline"))
+    old = {c["name"] for c in (saved.get("result") or {}).get("checks", []) if not c.get("ok")}
+    new = {c.name for c in res.checks if not c.ok}
+    if saved.get("result"):
+        out.append("failed before: %s" % (sorted(old) or "none"))
+        out.append("failed now:    %s" % (sorted(new) or "none"))
+        out.append("changed:       fixed %s, new %s" % (sorted(old - new) or "none", sorted(new - old) or "none"))
+    failed = sorted(new | {c.get("name") for c in extra if not c.get("ok")})
+    out.append("")
+    out.append("VERDICT: %s%s" % ("PASS" if not failed else "FAIL", "" if not failed else " (%s)" % ", ".join(failed)))
+    return "\n".join(out), not failed
+
+
+def main(argv=None):
+    import argparse
+    ap = argparse.ArgumentParser(prog="python3 -m dvtest.soak", description="Re-judge a finished SOAK1 run offline from out/<run>/web/soak-samples.jsonl "
+                                 "(read only): prints the per child table, the counters, the checks and the verdict of the current rules.")
+    ap.add_argument("path", help="run directory (out/<utc>), its web directory, or soak-samples.jsonl")
+    ap.add_argument("--measured-s", type=float, help="length of the measured part when there is no soak.json")
+    ap.add_argument("--all", action="store_true", help="list every passing per-child check too")
+    ap.add_argument("--short", action="store_true", help="treat the run as a short run (RSS is a lead) when there is no soak.json")
+    args = ap.parse_args(argv)
+    text, ok = rejudge(args.path, {"measured_s": args.measured_s, "short": True if args.short else None}, verbose=args.all)
+    print(text)
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())
