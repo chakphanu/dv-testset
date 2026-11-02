@@ -103,6 +103,13 @@ floor: p99 0.9 ms, max 8.1 ms with 3000 packets; the 8 ms maximum at one listene
 SUT. The tester (source, sampler) used 7.7 percent of a core. The generator is not the bottleneck at 200 listeners; at full load it
 doubles its packet work (about 45 percent of one core estimated) and still has headroom.
 
+### Confirmation of the F9 fix (run `out/20261102T044726Z`, `dv-router:wip-81dcc76`, EDG2, no capture)
+
+All 5 cases pass (717 s). W8 at 200 listeners x 50 pps x 60 s: 600000 of 600000 received, 0 lost, 0 duplicate, 0 reordered,
+0 invalid, `dv_edge_webrtc_listeners` 200, both rooms served, `dv_edge_webrtc_join_refused_total{reason="core"}` 0 (the case now
+reads it and fails on any refusal). Edge: 10.4 percent cpu (limit 25), peak RSS 32.1 MiB (limit 64), worst-listener jitter
+p99 11.0 ms (limit 20) and max 12.1 ms (limit 60), 0 source deadlines missed. The 128-listener cap of F9 is gone.
+
 ## Flood (short, bounded; MS9 limits)
 
 From the tester's address while a probe listener (generator address) kept hearing a 36 s over, in the same run: **passed**.

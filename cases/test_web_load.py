@@ -34,6 +34,7 @@ from webload_support import LoadGen, LoadGenError, Sampler, Source, generator_cp
 pytestmark = [pytest.mark.rig, pytest.mark.web, pytest.mark.slow]
 
 LISTENERS = "dv_edge_webrtc_listeners"
+JOIN_REFUSED = "dv_edge_webrtc_join_refused_total"   # EDG2: {reason="core"}, zero from the first record
 ROOMS = ("A", "B")
 READY_WAIT_S = 180.0
 RESULTS = {"schema": 1, "cases": {}}
@@ -116,6 +117,15 @@ def edge_listeners(rig_control):
     return metrics.total(metrics.parse(rig_control.metrics("xlxd-sut")), LISTENERS)
 
 
+def join_refused(rig_control):
+    """Sum of dv_edge_webrtc_join_refused_total{reason="core"}, None when the SUT does not export it (images
+    before EDG2): then it is recorded as absent and not judged."""
+    samples = metrics.parse(rig_control.metrics("xlxd-sut"))
+    if not any(sample.name == JOIN_REFUSED for sample in samples):
+        return None
+    return metrics.total(samples, JOIN_REFUSED, reason="core")
+
+
 def wait_gauge(rig_control, n, budget_s=45.0):
     """The edge publishes its listener gauge every few seconds and the hub caches it (web.md; K22 waited up to 35 s):
     poll until it equals n. Returns (last value, [values seen])."""
@@ -165,6 +175,7 @@ def run_load(n, plan_kw, web_base_url, web_ca, load_gen, rig_control, target, ac
     summary["connect_status"] = {k: st[k] for k in ("state", "connected", "failed", "failures", "error")}
     ok_connect = st["connected"] == n and st["state"] != "error"
     summary["edge_listeners_gauge"], summary["edge_listeners_gauge_seen"] = wait_gauge(rig_control, n)
+    summary["join_refused_core"] = join_refused(rig_control)
     post_connect, _ = sampler.edge()
     summary["edge_vmhwm_after_connect_kib"] = post_connect.vmhwm_kib
     summary["edge_threads_after_connect"] = post_connect.threads
@@ -245,6 +256,9 @@ def judge_integrity(summary, totals, n):
             problems.append("%s packets: %d" % (key, totals[key]))
     if summary["source"]["missed"] or summary["source_errors"]:
         problems.append("source: %d missed deadlines, errors %s" % (summary["source"]["missed"], summary["source_errors"]))
+    if summary.get("join_refused_core"):
+        problems.append("the edge refused %s JOINs (%s{reason=core}): peers accepted at signalling but closed"
+                        % (summary["join_refused_core"], JOIN_REFUSED))
     if not summary["edge_same_pid"]:
         problems.append("dv-edge-webrtc restarted during the run")
     return problems
