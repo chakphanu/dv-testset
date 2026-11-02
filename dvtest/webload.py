@@ -414,10 +414,27 @@ class ProcSample:
         return self.ticks / float(self.clk_tck)
 
 
-def parse_procstat_out(text):
-    """ProcSample of a `proc-stat` reply (lines key=value); ValueError when a key is missing."""
-    kv = {}
+def split_procstat_out(text):
+    """The blocks of a `proc-stat` reply: one text per process, each starting at a `pid=` line (a name that several
+    processes carry, such as dv-room, gives several). A reply without a pid= line is returned whole."""
+    blocks = []
     for line in text.splitlines():
+        if line.strip().startswith("pid=") or not blocks:
+            blocks.append([])
+        blocks[-1].append(line)
+    return ["\n".join(b) + "\n" for b in blocks] or [text]
+
+
+def parse_procstat_all(text):
+    """[ProcSample] of every process in a `proc-stat` reply, in the order of the reply (pid order)."""
+    return [parse_procstat_out(block) for block in split_procstat_out(text)]
+
+
+def parse_procstat_out(text):
+    """ProcSample of a `proc-stat` reply (lines key=value); the FIRST process when the reply holds several
+    (parse_procstat_all reads them all); ValueError when a key is missing."""
+    kv = {}
+    for line in split_procstat_out(text)[0].splitlines():
         key, sep, value = line.strip().partition("=")
         if sep:
             kv[key] = value

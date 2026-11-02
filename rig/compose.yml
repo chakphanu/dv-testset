@@ -372,8 +372,10 @@ services:
       DVT_WEBLOAD: ${DVT_WEBLOAD:-off}
       # cases/test_web_soak.py: 1 starts the 60 minute soak; timing, seed and modules of the mix (docs/web-soak-cases.md)
       DVT_SOAK: ${DVT_SOAK:-}
-      DVT_SOAK_WARMUP_S: ${DVT_SOAK_WARMUP_S:-600}
-      DVT_SOAK_MEASURED_S: ${DVT_SOAK_MEASURED_S:-3000}
+      DVT_SOAK_SHORT: ${DVT_SOAK_SHORT:-}
+      DVT_SOAK_WARMUP_S: ${DVT_SOAK_WARMUP_S:-}
+      DVT_SOAK_MEASURE_S: ${DVT_SOAK_MEASURE_S:-${DVT_SOAK_MEASURED_S:-}}
+      DVT_SOAK_SAMPLE_S: ${DVT_SOAK_SAMPLE_S:-}
       DVT_SOAK_SEED: ${DVT_SOAK_SEED:-1}
       DVT_SOAK_MODULES: ${DVT_SOAK_MODULES:-}
       DVT_WEBLOAD_URL: http://${DVT_NET:-172.30.0}.97:${DVT_WEBLOAD_PORT:-3100}

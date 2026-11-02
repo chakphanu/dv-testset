@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/rig.md): the SUT's own NXDN and P25 client ports for the
+# soak (cases/test_web_soak.py, docs/web-soak-cases.md). The native template has no xlxd.* files, so the importer's
+# DVT_NXDN / DVT_P25 rows do not exist; this is the recipe of DV-Router's manual (docs/design/config.md, "Edge
+# settings"), the same endpoints cases/proto/test_nxdn_server.py and test_p25_network.py talk to:
+#   NXDN  UDP 41400 (default port), TG 31672 -> module F      (DVT_NXDN_TG / DVT_NXDN_MODULE of the rig, soak lane nxdn=F)
+#   P25   UDP 41000 (default port), one served module G, TG 31672 (DVT_P25_TG / DVT_P25_MODULE, soak lane p25=G)
+# If DVT_SOAK_MODULES moves the nxdn or p25 lane to another module, change the letters here too. The template's
+# [edges.nxdn] / [edges.p25] tables (enable = "auto") are MERGED key by key (dvtest/sut_config.py): only the keys
+# below change. Combine: DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/soak-edges.toml
+
+[edges.nxdn]
+enable = true
+tg_modules = "31672:F"
+
+[edges.p25]
+enable = true
+server_module = "G"
+server_tg = 31672

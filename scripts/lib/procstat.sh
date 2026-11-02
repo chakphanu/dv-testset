@@ -29,7 +29,14 @@
 #   readable), starttime= (clock ticks after boot: with the pid it names the process), t=<epoch seconds, taken
 #   right after the reads>; exit 0 ok, 3 no such process, 5 no limits.
 
-DVT_PROCSTAT_NAMES="dv-router dv-edge-xlx dv-edge-nxdn dv-edge-p25 dv-edge-usrp dv-edge-webrtc dv-svc-status dv-svc-web dv-svc-admin dv-room dv-recorder dv-codec-ambed"
+# Explicit list, never a pattern: every edge is its own binary (no combined edge); aprsis, ax25, codec-ambed and
+# the svc-* ones exist only when enabled. Keep in step with PROC_STAT_NAMES of dvtest/control.py (unit test).
+DVT_PROCSTAT_NAMES="dv-router \
+  dv-edge-dextra dv-edge-dplus dv-edge-dcs dv-edge-mmdvm dv-edge-dmrplus dv-edge-ysf \
+  dv-edge-m17 dv-edge-g3 dv-edge-imrs dv-edge-xlx dv-edge-nxdn dv-edge-p25 dv-edge-usrp dv-edge-webrtc \
+  dv-edge-aprsis dv-edge-ax25 \
+  dv-room dv-data-worker dv-codec-ambed \
+  dv-svc-status dv-svc-web dv-svc-admin dv-svc-iddb dv-svc-idsync dv-svc-callhome dv-svc-recorder"
 
 dvt_procstat_allowed() {
   [ "$#" -eq 2 ] || return 1
@@ -68,6 +75,7 @@ if want == "list":
         if int(name) != me and rest[0] != "Z":
             print("proc=%s %s %s" % (name, rest[1], comm))
     sys.exit(0)
+found = 0
 for name in sorted((d for d in os.listdir("/proc") if d.isdigit()), key=int):
     pid = int(name)
     if pid == me:
@@ -94,6 +102,7 @@ for name in sorted((d for d in os.listdir("/proc") if d.isdigit()), key=int):
     except OSError:
         fds = -1
     now = time.time()
+    # one block of key=value lines per process, each starting with pid= (dv-room runs one process per module)
     print("pid=%d" % pid)
     print("comm=%s" % comm)
     print("utime=%s" % rest[11])
@@ -105,6 +114,8 @@ for name in sorted((d for d in os.listdir("/proc") if d.isdigit()), key=int):
     print("fds=%d" % fds)
     print("starttime=%s" % rest[19])
     print("t=%.6f" % now)
+    found += 1
+if found:
     sys.exit(0)
 print("none=" + want)
 sys.exit(3)

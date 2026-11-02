@@ -3,6 +3,7 @@
 generator, lanes, event stream) with seconds instead of minutes, so that the orchestration (phases, sampling, the
 stop file, the wall clock cap, the teardown, the report files) is checked before the 70 minute run."""
 import json
+import os
 import threading
 import time
 
@@ -19,8 +20,9 @@ CHILDREN = [(1, 0, "dv-router"), (7, 1, "dv-edge-xlx"), (8, 1, "dv-svc-web"), (9
 
 
 class Ctl:
-    def __init__(self, leak=0.0, restart_at=None):
+    def __init__(self, leak=0.0, restart_at=None, drops_per_s=0.0):
         self.listeners, self.leak, self.restart_at, self.t0, self.lock = 0, leak, restart_at, time.time(), threading.Lock()
+        self.drops_per_s = drops_per_s
 
     def proc_list(self):
         return list(CHILDREN)
@@ -34,7 +36,8 @@ class Ctl:
                 % (pid, process, rss + 10, rss, start, now))
 
     def metrics(self, service="xlxd-sut", timeout=30.0):
-        return "dv_edge_webrtc_listeners %d\ndv_hub_dropped_total 5\ndv_panics_total 0\n" % self.listeners
+        return ("dv_edge_webrtc_listeners %d\ndv_hub_dropped_total 5\ndv_panics_total 0\ndv_edge_drops_total{reason=\"x\"} %d\n"
+                % (self.listeners, 4 + self.drops_per_s * (time.time() - self.t0)))
 
 
 class Gen:
@@ -84,17 +87,17 @@ class Target:
 def rehearsal(tmp_path, monkeypatch):
     monkeypatch.setenv("DVT_OUT", str(tmp_path))
     monkeypatch.setenv("DVT_SOAK_WARMUP_S", "1")
-    monkeypatch.setenv("DVT_SOAK_MEASURED_S", "2.5")
+    monkeypatch.setenv("DVT_SOAK_MEASURE_S", "2.5")
+    monkeypatch.setenv("DVT_SOAK_SAMPLE_S", "0.25")
     monkeypatch.setattr(ts, "IDLE0_TICKS", 1)
     monkeypatch.setattr(ts, "IDLE0_GAP_S", 0.1)
     monkeypatch.setattr(ts, "SETTLE_S", 0.1)
-    monkeypatch.setattr(ts, "SAMPLE_PERIOD_S", 0.25)
     monkeypatch.setattr(soak, "IDLE_S", 1.0)
     monkeypatch.setattr(ts.soak, "build_overs", lambda seed, lanes, dur: [{"t": 0.2 * i, "lane": lane, "dur_s": 1.0}
                                                                            for i in range(10) for lane in lanes])
 
     def lanes(target, env, modules):
-        return {n: Lane(n) for n in ss.REQUIRED_LANES}, {"nxdn": "no NXDN reflector", "p25": "no P25 reflector"}
+        return {n: Lane(n) for n in ss.REQUIRED_LANES}, {"nxdn": "no NXDN edge", "p25": "no P25 edge"}
 
     monkeypatch.setattr(ss, "make_lanes", lanes)
     web = tmp_path / "web"
@@ -119,6 +122,10 @@ def test_a_healthy_rehearsal_passes_and_writes_the_files(rehearsal):
     assert {c["name"] for c in report["extra_checks"]} >= {"generator-sessions", "sampling", "drained", "traffic:dstar", "traffic:m17"}
     assert report["lanes_skipped"].keys() == {"nxdn", "p25"} and report["table"][0].startswith("child")
     assert set(report["result"]["children"]) == {"dv-router", "dv-edge-xlx", "dv-svc-web", "dv-edge-webrtc"}
+    flat = report["result"]["counters"]["flat"]
+    assert flat["dv_edge_drops_total"]["status"] == "flat" and flat["dv_edge_tx_refused_total"]["status"] == "absent"
+    assert report["counters_table"][0].startswith("flat family") and "dv_edge_drops_total" in report["metric_families"]
+    assert report["short"] is False and report["sample_s"] == 0.25
     rows, bad = soak.parse_jsonl((rehearsal / "soak-samples.jsonl").read_text())
     assert bad == 0
     phases = {r["phase"] for r in rows if r["kind"] == "proc"}
@@ -135,6 +142,26 @@ def test_a_leaking_child_fails_the_case(rehearsal):
     assert "rss:" in str(err.value)
     report = json.loads((rehearsal / "soak.json").read_text())
     assert report["state"] == "done" and not report["result"]["ok"]
+
+
+def test_a_growing_flat_counter_fails_the_case_naming_the_family(rehearsal):
+    ctl = Ctl(drops_per_s=50.0)
+    with pytest.raises(AssertionError, match="flat:dv_edge_drops_total"):
+        run(ctl, Gen(ctl))
+    report = json.loads((rehearsal / "soak.json").read_text())
+    assert report["result"]["counters"]["flat"]["dv_edge_drops_total"]["status"] == "grew"
+
+
+def test_the_short_mode_sets_the_timing_and_scales_the_rss_bound(monkeypatch):
+    monkeypatch.setenv("DVT_SOAK_SHORT", "1")
+    monkeypatch.delenv("DVT_SOAK_WARMUP_S", raising=False)
+    monkeypatch.delenv("DVT_SOAK_MEASURE_S", raising=False)
+    monkeypatch.delenv("DVT_SOAK_SAMPLE_S", raising=False)
+    tm = soak.timing(os.environ)
+    assert (tm["warmup_s"], tm["measured_s"], tm["sample_s"]) == (180.0, 240.0, 15.0)
+    plan = soak.build_overs("1", ["dstar", "dmr", "ysf", "m17", "usrp-a", "usrp-b", "nxdn", "p25"], tm["warmup_s"] + tm["measured_s"])
+    assert soak.summarize_plan(plan, [])["overs_per_lane"]["dstar"] == 7                  # 7 minutes: at least 5 overs a lane
+    assert soak.validate_sessions(soak.build_sessions("1", tm["warmup_s"] + tm["measured_s"], seats=100)) == []
 
 
 def test_a_restarting_child_fails_the_case(rehearsal):

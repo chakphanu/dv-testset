@@ -49,10 +49,15 @@ KILL_PROC_ALLOWED = {
 # read: kill-proc never signals it. "list" prints pid, ppid and comm of every process of the container.
 PROC_STAT_NAMES = (
     "dv-router",                # the launcher
-    "dv-edge-xlx", "dv-edge-nxdn", "dv-edge-p25", "dv-edge-usrp",
+    # every edge is its own binary (there is no combined edge)
+    "dv-edge-dextra", "dv-edge-dplus", "dv-edge-dcs", "dv-edge-mmdvm", "dv-edge-dmrplus", "dv-edge-ysf",
+    "dv-edge-m17", "dv-edge-g3", "dv-edge-imrs", "dv-edge-xlx", "dv-edge-nxdn", "dv-edge-p25", "dv-edge-usrp",
     "dv-edge-webrtc",           # the web load test: edge cpu and peak RSS
-    "dv-svc-status", "dv-svc-web", "dv-svc-admin",
-    "dv-room", "dv-recorder", "dv-codec-ambed",
+    "dv-edge-aprsis", "dv-edge-ax25",                      # only when enabled
+    "dv-room", "dv-data-worker",
+    "dv-codec-ambed",           # only with a codec worker
+    "dv-svc-status", "dv-svc-web", "dv-svc-admin", "dv-svc-iddb", "dv-svc-idsync", "dv-svc-callhome",
+    "dv-svc-recorder",          # the svc ones only when enabled
 )
 PROC_STAT_LIST = "list"
 PROC_STAT_ALLOWED = tuple(("xlxd-sut", name) for name in PROC_STAT_NAMES) + (("xlxd-sut", PROC_STAT_LIST),)

@@ -43,17 +43,26 @@ def gauge_rows(values=(0, 0, 0)):
     return [soak.gauge_row(T0 + 4000 + i, "idle", v) for i, v in enumerate(values)]
 
 
-def counter_rows(growth=None, idle_growth=None):
+FLAT_BASE = {"dv_edge_webrtc_panics_total": 0.0, "dv_edge_drops_total": 12.0, "dv_room_ingress_rejected_total": 0.0}
+
+
+def counter_rows(growth=None, flat_growth=None, absent=(), flat_start=None):
+    """Counter snapshots: `growth` adds to the error-like families (recorded only) from the end of the measured part
+    on, `flat_growth` {family: delta} to the flat families at the same points, `absent` names flat families that are not
+    on /metrics, `flat_start` {family: value} replaces the base values (all five snapshots)."""
     base = {"dv_hub_dropped_total": 5.0, "dv_panics_total": 0.0, "dv_edge_refused_total": 2.0}
-    snap = {}
-    for label in ("idle0", "warmup_end", "measured_end", "idle_start", "idle_end"):
-        snap[label] = dict(base)
-    for fam, v in (growth or {}).items():
-        for label in ("measured_end", "idle_start", "idle_end"):
-            snap[label][fam] += v
-    for fam, v in (idle_growth or {}).items():
-        snap["idle_end"][fam] += v
-    return [soak.counters_row(T0 + i, label, c) for i, (label, c) in enumerate(snap.items())]
+    flat0 = {fam: None if fam in absent else v for fam, v in dict(FLAT_BASE, **(flat_start or {})).items()}
+    rows = []
+    for i, label in enumerate(("idle0", "warmup_end", "measured_end", "idle_start", "idle_end")):
+        counters, flat = dict(base), dict(flat0)
+        if label in ("measured_end", "idle_start", "idle_end"):
+            for fam, v in (growth or {}).items():
+                counters[fam] += v
+            for fam, v in (flat_growth or {}).items():
+                flat[fam] = (flat[fam] or 0.0) + v
+        series = {fam: {"reason=x": v} for fam, v in flat.items() if v is not None}
+        rows.append(soak.counters_row(T0 + i, label, counters, flat=flat, series=series))
+    return rows
 
 
 def verdict(rows, **kw):
@@ -121,8 +130,8 @@ def test_a_vanished_child_fails():
 
 
 def test_a_child_that_appears_late_fails():
-    rows = [r for r in series("dv-recorder") if r["phase"] != "warmup" and r["phase"] != "idle0"]
-    assert "no-restart:dv-recorder" in failed(verdict(rows))
+    rows = [r for r in series("dv-svc-recorder") if r["phase"] != "warmup" and r["phase"] != "idle0"]
+    assert "no-restart:dv-svc-recorder" in failed(verdict(rows))
 
 
 def test_an_fd_leak_fails():
@@ -158,8 +167,16 @@ def test_an_expected_child_that_was_never_sampled_fails():
     assert failed(res) == ["present:dv-room"]
 
 
+def test_an_expected_name_with_several_processes_is_present_through_its_ranked_rows():
+    rows = series("dv-room.01") + series("dv-room.02")
+    res = verdict(rows, expected=("dv-room",))
+    assert res.ok, failed(res)
+    assert set(res.children) == {"dv-room.01", "dv-room.02"}
+    assert failed(verdict(series("dv-roomx"), expected=("dv-room",))) == ["present:dv-room"]
+
+
 def test_an_allow_listed_child_that_does_not_run_is_ignored():
-    rows = series() + [soak.absent_row("dv-recorder", T0 + 30 * i, "measured", 0) for i in range(5)]
+    rows = series() + [soak.absent_row("dv-svc-recorder", T0 + 30 * i, "measured", 0) for i in range(5)]
     assert verdict(rows).ok
 
 
@@ -171,14 +188,136 @@ def test_several_children_are_judged_one_by_one():
 
 # ---- counters, events, idle
 
-def test_counters_panic_must_not_grow_and_drops_must_not_grow_idle():
-    assert verdict(series(), extra=gauge_rows() + counter_rows(growth={"dv_hub_dropped_total": 400.0})).ok     # recorded only
-    res = verdict(series(), extra=gauge_rows() + counter_rows(growth={"dv_panics_total": 1.0}))
-    assert failed(res) == ["counters-panic"]
-    res = verdict(series(), extra=gauge_rows() + counter_rows(idle_growth={"dv_edge_refused_total": 3.0}))
-    assert failed(res) == ["counters-idle"]
-    res = verdict(series(), extra=gauge_rows())
-    assert set(failed(res)) == {"counters-panic", "counters-idle"}
+def test_flat_families_are_the_twelve_of_the_ruling():
+    assert soak.FLAT_FAMILIES == (
+        "dv_edge_webrtc_panics_total", "dv_edge_drops_total", "dv_edge_queue_drops_total", "dv_edge_webrtc_audio_dropped_total",
+        "dv_room_ingress_rejected_total", "dv_room_shell_errors_total", "dv_status_telemetry_rejected_total",
+        "dv_status_input_dropped_total", "dv_fabric_put_dropped_total", "dv_recorder_dropped_total", "dv_codec_dropped_total",
+        "dv_edge_tx_refused_total")
+    assert soak.FLAT_OVERRIDES == {}                                         # starts empty, DV-Router rules on growth
+
+
+def test_flat_counters_pass_and_error_like_growth_of_other_families_is_only_recorded():
+    res = verdict(series(), extra=gauge_rows() + counter_rows(growth={"dv_hub_dropped_total": 400.0, "dv_panics_total": 3.0}))
+    assert res.ok, failed(res)
+    assert res.counters["growing"] == ["dv_hub_dropped_total", "dv_panics_total"]
+    flat = res.counters["flat"]
+    assert flat["dv_edge_drops_total"] == {"status": "flat", "start": 12.0, "end": 12.0, "delta": 0.0}
+    assert flat["dv_edge_tx_refused_total"] == {"status": "absent"}
+    assert "dv_edge_drops_total" in soak.counters_table(res) and "absent" in soak.counters_table(res)
+
+
+@pytest.mark.parametrize("fam,start", [("dv_edge_drops_total", 12.0), ("dv_edge_webrtc_panics_total", 0.0)])
+def test_a_flat_family_that_grows_fails_naming_family_and_delta(fam, start):
+    res = verdict(series(), extra=gauge_rows() + counter_rows(flat_growth={fam: 3.0}))
+    assert failed(res) == ["counters-flat", "flat:" + fam]
+    detail = next(c.detail for c in res.checks if c.name == "flat:" + fam)
+    assert fam in detail and "grew by 3" in detail and "reason=x" in detail
+    assert res.counters["flat"][fam]["status"] == "grew" and res.counters["flat"][fam]["delta"] == 3.0
+
+
+def test_growth_only_in_the_idle_window_is_not_a_flat_failure():
+    rows = counter_rows()
+    rows[4]["flat"]["dv_edge_drops_total"] += 5                                # idle_end only
+    assert verdict(series(), extra=gauge_rows() + rows).ok
+
+
+def test_a_family_that_shows_up_after_warmup_counts_from_zero_and_an_absent_one_is_not_asserted():
+    rows = counter_rows(absent=("dv_room_shell_errors_total",))
+    for r in rows[2:]:
+        r["flat"]["dv_room_shell_errors_total"] = 2.0                          # "nonzero values only": first seen at the end
+    res = verdict(series(), extra=gauge_rows() + rows)
+    assert "flat:dv_room_shell_errors_total" in failed(res)
+    assert res.counters["flat"]["dv_room_shell_errors_total"]["delta"] == 2.0
+    res = verdict(series(), extra=gauge_rows() + counter_rows(absent=tuple(soak.FLAT_FAMILIES)))
+    assert res.ok and {v["status"] for v in res.counters["flat"].values()} == {"absent"}
+
+
+def test_an_override_records_the_growth_without_failing():
+    res = verdict(series(), extra=gauge_rows() + counter_rows(flat_growth={"dv_edge_drops_total": 7.0}),
+                  params={"flat_overrides": {"dv_edge_drops_total": "grows with the mix"}})
+    assert res.ok, failed(res)
+    info = res.counters["flat"]["dv_edge_drops_total"]
+    assert info["status"] == "override" and info["delta"] == 7.0 and info["reason"] == "grows with the mix"
+
+
+def test_a_vanished_flat_family_is_recorded_only_and_missing_snapshots_fail():
+    rows = counter_rows()
+    rows[2]["flat"]["dv_edge_drops_total"] = None
+    res = verdict(series(), extra=gauge_rows() + rows)
+    assert res.ok and res.counters["flat"]["dv_edge_drops_total"]["status"] == "vanished"
+    assert failed(verdict(series(), extra=gauge_rows())) == ["counters-flat"]
+
+
+def test_flat_snapshot_sums_series_over_procs_and_marks_absent_families():
+    text = ('dv_edge_drops_total{proc="dv-edge-ysf",reason="no_session"} 3\ndv_edge_drops_total{proc="dv-edge-m17",reason="no_session"} 4\n'
+            'dv_edge_drops_total{proc="dv-edge-m17",reason="hold_drop"} 1\ndv_edge_webrtc_panics_total{proc="dv-edge-webrtc"} 0\n')
+    flat, ser = soak.flat_snapshot(metrics.parse(text))
+    assert flat["dv_edge_drops_total"] == 8.0 and flat["dv_edge_webrtc_panics_total"] == 0.0 and flat["dv_recorder_dropped_total"] is None
+    assert ser["dv_edge_drops_total"] == {"reason=hold_drop": 1.0, "reason=no_session": 7.0} and "dv_recorder_dropped_total" not in ser
+
+
+# ---- thresholds of the ruling: max(10 percent, +2 threads, +4 fds) over the end-of-warmup value
+
+@pytest.mark.parametrize("base,end,ok", [(8, 10, True), (8, 11, False), (3, 5, True), (3, 6, False), (100, 110, True), (100, 111, False),
+                                         (30, 33, True), (30, 34, False)])
+def test_thread_limit_is_the_larger_of_ten_percent_and_two(base, end, ok):
+    res = verdict(series(threads=lambda t: base if t < 600 else end))
+    assert ("threads:dv-edge-webrtc" not in failed(res)) is ok, res.children["dv-edge-webrtc"]["threads"]
+
+
+@pytest.mark.parametrize("base,end,ok", [(20, 24, True), (20, 25, False), (0 + 3, 7, True), (3, 8, False), (100, 110, True), (100, 111, False),
+                                         (50, 55, True), (50, 56, False)])
+def test_fd_limit_is_the_larger_of_ten_percent_and_four(base, end, ok):
+    res = verdict(series(fds=lambda t: base if t < 600 else end, idle_fds=base, idle0_fds=base))
+    assert ("fds:dv-edge-webrtc" not in failed(res)) is ok, res.children["dv-edge-webrtc"]["fds"]
+
+
+def test_idle_fds_stay_within_five_of_the_idle_value_before_the_traffic():
+    res = verdict(series(idle0_fds=20, fds=lambda t: 30, idle_fds=26))
+    assert failed(res) == ["fds-idle:dv-edge-webrtc"]
+    assert "fds-idle:dv-edge-webrtc" not in failed(verdict(series(idle0_fds=20, fds=lambda t: 30, idle_fds=25)))
+
+
+# ---- timing: the real run and the short mode
+
+def test_timing_defaults_are_the_real_run():
+    tm = soak.timing({})
+    assert (tm["warmup_s"], tm["measured_s"], tm["sample_s"]) == (600.0, 3000.0, 30.0)
+    assert not tm["short"] and not tm["smoke"] and tm["rss_scale"] == 1.0
+    assert soak.timing({"DVT_SOAK_WARMUP_S": "", "DVT_SOAK_MEASURE_S": "", "DVT_SOAK_SHORT": ""})["smoke"] is False      # empty = unset (compose)
+
+
+def test_timing_short_mode_and_overrides():
+    tm = soak.timing({"DVT_SOAK_SHORT": "1"})
+    assert (tm["warmup_s"], tm["measured_s"], tm["sample_s"]) == (180.0, 240.0, 15.0) and tm["short"] and tm["smoke"]
+    assert tm["rss_scale"] == pytest.approx(240.0 / 3000.0)
+    tm = soak.timing({"DVT_SOAK_SHORT": "1", "DVT_SOAK_WARMUP_S": "60", "DVT_SOAK_MEASURE_S": "300", "DVT_SOAK_SAMPLE_S": "10"})
+    assert (tm["warmup_s"], tm["measured_s"], tm["sample_s"]) == (60.0, 300.0, 10.0)
+    assert soak.timing({"DVT_SOAK_MEASURED_S": "900"})["measured_s"] == 900.0                      # the older spelling
+    assert soak.timing({"DVT_SOAK_MEASURE_S": "900", "DVT_SOAK_MEASURED_S": "1200"})["measured_s"] == 900.0
+    assert soak.timing({"DVT_SOAK_SHORT": "0"})["short"] is False
+
+
+@pytest.mark.parametrize("env", [{"DVT_SOAK_WARMUP_S": "x"}, {"DVT_SOAK_MEASURE_S": "-5"}, {"DVT_SOAK_MEASURE_S": "50"},
+                                 {"DVT_SOAK_SAMPLE_S": "0"}, {"DVT_SOAK_MEASURE_S": "nan"}])
+def test_timing_refuses_nonsense(env):
+    with pytest.raises(ValueError):
+        soak.timing(env)
+
+
+def test_the_rss_bound_scales_with_a_short_measured_part():
+    def leak(t):                                                                     # 80 KiB per minute, 320 KiB in 240 s
+        return 20000 + max(0, t - 180) * 80 / 60.0
+
+    short = dict(warm=180, measured=240, step=15)
+    assert verdict(series(rss=leak, **short)).ok                                    # unscaled: 5 MiB in 240 s, passes
+    res = verdict(series(rss=leak, **short), params={"rss_scale": 240 / 3000.0})   # scaled: 410 KiB allowed, 320 KiB grown
+    assert res.ok, failed(res)
+    res = verdict(series(rss=lambda t: 20000 + max(0, t - 180) * 150 / 60.0, **short), params={"rss_scale": 240 / 3000.0})
+    assert failed(res) == ["rss:dv-edge-webrtc"]                                    # 150 KiB a minute = 600 KiB > 410 KiB
+    assert res.children["dv-edge-webrtc"]["rss_kib"]["limit_kib"] == pytest.approx(5120 * 0.08, abs=0.5)
+    assert verdict(series(rss=lambda t: 20000 + max(0, t - 180) * 150 / 60.0, **short)).ok          # the real bound would not see it
 
 
 def test_events_and_idle_gauge():

@@ -52,6 +52,23 @@ def test_discover_children_of_the_launcher_and_the_unlisted_ones():
         ss.discover(FakeCtl(procs=[(7, 1, "dv-edge-xlx")]))
 
 
+REAL_CHILDREN = [
+    "dv-edge-dextra", "dv-edge-dplus", "dv-edge-dcs", "dv-edge-mmdvm", "dv-edge-dmrplus", "dv-edge-ysf", "dv-edge-m17", "dv-edge-g3",
+    "dv-edge-imrs", "dv-edge-xlx", "dv-edge-nxdn", "dv-edge-p25", "dv-edge-usrp", "dv-edge-webrtc",
+    "dv-room", "dv-data-worker", "dv-codec-ambed", "dv-svc-status", "dv-svc-web", "dv-svc-admin", "dv-svc-iddb", "dv-svc-idsync",
+    "dv-svc-callhome", "dv-svc-recorder"]
+
+
+def test_discovery_finds_every_edge_as_its_own_child_and_reports_unknown_ones():
+    procs = [(1, 0, "dv-router")] + [(10 + i, 1, n) for i, n in enumerate(REAL_CHILDREN)] + [(90, 1, "dv-edge-newone"), (91, 1, "dv-edge-ax25x")]
+    names, others = ss.discover(FakeCtl(procs=procs))
+    assert names == sorted(REAL_CHILDREN + ["dv-router"])                      # one entry per binary, nothing grouped
+    assert others == ["dv-edge-ax25x", "dv-edge-newone"]
+    # not running = not listed = not an error: a launch without a recorder, codec worker and the optional edges
+    few = [(1, 0, "dv-router"), (2, 1, "dv-edge-dextra"), (3, 1, "dv-room")]
+    assert ss.discover(FakeCtl(procs=few)) == (["dv-edge-dextra", "dv-room", "dv-router"], [])
+
+
 def test_discovery_names_agree_with_the_allow_list():
     assert set(ss.discover(FakeCtl())[0]) <= set(control.PROC_STAT_NAMES)
 
@@ -71,7 +88,22 @@ def test_sampler_tick_writes_one_row_per_child_a_gauge_and_marks_failures():
     proc = next(r for r in sink.rows if r["kind"] == "proc" and r.get("name") == "dv-edge-xlx")
     assert proc["fds"] == 21 and proc["start"] == 900 and proc["rss_kib"] == 1500 and proc["seq"] == 1
     sampler.counters("idle0")
-    assert sink.rows[-1] == soak.counters_row(sink.rows[-1]["t"], "idle0", {"dv_hub_dropped_total": 4.0})
+    last = sink.rows[-1]
+    assert last["counters"] == {"dv_hub_dropped_total": 4.0} and last["phase"] == "idle0" and last["families"] == ["dv_edge_webrtc_listeners", "dv_hub_dropped_total"]
+    assert set(last["flat"]) == set(soak.FLAT_FAMILIES) and set(last["flat"].values()) == {None}
+
+
+def test_sampler_tells_the_processes_of_a_shared_name_apart():
+    sink = FakeSink()
+
+    class Ctl(FakeCtl):
+        def proc_stat(self, service, process, timeout=60.0):
+            return REPLY % (21, process, 1000.0) + REPLY % (22, process, 1000.5) if process == "dv-room" else super().proc_stat(service, process, timeout)
+
+    sampler = ss.ChildSampler(Ctl(), ["dv-room", "dv-svc-web"], sink)
+    sampler.tick("warmup")
+    rows = [(r["name"], r["pid"]) for r in sink.rows if r["kind"] == "proc"]
+    assert rows == [("dv-room.01", 21), ("dv-room.02", 22), ("dv-svc-web", 8)]
 
 
 def test_sampler_thread_ticks_on_a_schedule_and_stops():
@@ -105,6 +137,38 @@ def test_modules_defaults_overrides_and_collisions():
     for bad in ("dmr", "dmr=", "dmr=de", "nosuch=D", "dmr=D"):
         with pytest.raises(ValueError):
             ss.parse_modules(bad)
+
+
+class Tgt:
+    xlxd_sut = "192.0.2.11"
+    xlxd_peer_sut = ""
+    sut_profile = "dvrouter"
+
+
+def test_make_lanes_talk_to_the_suts_own_nxdn_and_p25_ports():
+    lanes, skipped = ss.make_lanes(Tgt(), {}, ss.parse_modules("", None, None))
+    assert not skipped and set(lanes) == set(ss.DEFAULT_MODULES)
+    assert (lanes["nxdn"].ip, lanes["nxdn"].tg, lanes["nxdn"].module) == ("192.0.2.11", 31672, "F")
+    assert (lanes["p25"].ip, lanes["p25"].tg, lanes["p25"].module) == ("192.0.2.11", 31672, "G")
+    lanes, _ = ss.make_lanes(Tgt(), {"DVT_NXDN_TG": "20", "DVT_P25_TG": "9", "DVT_NXDN": "off"}, ss.parse_modules("", None, None))
+    assert (lanes["nxdn"].tg, lanes["p25"].tg) == (20, 9)                       # the rig's TG settings, no reflector needed
+
+
+def test_a_counters_row_has_the_flat_families_and_the_family_names_once():
+    sink = FakeSink()
+    text = 'dv_edge_drops_total{proc="p",reason="x"} 2\ndv_codec_dropped_total{kind="data"} 0\ndv_up 1\n'
+
+    class Ctl(FakeCtl):
+        def metrics(self, service="xlxd-sut", timeout=30.0):
+            return text
+
+    sampler = ss.ChildSampler(Ctl(), ["dv-router"], sink)
+    sampler.counters("idle0")
+    sampler.counters("warmup_end")
+    first, second = [r for r in sink.rows if r["kind"] == "metrics"]
+    assert first["flat"]["dv_edge_drops_total"] == 2.0 and first["flat"]["dv_codec_dropped_total"] == 0.0
+    assert first["flat"]["dv_edge_tx_refused_total"] is None and first["series"]["dv_edge_drops_total"] == {"reason=x": 2.0}
+    assert first["families"] == ["dv_codec_dropped_total", "dv_edge_drops_total", "dv_up"] and "families" not in second
 
 
 class FakeLane:

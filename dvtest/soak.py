@@ -13,11 +13,14 @@ Lead defaults of the criteria (DV-Router, 2026-11-02), all constants below:
   1  no child restarts: one (pid, start time) per child over the whole run, and no child vanishes or appears late
   2  RSS growth over the measured part <= max(5 MiB, 10 percent of the RSS at the end of warmup), judged on the
      least-squares slope x the measured span (not on the last sample)
-  3  threads and fds at the end of the measured part <= end of warmup + 10 percent (with a floor of 2 threads and
-     4 fds: 10 percent of 8 threads is 0.8); after all traffic stopped the fds are within +5 of the idle value
-     taken before any traffic
-  4  error counters (drops, refusals, panics): panic families never grow, drop and refusal families do not grow
-     while idle; the others are recorded
+  3  threads and fds at the end of the measured part <= max(end of warmup + 10 percent, +2 threads, +4 fds) over
+     the end-of-warmup value (the floor applies next to the 10 percent rule: 10 percent of 8 threads is 0.8); after
+     all traffic stopped the fds are within +5 of the idle value taken before any traffic (rulings of DV-Router,
+     2026-11-02)
+  4  the counters of FLAT_FAMILIES are FLAT over the measured part (value at the end of warmup == value at the
+     end, absolute zero growth); a family that is not on /metrics is recorded as absent, a family that grows and
+     that DV-Router ruled on goes into FLAT_OVERRIDES (starts empty) and is recorded with its growth; every
+     other error-like family is recorded only
   5  the public event stream is quiet while idle (dvtest.k22.idle_stream_verdict, judged by the case)
 """
 import json
@@ -46,10 +49,66 @@ IDLE_FDS_SLACK = 5
 MIN_SAMPLES = 5                 # measured samples a child needs for a slope
 
 PHASES = ("idle0", "warmup", "measured", "stopping", "idle")
-# counters recorded when their name looks like an error; the strict ones must not grow when it does not belong
+# Short mode (DVT_SOAK_SHORT=1, a validation of the lanes and the sampling, not the criterion): same mix and the
+# same criteria, 180 s warmup + 240 s measured, a sample every 15 s.
+SHORT_WARMUP_S = 180.0
+SHORT_MEASURED_S = 240.0
+SHORT_SAMPLE_S = 15.0
+
+# Error-like families are RECORDED (value summed over the labels, deltas over the phases) when their name looks
+# like an error; none of them is asserted unless it is in FLAT_FAMILIES.
 RECORD_PATTERN = re.compile(r"drop|refus|reject|denied|panic|error|overflow|overrun|lost|fail|timeout|discard", re.I)
-PANIC_PATTERN = re.compile(r"panic", re.I)
-IDLE_STRICT_PATTERN = re.compile(r"drop|refus|panic|reject|discard", re.I)
+
+# Counters asserted FLAT over the measured part (DV-Router ruling 2026-11-02, docs/design/status.md "Metrics"):
+# the value at the end of warmup must equal the value at the end, absolute zero growth.
+FLAT_FAMILIES = (
+    "dv_edge_webrtc_panics_total", "dv_edge_drops_total", "dv_edge_queue_drops_total", "dv_edge_webrtc_audio_dropped_total",
+    "dv_room_ingress_rejected_total", "dv_room_shell_errors_total", "dv_status_telemetry_rejected_total",
+    "dv_status_input_dropped_total", "dv_fabric_put_dropped_total", "dv_recorder_dropped_total", "dv_codec_dropped_total",
+    "dv_edge_tx_refused_total",
+)
+# Per-family overrides, {family: reason}: a family that grows with the traffic mix is NOT asserted but recorded with
+# its name and growth, until DV-Router rules on it. Starts empty on purpose.
+FLAT_OVERRIDES = {}
+
+
+# ------------------------------------------------------------------ timing (real run and short mode)
+
+def _env_float(env, *names):
+    for name in names:
+        raw = (env.get(name) or "").strip()
+        if raw:
+            try:
+                value = float(raw)
+            except ValueError:
+                raise ValueError("%s=%r is not a number" % (name, raw)) from None
+            if not value == value or value < 0:
+                raise ValueError("%s=%r must be a number of seconds >= 0" % (name, raw))
+            return value
+    return None
+
+
+def timing(env):
+    """The timing of a run from its environment: {"warmup_s", "measured_s", "sample_s", "short", "smoke", "rss_scale"}.
+    Defaults: the real run, 600 s warmup + 3000 s measured, a sample every 30 s. DVT_SOAK_SHORT=1: the validation
+    run, 180 s + 240 s, a sample every 15 s. DVT_SOAK_WARMUP_S, DVT_SOAK_MEASURE_S (also spelled DVT_SOAK_MEASURED_S)
+    and DVT_SOAK_SAMPLE_S override either. `smoke` = not the real timing. `rss_scale` scales the RSS growth bound of
+    a measured part shorter than the real one: the bound is a RATE (max(5 MiB, 10 percent) per 3000 s), so a measured
+    part of 240 s gets 240/3000 of the bytes; it is as sharp as the real one in KiB per minute and noisier, so a
+    failure of the RSS check in a short run is a lead, not a verdict. ValueError for a bad number or fewer than 6
+    samples in the measured part (a slope needs MIN_SAMPLES)."""
+    short = (env.get("DVT_SOAK_SHORT") or "").strip() == "1"
+    warmup = _env_float(env, "DVT_SOAK_WARMUP_S")
+    measured = _env_float(env, "DVT_SOAK_MEASURE_S", "DVT_SOAK_MEASURED_S")
+    sample = _env_float(env, "DVT_SOAK_SAMPLE_S")
+    warmup = warmup if warmup is not None else (SHORT_WARMUP_S if short else WARMUP_S)
+    measured = measured if measured is not None else (SHORT_MEASURED_S if short else MEASURED_S)
+    sample = sample if sample is not None else (SHORT_SAMPLE_S if short else SAMPLE_S)
+    if sample < 0.05 or measured < (MIN_SAMPLES + 1) * sample:
+        raise ValueError("measured %g s with a sample every %g s gives fewer than %d samples" % (measured, sample, MIN_SAMPLES + 1))
+    smoke = (warmup, measured) != (WARMUP_S, MEASURED_S)
+    return {"warmup_s": warmup, "measured_s": measured, "sample_s": sample, "short": short, "smoke": smoke,
+            "rss_scale": min(1.0, measured / MEASURED_S)}
 
 
 # ------------------------------------------------------------------ small maths
@@ -77,9 +136,9 @@ def least_squares(xs, ys):
 
 # ------------------------------------------------------------------ the sample file
 
-def proc_row(sample, phase, seq):
-    """The raw row of a dvtest.webload.ProcSample."""
-    return {"kind": "proc", "t": round(sample.t, 3), "seq": seq, "phase": phase, "name": sample.comm, "pid": sample.pid,
+def proc_row(sample, phase, seq, label=None):
+    """The raw row of a dvtest.webload.ProcSample; `label` replaces the comm as the child's name (dv-room.01 ...)."""
+    return {"kind": "proc", "t": round(sample.t, 3), "seq": seq, "phase": phase, "name": label or sample.comm, "pid": sample.pid,
             "start": sample.starttime, "rss_kib": sample.vmrss_kib, "hwm_kib": sample.vmhwm_kib, "threads": sample.threads,
             "fds": sample.fds, "ticks": sample.ticks}
 
@@ -88,8 +147,17 @@ def absent_row(name, t, phase, seq):
     return {"kind": "proc", "t": round(t, 3), "seq": seq, "phase": phase, "name": name, "absent": True}
 
 
-def counters_row(t, phase, counters):
-    return {"kind": "metrics", "t": round(t, 3), "phase": phase, "counters": dict(sorted(counters.items()))}
+def counters_row(t, phase, counters, flat=None, series=None, families=None):
+    """A counter snapshot: `counters` = the error-like families (summed over labels), `flat` = {family: value or None
+    (absent)} of FLAT_FAMILIES, `series` = their series, `families` = every family name on /metrics (first snapshot)."""
+    row = {"kind": "metrics", "t": round(t, 3), "phase": phase, "counters": dict(sorted(counters.items()))}
+    if flat is not None:
+        row["flat"] = dict(sorted(flat.items()))
+    if series is not None:
+        row["series"] = series
+    if families is not None:
+        row["families"] = sorted(families)
+    return row
 
 
 def gauge_row(t, phase, listeners):
@@ -129,6 +197,28 @@ def error_counters(samples):
         if RECORD_PATTERN.search(s.name) and s.value == s.value and abs(s.value) != float("inf"):
             out[s.name] = out.get(s.name, 0.0) + s.value
     return out
+
+
+def label_key(labels):
+    return ",".join("%s=%s" % (k, labels[k]) for k in sorted(labels) if k != "proc") or "-"
+
+
+def flat_snapshot(samples, families=FLAT_FAMILIES):
+    """(flat, series) of dvtest.metrics samples for the flat families: flat = {family: value summed over all
+    series, or None when the family is not on /metrics}, series = {family: {labels without proc: value summed over
+    the procs}} (kept to name the series that grew). Any sample of the family, at any value, counts as present."""
+    flat, series = {}, {}
+    for fam in families:
+        rows = [x for x in samples if x.name == fam and x.value == x.value]
+        if not rows:
+            flat[fam] = None
+            continue
+        flat[fam] = round(sum(x.value for x in rows), 6)
+        per = {}
+        for x in rows:
+            per[label_key(x.labels)] = per.get(label_key(x.labels), 0.0) + x.value
+        series[fam] = dict(sorted(per.items()))
+    return flat, series
 
 
 # ------------------------------------------------------------------ the traffic mix (deterministic from a seed)
@@ -316,12 +406,13 @@ def judge_child(name, rows, params):
     slope, _ = least_squares(xs, [r["rss_kib"] for r in meas])
     span = max(xs) - min(xs)
     growth = slope * span
-    limit = max(p["rss_floor_kib"], p["rss_fraction"] * base_rss)
+    limit = max(p["rss_floor_kib"], p["rss_fraction"] * base_rss) * p["rss_scale"]
     rec["rss_kib"] = {"start": round(base_rss, 1), "end": median([r["rss_kib"] for r in meas[-3:]]), "max": max(r["rss_kib"] for r in meas),
                       "slope_kib_per_min": round(slope * 60.0, 3), "growth_kib": round(growth, 1), "limit_kib": round(limit, 1),
                       "span_s": round(span, 1), "hwm": max(r["hwm_kib"] for r in meas)}
-    checks.append(Check("rss:" + name, growth <= limit, "slope %.2f KiB/min x %.0f s = %.0f KiB, limit %.0f KiB (start %.0f KiB)"
-                        % (slope * 60.0, span, growth, limit, base_rss)))
+    scaled = " (scaled x%.3f for a short measured part)" % p["rss_scale"] if p["rss_scale"] != 1.0 else ""
+    checks.append(Check("rss:" + name, growth <= limit, "slope %.2f KiB/min x %.0f s = %.0f KiB, limit %.0f KiB%s (start %.0f KiB)"
+                        % (slope * 60.0, span, growth, limit, scaled, base_rss)))
 
     base_thr = median([r["threads"] for r in warm[-3:]])
     end_thr = median([r["threads"] for r in meas[-5:]])
@@ -352,29 +443,68 @@ def judge_child(name, rows, params):
     return rec, checks
 
 
-def judge_counters(snapshots, strict_extra=()):
-    """(record, checks) of the error-like counters. `snapshots` = {label: {family: value}} with the labels idle0,
-    warmup_end, measured_end, idle_start, idle_end (missing ones are skipped). Panic families must not grow at all;
-    drop, refusal and reject families must not grow while idle; every family is recorded with its deltas."""
+def _grown_series(a, b):
+    """The series of a family that grew between two snapshots: {labels: delta}."""
+    a, b = a or {}, b or {}
+    return {k: round(b.get(k, 0.0) - a.get(k, 0.0), 6) for k in sorted(set(a) | set(b)) if b.get(k, 0.0) - a.get(k, 0.0) > 0}
+
+
+def judge_flat(snapshots, overrides=None, families=FLAT_FAMILIES):
+    """(record, checks) of the flat families. `snapshots` = {label: counters row}. Per family: status "absent" (not on
+    /metrics at either snapshot: no assertion), "flat", "grew" (a check FAILS, naming the family and the delta),
+    "override" (grew, but in `overrides`: recorded only), "vanished" (on /metrics at the end of warmup, gone at the
+    end: recorded, no assertion). A family that first shows up after the end of warmup counts from zero."""
+    overrides = FLAT_OVERRIDES if overrides is None else overrides
+    w, e = snapshots.get("warmup_end"), snapshots.get("measured_end")
+    if not w or not e or "flat" not in w or "flat" not in e:
+        return {}, [Check("counters-flat", False, "no counter snapshot with the flat families at the end of warmup and of the measured part")]
+    record, checks = {}, []
+    for fam in families:
+        a, b = w["flat"].get(fam), e["flat"].get(fam)
+        if a is None and b is None:
+            record[fam] = {"status": "absent"}
+            continue
+        if b is None:
+            record[fam] = {"status": "vanished", "start": a}
+            continue
+        start = 0.0 if a is None else a
+        delta = round(b - start, 6)
+        info = {"status": "flat", "start": start, "end": b, "delta": delta}
+        if delta > 0:
+            info["grown_series"] = _grown_series((w.get("series") or {}).get(fam), (e.get("series") or {}).get(fam))
+            if fam in overrides:
+                info.update(status="override", reason=str(overrides[fam]))
+            else:
+                info["status"] = "grew"
+                checks.append(Check("flat:" + fam, False, "family %s grew by %g over the measured part (%g -> %g), series %s"
+                                    % (fam, delta, start, b, info["grown_series"] or "?")))
+        elif delta < 0:
+            info["note"] = "went down (counter reset: a restart of its process?)"
+        record[fam] = info
+
+    def count(status):
+        return sum(1 for v in record.values() if v["status"] == status)
+
+    checks.append(Check("counters-flat", not any(v["status"] == "grew" for v in record.values()),
+                        "%d flat, %d absent, %d grew, %d override, %d vanished (of %d families)"
+                        % (count("flat"), count("absent"), count("grew"), count("override"), count("vanished"), len(families))))
+    return record, checks
+
+
+def judge_counters(snapshots, overrides=None):
+    """(record, checks) of the counters. `snapshots` = {label: counters row} with the labels idle0, warmup_end,
+    measured_end, idle_start, idle_end (missing ones are skipped). The flat families must not grow over the measured
+    part (judge_flat); every error-like family is recorded with its deltas over the measured part, the run and the
+    idle window, and none of those is asserted."""
     def delta(a, b):
-        sa, sb = snapshots.get(a), snapshots.get(b)
+        sa, sb = (snapshots.get(a) or {}).get("counters"), (snapshots.get(b) or {}).get("counters")
         if sa is None or sb is None:
             return None
         return {k: round(sb.get(k, 0.0) - sa.get(k, 0.0), 3) for k in sorted(set(sa) | set(sb))}
     record = {"measured": delta("warmup_end", "measured_end"), "run": delta("idle0", "idle_end"), "idle": delta("idle_start", "idle_end")}
-    checks = []
-    run = record["run"]
-    if run is not None:
-        grown = sorted(k for k, v in run.items() if PANIC_PATTERN.search(k) and v > 0)
-        checks.append(Check("counters-panic", not grown, "panic families grown: %s" % (grown or "none")))
-    else:
-        checks.append(Check("counters-panic", False, "no counter snapshot before and after the run"))
-    idle = record["idle"]
-    if idle is not None:
-        strict = sorted(k for k, v in idle.items() if (IDLE_STRICT_PATTERN.search(k) or k in strict_extra) and v > 0)
-        checks.append(Check("counters-idle", not strict, "drop/refusal/reject families grown while idle: %s" % (strict or "none")))
-    else:
-        checks.append(Check("counters-idle", False, "no counter snapshot around the idle window"))
+    flat, checks = judge_flat(snapshots, overrides)
+    record["flat"] = flat
+    record["growing"] = sorted(k for k, v in (record["measured"] or {}).items() if v > 0 and k not in FLAT_FAMILIES)
     return record, checks
 
 
@@ -412,7 +542,7 @@ def generator_summary(rows, min_packets=50, failed_fraction=0.02):
 def default_params():
     return {"min_samples": MIN_SAMPLES, "rss_floor_kib": RSS_FLOOR_KIB, "rss_fraction": RSS_FRACTION,
             "threads_fraction": THREADS_FRACTION, "threads_floor": THREADS_FLOOR, "fds_fraction": FDS_FRACTION,
-            "fds_floor": FDS_FLOOR, "idle_fds_slack": IDLE_FDS_SLACK}
+            "fds_floor": FDS_FLOOR, "idle_fds_slack": IDLE_FDS_SLACK, "rss_scale": 1.0, "flat_overrides": None}
 
 
 def evaluate(rows, events=None, params=None, expected=()):
@@ -424,7 +554,8 @@ def evaluate(rows, events=None, params=None, expected=()):
     res = Result()
     by = _proc_rows(rows)
     for name in expected:
-        if not _present(by.get(name, [])):
+        # a name several processes carry (dv-room) is sampled as dv-room.01, dv-room.02, ...
+        if not any(_present(rows_) for key, rows_ in by.items() if key == name or key.startswith(name + ".")):
             res.add("present:" + name, False, "never sampled although the container listed it")
     for name in sorted(by):
         if not _present(by[name]):
@@ -439,8 +570,8 @@ def evaluate(rows, events=None, params=None, expected=()):
     snaps = {}
     for r in rows:
         if r.get("kind") == "metrics" and r.get("phase") in ("idle0", "warmup_end", "measured_end", "idle_start", "idle_end"):
-            snaps[r["phase"]] = r["counters"]
-    rec, checks = judge_counters(snaps)
+            snaps[r["phase"]] = r
+    rec, checks = judge_counters(snaps, p.get("flat_overrides"))
     res.counters = rec
     res.checks.extend(checks)
     if events is None:
@@ -466,6 +597,14 @@ def table(result):
         lines.append("%-16s %9s %9s %11s %7s %7s %7s %7s %7s %7s" % (
             name, _f(rss.get("start")), _f(rss.get("end")), _f(rss.get("slope_kib_per_min")), _f(thr.get("start")), _f(thr.get("end")),
             _f(fds.get("start")), _f(fds.get("end")), _f(fds.get("idle_end")), c.get("restarts", "?")))
+    return "\n".join(lines)
+
+
+def counters_table(result):
+    """Plain-text table of the flat families (what the case prints and the doc shows)."""
+    lines = ["%-42s %-9s %12s %12s %9s" % ("flat family", "status", "warmup end", "end", "delta")]
+    for fam, info in sorted((result.counters.get("flat") or {}).items()):
+        lines.append("%-42s %-9s %12s %12s %9s" % (fam, info["status"], _f(info.get("start")), _f(info.get("end")), _f(info.get("delta"))))
     return "\n".join(lines)
 
 

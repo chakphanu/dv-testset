@@ -341,6 +341,25 @@ def test_the_web_snippet_merges_into_a_template_that_switches_web_off():
     assert cfg["edges"]["webrtc"] == {"enable": True, "public_ips": ["172.30.7.11"]}
 
 
+@pytest.mark.parametrize("template_tables", ['[edges.nxdn]\nenable = "auto"\n\n[edges.p25]\nenable = "auto"\n', ""])
+def test_the_soak_edges_snippet_merges_key_by_key_or_adds_the_tables(template_tables):
+    import tomllib
+    snippet = (ROOT / "rig" / "config" / "dv-router" / "soak-edges.toml").read_text()
+    cfg = tomllib.loads(sut_config.render('schema = 1\n[node]\nbind_ip = "<OWN_IP>"\n\n' + template_tables, "172.30.7",
+                                          extras=[snippet]))
+    assert cfg["edges"]["nxdn"] == {"enable": True, "tg_modules": "31672:F"}
+    assert cfg["edges"]["p25"] == {"enable": True, "server_module": "G", "server_tg": 31672}
+
+
+def test_the_soak_edges_snippet_matches_the_lanes():
+    import tomllib
+
+    import soak_support as ss
+    cfg = tomllib.loads((ROOT / "rig" / "config" / "dv-router" / "soak-edges.toml").read_text())
+    assert cfg["edges"]["nxdn"]["tg_modules"] == "%d:%s" % (ss.NXDN_TG, ss.DEFAULT_MODULES["nxdn"])
+    assert cfg["edges"]["p25"]["server_module"] == ss.DEFAULT_MODULES["p25"] and cfg["edges"]["p25"]["server_tg"] == ss.P25_TG
+
+
 def test_web_proxy_octet_option(tmp_path):
     src = tmp_path / "t.toml"
     src.write_text('x = "<WEB_PROXY_IP>"\n')

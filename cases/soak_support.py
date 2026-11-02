@@ -28,6 +28,8 @@ REQUIRED_LANES = ("usrp-a", "usrp-b", "dstar", "dmr", "ysf", "m17")
 OPTIONAL_LANES = ("nxdn", "p25")
 DEFAULT_MODULES = {"usrp-a": "A", "usrp-b": "B", "dstar": "D", "dmr": "E", "ysf": "C", "m17": "J", "nxdn": "F", "p25": "G"}
 USRP_CALLSIGNS = {"usrp-a": "N0TEST", "usrp-b": "N0CALL"}        # one per room (docs/web-load-cases.md F3)
+NXDN_TG = 31672                                                   # tg_modules / server_tg of rig/config/dv-router/soak-edges.toml
+P25_TG = 31672
 NXDN_IDS = (1001, 1002)                                           # N0CALL, N0TEST in rig/config/nxdn.csv
 
 
@@ -106,8 +108,10 @@ class ChildSampler:
         self.seq += 1
         for name in self.names:
             try:
-                sample = wl.parse_procstat_out(self.ctl.proc_stat("xlxd-sut", name))
-                self.sink.write(soak.proc_row(sample, phase, self.seq))
+                found = wl.parse_procstat_all(self.ctl.proc_stat("xlxd-sut", name))
+                for rank, sample in enumerate(found):
+                    # several processes with one name (dv-room: one per module) are told apart by their rank in pid order
+                    self.sink.write(soak.proc_row(sample, phase, self.seq, label=name if len(found) == 1 else "%s.%02d" % (name, rank + 1)))
             except RuntimeError as exc:
                 if str(exc).rstrip().endswith("error 3"):
                     self.sink.write(soak.absent_row(name, time.time(), phase, self.seq))
@@ -142,7 +146,9 @@ class ChildSampler:
                 if attempt == 2:
                     raise
                 time.sleep(5.0)
-        self.sink.write(soak.counters_row(time.time(), label, soak.error_counters(samples)))
+        flat, series = soak.flat_snapshot(samples)
+        names = {x.name for x in samples} if label == "idle0" else None            # the families on /metrics, once
+        self.sink.write(soak.counters_row(time.time(), label, soak.error_counters(samples), flat=flat, series=series, families=names))
 
     def _loop(self):
         nxt = time.monotonic()
@@ -261,11 +267,12 @@ class UsrpLane(Lane):
 
 
 class NxdnLane(Lane):
-    """NXDN talker on the NXDNReflector peered with the sut (DVT_NXDN_SUT, DVT_NXDN_TG), DMR listener on the module."""
+    """NXDN talker on the SUT's OWN NXDN server port (UDP 41400, as cases/proto/test_nxdn_server.py does), DMR listener
+    on the module that `tg_modules` of rig/config/dv-router/soak-edges.toml maps the TG to."""
 
-    def __init__(self, name, module, xlxd_ip, reflector_ip, tg):
+    def __init__(self, name, module, sut_ip, tg):
         super().__init__(name, module)
-        self.ip, self.reflector, self.tg = xlxd_ip, reflector_ip, tg
+        self.ip, self.tg = sut_ip, tg
 
     def _over(self, dur_s, seed, result):
         frames = [nxdn.from_dmr(f) for f in signals.prng_frames("dmr", frame_count(dur_s, 12), seed="soak/%s" % seed)]
@@ -275,8 +282,8 @@ class NxdnLane(Lane):
             if not listener.link(self.ip):
                 raise AssertionError("DMR listener link failed")
             talker = nxdn.NxdnClient("0.0.0.0", self.tg, nxdn_id=NXDN_IDS[0], callsign=clients.CALLSIGNS[0])
-            if not talker.link(self.reflector):
-                raise AssertionError("NXDN link to %s failed" % self.reflector)
+            if not talker.link(self.ip):
+                raise AssertionError("NXDN poll to %s:%d (TG %d) is not echoed: edge not serving?" % (self.ip, nxdn.PORT, self.tg))
             listener.client.drain()
             listener.client.inbox.clear()
             with ThreadPoolExecutor(max_workers=1) as pool:
@@ -295,12 +302,13 @@ class NxdnLane(Lane):
 
 
 class P25Lane(Lane):
-    """P25 talker on the P25Reflector peered with the sut (DVT_P25_SUT, DVT_P25_TG), D-STAR listener on the module
-    (IMBE is transcoded: needs the codec worker with IMBE)."""
+    """P25 talker on the SUT's OWN P25 server port (UDP 41000, one served module `server_module` and TG `server_tg`
+    of rig/config/dv-router/soak-edges.toml, as the P25 server cases do), D-STAR listener on the module (IMBE is
+    transcoded: needs the codec worker with IMBE)."""
 
-    def __init__(self, name, module, xlxd_ip, reflector_ip, tg):
+    def __init__(self, name, module, sut_ip, tg):
         super().__init__(name, module)
-        self.ip, self.reflector, self.tg = xlxd_ip, reflector_ip, tg
+        self.ip, self.tg = sut_ip, tg
 
     def _over(self, dur_s, seed, result):
         frames = signals.prng_frames("imbe", frame_count(dur_s, 9), seed="soak/%s" % seed)
@@ -310,8 +318,8 @@ class P25Lane(Lane):
             if not listener.link(self.ip):
                 raise AssertionError("D-STAR listener link failed")
             talker = p25.P25Client("0.0.0.0", callsign=clients.CALLSIGNS[0], src_id=clients.DMR_IDS[0], tg=self.tg)
-            if not talker.link(self.reflector):
-                raise AssertionError("P25 link to %s failed" % self.reflector)
+            if not talker.link(self.ip):
+                raise AssertionError("P25 poll to %s:%d is not echoed: edge not serving?" % (self.ip, p25.PORT))
             listener.client.drain()
             listener.client.inbox.clear()
             with ThreadPoolExecutor(max_workers=1) as pool:
@@ -330,8 +338,8 @@ class P25Lane(Lane):
 
 
 def make_lanes(target, env, modules):
-    """({name: Lane}, {name: reason it is not in the mix}). The required lanes always exist (their probe decides);
-    NXDN and P25 exist only when the rig profile says the reflector is peered with the sut."""
+    """({name: Lane}, {name: reason it is not in the mix}). The required lanes always exist and so do NXDN and P25
+    (their probe over decides; a lane is skipped here only for the USRP hub)."""
     lanes, skipped = {}, {}
     hub, why = usrp_hub(target)
     for name in ("usrp-a", "usrp-b"):
@@ -344,14 +352,11 @@ def make_lanes(target, env, modules):
     lanes["dmr"] = DigitalLane("dmr", modules["dmr"], target.xlxd_sut, "dmr", ("dmr",), "dmr", multiple=3)
     lanes["ysf"] = DigitalLane("ysf", modules["ysf"], target.xlxd_sut, "ysf", ("ysf",), 2)
     lanes["m17"] = DigitalLane("m17", modules["m17"], target.xlxd_sut, "m17", ("m17",), "m17")
-    if env.get("DVT_NXDN") == "on" and env.get("DVT_NXDN_SUT"):
-        lanes["nxdn"] = NxdnLane("nxdn", modules["nxdn"], target.xlxd_sut, env["DVT_NXDN_SUT"], int(env.get("DVT_NXDN_TG", "31672")))
-    else:
-        skipped["nxdn"] = "no NXDN reflector for the sut (run with --profile nxdn and name the peer in the native template)"
-    if env.get("DVT_P25") == "on" and env.get("DVT_P25_SUT"):
-        lanes["p25"] = P25Lane("p25", modules["p25"], target.xlxd_sut, env["DVT_P25_SUT"], int(env.get("DVT_P25_TG", "31672")))
-    else:
-        skipped["p25"] = "no P25 reflector for the sut (run with --profile p25 and name the peer in the native template)"
+    # NXDN and P25: the SUT's own server ports; the native template has no xlxd.* files, so the edges need
+    # rig/config/dv-router/soak-edges.toml in DVT_SUT_CONFIG_EXTRA. Without it the probe over fails and the lane
+    # is dropped with a reason (cases/test_web_soak.py).
+    lanes["nxdn"] = NxdnLane("nxdn", modules["nxdn"], target.xlxd_sut, int(env.get("DVT_NXDN_TG") or NXDN_TG))
+    lanes["p25"] = P25Lane("p25", modules["p25"], target.xlxd_sut, int(env.get("DVT_P25_TG") or P25_TG))
     return lanes, skipped
 
 

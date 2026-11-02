@@ -315,6 +315,7 @@ another launch mode the variable draws a warning. Snippets in
 | `web.toml` | the web service, a persistent state dir and the WebRTC edge; added by `--profile web` itself (next section) |
 | `recorder.toml` | the recorder (K14b): `[recorder] dir = "/var/lib/dv-recorder"`, `keep_days = 7`, `max_gb = 1`; naming it in `DVT_SUT_CONFIG_EXTRA` is the switch (see "Recorder" in the web profile section) |
 | `guest.toml` | `[web] guest_listen = true`: anonymous guests may Listen (two per IPv4, no Talk); used by the K22 cases (`docs/web-k22-cases.md`); name it after `web.toml` |
+| `soak-edges.toml` | `[edges.nxdn]` (`enable`, `tg_modules = "31672:F"`) and `[edges.p25]` (`enable`, `server_module = "G"`, `server_tg = 31672`): the SUT's own NXDN (41400) and P25 (41000) client ports for the soak (`docs/web-soak-cases.md`); the template's own tables are merged key by key |
 
 The XLX peer row names `xlxd-peer-sut` (`<NET>.12`, XLX998), not `xlxd-peer-ref`
 (`.13`): `xlxd-peer-sut` is configured to link with `xlxd-sut` (`.11`, XLX999),

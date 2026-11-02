@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -16,9 +17,16 @@ pytestmark = pytest.mark.unit
 
 LIB = Path(__file__).resolve().parents[2] / "scripts" / "lib" / "procstat.sh"
 SERVICES = ["xlxd-sut", "xlxd-ref", "tester", "XLXD-SUT", "", "*"]
-PROCESSES = ["dv-edge-webrtc", "dv-svc-web", "dv-svc-status", "dv-router", "dv-edge-xlx", "dv-codec-ambed", "dv-edge-webrtc2",
-             "dv-svc-admin", "dv-room", "dv-recorder", "dv-edge-nxdn", "dv-edge-p25", "dv-edge-usrp", "list", "LIST", "list ", "dv-roo",
-             "dv-edge-*", "", "sh", "dv-edge-webrtc;id", "../x", "dv-router2", "DV-ROUTER"]
+# the real names (DV-Router, 2026-11-02): every edge is its own binary, there is no combined edge
+REAL_NAMES = {
+    "dv-router", "dv-room", "dv-data-worker", "dv-codec-ambed",
+    "dv-edge-dextra", "dv-edge-dplus", "dv-edge-dcs", "dv-edge-mmdvm", "dv-edge-dmrplus", "dv-edge-ysf", "dv-edge-m17", "dv-edge-g3",
+    "dv-edge-imrs", "dv-edge-xlx", "dv-edge-nxdn", "dv-edge-p25", "dv-edge-usrp", "dv-edge-webrtc", "dv-edge-aprsis", "dv-edge-ax25",
+    "dv-svc-status", "dv-svc-web", "dv-svc-admin", "dv-svc-iddb", "dv-svc-idsync", "dv-svc-callhome", "dv-svc-recorder",
+}
+PROCESSES = sorted(REAL_NAMES) + ["dv-edge-webrtc2", "dv-recorder", "dv-edge", "dv-edge-", "dv-edge-xlxd", "dv-svc", "dv-room2", "dv-data", "dv-codec",
+                                  "list", "LIST", "list ", "dv-roo", "dv-edge-*", "dv-svc-*", "", "sh", "dv-edge-webrtc;id", "../x", "dv-router2",
+                                  "DV-ROUTER"]
 
 
 def bash(script, *args):
@@ -35,13 +43,16 @@ def test_python_table():
     assert not control.proc_stat_allowed("xlxd-ref", "dv-edge-webrtc")
     assert control.proc_stat_line("xlxd-sut", "dv-svc-web") == "proc-stat xlxd-sut dv-svc-web"
     assert control.proc_stat_line("xlxd-sut", "list") == "proc-stat xlxd-sut list"
-    with pytest.raises(ValueError):
-        control.proc_stat_line("xlxd-sut", "dv-edge-dextra")
+    assert control.proc_stat_line("xlxd-sut", "dv-edge-dextra") == "proc-stat xlxd-sut dv-edge-dextra"      # its own binary
+    for bad in ("dv-recorder", "dv-edge-xlxd", "dv-edge", "dv-edge-*"):
+        with pytest.raises(ValueError):
+            control.proc_stat_line("xlxd-sut", bad)
     with pytest.raises(ValueError):
         control.proc_stat_line("xlxd-ref", "list")
     # every name is a plain comm: at most 15 characters (the kernel truncates longer ones), the helper's pattern
     assert all(len(n) <= 15 and n.replace("-", "").isalnum() and n == n.lower() for n in control.PROC_STAT_NAMES)
     assert len(set(control.PROC_STAT_NAMES)) == len(control.PROC_STAT_NAMES)
+    assert set(control.PROC_STAT_NAMES) == REAL_NAMES                      # exactly the real names, an explicit list
 
 
 def test_bash_and_python_agree_on_every_combination():
@@ -56,6 +67,13 @@ def test_bash_and_python_agree_on_every_combination():
     assert allowed_bash == {c for c in combos if control.proc_stat_allowed(*c)}
     assert len(allowed_bash) == len(control.PROC_STAT_NAMES) + 1          # the names and "list", service xlxd-sut
     assert {p for _s, p in allowed_bash} == set(control.PROC_STAT_NAMES) | {"list"}
+    assert {p for _s, p in allowed_bash} == REAL_NAMES | {"list"}
+
+
+def test_bash_list_is_the_python_list():
+    run = bash('printf "%s\\n" $DVT_PROCSTAT_NAMES')
+    assert run.returncode == 0, run.stderr
+    assert sorted(run.stdout.split()) == sorted(control.PROC_STAT_NAMES)
 
 
 @pytest.mark.parametrize("line,out", [
@@ -70,7 +88,7 @@ def test_parse_accepts(line, out):
 
 
 @pytest.mark.parametrize("line", ["", "proc-stat", "proc-stat xlxd-sut", "proc-stat xlxd-sut dv-router2", "proc-stat xlxd-ref dv-edge-webrtc",
-                                  "proc-stat xlxd-ref list", "proc-stat xlxd-sut list extra", "proc-stat xlxd-sut dv-edge-dextra",
+                                  "proc-stat xlxd-ref list", "proc-stat xlxd-sut list extra", "proc-stat xlxd-sut dv-recorder",
                                   "proc-stat xlxd-sut dv-edge-webrtc extra", "proc-stat xlxd-sut dv-edge-*", "kill-proc xlxd-sut dv-edge-webrtc",
                                   "PROC-STAT xlxd-sut dv-edge-webrtc", "proc-stat xlxd-sut dv-edge-webrtc;id"])
 def test_parse_refuses(line):
@@ -146,3 +164,38 @@ def test_helper_runs_as_the_user_of_the_sut_container(user, want):
     run = subprocess.run(["bash", "-c", 'source "$1"; docker() { printf "%s\n" "$FAKE_USER"; }; DVT_UID=1000 DVT_GID=1000; dvt_procstat_user cid',
                           "x", str(LIB)], capture_output=True, text=True, timeout=30, env={**os.environ, "FAKE_USER": user})
     assert run.returncode == 0 and run.stdout == want + "\n", run.stderr
+
+
+def test_helper_script_reports_every_process_of_a_shared_name_in_pid_order():
+    """dv-room runs one process per module under one comm: all of them come back, one block each."""
+    if not Path("/proc/self/stat").exists() or not shutil.which("bash"):
+        pytest.skip("/proc or bash missing")
+    code = "import ctypes, sys, time; ctypes.CDLL(None).prctl(15, b'dvt-procmulti'); time.sleep(30)"
+    procs = [subprocess.Popen([sys.executable, "-c", code]) for _ in range(3)]
+    try:
+        for p in procs:
+            for _ in range(100):
+                try:
+                    if Path("/proc/%d/comm" % p.pid).read_text().strip() == "dvt-procmulti":
+                        break
+                except OSError:
+                    pass
+                time.sleep(0.05)
+            else:
+                pytest.skip("cannot set the process name with prctl here")
+        script = bash('printf "%s" "$DVT_PROCSTAT_SCRIPT"').stdout
+        run = subprocess.run([sys.executable, "-c", script, "dvt-procmulti"], capture_output=True, text=True, timeout=30)
+        assert run.returncode == 0, run.stderr
+        got = webload.parse_procstat_all(run.stdout)
+        assert [s.pid for s in got] == sorted(p.pid for p in procs)
+        assert webload.parse_procstat_out(run.stdout).pid == got[0].pid          # the single-process reader takes the first
+    finally:
+        for p in procs:
+            p.kill()
+            p.wait(5)
+
+
+def test_split_procstat_out():
+    one = "pid=1\ncomm=x\nt=1.0\n"
+    assert webload.split_procstat_out(one) == [one]
+    assert webload.split_procstat_out(one + one.replace("pid=1", "pid=2")) == [one, one.replace("pid=1", "pid=2")]

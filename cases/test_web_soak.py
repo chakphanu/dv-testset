@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 """Web unit: SOAK1, a 60 minute soak of DV-Router with WebRTC listeners and protocol clients at once
-(docs/web-soak-cases.md). Needs `scripts/run.sh --profile web,webload` (optionally nxdn, p25, interlink), native
+(docs/web-soak-cases.md). Needs `scripts/run.sh --profile web,webload` (optionally interlink; NXDN and P25 come from soak-edges.toml), native
 launch, DVT_USRP_DYNAMIC=1, and DVT_SOAK=1 (the case skips without it: it takes about 70 minutes).
 
 Mix (DV-Router spec): 100 receive-only WebRTC listeners from the stage 5 generator with slow churn (about 5 leave
@@ -18,9 +18,12 @@ the idle gauge); the table per child is printed and written to out/<run>/web/soa
 after 75 minutes at the latest (hard wall clock cap) and can be stopped with `touch out/<run>/web/soak.stop`;
 the teardown is the same in both cases, and in a failure.
 
-Environment (all optional): DVT_SOAK_WARMUP_S (600), DVT_SOAK_MEASURED_S (3000), DVT_SOAK_SEED (1),
-DVT_SOAK_MODULES ("dstar=D,dmr=E,ysf=C,m17=J,usrp-a=A,usrp-b=B,nxdn=F,p25=G"). Shorter times are for smoke runs only
-(the judgement uses the real spans); the documented run uses the defaults.
+Environment (all optional): DVT_SOAK_WARMUP_S (600), DVT_SOAK_MEASURE_S (3000; DVT_SOAK_MEASURED_S is the same),
+DVT_SOAK_SAMPLE_S (30), DVT_SOAK_SHORT=1 (the validation run: 180 s warmup + 240 s measured, a sample every 15 s, the
+same mix and criteria, the RSS growth bound scaled to the shorter part: dvtest.soak.timing), DVT_SOAK_SEED (1),
+DVT_SOAK_MODULES ("dstar=D,dmr=E,ysf=C,m17=J,usrp-a=A,usrp-b=B,nxdn=F,p25=G"). Shorter times are for validation only
+and say so; the documented run uses the defaults. NXDN and P25 need rig/config/dv-router/soak-edges.toml in
+DVT_SUT_CONFIG_EXTRA (docs/web-soak-cases.md).
 """
 import json
 import os
@@ -43,7 +46,7 @@ IDLE0_TICKS = 3                     # samples of the quiet SUT before any traffi
 IDLE0_GAP_S = 10.0
 SETTLE_S = 30.0                     # after the listeners are gone, before the idle window
 GAUGE_BUDGET_S = 150.0              # for the listener gauge to reach zero after the generator finished
-SAMPLE_PERIOD_S = None              # None: dvtest.soak.SAMPLE_S (the offline rehearsal shortens it)
+SAMPLE_PERIOD_S = None              # None: dvtest.soak.timing(env) (the offline rehearsal shortens it)
 
 
 @pytest.fixture(scope="module")
@@ -121,7 +124,8 @@ def probe_lanes(lanes, report):
             continue
         if name in ss.REQUIRED_LANES:
             pytest.fail("lane %s does not work before the soak starts: %s (heard %s)" % (name, res["error"], res["heard"]))
-        dropped[name] = "probe over failed: %s (heard %s)" % (res["error"], res["heard"])
+        hint = " (is rig/config/dv-router/soak-edges.toml in DVT_SUT_CONFIG_EXTRA?)" if name in ("nxdn", "p25") else ""
+        dropped[name] = "probe over failed: %s (heard %s)%s" % (res["error"], res["heard"], hint)
         del lanes[name]
     report.update(lanes_dropped=dropped)
     return dropped
@@ -130,10 +134,10 @@ def probe_lanes(lanes, report):
 def test_soak_sixty_minutes(soak_on, load_gen, load_ready, rig_control, target, web_base_url, web_ca, web_client,  # noqa: F811
                             load_accounts):  # noqa: F811
     env = os.environ
-    warmup_s = float(env.get("DVT_SOAK_WARMUP_S", soak.WARMUP_S))
-    measured_s = float(env.get("DVT_SOAK_MEASURED_S", soak.MEASURED_S))
+    tm = soak.timing(env)
+    warmup_s, measured_s, smoke = tm["warmup_s"], tm["measured_s"], tm["smoke"]
+    sample_s = SAMPLE_PERIOD_S or tm["sample_s"]
     seed = env.get("DVT_SOAK_SEED", "1")
-    smoke = (warmup_s, measured_s) != (soak.WARMUP_S, soak.MEASURED_S)
     out = out_dir()
     report = Report(out / "soak.json")
     stop_file = out / "soak.stop"
@@ -146,11 +150,13 @@ def test_soak_sixty_minutes(soak_on, load_gen, load_ready, rig_control, target, 
         return stop_file.exists() or time.monotonic() > cap
 
     if smoke:
-        web.finding("SOAK1: a shortened run (warmup %d s, measured %d s) is a smoke test, not the criterion" % (warmup_s, measured_s))
+        web.finding("SOAK1: a shortened run (warmup %d s, measured %d s, a sample every %g s, RSS bound x%.3f) is a validation, not the criterion"
+                    % (warmup_s, measured_s, sample_s, tm["rss_scale"]))
     modules = ss.parse_modules(env.get("DVT_SOAK_MODULES", ""), env.get("DVT_NXDN_MODULE"), env.get("DVT_P25_MODULE"))
     names, unlisted = ss.discover(rig_control)
     report.update(children=names, children_unsampled=unlisted, seed=seed, warmup_s=warmup_s, measured_s=measured_s,
-                  modules=modules, smoke=smoke, wall_cap_s=soak.WALL_CAP_S)
+                  modules=modules, smoke=smoke, short=tm["short"], sample_s=sample_s, rss_scale=tm["rss_scale"],
+                  wall_cap_s=soak.WALL_CAP_S)
     if unlisted:
         web.finding("SOAK1: children of the launcher that are not in the proc-stat allow-list (not sampled): %s" % unlisted)
     lanes, skipped = ss.make_lanes(target, env, modules)
@@ -167,7 +173,7 @@ def test_soak_sixty_minutes(soak_on, load_gen, load_ready, rig_control, target, 
     report.update(plan=soak.summarize_plan(overs, sessions))
 
     sink = ss.SampleFile(str(out / "soak-samples.jsonl"))
-    sampler = ss.ChildSampler(rig_control, names, sink, loadgen=load_gen, period_s=SAMPLE_PERIOD_S or soak.SAMPLE_S)
+    sampler = ss.ChildSampler(rig_control, names, sink, loadgen=load_gen, period_s=sample_s)
     traffic = None
     generator_done = False
     result = None
@@ -250,17 +256,19 @@ def test_soak_sixty_minutes(soak_on, load_gen, load_ready, rig_control, target, 
         # the verdict
         text = (out / "soak-samples.jsonl").read_text(encoding="utf-8")
         rows, bad = soak.parse_jsonl(text)
-        result = soak.evaluate(rows, events=events, expected=names)
+        result = soak.evaluate(rows, events=events, expected=names, params={"rss_scale": tm["rss_scale"]})
         gsum, gchecks = soak.generator_summary(gen_rows, min_packets=ROOMS_HEARD_MIN_PACKETS)
         tsum = traffic.summary()
-        extra = list(gchecks) + ss.lane_checks({k: v for k, v in tsum.items() if k not in ("usrp-a", "usrp-b")},
-                                                required=[n for n in ss.REQUIRED_LANES if not n.startswith("usrp")])
+        # the lanes that stayed in the mix (the required ones, and NXDN / P25 when their probe over worked) must deliver
+        judged = [n for n in list(ss.REQUIRED_LANES) + list(ss.OPTIONAL_LANES) if n in lanes and not n.startswith("usrp")]
+        extra = list(gchecks) + ss.lane_checks({k: v for k, v in tsum.items() if k not in ("usrp-a", "usrp-b")}, required=judged)
         extra.append(soak.Check("sampling", bad == 0 and len(sampler.errors) <= 3,
                                 "%d damaged lines, %d sampling errors %s" % (bad, len(sampler.errors), sampler.errors[:2])))
         extra.append(soak.Check("drained", zero and overs_ended, "listeners zero %s (%s), overs ended %s" % (zero, gauge_seen, overs_ended)))
         report.update(state="done", result=result.as_dict(), events=events, generator=gsum, traffic=tsum,
                       extra_checks=[{"name": c.name, "ok": c.ok, "detail": c.detail} for c in extra],
-                      table=soak.table(result).splitlines(), samples=len(rows), sampling_errors=sampler.errors[:10],
+                      table=soak.table(result).splitlines(), counters_table=soak.counters_table(result).splitlines(),
+                      metric_families=next((r["families"] for r in rows if r.get("kind") == "metrics" and "families" in r), []), samples=len(rows), sampling_errors=sampler.errors[:10],
                       slow_ticks=sampler.slow_ticks, loadavg_end=loadavg(), wall_s=round(time.monotonic() - t_wall))
     except BaseException as exc:
         if str(report.data.get("state", "")).startswith("stopped"):
@@ -284,6 +292,7 @@ def test_soak_sixty_minutes(soak_on, load_gen, load_ready, rig_control, target, 
             pass
 
     print("\n" + soak.table(result))
+    print("\n" + soak.counters_table(result))
     for c in list(result.checks) + extra:
         print("%-4s %-34s %s" % ("ok" if c.ok else "FAIL", c.name, c.detail))
     for note in result.unmeasured:
