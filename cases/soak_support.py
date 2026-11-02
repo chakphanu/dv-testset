@@ -210,6 +210,19 @@ class Lane:
             result["error"] = "%s: %s" % (type(exc).__name__, str(exc)[:160])
         return result
 
+    def cycle(self, hold_s, seed):
+        """One login / logout cycle without any voice (the RSS isolation mode D, cases/test_web_rss_isolation.py): the
+        clients of the lane link, stay `hold_s` seconds and unlink. Same result shape as over(); never raises."""
+        result = {"lane": self.name, "ok": False, "sent": 0, "heard": {}, "error": None}
+        try:
+            self._cycle(hold_s, result)
+        except Exception as exc:                                      # noqa: BLE001 - one bad cycle must not end the run
+            result["error"] = "%s: %s" % (type(exc).__name__, str(exc)[:160])
+        return result
+
+    def _cycle(self, hold_s, result):
+        raise NotImplementedError("%s has no login cycle" % type(self).__name__)
+
 
 class DigitalLane(Lane):
     """kinds of dvtest.clients: one talker kind, listener kinds on the same module of xlxd-sut. Passthrough
@@ -247,6 +260,31 @@ class DigitalLane(Lane):
         finally:
             clients.close(*[c for c in [talker] + listeners if c is not None])
 
+    def _cycle(self, hold_s, result):
+        opened = []
+        try:
+            targets = [(k, self.ip) for k in self.listeners]
+            if self.peer_ip:
+                targets.append((self.talker, self.peer_ip))
+            for kind, ip in targets:
+                client = clients.make(kind, self.module, 1)
+                opened.append(client)
+                if not client.link(ip):
+                    raise AssertionError("%s listener link to %s failed" % (kind, ip))
+            talker = clients.make(self.talker, self.module, 0)
+            opened.append(talker)
+            if not talker.link(self.ip):
+                raise AssertionError("%s talker link failed" % self.talker)
+            end = time.monotonic() + hold_s
+            while time.monotonic() < end:
+                for c in opened[:-1]:
+                    c.client.pump(0.05)
+                if len(opened) < 2:
+                    time.sleep(0.05)
+            result["ok"] = True
+        finally:
+            clients.close(*opened)
+
 
 class UsrpLane(Lane):
     """A USRP dynamic client that talks into a room; the audience are the WebRTC listeners of the generator."""
@@ -265,6 +303,20 @@ class UsrpLane(Lane):
             peer.talk(frames, tail=0.5)
             result["sent"] = len(frames)
             result["ok"] = True              # judged by the listeners that heard it (soak.generator_summary)
+        finally:
+            try:
+                peer.unlink()
+            except OSError:
+                pass
+            peer.close()
+
+    def _cycle(self, hold_s, result):
+        peer = UsrpPeer(self.hub, callsign=self.callsign, module=self.module)
+        try:
+            if not peer.link(timeout=8.0):
+                raise AssertionError("USRP REG:OK missing from %s:%d" % self.hub)
+            peer.pump(hold_s)
+            result["ok"] = True
         finally:
             try:
                 peer.unlink()
@@ -307,6 +359,20 @@ class NxdnLane(Lane):
                     finally:
                         c.close()
 
+    def _cycle(self, hold_s, result):
+        talker = nxdn.NxdnClient("0.0.0.0", self.tg, nxdn_id=NXDN_IDS[0], callsign=clients.CALLSIGNS[0])
+        try:
+            if not talker.link(self.ip):
+                raise AssertionError("NXDN poll to %s:%d (TG %d) is not echoed: edge not serving?" % (self.ip, nxdn.PORT, self.tg))
+            time.sleep(hold_s)
+            result["ok"] = True
+        finally:
+            try:
+                if talker.dest:
+                    talker.unlink()
+            finally:
+                talker.close()
+
 
 class P25Lane(Lane):
     """P25 talker on the SUT's OWN P25 server port (UDP 41000, one served module `server_module` and TG `server_tg`
@@ -343,6 +409,20 @@ class P25Lane(Lane):
                     talker.close()
                 clients.close(listener)
 
+    def _cycle(self, hold_s, result):
+        talker = p25.P25Client("0.0.0.0", callsign=clients.CALLSIGNS[0], src_id=clients.DMR_IDS[0], tg=self.tg)
+        try:
+            if not talker.link(self.ip):
+                raise AssertionError("P25 poll to %s:%d is not echoed: edge not serving?" % (self.ip, p25.PORT))
+            time.sleep(hold_s)
+            result["ok"] = True
+        finally:
+            try:
+                if getattr(talker, "dest", None):
+                    talker.unlink()
+            finally:
+                talker.close()
+
 
 def make_lanes(target, env, modules):
     """({name: Lane}, {name: reason it is not in the mix}). The required lanes always exist and so do NXDN and P25
@@ -368,10 +448,12 @@ def make_lanes(target, env, modules):
 
 
 class Traffic:
-    """Runs a schedule of overs (soak.build_overs, t in seconds after `t0` monotonic) on a pool; `stop` ends it."""
+    """Runs a schedule of overs (soak.build_overs, t in seconds after `t0` monotonic) on a pool; `stop` ends it.
+    `method` is the Lane method an item runs: "over" (default) or "cycle" (login / logout without voice, build_cycles of
+    dvtest/isolation.py); the item's dur_s is its first argument."""
 
-    def __init__(self, lanes, overs, t0, seed, workers=16):
-        self.lanes, self.overs, self.t0, self.seed = lanes, overs, t0, seed
+    def __init__(self, lanes, overs, t0, seed, workers=16, method="over"):
+        self.lanes, self.overs, self.t0, self.seed, self.method = lanes, overs, t0, seed, method
         self.stop = threading.Event()
         self.results = []
         self._lock = threading.Lock()
@@ -384,7 +466,7 @@ class Traffic:
 
     def _one(self, over, index):
         began = time.time()
-        res = self.lanes[over["lane"]].over(over["dur_s"], "%s/%d" % (self.seed, index))
+        res = getattr(self.lanes[over["lane"]], self.method)(over["dur_s"], "%s/%d" % (self.seed, index))
         res.update(t_plan=over["t"], t_start=round(began, 2), t_end=round(time.time(), 2))
         with self._lock:
             self.results.append(res)

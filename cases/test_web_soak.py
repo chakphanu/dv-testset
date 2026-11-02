@@ -115,12 +115,13 @@ def idle_events(client, seconds):
     return verdict
 
 
-def probe_lanes(lanes, report):
+def probe_lanes(lanes, report, method="over"):
     """One short over per lane before the clock starts: a required lane that does not work fails the case at once
-    (an hour must not be spent on a broken mix); NXDN and P25 are dropped with the reason."""
+    (an hour must not be spent on a broken mix); NXDN and P25 are dropped with the reason. `method` "cycle" probes with a
+    login without voice (the RSS isolation mode D)."""
     dropped = {}
     for name, lane in list(lanes.items()):
-        res = lane.over(2.0, "probe")
+        res = getattr(lane, method)(2.0, "probe")
         if res["ok"] or (name.startswith("usrp") and res["sent"]):
             continue
         if name in ss.REQUIRED_LANES:
