@@ -12,15 +12,21 @@
 Lead defaults of the criteria (DV-Router, 2026-11-02), all constants below:
   1  no child restarts: one (pid, start time) per child over the whole run, and no child vanishes or appears late
   2  RSS growth over the measured part <= max(5 MiB, 10 percent of the RSS at the end of warmup), judged on the
-     least-squares slope x the measured span (not on the last sample)
+     least-squares slope x the measured window (not on the last sample); NOT a verdict in a short run (a lead,
+     params["rss_judged"] False). Next to the RSS the case records the gauge-style series of dv-svc-status and
+     dv-router (ATTR_INCLUDE) and the number of series of the scrape, every tick, for attribution (recorded,
+     never asserted: attribution())
   3  threads and fds at the end of the measured part <= max(end of warmup + 10 percent, +2 threads, +4 fds) over
      the end-of-warmup value (the floor applies next to the 10 percent rule: 10 percent of 8 threads is 0.8); after
      all traffic stopped the fds are within +5 of the idle value taken before any traffic (rulings of DV-Router,
      2026-11-02)
   4  the counters of FLAT_FAMILIES are FLAT over the measured part (value at the end of warmup == value at the
-     end, absolute zero growth); a family that is not on /metrics is recorded as absent, a family that grows and
+     end, absolute zero growth); a series that is not on /metrics counts as 0 (LAZY_FAMILIES are created at their
+     first increment: they must not appear or grow, and are never required to be present); a family that grows and
      that DV-Router ruled on goes into FLAT_OVERRIDES (starts empty) and is recorded with its growth; every
-     other error-like family is recorded only
+     other error-like family is recorded only. dv_edge_drops_total is NOT flat (it counts legitimate events of
+     the lane mix): judge_drops(): idle window no reason grows; measured window only a reason outside
+     DROPS_LEGIT fails, the legit reasons are recorded with their rate and flagged above 1 per second
   5  the public event stream is quiet while idle (dvtest.k22.idle_stream_verdict, judged by the case)
 """
 import json
@@ -61,15 +67,39 @@ RECORD_PATTERN = re.compile(r"drop|refus|reject|denied|panic|error|overflow|over
 
 # Counters asserted FLAT over the measured part (DV-Router ruling 2026-11-02, docs/design/status.md "Metrics"):
 # the value at the end of warmup must equal the value at the end, absolute zero growth.
+# A series that is not on /metrics counts as 0 (rulings of DV-Router 2026-11-02).
 FLAT_FAMILIES = (
-    "dv_edge_webrtc_panics_total", "dv_edge_drops_total", "dv_edge_queue_drops_total", "dv_edge_webrtc_audio_dropped_total",
+    "dv_edge_webrtc_panics_total", "dv_edge_queue_drops_total", "dv_edge_webrtc_audio_dropped_total",
     "dv_room_ingress_rejected_total", "dv_room_shell_errors_total", "dv_status_telemetry_rejected_total",
     "dv_status_input_dropped_total", "dv_fabric_put_dropped_total", "dv_recorder_dropped_total", "dv_codec_dropped_total",
     "dv_edge_tx_refused_total",
 )
+# Created at their first increment: absent is 0, never "must be present"; the case only checks that they do not
+# appear or grow over the measured part (appearing is growth from 0).
+LAZY_FAMILIES = ("dv_edge_tx_refused_total", "dv_recorder_dropped_total", "dv_room_shell_errors_total")
+# dv_edge_drops_total counts legitimate events of the lane mix (links time out, packets for unknown sessions): judged
+# by reason (judge_drops), not flat. Idle window: no reason grows. Measured window: a reason outside DROPS_LEGIT
+# fails; the legit ones are recorded with their rate and flagged (a warning) above DROPS_RATE_FLAG_PER_S in total.
+DROPS_FAMILY = "dv_edge_drops_total"
+DROPS_LEGIT = ("link_timeout", "no_session", "rx_ignored", "x_stale")
+DROPS_RATE_FLAG_PER_S = 1.0
+SNAPSHOT_FAMILIES = FLAT_FAMILIES + (DROPS_FAMILY,)               # what the counter snapshots keep
 # Per-family overrides, {family: reason}: a family that grows with the traffic mix is NOT asserted but recorded with
 # its name and growth, until DV-Router rules on it. Starts empty on purpose.
 FLAT_OVERRIDES = {}
+
+# RSS attribution (recorded every sample tick next to the RSS, never asserted): the gauge-style series of the hub
+# /metrics of dv-svc-status (events ring, positions, text history, clients, rooms on air ...) and of dv-router (sessions,
+# rooms, routes, launcher state). A series is kept when its name matches one of ATTR_INCLUDE and none of
+# ATTR_EXCLUDE (counters and histogram parts are not size gauges). One constant, so that the names learned from a
+# live /metrics text (the "gauges" snapshots of soak.json) are fixed in one place.
+ATTR_INCLUDE = (
+    r"^dv_status_", r"^dv_pkt_", r"^dv_launcher_", r"^dv_fabric_", r"^dv_router_", r"^dv_room_",
+    r"^dv_edge_(sessions|webrtc_listeners|webrtc_room_listeners)$", r"^dv_idsync_entries$", r"^dv_codec_(active_sessions|queue_frames)$",
+)
+ATTR_EXCLUDE = (r"_total$", r"_bucket$", r"_sum$", r"_count$", r"_up$", r"timestamp")
+ATTR_MAX_SERIES = 400               # series kept per scrape; the rest is counted (attr row "truncated")
+ATTR_KEY_SERIES_TOTAL = "scrape:series_total"
 
 
 # ------------------------------------------------------------------ timing (real run and short mode)
@@ -147,9 +177,11 @@ def absent_row(name, t, phase, seq):
     return {"kind": "proc", "t": round(t, 3), "seq": seq, "phase": phase, "name": name, "absent": True}
 
 
-def counters_row(t, phase, counters, flat=None, series=None, families=None):
+def counters_row(t, phase, counters, flat=None, series=None, families=None, reasons=None, gauges=None):
     """A counter snapshot: `counters` = the error-like families (summed over labels), `flat` = {family: value or None
-    (absent)} of FLAT_FAMILIES, `series` = their series, `families` = every family name on /metrics (first snapshot)."""
+    (absent)} of SNAPSHOT_FAMILIES, `series` = their series, `families` = every family name on /metrics (first
+    snapshot), `reasons` = {reason: value} of dv_edge_drops_total, `gauges` = {name: {"n", "sum"}} of the non-counter
+    families (discovery of the attribution names)."""
     row = {"kind": "metrics", "t": round(t, 3), "phase": phase, "counters": dict(sorted(counters.items()))}
     if flat is not None:
         row["flat"] = dict(sorted(flat.items()))
@@ -157,7 +189,18 @@ def counters_row(t, phase, counters, flat=None, series=None, families=None):
         row["series"] = series
     if families is not None:
         row["families"] = sorted(families)
+    if reasons is not None:
+        row["reasons"] = dict(sorted(reasons.items()))
+    if gauges is not None:
+        row["gauges"] = dict(sorted(gauges.items()))
     return row
+
+
+def attr_row(t, phase, values, series_total, truncated=0):
+    """The attribution row of one tick: `values` = {series key: value} (attr_values), `series_total` = the number of
+    series of the whole scrape."""
+    return {"kind": "attr", "t": round(t, 3), "phase": phase, "series_total": int(series_total), "truncated": int(truncated),
+            "values": dict(sorted(values.items()))}
 
 
 def gauge_row(t, phase, listeners):
@@ -183,7 +226,7 @@ def parse_jsonl(text):
         except ValueError:
             bad += 1
             continue
-        if isinstance(row, dict) and row.get("kind") in ("proc", "metrics", "gauge", "mark") and isinstance(row.get("t"), (int, float)):
+        if isinstance(row, dict) and row.get("kind") in ("proc", "metrics", "gauge", "mark", "attr") and isinstance(row.get("t"), (int, float)):
             rows.append(row)
         else:
             bad += 1
@@ -203,7 +246,7 @@ def label_key(labels):
     return ",".join("%s=%s" % (k, labels[k]) for k in sorted(labels) if k != "proc") or "-"
 
 
-def flat_snapshot(samples, families=FLAT_FAMILIES):
+def flat_snapshot(samples, families=SNAPSHOT_FAMILIES):
     """(flat, series) of dvtest.metrics samples for the flat families: flat = {family: value summed over all
     series, or None when the family is not on /metrics}, series = {family: {labels without proc: value summed over
     the procs}} (kept to name the series that grew). Any sample of the family, at any value, counts as present."""
@@ -219,6 +262,61 @@ def flat_snapshot(samples, families=FLAT_FAMILIES):
             per[label_key(x.labels)] = per.get(label_key(x.labels), 0.0) + x.value
         series[fam] = dict(sorted(per.items()))
     return flat, series
+
+
+def drop_reasons(samples, family=DROPS_FAMILY):
+    """{reason: value summed over all other labels and procs} of the drop counter; a series without a reason label
+    counts under "-" (outside the legit set)."""
+    out = {}
+    for x in samples:
+        if x.name == family and x.value == x.value and abs(x.value) != float("inf"):
+            reason = x.labels.get("reason", "-")
+            out[reason] = out.get(reason, 0.0) + x.value
+    return {k: round(v, 6) for k, v in sorted(out.items())}
+
+
+_COUNTER_PARTS = re.compile(r"_(total|bucket|sum|count)$")
+
+
+def gauge_values(samples):
+    """{name: {"n": series, "sum": value}} of the families that are not counters or histogram parts: what the case
+    keeps at a few snapshots so that the names for ATTR_INCLUDE can be read from a live /metrics."""
+    out = {}
+    for x in samples:
+        if _COUNTER_PARTS.search(x.name) or x.value != x.value or abs(x.value) == float("inf"):
+            continue
+        rec = out.setdefault(x.name, {"n": 0, "sum": 0.0})
+        rec["n"] += 1
+        rec["sum"] = round(rec["sum"] + x.value, 6)
+    return out
+
+
+def attr_wanted(name, include=None, exclude=None):
+    include = ATTR_INCLUDE if include is None else include
+    exclude = ATTR_EXCLUDE if exclude is None else exclude
+    return any(re.search(p, name) for p in include) and not any(re.search(p, name) for p in exclude)
+
+
+def series_key(sample):
+    """name{label=value,...} with the labels sorted; the proc label stays (it names the process that reports)."""
+    if not sample.labels:
+        return sample.name
+    return "%s{%s}" % (sample.name, ",".join("%s=%s" % (k, sample.labels[k]) for k in sorted(sample.labels)))
+
+
+def attr_values(samples, include=None, exclude=None, limit=ATTR_MAX_SERIES):
+    """(values, truncated): {series key: value (summed when the key repeats)} of the attributed series of dvtest.metrics
+    samples, at most `limit` of them (the rest is counted in `truncated`)."""
+    values, truncated = {}, 0
+    for x in samples:
+        if x.value != x.value or abs(x.value) == float("inf") or not attr_wanted(x.name, include, exclude):
+            continue
+        key = series_key(x)
+        if key not in values and len(values) >= limit:
+            truncated += 1
+            continue
+        values[key] = round(values.get(key, 0.0) + x.value, 6)
+    return values, truncated
 
 
 # ------------------------------------------------------------------ the traffic mix (deterministic from a seed)
@@ -339,6 +437,8 @@ class Result:
     children: dict = field(default_factory=dict)
     counters: dict = field(default_factory=dict)
     unmeasured: list = field(default_factory=list)
+    warnings: list = field(default_factory=list)            # flagged, not failed
+    attribution: dict = field(default_factory=dict)         # recorded series next to the RSS (attribution())
 
     def add(self, name, ok, detail=""):
         self.checks.append(Check(name, bool(ok), detail))
@@ -347,7 +447,8 @@ class Result:
 
     def as_dict(self):
         return {"ok": self.ok, "checks": [{"name": c.name, "ok": c.ok, "detail": c.detail} for c in self.checks],
-                "children": self.children, "counters": self.counters, "unmeasured": self.unmeasured}
+                "children": self.children, "counters": self.counters, "unmeasured": self.unmeasured, "warnings": self.warnings,
+                "attribution": self.attribution}
 
 
 def _proc_rows(rows):
@@ -405,14 +506,19 @@ def judge_child(name, rows, params):
     xs = [r["t"] for r in meas]
     slope, _ = least_squares(xs, [r["rss_kib"] for r in meas])
     span = max(xs) - min(xs)
-    growth = slope * span
+    # the bound is on the line over the whole measured window (50 minutes in the real run), not on the span of the samples
+    window = p["measured_s"] if p.get("measured_s") else span
+    growth = slope * window
     limit = max(p["rss_floor_kib"], p["rss_fraction"] * base_rss) * p["rss_scale"]
+    judged = bool(p.get("rss_judged", True))
     rec["rss_kib"] = {"start": round(base_rss, 1), "end": median([r["rss_kib"] for r in meas[-3:]]), "max": max(r["rss_kib"] for r in meas),
                       "slope_kib_per_min": round(slope * 60.0, 3), "growth_kib": round(growth, 1), "limit_kib": round(limit, 1),
-                      "span_s": round(span, 1), "hwm": max(r["hwm_kib"] for r in meas)}
+                      "span_s": round(span, 1), "window_s": round(window, 1), "judged": judged, "over_limit": growth > limit,
+                      "hwm": max(r["hwm_kib"] for r in meas)}
     scaled = " (scaled x%.3f for a short measured part)" % p["rss_scale"] if p["rss_scale"] != 1.0 else ""
-    checks.append(Check("rss:" + name, growth <= limit, "slope %.2f KiB/min x %.0f s = %.0f KiB, limit %.0f KiB%s (start %.0f KiB)"
-                        % (slope * 60.0, span, growth, limit, scaled, base_rss)))
+    lead = "" if judged else "LEAD ONLY, not a verdict (short run, warmup): "
+    checks.append(Check("rss:" + name, growth <= limit or not judged, "%sslope %.2f KiB/min x %.0f s = %.0f KiB, limit %.0f KiB%s (start %.0f KiB)"
+                        % (lead, slope * 60.0, window, growth, limit, scaled, base_rss)))
 
     base_thr = median([r["threads"] for r in warm[-3:]])
     end_thr = median([r["threads"] for r in meas[-5:]])
@@ -451,9 +557,10 @@ def _grown_series(a, b):
 
 def judge_flat(snapshots, overrides=None, families=FLAT_FAMILIES):
     """(record, checks) of the flat families. `snapshots` = {label: counters row}. Per family: status "absent" (not on
-    /metrics at either snapshot: no assertion), "flat", "grew" (a check FAILS, naming the family and the delta),
+    /metrics at either snapshot: it counts as 0, no assertion, never "must be present"), "flat", "grew" (a check FAILS, naming the family and the delta),
     "override" (grew, but in `overrides`: recorded only), "vanished" (on /metrics at the end of warmup, gone at the
-    end: recorded, no assertion). A family that first shows up after the end of warmup counts from zero."""
+    end: recorded, no assertion). A series that is missing counts as 0, so a family that first shows up after the end
+    of warmup (LAZY_FAMILIES are created at their first increment) counts from zero: appearing is growth."""
     overrides = FLAT_OVERRIDES if overrides is None else overrides
     w, e = snapshots.get("warmup_end"), snapshots.get("measured_end")
     if not w or not e or "flat" not in w or "flat" not in e:
@@ -462,7 +569,9 @@ def judge_flat(snapshots, overrides=None, families=FLAT_FAMILIES):
     for fam in families:
         a, b = w["flat"].get(fam), e["flat"].get(fam)
         if a is None and b is None:
-            record[fam] = {"status": "absent"}
+            record[fam] = {"status": "absent", "start": 0.0, "end": 0.0, "delta": 0.0}
+            if fam in LAZY_FAMILIES:
+                record[fam]["lazy"] = True
             continue
         if b is None:
             record[fam] = {"status": "vanished", "start": a}
@@ -470,6 +579,8 @@ def judge_flat(snapshots, overrides=None, families=FLAT_FAMILIES):
         start = 0.0 if a is None else a
         delta = round(b - start, 6)
         info = {"status": "flat", "start": start, "end": b, "delta": delta}
+        if fam in LAZY_FAMILIES:
+            info["lazy"] = True
         if delta > 0:
             info["grown_series"] = _grown_series((w.get("series") or {}).get(fam), (e.get("series") or {}).get(fam))
             if fam in overrides:
@@ -491,11 +602,60 @@ def judge_flat(snapshots, overrides=None, families=FLAT_FAMILIES):
     return record, checks
 
 
+def _reason_deltas(a, b):
+    """{reason: {"start", "end", "delta"}} between two {reason: value} dicts; a missing reason is 0."""
+    a, b = a or {}, b or {}
+    return {r: {"start": a.get(r, 0.0), "end": b.get(r, 0.0), "delta": round(b.get(r, 0.0) - a.get(r, 0.0), 6)} for r in sorted(set(a) | set(b))}
+
+
+def judge_drops(snapshots, legit=DROPS_LEGIT, flag_rate=DROPS_RATE_FLAG_PER_S):
+    """(record, checks, warnings) of dv_edge_drops_total, which counts legitimate events of the lane mix and is not
+    flat. Per reason, a missing series is 0.
+      drops-reasons  measured part (warmup_end -> measured_end): fails only when a reason OUTSIDE `legit` appears or
+                     grows; the legit reasons are recorded with delta and rate per second
+      drops-idle     idle window (idle_start -> idle_end): no reason of any kind grows
+    A warning (a flag in the summary, not a failure) when the legit reasons together run above `flag_rate` per second
+    over the measured part."""
+    record = {"legit": list(legit), "flag_rate_per_s": flag_rate}
+    checks, warnings = [], []
+    w, e = snapshots.get("warmup_end"), snapshots.get("measured_end")
+    if not w or not e or "reasons" not in w or "reasons" not in e:
+        checks.append(Check("drops-reasons", False, "no per-reason snapshot of %s at the end of warmup and of the measured part" % DROPS_FAMILY))
+    else:
+        span = max(1.0, e["t"] - w["t"])
+        per = _reason_deltas(w["reasons"], e["reasons"])
+        for reason, info in per.items():
+            info["legit"] = reason in legit
+            info["rate_per_s"] = round(max(0.0, info["delta"]) / span, 4)
+        outside = {r: i["delta"] for r, i in per.items() if not i["legit"] and i["delta"] > 0}
+        total = sum(max(0.0, i["delta"]) for r, i in per.items() if i["legit"])
+        rate = total / span
+        record.update(reasons=per, window_s=round(span, 1), legit_total=total, legit_rate_per_s=round(rate, 4), outside=outside)
+        legit_text = ", ".join("%s %g (%.3f/s)" % (r, i["delta"], i["rate_per_s"]) for r, i in per.items() if i["legit"] and i["delta"] > 0) or "none grew"
+        checks.append(Check("drops-reasons", not outside,
+                            ("reasons outside %s appeared or grew over the measured part: %s" % (list(legit), outside)) if outside
+                            else "legit reasons over %.0f s: %s; total %.3f/s" % (span, legit_text, rate)))
+        if rate > flag_rate:
+            record["flagged"] = True
+            warnings.append("FLAG %s: the legit reasons run at %.2f/s over the measured part (flag above %g/s): %s"
+                            % (DROPS_FAMILY, rate, flag_rate, legit_text))
+    i0, i1 = snapshots.get("idle_start"), snapshots.get("idle_end")
+    if not i0 or not i1 or "reasons" not in i0 or "reasons" not in i1:
+        checks.append(Check("drops-idle", False, "no per-reason snapshot of %s at the start and the end of the idle window" % DROPS_FAMILY))
+    else:
+        grown = {r: i["delta"] for r, i in _reason_deltas(i0["reasons"], i1["reasons"]).items() if i["delta"] > 0}
+        record["idle"] = grown
+        checks.append(Check("drops-idle", not grown, ("%s grew while idle: %s" % (DROPS_FAMILY, grown)) if grown
+                            else "no reason of %s grew while idle" % DROPS_FAMILY))
+    return record, checks, warnings
+
+
 def judge_counters(snapshots, overrides=None):
     """(record, checks) of the counters. `snapshots` = {label: counters row} with the labels idle0, warmup_end,
     measured_end, idle_start, idle_end (missing ones are skipped). The flat families must not grow over the measured
-    part (judge_flat); every error-like family is recorded with its deltas over the measured part, the run and the
-    idle window, and none of those is asserted."""
+    part (judge_flat); dv_edge_drops_total is judged by reason (judge_drops); every error-like family is recorded with
+    its deltas over the measured part, the run and the idle window, and none of those is asserted. record["warnings"]
+    holds the flags."""
     def delta(a, b):
         sa, sb = (snapshots.get(a) or {}).get("counters"), (snapshots.get(b) or {}).get("counters")
         if sa is None or sb is None:
@@ -504,8 +664,46 @@ def judge_counters(snapshots, overrides=None):
     record = {"measured": delta("warmup_end", "measured_end"), "run": delta("idle0", "idle_end"), "idle": delta("idle_start", "idle_end")}
     flat, checks = judge_flat(snapshots, overrides)
     record["flat"] = flat
-    record["growing"] = sorted(k for k, v in (record["measured"] or {}).items() if v > 0 and k not in FLAT_FAMILIES)
+    record["warnings"] = []
+    if flat:                                                  # the snapshots exist
+        drops, dchecks, warnings = judge_drops(snapshots)
+        record["drops"] = drops
+        record["warnings"] = warnings
+        checks.extend(dchecks)
+    record["growing"] = sorted(k for k, v in (record["measured"] or {}).items() if v > 0 and k not in SNAPSHOT_FAMILIES)
     return record, checks
+
+
+def attribution(rows):
+    """The recorded attribution series next to the RSS, from the "attr" rows of the sample file: {"series_total":
+    stats of the number of series of the scrape, "series": {key: stats}, "raw": {key: [[seconds since the first row, value], ...]},
+    "scrape": [[t, series_total], ...]}. stats = {n, first, last, min, max, slope_per_min} over the measured phase
+    (least squares), recorded, never asserted. Keys are sorted by |slope| in `order`."""
+    attr = sorted((r for r in rows if r.get("kind") == "attr"), key=lambda r: r["t"])
+    if not attr:
+        return {}
+    t0 = attr[0]["t"]
+    raw, scrape = {}, []
+    for r in attr:
+        scrape.append([round(r["t"] - t0, 1), r.get("series_total", 0)])
+        for key, value in (r.get("values") or {}).items():
+            raw.setdefault(key, []).append([round(r["t"] - t0, 1), value, r.get("phase")])
+
+    def stats(points):
+        meas = [(t, v) for t, v, ph in points if ph == "measured"]
+        if not meas:
+            return {"n": 0}
+        xs, ys = [t for t, _ in meas], [v for _, v in meas]
+        slope, _ = least_squares(xs, ys) if len(meas) > 1 else (0.0, ys[0])
+        return {"n": len(meas), "first": ys[0], "last": ys[-1], "min": min(ys), "max": max(ys), "slope_per_min": round(slope * 60.0, 4)}
+
+    scrape_pts = [(t, v, r.get("phase")) for (t, v), r in zip(scrape, attr)]
+    series = {key: stats(points) for key, points in sorted(raw.items())}
+    series_total = stats(scrape_pts)
+    order = sorted(series, key=lambda k: (-abs(series[k].get("slope_per_min", 0.0)), k))
+    return {"series_total": series_total, "series": series, "order": order, "scrape": scrape,
+            "raw": {k: [[t, v] for t, v, _ph in pts] for k, pts in raw.items()},
+            "truncated": max((r.get("truncated", 0) for r in attr), default=0)}
 
 
 def generator_summary(rows, min_packets=50, failed_fraction=0.02):
@@ -539,10 +737,30 @@ def generator_summary(rows, min_packets=50, failed_fraction=0.02):
     return summary, checks
 
 
+def assign_phases(rows):
+    """The rows with their phase corrected by the counter snapshots. A sampling tick takes ~19 s (23 helper containers) and
+    carries the phase it started in, so a tick that began before the end of warmup or of the measured part can end after it
+    (the listeners are gone by then: the edge RSS drops). A proc, gauge or attr row of phase warmup written after the
+    warmup_end snapshot counts as measured; one of phase measured written after the measured_end snapshot counts as stopping."""
+    snap = {r["phase"]: r["t"] for r in rows if r.get("kind") == "metrics" and r.get("phase") in ("warmup_end", "measured_end")}
+    if not snap:
+        return rows
+    out = []
+    for r in rows:
+        if r.get("kind") in ("proc", "gauge", "attr"):
+            if r.get("phase") == "measured" and "measured_end" in snap and r["t"] > snap["measured_end"]:
+                r = dict(r, phase="stopping")
+            elif r.get("phase") == "warmup" and "warmup_end" in snap and r["t"] > snap["warmup_end"]:
+                r = dict(r, phase="measured")
+        out.append(r)
+    return out
+
+
 def default_params():
     return {"min_samples": MIN_SAMPLES, "rss_floor_kib": RSS_FLOOR_KIB, "rss_fraction": RSS_FRACTION,
             "threads_fraction": THREADS_FRACTION, "threads_floor": THREADS_FLOOR, "fds_fraction": FDS_FRACTION,
-            "fds_floor": FDS_FLOOR, "idle_fds_slack": IDLE_FDS_SLACK, "rss_scale": 1.0, "flat_overrides": None}
+            "fds_floor": FDS_FLOOR, "idle_fds_slack": IDLE_FDS_SLACK, "rss_scale": 1.0, "flat_overrides": None,
+            "rss_judged": True, "measured_s": None}
 
 
 def evaluate(rows, events=None, params=None, expected=()):
@@ -552,6 +770,7 @@ def evaluate(rows, events=None, params=None, expected=()):
     p = default_params()
     p.update(params or {})
     res = Result()
+    rows = assign_phases(rows)
     by = _proc_rows(rows)
     for name in expected:
         # a name several processes carry (dv-room) is sampled as dv-room.01, dv-room.02, ...
@@ -574,6 +793,13 @@ def evaluate(rows, events=None, params=None, expected=()):
     rec, checks = judge_counters(snaps, p.get("flat_overrides"))
     res.counters = rec
     res.checks.extend(checks)
+    res.warnings.extend(rec.get("warnings", []))
+    for name, c in sorted(res.children.items()):
+        r = c.get("rss_kib") or {}
+        if r.get("over_limit") and not r.get("judged", True):
+            res.warnings.append("RSS lead %s: slope %.1f KiB/min, growth %.0f KiB over the window, limit %.0f KiB (short run: not a verdict)"
+                                % (name, r["slope_kib_per_min"], r["growth_kib"], r["limit_kib"]))
+    res.attribution = attribution(rows)
     if events is None:
         res.add("events-quiet", False, "the public event stream was not sampled while idle")
     else:
@@ -605,6 +831,36 @@ def counters_table(result):
     lines = ["%-42s %-9s %12s %12s %9s" % ("flat family", "status", "warmup end", "end", "delta")]
     for fam, info in sorted((result.counters.get("flat") or {}).items()):
         lines.append("%-42s %-9s %12s %12s %9s" % (fam, info["status"], _f(info.get("start")), _f(info.get("end")), _f(info.get("delta"))))
+    drops = result.counters.get("drops") or {}
+    if drops.get("reasons") is not None:
+        lines.append("")
+        lines.append("%-42s %-9s %12s %12s %9s %9s" % (DROPS_FAMILY + " reason", "legit", "warmup end", "end", "delta", "per s"))
+        for reason, info in drops["reasons"].items():
+            if not info["start"] and not info["end"]:
+                continue                                  # a reason that never counted (all of them are in soak.json)
+            lines.append("%-42s %-9s %12s %12s %9s %9.3f" % (reason, "yes" if info["legit"] else "NO", _f(info["start"]), _f(info["end"]),
+                                                              _f(info["delta"]), info["rate_per_s"]))
+        lines.append("legit total %.3f/s over %.0f s (flag above %g/s)%s" % (drops["legit_rate_per_s"], drops["window_s"], drops["flag_rate_per_s"],
+                                                                         ", FLAGGED" if drops.get("flagged") else ""))
+    return "\n".join(lines)
+
+
+def attribution_table(result, top=25):
+    """Plain-text table of the attribution series (recorded, not asserted): the number of series of the scrape and,
+    per series that moved, first and last value and the least-squares slope per minute over the measured part, the
+    largest slopes first; the series that did not move are counted, not listed (all of them are in soak.json)."""
+    att = result.attribution or {}
+    if not att:
+        return "attribution: no series recorded"
+    lines = ["%-64s %12s %12s %12s" % ("attribution series (measured part)", "first", "last", "slope/min")]
+    st = att["series_total"]
+    lines.append("%-64s %12s %12s %12s" % (ATTR_KEY_SERIES_TOTAL, _f(st.get("first")), _f(st.get("last")), _f(st.get("slope_per_min"))))
+    moved = [k for k in att["order"] if att["series"][k].get("n") and att["series"][k]["first"] != att["series"][k]["last"]]
+    for k in moved[:top]:
+        v = att["series"][k]
+        lines.append("%-64s %12s %12s %12s" % (k[:64], _f(v["first"]), _f(v["last"]), _f(v["slope_per_min"])))
+    lines.append("(%d series recorded, %d moved%s, %d unchanged; truncated %d)" % (len(att["series"]), len(moved),
+                 ", top %d listed" % top if len(moved) > top else "", len(att["series"]) - len(moved), att.get("truncated", 0)))
     return "\n".join(lines)
 
 

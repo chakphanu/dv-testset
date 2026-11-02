@@ -43,25 +43,37 @@ def gauge_rows(values=(0, 0, 0)):
     return [soak.gauge_row(T0 + 4000 + i, "idle", v) for i, v in enumerate(values)]
 
 
-FLAT_BASE = {"dv_edge_webrtc_panics_total": 0.0, "dv_edge_drops_total": 12.0, "dv_room_ingress_rejected_total": 0.0}
+FLAT_BASE = dict({fam: 0.0 for fam in soak.FLAT_FAMILIES}, dv_edge_queue_drops_total=12.0)
+REASONS_BASE = {"link_timeout": 30.0, "no_session": 10.0, "rx_ignored": 5.0, "x_stale": 2.0}
+WINDOW_S = 3000.0
 
 
-def counter_rows(growth=None, flat_growth=None, absent=(), flat_start=None):
+def counter_rows(growth=None, flat_growth=None, absent=(), flat_start=None, reasons=None, idle_reasons=None, window_s=WINDOW_S):
     """Counter snapshots: `growth` adds to the error-like families (recorded only) from the end of the measured part
     on, `flat_growth` {family: delta} to the flat families at the same points, `absent` names flat families that are not
-    on /metrics, `flat_start` {family: value} replaces the base values (all five snapshots)."""
+    on /metrics, `flat_start` {family: value} replaces the base values (all five snapshots), `reasons` {reason: delta}
+    grows the dv_edge_drops_total reasons over the measured part (and stays), `idle_reasons` {reason: delta} grows them
+    in the idle window only, `window_s` is the length of the measured part. The snapshots carry the time (idle0,
+    warmup_end 600 s, measured_end after `window_s`, idle_start 30 s later, idle_end 120 s after that)."""
     base = {"dv_hub_dropped_total": 5.0, "dv_panics_total": 0.0, "dv_edge_refused_total": 2.0}
     flat0 = {fam: None if fam in absent else v for fam, v in dict(FLAT_BASE, **(flat_start or {})).items()}
+    times = {"idle0": T0 - 100, "warmup_end": T0 + 600, "measured_end": T0 + 600 + window_s, "idle_start": T0 + 630 + window_s,
+             "idle_end": T0 + 750 + window_s}
     rows = []
-    for i, label in enumerate(("idle0", "warmup_end", "measured_end", "idle_start", "idle_end")):
-        counters, flat = dict(base), dict(flat0)
+    for label in ("idle0", "warmup_end", "measured_end", "idle_start", "idle_end"):
+        counters, flat, rs = dict(base), dict(flat0), dict(REASONS_BASE)
         if label in ("measured_end", "idle_start", "idle_end"):
             for fam, v in (growth or {}).items():
                 counters[fam] += v
             for fam, v in (flat_growth or {}).items():
                 flat[fam] = (flat[fam] or 0.0) + v
+            for reason, v in (reasons or {}).items():
+                rs[reason] = rs.get(reason, 0.0) + v
+        if label == "idle_end":
+            for reason, v in (idle_reasons or {}).items():
+                rs[reason] = rs.get(reason, 0.0) + v
         series = {fam: {"reason=x": v} for fam, v in flat.items() if v is not None}
-        rows.append(soak.counters_row(T0 + i, label, counters, flat=flat, series=series))
+        rows.append(soak.counters_row(times[label], label, counters, flat=flat, series=series, reasons=rs))
     return rows
 
 
@@ -188,26 +200,34 @@ def test_several_children_are_judged_one_by_one():
 
 # ---- counters, events, idle
 
-def test_flat_families_are_the_twelve_of_the_ruling():
+def test_flat_families_are_the_eleven_strict_ones_and_the_drops_family_is_judged_by_reason():
     assert soak.FLAT_FAMILIES == (
-        "dv_edge_webrtc_panics_total", "dv_edge_drops_total", "dv_edge_queue_drops_total", "dv_edge_webrtc_audio_dropped_total",
+        "dv_edge_webrtc_panics_total", "dv_edge_queue_drops_total", "dv_edge_webrtc_audio_dropped_total",
         "dv_room_ingress_rejected_total", "dv_room_shell_errors_total", "dv_status_telemetry_rejected_total",
         "dv_status_input_dropped_total", "dv_fabric_put_dropped_total", "dv_recorder_dropped_total", "dv_codec_dropped_total",
         "dv_edge_tx_refused_total")
     assert soak.FLAT_OVERRIDES == {}                                         # starts empty, DV-Router rules on growth
+    assert soak.DROPS_FAMILY == "dv_edge_drops_total" and soak.DROPS_FAMILY not in soak.FLAT_FAMILIES
+    assert soak.DROPS_FAMILY in soak.SNAPSHOT_FAMILIES and len(soak.SNAPSHOT_FAMILIES) == 12
+    assert soak.DROPS_LEGIT == ("link_timeout", "no_session", "rx_ignored", "x_stale") and soak.DROPS_RATE_FLAG_PER_S == 1.0
+    assert set(soak.LAZY_FAMILIES) == {"dv_edge_tx_refused_total", "dv_recorder_dropped_total", "dv_room_shell_errors_total"}
+    assert set(soak.LAZY_FAMILIES) <= set(soak.FLAT_FAMILIES)
 
 
 def test_flat_counters_pass_and_error_like_growth_of_other_families_is_only_recorded():
-    res = verdict(series(), extra=gauge_rows() + counter_rows(growth={"dv_hub_dropped_total": 400.0, "dv_panics_total": 3.0}))
+    res = verdict(series(), extra=gauge_rows() + counter_rows(growth={"dv_hub_dropped_total": 400.0, "dv_panics_total": 3.0},
+                                                              absent=tuple(soak.LAZY_FAMILIES)))
     assert res.ok, failed(res)
     assert res.counters["growing"] == ["dv_hub_dropped_total", "dv_panics_total"]
     flat = res.counters["flat"]
-    assert flat["dv_edge_drops_total"] == {"status": "flat", "start": 12.0, "end": 12.0, "delta": 0.0}
-    assert flat["dv_edge_tx_refused_total"] == {"status": "absent"}
-    assert "dv_edge_drops_total" in soak.counters_table(res) and "absent" in soak.counters_table(res)
+    assert flat["dv_edge_queue_drops_total"] == {"status": "flat", "start": 12.0, "end": 12.0, "delta": 0.0}
+    assert flat["dv_edge_tx_refused_total"] == {"status": "absent", "start": 0.0, "end": 0.0, "delta": 0.0, "lazy": True}   # missing = 0
+    assert "dv_edge_drops_total" not in flat and "dv_edge_queue_drops_total" in soak.counters_table(res) and "absent" in soak.counters_table(res)
+    assert "dv_edge_drops_total reason" in soak.counters_table(res)
 
 
-@pytest.mark.parametrize("fam,start", [("dv_edge_drops_total", 12.0), ("dv_edge_webrtc_panics_total", 0.0)])
+@pytest.mark.parametrize("fam,start", [("dv_edge_queue_drops_total", 12.0), ("dv_edge_webrtc_audio_dropped_total", 0.0),
+                                       ("dv_edge_webrtc_panics_total", 0.0)])
 def test_a_flat_family_that_grows_fails_naming_family_and_delta(fam, start):
     res = verdict(series(), extra=gauge_rows() + counter_rows(flat_growth={fam: 3.0}))
     assert failed(res) == ["counters-flat", "flat:" + fam]
@@ -218,7 +238,7 @@ def test_a_flat_family_that_grows_fails_naming_family_and_delta(fam, start):
 
 def test_growth_only_in_the_idle_window_is_not_a_flat_failure():
     rows = counter_rows()
-    rows[4]["flat"]["dv_edge_drops_total"] += 5                                # idle_end only
+    rows[4]["flat"]["dv_edge_queue_drops_total"] += 5                          # idle_end only
     assert verdict(series(), extra=gauge_rows() + rows).ok
 
 
@@ -234,19 +254,121 @@ def test_a_family_that_shows_up_after_warmup_counts_from_zero_and_an_absent_one_
 
 
 def test_an_override_records_the_growth_without_failing():
-    res = verdict(series(), extra=gauge_rows() + counter_rows(flat_growth={"dv_edge_drops_total": 7.0}),
-                  params={"flat_overrides": {"dv_edge_drops_total": "grows with the mix"}})
+    res = verdict(series(), extra=gauge_rows() + counter_rows(flat_growth={"dv_edge_queue_drops_total": 7.0}),
+                  params={"flat_overrides": {"dv_edge_queue_drops_total": "grows with the mix"}})
     assert res.ok, failed(res)
-    info = res.counters["flat"]["dv_edge_drops_total"]
+    info = res.counters["flat"]["dv_edge_queue_drops_total"]
     assert info["status"] == "override" and info["delta"] == 7.0 and info["reason"] == "grows with the mix"
 
 
 def test_a_vanished_flat_family_is_recorded_only_and_missing_snapshots_fail():
     rows = counter_rows()
-    rows[2]["flat"]["dv_edge_drops_total"] = None
+    rows[2]["flat"]["dv_edge_queue_drops_total"] = None
     res = verdict(series(), extra=gauge_rows() + rows)
-    assert res.ok and res.counters["flat"]["dv_edge_drops_total"]["status"] == "vanished"
+    assert res.ok and res.counters["flat"]["dv_edge_queue_drops_total"]["status"] == "vanished"
     assert failed(verdict(series(), extra=gauge_rows())) == ["counters-flat"]
+
+
+@pytest.mark.parametrize("fam", sorted(soak.LAZY_FAMILIES))
+def test_a_lazy_family_may_be_missing_and_fails_only_when_it_appears_or_grows(fam):
+    # missing everywhere = 0 = flat; never "must be present"
+    res = verdict(series(), extra=gauge_rows() + counter_rows(absent=(fam,)))
+    assert res.ok, failed(res)
+    assert res.counters["flat"][fam]["status"] == "absent" and res.counters["flat"][fam]["delta"] == 0.0
+    # it appears over the measured part (created at its first increment): growth from 0
+    rows = counter_rows(absent=(fam,))
+    for r in rows[2:]:
+        r["flat"][fam] = 1.0
+    res = verdict(series(), extra=gauge_rows() + rows)
+    assert failed(res) == ["counters-flat", "flat:" + fam]
+    assert res.counters["flat"][fam]["status"] == "grew" and res.counters["flat"][fam]["start"] == 0.0 and res.counters["flat"][fam]["delta"] == 1.0
+    # it appears with 0 only: still flat
+    rows = counter_rows(absent=(fam,))
+    for r in rows[2:]:
+        r["flat"][fam] = 0.0
+    assert verdict(series(), extra=gauge_rows() + rows).ok
+    # present with a value at the end of warmup and growing: fails as any strict family
+    res = verdict(series(), extra=gauge_rows() + counter_rows(flat_start={fam: 3.0}, flat_growth={fam: 2.0}))
+    assert "flat:" + fam in failed(res)
+
+
+def test_the_strict_queue_drops_stay_flat_and_a_missing_series_is_zero():
+    for fam in ("dv_edge_queue_drops_total", "dv_edge_webrtc_audio_dropped_total"):
+        assert fam in soak.FLAT_FAMILIES
+        assert verdict(series(), extra=gauge_rows() + counter_rows(absent=(fam,))).ok
+        res = verdict(series(), extra=gauge_rows() + counter_rows(flat_start={fam: 0.0}, flat_growth={fam: 1.0}))
+        assert failed(res) == ["counters-flat", "flat:" + fam]
+        rows = counter_rows(absent=(fam,))
+        for r in rows[2:]:
+            r["flat"][fam] = 4.0                                              # appears in the window
+        assert "flat:" + fam in failed(verdict(series(), extra=gauge_rows() + rows))
+
+
+# ---- dv_edge_drops_total: by reason, not flat
+
+def test_growth_of_the_legit_drop_reasons_passes_and_is_recorded_with_its_rate():
+    res = verdict(series(), extra=gauge_rows() + counter_rows(reasons={"link_timeout": 60.0, "no_session": 30.0, "x_stale": 3.0}))
+    assert res.ok, failed(res)
+    d = res.counters["drops"]
+    assert d["reasons"]["link_timeout"]["delta"] == 60.0 and d["reasons"]["link_timeout"]["rate_per_s"] == pytest.approx(0.02)
+    assert d["reasons"]["rx_ignored"]["delta"] == 0.0 and d["legit_total"] == 93.0
+    assert d["legit_rate_per_s"] == pytest.approx(93.0 / 3000.0) and d["window_s"] == 3000.0 and not d.get("flagged")
+    assert res.warnings == [] and "dv_edge_drops_total" not in res.counters["growing"]
+    assert {c.name for c in res.checks} >= {"drops-reasons", "drops-idle"}
+
+
+def test_a_drop_reason_outside_the_legit_set_that_appears_or_grows_fails():
+    res = verdict(series(), extra=gauge_rows() + counter_rows(reasons={"hold_drop": 1.0}))              # appears: growth from 0
+    assert failed(res) == ["drops-reasons"]
+    assert "hold_drop" in next(c.detail for c in res.checks if c.name == "drops-reasons")
+    assert res.counters["drops"]["outside"] == {"hold_drop": 1.0}
+    base = counter_rows()
+    for r in base:
+        r["reasons"]["queue_full"] = 4.0                                      # present from the start, then grows
+    for r in base[2:]:
+        r["reasons"]["queue_full"] += 2.0
+    assert failed(verdict(series(), extra=gauge_rows() + base)) == ["drops-reasons"]
+    quiet = counter_rows()
+    for r in quiet:
+        r["reasons"]["queue_full"] = 4.0                                      # present but flat: fine
+    assert verdict(series(), extra=gauge_rows() + quiet).ok
+
+
+def test_the_legit_drop_rate_above_one_per_second_is_flagged_not_failed():
+    res = verdict(series(), extra=gauge_rows() + counter_rows(reasons={"link_timeout": 2400.0, "no_session": 900.0}))      # 3300 in 3000 s
+    assert res.ok, failed(res)
+    assert res.counters["drops"]["flagged"] and res.counters["drops"]["legit_rate_per_s"] == pytest.approx(1.1)
+    assert len(res.warnings) == 1 and "FLAG dv_edge_drops_total" in res.warnings[0] and "link_timeout" in res.warnings[0]
+    assert "FLAGGED" in soak.counters_table(res)
+    at = verdict(series(), extra=gauge_rows() + counter_rows(reasons={"link_timeout": 3000.0}))                              # exactly 1/s
+    assert at.warnings == []
+    short = verdict(series(), extra=gauge_rows() + counter_rows(reasons={"link_timeout": 300.0}, window_s=240.0))             # 1.25/s in 240 s
+    assert short.ok and short.warnings and short.counters["drops"]["window_s"] == 240.0
+
+
+def test_any_drop_growth_in_the_idle_window_fails():
+    res = verdict(series(), extra=gauge_rows() + counter_rows(idle_reasons={"link_timeout": 1.0}))
+    assert failed(res) == ["drops-idle"] and "link_timeout" in next(c.detail for c in res.checks if c.name == "drops-idle")
+    assert failed(verdict(series(), extra=gauge_rows() + counter_rows(idle_reasons={"brand_new": 1.0}))) == ["drops-idle"]
+    # growth over the measured part only (frozen in the idle window) is fine
+    assert verdict(series(), extra=gauge_rows() + counter_rows(reasons={"link_timeout": 50.0})).ok
+
+
+def test_drops_without_per_reason_snapshots_fail_and_no_counter_rows_fail_once():
+    rows = counter_rows()
+    for r in rows:
+        del r["reasons"]
+    assert failed(verdict(series(), extra=gauge_rows() + rows)) == ["drops-idle", "drops-reasons"]
+    assert failed(verdict(series(), extra=gauge_rows())) == ["counters-flat"]
+
+
+def test_drop_reasons_and_gauge_values_of_a_scrape():
+    text = ('dv_edge_drops_total{proc="a",reason="no_session"} 3\ndv_edge_drops_total{proc="b",reason="no_session"} 4\n'
+            'dv_edge_drops_total{proc="b",reason="x_stale"} 1\ndv_edge_drops_total{proc="b"} 2\n'
+            'dv_status_clients{protocol="p",kind="k"} 3\ndv_status_clients{protocol="q",kind="k"} 4\ndv_up 1\ndv_x_total 9\n')
+    samples = metrics.parse(text)
+    assert soak.drop_reasons(samples) == {"-": 2.0, "no_session": 7.0, "x_stale": 1.0}
+    assert soak.gauge_values(samples) == {"dv_status_clients": {"n": 2, "sum": 7.0}, "dv_up": {"n": 1, "sum": 1.0}}
 
 
 def test_flat_snapshot_sums_series_over_procs_and_marks_absent_families():
@@ -318,6 +440,96 @@ def test_the_rss_bound_scales_with_a_short_measured_part():
     assert failed(res) == ["rss:dv-edge-webrtc"]                                    # 150 KiB a minute = 600 KiB > 410 KiB
     assert res.children["dv-edge-webrtc"]["rss_kib"]["limit_kib"] == pytest.approx(5120 * 0.08, abs=0.5)
     assert verdict(series(rss=lambda t: 20000 + max(0, t - 180) * 150 / 60.0, **short)).ok          # the real bound would not see it
+
+
+def test_a_short_run_does_not_judge_the_rss_slope_but_records_it_as_a_lead():
+    short = dict(warm=180, measured=240, step=15)
+    leak = series(rss=lambda t: 20000 + max(0, t - 180) * 150 / 60.0, **short)                   # 150 KiB a minute
+    params = {"rss_scale": 240 / 3000.0, "rss_judged": False, "measured_s": 240.0}
+    res = verdict(leak, params=params)
+    assert res.ok, failed(res)
+    rss = res.children["dv-edge-webrtc"]["rss_kib"]
+    assert rss["judged"] is False and rss["over_limit"] is True and rss["slope_kib_per_min"] == pytest.approx(150.0, rel=0.01)
+    check = next(c for c in res.checks if c.name == "rss:dv-edge-webrtc")
+    assert check.ok and "LEAD ONLY" in check.detail
+    assert len(res.warnings) == 1 and "RSS lead dv-edge-webrtc" in res.warnings[0]
+    # the real run (judged, the default) fails the same series at the same scale
+    assert failed(verdict(leak, params={"rss_scale": 240 / 3000.0})) == ["rss:dv-edge-webrtc"]
+    # a short run that stays inside the bound has no lead
+    assert verdict(series(**short), params=params).warnings == []
+
+
+def test_the_full_run_rss_rule_is_the_slope_over_the_whole_measured_window():
+    # end-of-warmup RSS 20000 KiB: bound = max(5 MiB, 10 percent) = 5120 KiB over 3000 s = 102.4 KiB/min
+    ok = verdict(series(rss=lambda t: 20000 + max(0, t - 600) * 100 / 60.0), params={"measured_s": 3000.0})
+    assert ok.ok, failed(ok)
+    bad = verdict(series(rss=lambda t: 20000 + max(0, t - 600) * 105 / 60.0), params={"measured_s": 3000.0})
+    assert failed(bad) == ["rss:dv-edge-webrtc"]
+    rec = bad.children["dv-edge-webrtc"]["rss_kib"]
+    assert rec["window_s"] == 3000.0 and rec["growth_kib"] == pytest.approx(5250.0, abs=60.0) and rec["limit_kib"] == 5120.0 and rec["judged"]
+    # 10 percent of a big process: 200000 KiB -> 20000 KiB in 3000 s = 400 KiB/min
+    assert verdict(series(rss=lambda t: 200000 + max(0, t - 600) * 395 / 60.0), params={"measured_s": 3000.0}).ok
+
+
+def attr_rows(minutes=6, step=30.0, grow=None, truncated=0):
+    """attr rows: a flat series, a growing series, the number of series of the scrape; phases warmup (2 minutes), measured."""
+    rows = []
+    for i in range(int(minutes * 60 / step)):
+        t = i * step
+        phase = "warmup" if t < 120 else "measured"
+        mins = max(0.0, t - 120) / 60.0
+        rows.append(soak.attr_row(T0 + t, phase, {"dv_status_clients{kind=web,proc=status}": 7.0, "dv_status_events_len{proc=status}": 100.0 + (grow or 0.0) * mins},
+                                  200 + int(mins) * 3, truncated))
+    return rows
+
+
+def test_attribution_records_first_last_and_slope_per_series_and_the_series_count():
+    res = verdict(series(), extra=gauge_rows() + counter_rows() + attr_rows(grow=10.0))
+    assert res.ok, failed(res)                                                 # recorded, never asserted
+    att = res.attribution
+    ev = att["series"]["dv_status_events_len{proc=status}"]
+    assert ev["first"] == 100.0 and ev["last"] == pytest.approx(135.0) and ev["slope_per_min"] == pytest.approx(10.0, rel=0.02) and ev["n"] == 8
+    assert att["series"]["dv_status_clients{kind=web,proc=status}"]["slope_per_min"] == 0.0
+    assert att["series_total"]["first"] == 200 and att["series_total"]["last"] == 209 and att["series_total"]["slope_per_min"] > 2.0
+    assert att["order"][0] == "dv_status_events_len{proc=status}"
+    raw = att["raw"]["dv_status_events_len{proc=status}"]
+    assert len(raw) == 12 and raw[0] == [0.0, 100.0] and att["scrape"][0] == [0.0, 200]           # the raw series stay in the report
+    text = soak.attribution_table(res)
+    assert "scrape:series_total" in text and "dv_status_events_len{proc=status}" in text and "dv_status_clients" not in text.split("\n", 3)[3]
+    assert "1 unchanged" in text and res.as_dict()["attribution"]["raw"]
+
+
+def test_attribution_without_rows_is_empty_and_attr_rows_survive_the_file():
+    assert soak.attribution(series()) == {}
+    assert "no series recorded" in soak.attribution_table(verdict(series()))
+    rows, bad = soak.parse_jsonl("\n".join(soak.dump_line(r) for r in attr_rows(minutes=1)))
+    assert bad == 0 and len(rows) == 2 and rows[0]["kind"] == "attr"
+
+
+def test_attributed_series_are_selected_by_the_name_constants():
+    text = ('dv_status_events_len{proc="status"} 5\ndv_status_inputs_total{kind="x"} 9\ndv_pkt_seen_entries{proc="data"} 4\n'
+            'dv_status_process_up{kind="a"} 1\ndv_edge_webrtc_room_listeners{room="a"} 50\ndv_codec_dropped_total 1\ndv_web_sse_streams 3\n'
+            'dv_launcher_children_unlabelled 0\n')
+    values, truncated = soak.attr_values(metrics.parse(text))
+    assert values == {"dv_status_events_len{proc=status}": 5.0, "dv_pkt_seen_entries{proc=data}": 4.0,
+                      "dv_edge_webrtc_room_listeners{room=a}": 50.0, "dv_launcher_children_unlabelled": 0.0} and truncated == 0
+    values, truncated = soak.attr_values(metrics.parse(text), limit=2)
+    assert len(values) == 2 and truncated == 2
+    assert soak.attr_wanted("dv_foo_bar", include=(r"^dv_foo_",)) and not soak.attr_wanted("dv_foo_total", include=(r"^dv_foo_",))
+
+
+def test_a_tick_that_ends_after_the_measured_end_snapshot_is_not_judged_as_measured():
+    rows = series()
+    rows.append(proc("dv-edge-webrtc", T0 + 3600 + 9, "measured", rss=5000, threads=2, fds=3))     # started before the end, read after the listeners left
+    res = verdict(rows)
+    assert res.ok, failed(res)
+    assert res.children["dv-edge-webrtc"]["rss_kib"]["slope_kib_per_min"] == 0.0
+    fixed = soak.assign_phases(rows + counter_rows())
+    assert [r["phase"] for r in fixed if r.get("kind") == "proc" and r["t"] == T0 + 3609] == ["stopping"]
+    late_warm = series()
+    late_warm.append(proc("dv-edge-webrtc", T0 + 610, "warmup"))                                     # read after the warmup_end snapshot
+    assert [r["phase"] for r in soak.assign_phases(late_warm + counter_rows()) if r.get("kind") == "proc" and r["t"] == T0 + 610] == ["measured"]
+    assert soak.assign_phases(late_warm) == late_warm                                                # no snapshots: unchanged
 
 
 def test_events_and_idle_gauge():

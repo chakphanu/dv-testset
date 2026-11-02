@@ -121,7 +121,12 @@ class ChildSampler:
                 self._error(phase, "%s: %s: %s" % (name, type(exc).__name__, str(exc)[:120]))
         try:
             text = self.ctl.metrics("xlxd-sut")
-            self.sink.write(soak.gauge_row(time.time(), phase, round(metrics.total(metrics.parse(text), LISTENERS))))
+            samples = metrics.parse(text)
+            now = time.time()
+            self.sink.write(soak.gauge_row(now, phase, round(metrics.total(samples, LISTENERS))))
+            # attribution next to the RSS: the size gauges of the hub and the number of series of the scrape (recorded only)
+            values, truncated = soak.attr_values(samples)
+            self.sink.write(soak.attr_row(now, phase, values, len(samples), truncated))
         except (RuntimeError, TimeoutError, OSError) as exc:
             self._error(phase, "metrics: %s" % str(exc)[:120])
         if self.gen is not None and phase in ("warmup", "measured", "stopping") and self.seq % 10 == 0:
@@ -148,7 +153,9 @@ class ChildSampler:
                 time.sleep(5.0)
         flat, series = soak.flat_snapshot(samples)
         names = {x.name for x in samples} if label == "idle0" else None            # the families on /metrics, once
-        self.sink.write(soak.counters_row(time.time(), label, soak.error_counters(samples), flat=flat, series=series, families=names))
+        gauges = soak.gauge_values(samples) if label in ("idle0", "measured_end") else None      # names for soak.ATTR_INCLUDE
+        self.sink.write(soak.counters_row(time.time(), label, soak.error_counters(samples), flat=flat, series=series, families=names,
+                                          reasons=soak.drop_reasons(samples), gauges=gauges))
 
     def _loop(self):
         nxt = time.monotonic()

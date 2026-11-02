@@ -20,9 +20,9 @@ CHILDREN = [(1, 0, "dv-router"), (7, 1, "dv-edge-xlx"), (8, 1, "dv-svc-web"), (9
 
 
 class Ctl:
-    def __init__(self, leak=0.0, restart_at=None, drops_per_s=0.0):
+    def __init__(self, leak=0.0, restart_at=None, drops_per_s=0.0, bad_reason=None, queue_per_s=0.0):
         self.listeners, self.leak, self.restart_at, self.t0, self.lock = 0, leak, restart_at, time.time(), threading.Lock()
-        self.drops_per_s = drops_per_s
+        self.drops_per_s, self.bad_reason, self.queue_per_s = drops_per_s, bad_reason, queue_per_s
 
     def proc_list(self):
         return list(CHILDREN)
@@ -36,8 +36,19 @@ class Ctl:
                 % (pid, process, rss + 10, rss, start, now))
 
     def metrics(self, service="xlxd-sut", timeout=30.0):
-        return ("dv_edge_webrtc_listeners %d\ndv_hub_dropped_total 5\ndv_panics_total 0\ndv_edge_drops_total{reason=\"x\"} %d\n"
-                % (self.listeners, 4 + self.drops_per_s * (time.time() - self.t0)))
+        now = time.time()
+        if self.listeners:
+            self.started = True
+            self.started_t = getattr(self, "started_t", None) or now
+        elif getattr(self, "started", False) and getattr(self, "stop_t", None) is None:
+            self.stop_t = now                                       # the counters stop moving when the traffic is over
+        age = (getattr(self, "stop_t", None) or now) - self.t0
+        text = ("dv_edge_webrtc_listeners %d\ndv_hub_dropped_total 5\ndv_panics_total 0\ndv_edge_drops_total{reason=\"no_session\"} %d\n"
+                "dv_edge_queue_drops_total{queue=\"q\"} %d\ndv_status_events_len{proc=\"status\"} %d\n"
+                % (self.listeners, 4 + self.drops_per_s * age, self.queue_per_s * age, 100 + 10 * age))
+        if self.bad_reason and getattr(self, "started_t", None) and now - self.started_t > 3.8:        # inside the measured part (traffic clock starts 2 s after run, 1 s warmup)
+            text += "dv_edge_drops_total{reason=\"%s\"} 1\n" % self.bad_reason
+        return text
 
 
 class Gen:
@@ -123,8 +134,13 @@ def test_a_healthy_rehearsal_passes_and_writes_the_files(rehearsal):
     assert report["lanes_skipped"].keys() == {"nxdn", "p25"} and report["table"][0].startswith("child")
     assert set(report["result"]["children"]) == {"dv-router", "dv-edge-xlx", "dv-svc-web", "dv-edge-webrtc"}
     flat = report["result"]["counters"]["flat"]
-    assert flat["dv_edge_drops_total"]["status"] == "flat" and flat["dv_edge_tx_refused_total"]["status"] == "absent"
+    assert flat["dv_edge_queue_drops_total"]["status"] == "flat" and flat["dv_edge_tx_refused_total"]["status"] == "absent"
+    assert "dv_edge_drops_total" not in flat and report["result"]["counters"]["drops"]["outside"] == {}
     assert report["counters_table"][0].startswith("flat family") and "dv_edge_drops_total" in report["metric_families"]
+    att = report["result"]["attribution"]
+    assert "dv_status_events_len{proc=status}" in att["series"] and att["series_total"]["n"] > 0 and att["raw"]       # raw series in soak.json
+    assert report["attribution_table"][0].startswith("attribution series") and report["warnings"] == []
+    assert "idle0" in report["gauge_families"] and report["gauge_families"]["idle0"]["dv_status_events_len"]["n"] == 1
     assert report["short"] is False and report["sample_s"] == 0.25
     rows, bad = soak.parse_jsonl((rehearsal / "soak-samples.jsonl").read_text())
     assert bad == 0
@@ -145,11 +161,26 @@ def test_a_leaking_child_fails_the_case(rehearsal):
 
 
 def test_a_growing_flat_counter_fails_the_case_naming_the_family(rehearsal):
-    ctl = Ctl(drops_per_s=50.0)
-    with pytest.raises(AssertionError, match="flat:dv_edge_drops_total"):
+    ctl = Ctl(queue_per_s=50.0)
+    with pytest.raises(AssertionError, match="flat:dv_edge_queue_drops_total"):
         run(ctl, Gen(ctl))
     report = json.loads((rehearsal / "soak.json").read_text())
-    assert report["result"]["counters"]["flat"]["dv_edge_drops_total"]["status"] == "grew"
+    assert report["result"]["counters"]["flat"]["dv_edge_queue_drops_total"]["status"] == "grew"
+
+
+def test_legit_drop_growth_passes_but_is_flagged_when_fast(rehearsal):
+    ctl = Ctl(drops_per_s=50.0)                                          # no_session grows during the traffic: legit; the rate is far above 1/s
+    run(ctl, Gen(ctl))
+    report = json.loads((rehearsal / "soak.json").read_text())
+    drops = report["result"]["counters"]["drops"]
+    assert report["result"]["ok"] and drops["flagged"] and drops["reasons"]["no_session"]["delta"] > 0
+    assert any("FLAG dv_edge_drops_total" in w for w in report["warnings"])
+
+
+def test_a_drop_reason_outside_the_legit_set_fails_the_case(rehearsal):
+    ctl = Ctl(bad_reason="hold_drop")
+    with pytest.raises(AssertionError, match="drops-reasons"):
+        run(ctl, Gen(ctl))
 
 
 def test_the_short_mode_sets_the_timing_and_scales_the_rss_bound(monkeypatch):

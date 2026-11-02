@@ -90,7 +90,24 @@ def test_sampler_tick_writes_one_row_per_child_a_gauge_and_marks_failures():
     sampler.counters("idle0")
     last = sink.rows[-1]
     assert last["counters"] == {"dv_hub_dropped_total": 4.0} and last["phase"] == "idle0" and last["families"] == ["dv_edge_webrtc_listeners", "dv_hub_dropped_total"]
-    assert set(last["flat"]) == set(soak.FLAT_FAMILIES) and set(last["flat"].values()) == {None}
+    assert set(last["flat"]) == set(soak.SNAPSHOT_FAMILIES) and set(last["flat"].values()) == {None}
+    assert last["reasons"] == {} and "gauges" in last
+
+
+def test_the_tick_records_the_attribution_series_and_the_scrape_size_next_to_the_gauge():
+    sink = FakeSink()
+    text = ('dv_edge_webrtc_listeners 3\ndv_status_events_len{proc="status"} 17\ndv_status_inputs_total{kind="x"} 9\n'
+            'dv_pkt_seen_entries{proc="data"} 4\n')
+
+    class Ctl(FakeCtl):
+        def metrics(self, service="xlxd-sut", timeout=30.0):
+            return text
+
+    sampler = ss.ChildSampler(Ctl(), ["dv-edge-xlx"], sink)
+    sampler.tick("measured")
+    attr = [r for r in sink.rows if r["kind"] == "attr"]
+    assert len(attr) == 1 and attr[0]["phase"] == "measured" and attr[0]["series_total"] == 4 and attr[0]["truncated"] == 0
+    assert attr[0]["values"] == {"dv_status_events_len{proc=status}": 17.0, "dv_pkt_seen_entries{proc=data}": 4.0, "dv_edge_webrtc_listeners": 3.0}
 
 
 def test_sampler_tells_the_processes_of_a_shared_name_apart():
@@ -168,6 +185,7 @@ def test_a_counters_row_has_the_flat_families_and_the_family_names_once():
     first, second = [r for r in sink.rows if r["kind"] == "metrics"]
     assert first["flat"]["dv_edge_drops_total"] == 2.0 and first["flat"]["dv_codec_dropped_total"] == 0.0
     assert first["flat"]["dv_edge_tx_refused_total"] is None and first["series"]["dv_edge_drops_total"] == {"reason=x": 2.0}
+    assert first["reasons"] == {"x": 2.0} and first["gauges"] == {"dv_up": {"n": 1, "sum": 1.0}} and "gauges" not in second
     assert first["families"] == ["dv_codec_dropped_total", "dv_edge_drops_total", "dv_up"] and "families" not in second
 
 

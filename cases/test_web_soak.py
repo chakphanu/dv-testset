@@ -44,7 +44,7 @@ WORKERS = 2
 ROOMS_HEARD_MIN_PACKETS = 50
 IDLE0_TICKS = 3                     # samples of the quiet SUT before any traffic, IDLE0_GAP_S apart
 IDLE0_GAP_S = 10.0
-SETTLE_S = 30.0                     # after the listeners are gone, before the idle window
+SETTLE_S = 120.0                    # after the listeners are gone, before the idle window (DV-Router: idle = 2 min after all clients left; lets link_timeout of departed clients age out)
 GAUGE_BUDGET_S = 150.0              # for the listener gauge to reach zero after the generator finished
 SAMPLE_PERIOD_S = None              # None: dvtest.soak.timing(env) (the offline rehearsal shortens it)
 
@@ -256,7 +256,9 @@ def test_soak_sixty_minutes(soak_on, load_gen, load_ready, rig_control, target, 
         # the verdict
         text = (out / "soak-samples.jsonl").read_text(encoding="utf-8")
         rows, bad = soak.parse_jsonl(text)
-        result = soak.evaluate(rows, events=events, expected=names, params={"rss_scale": tm["rss_scale"]})
+        # a short run is a validation: its RSS slopes are leads (warmup), not a verdict; the real run judges them
+        result = soak.evaluate(rows, events=events, expected=names,
+                               params={"rss_scale": tm["rss_scale"], "rss_judged": not tm["short"], "measured_s": measured_s})
         gsum, gchecks = soak.generator_summary(gen_rows, min_packets=ROOMS_HEARD_MIN_PACKETS)
         tsum = traffic.summary()
         # the lanes that stayed in the mix (the required ones, and NXDN / P25 when their probe over worked) must deliver
@@ -268,6 +270,8 @@ def test_soak_sixty_minutes(soak_on, load_gen, load_ready, rig_control, target, 
         report.update(state="done", result=result.as_dict(), events=events, generator=gsum, traffic=tsum,
                       extra_checks=[{"name": c.name, "ok": c.ok, "detail": c.detail} for c in extra],
                       table=soak.table(result).splitlines(), counters_table=soak.counters_table(result).splitlines(),
+                      attribution_table=soak.attribution_table(result).splitlines(), warnings=result.warnings,
+                      gauge_families={r["phase"]: r["gauges"] for r in rows if r.get("kind") == "metrics" and "gauges" in r},
                       metric_families=next((r["families"] for r in rows if r.get("kind") == "metrics" and "families" in r), []), samples=len(rows), sampling_errors=sampler.errors[:10],
                       slow_ticks=sampler.slow_ticks, loadavg_end=loadavg(), wall_s=round(time.monotonic() - t_wall))
     except BaseException as exc:
@@ -293,10 +297,15 @@ def test_soak_sixty_minutes(soak_on, load_gen, load_ready, rig_control, target, 
 
     print("\n" + soak.table(result))
     print("\n" + soak.counters_table(result))
+    print("\n" + soak.attribution_table(result))
+    for note in result.warnings:
+        print("WARN %s" % note)
     for c in list(result.checks) + extra:
         print("%-4s %-34s %s" % ("ok" if c.ok else "FAIL", c.name, c.detail))
     for note in result.unmeasured:
         web.finding("SOAK1: not measured: %s" % note)
+    for note in result.warnings:
+        web.finding("SOAK1: %s" % note)
     for name, why in {**skipped, **dropped}.items():
         web.finding("SOAK1: lane %s is not in the mix: %s" % (name, why))
     failed = [c for c in list(result.checks) + extra if not c.ok]
