@@ -2,17 +2,19 @@
 """Pure parts of the RSS isolation experiment (cases/test_web_rss_isolation.py, docs/web-isolation-cases.md).
 
 DV-Router asked which activity drives the linear RSS growth of dv-router (the launcher) and dv-svc-status seen in SOAK1.
-The experiment runs ONE activity per rig run (5 modes, A to E) with the SOAK1 machinery, judges nothing except that the
+The experiment runs ONE activity per rig run (6 modes, A to F) with the SOAK1 machinery, judges nothing except that the
 activity ran, and writes DATA: per child Rss / Anon / Private_Dirty / Pss_Anon (smaps_rollup) and VmRSS first / last /
 least-squares slope per minute over the measured part, plus the total series count of the hub scrape.
 
-  MODES, resolve()      the mode table: A idle, B webrtc-churn, C voice, D proto-churn, E webrtc-voice
+  MODES, resolve()      the mode table: A idle, B webrtc-churn, C voice, D proto-churn, E webrtc-voice, F voice-x3 (C with 3x the overs)
   timing()              5 + 10 minutes (DVT_ISOLATION_SHORT=1: 2 + 3), sample period
   build_plan()          the activity of a mode as a schedule (listener sessions, overs, login cycles), from a seed
+  build_overs_scaled()  the overs of mode F: soak.build_overs with `factor` overs per lane and minute
   summarize()           per child statistics from the raw sample rows (soak-samples format), the two focus children
   activity_checks()     "the activity ran": the only judgement
   assemble()            the isolation-<mode>.json document
-  main()                python3 -m dvtest.isolation out/<run>...  one table across the available isolation-*.json files
+  events_table()        hub events and streams per mode (dvtest/events.py): events/min, estimate, streams/min, KiB per stream
+  main()                python3 -m dvtest.isolation out/<run>...  the tables across the available isolation-*.json files
 """
 import json
 import random
@@ -39,6 +41,8 @@ VOICE_LANES_E = ("usrp-a", "usrp-b")                    # E: one protocol source
 LANE_ROOM = {"usrp-a": "A", "usrp-b": "B"}
 DEFAULT_E_LANE = "usrp-a"
 LISTENER_FRACTION = 0.9                                 # activity: at least this share of the listeners connected
+OVER_GAP_S = 15.0                                       # F: least seconds between the starts of two overs of one lane
+VOICE_FACTOR_F = 3                                      # F: three overs per lane and minute instead of one (C)
 OVER_FRACTION = 0.5                                     # activity: at least this share of planned overs / cycles ran and worked
 
 
@@ -53,6 +57,7 @@ class Mode:
     voice: str              # "none", "all" (the 6 required lanes + NXDN / P25 when they work) or "one"
     proto_churn: bool       # protocol clients log in and out every few seconds
     text: str
+    voice_factor: int = 1   # overs per lane and minute relative to SOAK1 (one); F has 3
 
     @property
     def needs_generator(self):
@@ -69,13 +74,15 @@ MODES = {m.letter: m for m in (
     Mode("C", "voice", 0, 0, "all", False, "the protocol lanes with overs as in SOAK1 (about 10 s per module per minute), no WebRTC listeners"),
     Mode("D", "proto-churn", 0, 0, "none", True, "protocol clients log in / out every few seconds on all lanes, no voice"),
     Mode("E", "webrtc-voice", SEATS, 0, "one", False, "100 stable WebRTC listeners, no churn, voice in one room (one protocol source)"),
+    Mode("F", "voice-x3", 0, 0, "all", False, "the lane mix of C with 3x as many overs: three per lane and minute (one every 20 s slot), no WebRTC listeners",
+         voice_factor=VOICE_FACTOR_F),
 )}
 ALIASES = {m.name: m.letter for m in MODES.values()}
 
 
 def resolve(text):
-    """Mode of DVT_ISOLATION: the letter (A to E, any case) or the name (idle, webrtc-churn, voice, proto-churn,
-    webrtc-voice). ValueError listing the valid values otherwise."""
+    """Mode of DVT_ISOLATION: the letter (A to F, any case) or the name (idle, webrtc-churn, voice, proto-churn,
+    webrtc-voice, voice-x3). ValueError listing the valid values otherwise."""
     key = (text or "").strip()
     letter = key.upper() if key.upper() in MODES else ALIASES.get(key.lower())
     if letter is None:
@@ -149,13 +156,45 @@ def build_cycles(seed, lanes, duration_s, period_s=CYCLE_PERIOD_S, hold_s=CYCLE_
     return out
 
 
+def build_overs_scaled(seed, lanes, duration_s, factor=VOICE_FACTOR_F, storm_every=5):
+    """soak.build_overs with `factor` overs per lane and minute (mode F, factor 3 = three times the over frequency of C): each minute is
+    split into `factor` slots of 60 / factor seconds, and every slot holds one over of every lane of about 10 s (9 to 11 s) at the offset of
+    SOAK1 scaled by 1 / factor (lanes spread over 45 / factor s of the slot, plus 0 to 2 s), so neighbouring lanes overlap as in C; every
+    fifth minute all lanes start within a second of each other in EVERY slot. The overs of one lane are at least OVER_GAP_S (15 s) apart,
+    longer than an over with its link and unlink (a start that would be closer, after a normal slot into a storm slot, is moved later),
+    so a lane never overlaps itself. [{"t", "lane", "dur_s"}] sorted by t, t seconds after the traffic start. `factor` 1 is the
+    shape of soak.build_overs (not the same numbers: another random stream)."""
+    if not lanes:
+        return []
+    rng = random.Random("isolation-overs-x%d/%s" % (factor, seed))
+    slot = 60.0 / factor
+    out = []
+    last = {}
+    for minute in range(int(duration_s // 60)):
+        storm = minute % storm_every == storm_every - 1
+        for k in range(factor):
+            for i, lane in enumerate(lanes):
+                dur = round(rng.uniform(soak.OVER_S - 1.0, soak.OVER_S + 1.0), 1)
+                off = (3.0 + rng.uniform(0.0, 1.0)) if storm else (i * (45.0 / factor) / len(lanes) + rng.uniform(0.0, 2.0))
+                t = max(minute * 60.0 + k * slot + off, last.get(lane, -1e9) + OVER_GAP_S)
+                last[lane] = t
+                out.append({"t": round(t, 2), "lane": lane, "dur_s": dur})
+    out.sort(key=lambda o: (o["t"], o["lane"]))
+    return out
+
+
 def build_plan(mode, seed, run_s, lane_names, e_lane=DEFAULT_E_LANE):
     """The schedule of a mode: {"sessions": WebRTC listener sessions (soak.build_sessions), "overs": voice overs
     (soak.build_overs), "cycles": login cycles (build_cycles), "lanes": the lane names used}. Nothing for the parts the
     mode does not have."""
     lanes = lanes_for(mode, lane_names, e_lane)
     sessions = soak.build_sessions(seed, run_s, seats=mode.listeners, churn_per_min=mode.churn_per_min) if mode.listeners else []
-    overs = soak.build_overs(seed, lanes, run_s) if mode.voice != "none" else []
+    if mode.voice == "none":
+        overs = []
+    elif mode.voice_factor > 1:
+        overs = build_overs_scaled(seed, lanes, run_s, mode.voice_factor)
+    else:
+        overs = soak.build_overs(seed, lanes, run_s)
     cycles = build_cycles(seed, lanes, run_s) if mode.proto_churn else []
     return {"sessions": sessions, "overs": overs, "cycles": cycles, "lanes": lanes}
 
@@ -364,11 +403,44 @@ def table(docs):
     return "\n".join(lines)
 
 
+def _get(doc, *path):
+    cur = doc
+    for key in path:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(key)
+    return cur
+
+
+def events_table(docs):
+    """Hub events and streams per file (the `hub_events` and `streams` records of dvtest/events.py): events per minute over the measured
+    part, the estimate events/min x 1.16 KiB, the dv-svc-status Rss slope and the ratio estimate / slope, streams per minute, and the
+    Rss slope per stream (KiB/min divided by streams/min) of dv-router, dv-room (sum of the ranks) and dv-svc-status. '' when no file has
+    the records (an older run)."""
+    rows = [d for d in sorted(docs, key=lambda d: (d.get("mode", "?"), _run_of(d))) if d.get("hub_events") or d.get("streams")]
+    if not rows:
+        return ""
+    head = "%-5s %-13s %-17s | %9s %9s %9s %6s | %9s | %10s %10s %10s" % (
+        "mode", "name", "run", "events/min", "est KiB/m", "svc Rss/m", "ratio", "streams/m", "router/str", "room/str", "status/str")
+    lines = [head, "-" * len(head)]
+    for d in rows:
+        per = ("dv-router", "dv-room", "dv-svc-status")
+        cells = [_f(_get(d, "streams", "slope_per_stream", c, "rss_kib_per_stream"), 2) for c in per]
+        lines.append("%-5s %-13s %-17s | %9s %9s %9s %6s | %9s | %10s %10s %10s" % (
+            d.get("mode", "?"), d.get("name", "?"), _run_of(d)[:17], _f(_get(d, "hub_events", "measured", "mean_per_min")),
+            _f(_get(d, "hub_events", "events_kib_per_min")), _f(_get(d, "hub_events", "status_rss_slope_kib_per_min")),
+            _f(_get(d, "hub_events", "ratio_to_rss"), 2), _f(_get(d, "streams", "streams_per_min"), 2), *cells))
+    lines.append("est = events/min x 1.16 KiB; ratio = est / dv-svc-status Rss slope (1.0: the event ring fill alone explains it); x/str = KiB per stream "
+                 "(Rss slope / streams per minute); '-' = not measured")
+    return "\n".join(lines)
+
+
 def main(argv=None):
     import argparse
     import sys
     ap = argparse.ArgumentParser(prog="python3 -m dvtest.isolation", description="Print one table across the isolation-*.json files of "
-                                 "RSS isolation runs: mode x (dv-router, dv-svc-status) x (Rss, Anon, Private_Dirty) slope in KiB/min.")
+                                 "RSS isolation runs: mode x (dv-router, dv-svc-status) x (Rss, Anon, Private_Dirty) slope in KiB/min, then the "
+                                 "hub events and streams table.")
     ap.add_argument("paths", nargs="+", help="run directories (out/<utc>), their web directories or isolation-*.json files")
     ap.add_argument("--children", action="store_true", help="also print the table of every child per run")
     args = ap.parse_args(argv)
@@ -377,11 +449,16 @@ def main(argv=None):
         print("no isolation-*.json found under: %s" % " ".join(args.paths), file=sys.stderr)
         return 1
     print(table(docs))
+    extra = events_table(docs)
+    if extra:
+        print("\n" + extra)
     if args.children:
         for doc in sorted(docs, key=lambda d: (d.get("mode", "?"), _run_of(d))):
             print("\nmode %s %s, run %s, series_total slope/min %s" % (doc.get("mode"), doc.get("name"), _run_of(doc),
                                                                        (doc.get("series_total") or {}).get("slope_per_min")))
             print("\n".join(doc.get("children_table") or []))
+            if doc.get("events_note"):
+                print("events: %s" % doc["events_note"])
     return 0
 
 

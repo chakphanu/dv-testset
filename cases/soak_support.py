@@ -6,6 +6,8 @@
   ChildSampler  proc-stat of every child, an hub gauge and error counters, on an absolute 30 s schedule in a thread
   Lane          one protocol client mix on one module that makes a full over (link, talk, collect, unlink)
   Traffic       runs the over schedule (dvtest.soak.build_overs) on a thread pool until told to stop
+  EventsReader  counts the events of the public stream in a thread (arrival times, reconnects): hub_events of soak.json
+  record_events_and_streams  the hub_events and streams records of soak.json / isolation-<mode>.json (dvtest/events.py)
 
 The protocol clients are the ones of the matrix and protocol cases (dvtest.clients, dvtest.proto.nxdn / p25, the
 USRP dynamic peer of cases/crossmode_fake.py); every over makes new sockets and links them, so a client table
@@ -18,7 +20,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from crossmode_fake import UsrpPeer, usrp_hub
-from dvtest import clients, control, metrics, soak
+from dvtest import clients, control, events, metrics, soak
 from dvtest import webload as wl
 from dvtest.audio import signals
 from dvtest.proto import nxdn, p25
@@ -100,6 +102,7 @@ class ChildSampler:
         self.seq = 0
         self.errors = []
         self.slow_ticks = 0
+        self.event_metric = []                # [(t, {family: value})] of the hub families with "event" in the name (dvtest/events.py)
         self.stop = threading.Event()
         self.thread = None
 
@@ -127,6 +130,9 @@ class ChildSampler:
             # attribution next to the RSS: the size gauges of the hub and the number of series of the scrape (recorded only)
             values, truncated = soak.attr_values(samples)
             self.sink.write(soak.attr_row(now, phase, values, len(samples), truncated))
+            seen = events.events_metric_values(samples)
+            if seen:
+                self.event_metric.append((now, seen))
         except (RuntimeError, TimeoutError, OSError) as exc:
             self._error(phase, "metrics: %s" % str(exc)[:120])
         if self.gen is not None and phase in ("warmup", "measured", "stopping") and self.seq % 10 == 0:
@@ -511,6 +517,126 @@ class Traffic:
             lane["heard_mean"] = round(sum(heard) / len(heard), 1) if heard else None
             lane["errors"] = dict(sorted(lane["errors"].items(), key=lambda kv: -kv[1])[:3])
         return dict(sorted(out.items()))
+
+
+# ------------------------------------------------------------------ the events of the hub, counted continuously
+
+class EventsReader:
+    """Reads GET /api/v1/public/events (no login, as cases/test_web_soak.py idle_events) in a thread from start() to stop() and
+    counts the events with their arrival time (dvtest.events.EventTally). One connection lives `chunk_s` seconds and is resumed at
+    once with the last event id (a planned roll-over, no gap). A stream that ends early or fails (an exception, also from the client
+    factory) is a GAP: it is recorded from the loss to the next connection, and the reader reconnects after a short backoff
+    (1, 2, 5 s); it never raises. A client whose sse() has no `on_frame` argument is read in chunks and stamped when the chunk ends."""
+
+    PATH = "/api/v1/public/events"
+    BACKOFF_S = (1.0, 2.0, 5.0)
+
+    def __init__(self, client_factory, chunk_s=60.0, clock=time.time, backoff=None):
+        self.factory, self.chunk_s, self.clock = client_factory, chunk_s, clock
+        self.backoff = tuple(backoff) if backoff is not None else self.BACKOFF_S
+        self.tally = events.EventTally(clock())
+        self.stop_event = threading.Event()
+        self.thread = None
+        self.t_stop = None
+        self.last_id = None
+        self.fails = 0
+
+    def _on_frame(self, frame):
+        if self.t_stop is not None:
+            return
+        now = self.clock()
+        self.tally.back(now)                               # a frame (the hello at least) means the stream is connected
+        self.fails = 0
+        if frame.get("id"):
+            self.last_id = frame["id"]
+        self.tally.add(now, frame)
+
+    def _loop(self):
+        client = None
+        while not self.stop_event.is_set():
+            began = self.clock()
+            try:
+                if client is None:
+                    client = self.factory()
+                path = self.PATH + ("?last_event_id=%s" % self.last_id if self.last_id else "")
+                streaming = "on_frame" in _params_of(client.sse)
+                kw = {"on_frame": self._on_frame} if streaming else {}
+                _status, _ctype, frames = client.sse(path, max_events=10 ** 6, timeout=self.chunk_s, **kw)
+                ended = self.clock()
+                if self.stop_event.is_set():
+                    break
+                if not streaming:
+                    self.tally.back(began)
+                    for fr in frames:
+                        self._on_frame(fr)
+                if ended - began >= 0.9 * self.chunk_s:
+                    self.tally.back(began)                 # a quiet stream sends no frame: it was connected at `began`
+                    self.tally.rolled()
+                    self.fails = 0
+                    continue
+                reason = "stream ended after %.1f s" % (ended - began)
+            except Exception as exc:                       # noqa: BLE001 - the reader outlives every failure
+                client = None
+                reason = "%s: %s" % (type(exc).__name__, str(exc)[:100])
+            if self.stop_event.is_set():
+                break
+            self.tally.lost(self.clock(), reason)
+            self.stop_event.wait(self.backoff[min(self.fails, len(self.backoff) - 1)])
+            self.fails += 1
+
+    def start(self):
+        self.tally = events.EventTally(self.clock())
+        self.thread = threading.Thread(target=self._loop, name="events-reader", daemon=True)
+        self.thread.start()
+
+    def stop(self, join_s=3.0):
+        """Stop counting now (the daemon thread ends with its current connection, at most `chunk_s` later). Returns the stop time."""
+        if self.t_stop is None:
+            self.t_stop = self.clock()
+        self.stop_event.set()
+        if self.thread is not None:
+            self.thread.join(join_s)
+        return self.t_stop
+
+
+def _params_of(fn):
+    import inspect
+    try:
+        return inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return {}
+
+
+def record_events_and_streams(reader, sampler, traffic, lane_modules, win_from, win_to, children, method="over"):
+    """See _record_events_and_streams; a failure is recorded as a note, never raised (the verdict must not depend on it)."""
+    try:
+        return _record_events_and_streams(reader, sampler, traffic, lane_modules, win_from, win_to, children, method)
+    except Exception as exc:                                      # noqa: BLE001 - recorded data only
+        return ({"events_total": None, "events_note": "the events record could not be computed: %s: %s" % (type(exc).__name__, str(exc)[:100])},
+                {"streams_total": None, "note": "the streams record could not be computed: %s: %s" % (type(exc).__name__, str(exc)[:100])})
+
+
+def _record_events_and_streams(reader, sampler, traffic, lane_modules, win_from, win_to, children, method="over"):
+    """(hub_events, streams): the two records of the run for soak.json / isolation-<mode>.json. `reader` an EventsReader (None: no
+    reading), `sampler` the ChildSampler (its hub /metrics event families), `traffic` the finished ss.Traffic or None, `lane_modules`
+    {lane: module}, [win_from, win_to] the measured part (epoch), `children` the per child records of the verdict (soak
+    `result.children`, isolation `summary["children"]`). `method` "cycle" (mode D) delivers no stream: logins are not overs.
+    Recorded only; never raises on a missing part."""
+    slopes = events.child_slopes(children)
+    if reader is None:
+        hub = {"events_total": None, "events_note": "the events stream was not read"}
+    else:
+        t_end = reader.t_stop or reader.clock()
+        hub = events.hub_events_block(reader.tally, t_end, win_from, win_to, slopes)
+    hub["hub_metric"] = events.events_metric_summary(list(sampler.event_metric), win_from, win_to)
+    results = []
+    if traffic is not None and method == "over":
+        with traffic._lock:
+            results = list(traffic.results)
+    streams = events.streams_block(results, lane_modules, win_from, win_to, slopes)
+    if method != "over":
+        streams["note"] = "login cycles carry no voice: no stream"
+    return hub, streams
 
 
 def lane_checks(summary, required=REQUIRED_LANES):

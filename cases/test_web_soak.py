@@ -19,6 +19,10 @@ values are recorded when the proc-stat reply carries them); `python3 -m dvtest.s
 after 75 minutes at the latest (hard wall clock cap) and can be stopped with `touch out/<run>/web/soak.stop`;
 the teardown is the same in both cases, and in a failure.
 
+Recorded next to the verdict, never asserted (dvtest/events.py): `hub_events` / `events_note` (a thread counts the events of the public stream
+from the start of warmup to the end of measured: events per minute, the estimate events/min x 1.16 KiB against the dv-svc-status RSS slope, whether
+the ring of 10000 would be full) and `streams` (overs delivered per lane / module, streams per minute, KiB/min per stream of dv-router, dv-svc-status and dv-room).
+
 Environment (all optional): DVT_SOAK_WARMUP_S (600), DVT_SOAK_MEASURE_S (3000; DVT_SOAK_MEASURED_S is the same),
 DVT_SOAK_SAMPLE_S (30), DVT_SOAK_SHORT=1 (the validation run: 180 s warmup + 240 s measured, a sample every 15 s, the
 same mix and criteria, the RSS growth bound scaled to the shorter part: dvtest.soak.timing), DVT_SOAK_SEED (1),
@@ -177,6 +181,7 @@ def test_soak_sixty_minutes(soak_on, load_gen, load_ready, rig_control, target, 
     sink = ss.SampleFile(str(out / "soak-samples.jsonl"))
     sampler = ss.ChildSampler(rig_control, names, sink, loadgen=load_gen, period_s=sample_s)
     traffic = None
+    reader = ss.EventsReader(web_client)                                   # the public event stream, counted from the start of warmup to the end of measured
     generator_done = False
     result = None
     extra = []
@@ -202,6 +207,7 @@ def test_soak_sixty_minutes(soak_on, load_gen, load_ready, rig_control, target, 
         traffic.start()
         sink.write(soak.mark_row(time.time(), "warmup", "traffic start"))
         sampler.phase = "warmup"
+        reader.start()
         sampler.start()
         state = "warmup"
         report.update(state="warmup", traffic_start_epoch=round(t_traffic, 1), loadavg_start=loadavg())
@@ -231,6 +237,7 @@ def test_soak_sixty_minutes(soak_on, load_gen, load_ready, rig_control, target, 
             report.update(state="stopped early", stopped=reason)
             pytest.fail("SOAK1 stopped early (%s); the traffic is torn down, no verdict" % reason)
 
+        reader.stop()                                                       # the events are counted up to the end of the measured part
         # stop everything: the protocol mix, then the listeners
         state = "stopping"
         sampler.phase = "stopping"
@@ -264,13 +271,17 @@ def test_soak_sixty_minutes(soak_on, load_gen, load_ready, rig_control, target, 
                                        "median_window_s": tm["median_window_s"]})
         gsum, gchecks = soak.generator_summary(gen_rows, min_packets=ROOMS_HEARD_MIN_PACKETS)
         tsum = traffic.summary()
+        # hub events per minute and distinct streams next to the RSS slopes (recorded, never asserted)
+        hub_events, streams = ss.record_events_and_streams(reader, sampler, traffic, modules, t_traffic + warmup_s, t_traffic + run_s,
+                                                           result.children)
         # the lanes that stayed in the mix (the required ones, and NXDN / P25 when their probe over worked) must deliver
         judged = [n for n in list(ss.REQUIRED_LANES) + list(ss.OPTIONAL_LANES) if n in lanes and not n.startswith("usrp")]
         extra = list(gchecks) + ss.lane_checks({k: v for k, v in tsum.items() if k not in ("usrp-a", "usrp-b")}, required=judged)
         extra.append(soak.Check("sampling", bad == 0 and len(sampler.errors) <= 3,
                                 "%d damaged lines, %d sampling errors %s" % (bad, len(sampler.errors), sampler.errors[:2])))
         extra.append(soak.Check("drained", zero and overs_ended, "listeners zero %s (%s), overs ended %s" % (zero, gauge_seen, overs_ended)))
-        report.update(state="done", result=result.as_dict(), events=events, generator=gsum, traffic=tsum,
+        report.update(state="done", result=result.as_dict(), events=events, hub_events=hub_events, events_note=hub_events.get("events_note"),
+                      streams=streams, generator=gsum, traffic=tsum,
                       extra_checks=[{"name": c.name, "ok": c.ok, "detail": c.detail} for c in extra],
                       table=soak.table(result).splitlines(), counters_table=soak.counters_table(result).splitlines(),
                       attribution_table=soak.attribution_table(result).splitlines(), smaps_table=soak.smaps_table(result).splitlines(), warnings=result.warnings,
@@ -286,6 +297,7 @@ def test_soak_sixty_minutes(soak_on, load_gen, load_ready, rig_control, target, 
     finally:
         # clean teardown in every case: stop sampling, traffic and listeners; leave nothing connected
         sampler.stop.set()
+        reader.stop()
         if traffic is not None:
             traffic.finish(60.0)
         if not generator_done:
@@ -302,6 +314,9 @@ def test_soak_sixty_minutes(soak_on, load_gen, load_ready, rig_control, target, 
     print("\n" + soak.counters_table(result))
     print("\n" + soak.attribution_table(result))
     print("\n" + soak.smaps_table(result))
+    print("\nhub events: %s" % hub_events.get("events_note"))
+    print("streams: %s in the measured part, %s a minute, per stream %s" % (streams.get("streams_total"), streams.get("streams_per_min"),
+                                                                       {k: v.get("rss_kib_per_stream") for k, v in (streams.get("slope_per_stream") or {}).items()}))
     for note in result.warnings:
         print("WARN %s" % note)
     for c in list(result.checks) + extra:

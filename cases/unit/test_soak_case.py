@@ -256,3 +256,44 @@ def test_soak_is_skipped_without_the_switch(monkeypatch):
 def test_the_real_settle_covers_the_longest_link_timeout():
     """DV-Router ruling: 170 s (imrs link timeout 150 s + sweep tick) between the last client and the idle window."""
     assert ts.SETTLE_S >= soak.SETTLE_MIN_S == 170
+
+
+class EventClient:
+    """A public event stream that sends two events per connection (and nothing to idle_events, which passes no on_frame)."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def sse(self, path, max_events=1, timeout=15.0, until=None, on_frame=None):
+        time.sleep(0.2)
+        self.calls += 1
+        if on_frame is not None:
+            for i in range(2):
+                on_frame({"event": "room", "id": "s-%d-%d" % (self.calls, i)})
+        return 200, "text/event-stream", [{"event": "hello", "id": "e-1"}]
+
+
+def test_the_report_carries_hub_events_and_streams(rehearsal):
+    ctl = Ctl(leak=0.5)
+    gen = Gen(ctl)
+    ts.test_soak_sixty_minutes(True, gen, True, ctl, Target(), "https://dvt-web", "/x/ca.pem", lambda: EventClient(),
+                               lambda n: [("N0LD%02d" % i, "x") for i in range(n)])
+    report = json.loads((rehearsal / "soak.json").read_text())
+    hub, streams = report["hub_events"], report["streams"]
+    assert report["state"] == "done" and report["events_note"] == hub["events_note"] and report["events"]["ok"] is True      # the idle verdict is unchanged
+    assert hub["events_total"] >= 2 and hub["by_kind"] == {"room": hub["events_total"]} and hub["measured"]["mean_per_min"] > 0
+    assert hub["events_kib_per_min"] == pytest.approx(hub["measured"]["mean_per_min"] * 1.16, abs=0.01) and hub["ring"] == 10000
+    assert hub["status_rss_slope_kib_per_min"] is None and hub["ratio_to_rss"] is None                                       # the fake has no dv-svc-status
+    assert hub["events_per_min_series"] and hub["hub_metric"]["names_seen"] == ["dv_status_events_len"]
+    assert streams["streams_total"] > 0 and streams["streams_per_min"] > 0 and set(streams["per_lane"]) <= set(ss.REQUIRED_LANES)
+    router = streams["slope_per_stream"]["dv-router"]
+    assert router["rss_kib_per_min"] > 0 and router["rss_kib_per_stream"] == pytest.approx(router["rss_kib_per_min"] / streams["streams_per_min"], abs=0.01)
+
+
+def test_a_plain_stream_client_without_on_frame_still_gives_a_record(rehearsal):
+    ctl = Ctl()
+    gen = Gen(ctl)
+    run(ctl, gen)                                                                                     # the Client of this file has no on_frame and sends only hello
+    report = json.loads((rehearsal / "soak.json").read_text())
+    assert report["state"] == "done" and report["hub_events"]["events_total"] == 0 and report["hub_events"]["reconnects"] >= 1
+    assert "events_note" in report and report["streams"]["streams_total"] > 0

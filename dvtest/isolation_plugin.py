@@ -6,7 +6,7 @@ the options travel as pytest arguments (scripts/run.sh passes everything after `
 
   scripts/run.sh -m rig --profile web,webload -- -p dvtest.isolation_plugin --isolation=A cases/test_web_rss_isolation.py
 
-  --isolation=MODE          DVT_ISOLATION (A to E or the mode name)
+  --isolation=MODE          DVT_ISOLATION (A to F or the mode name)
   --isolation-short         DVT_ISOLATION_SHORT=1 (2 + 3 minute smoke run)
   --isolation-env NAME=VAL  any other DVT_ISOLATION_* setting (SEED, E_LANE, WARMUP_S, MEASURE_S, SAMPLE_S) or DVT_SOAK_MODULES; repeatable
 
@@ -43,7 +43,7 @@ def apply_options(environ, mode=None, short=False, extra=()):
 
 def pytest_addoption(parser):
     group = parser.getgroup("isolation", "RSS isolation experiment (docs/web-isolation-cases.md)")
-    group.addoption("--isolation", default=None, metavar="MODE", help="mode A to E (or idle, webrtc-churn, voice, proto-churn, webrtc-voice): DVT_ISOLATION")
+    group.addoption("--isolation", default=None, metavar="MODE", help="mode A to F (or idle, webrtc-churn, voice, proto-churn, webrtc-voice, voice-x3): DVT_ISOLATION")
     group.addoption("--isolation-short", action="store_true", default=False, help="the 2 + 3 minute smoke run: DVT_ISOLATION_SHORT=1")
     group.addoption("--isolation-env", action="append", default=[], metavar="NAME=VALUE", help="another DVT_ISOLATION_* setting (repeatable)")
 

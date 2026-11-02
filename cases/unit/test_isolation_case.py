@@ -256,3 +256,77 @@ def test_digital_lane_cycle_links_holds_and_unlinks(monkeypatch):
     monkeypatch.setattr(Fake, "link", lambda self, ip: self.kind != "dcs")
     res = lane.cycle(0.1, "s")
     assert not res["ok"] and "dcs listener link" in res["error"] and all(m.closed for m in made)
+
+
+# ------------------------------------------------------------------ the hub events and streams records, and mode F
+
+class EventsClient:
+    """A public event stream that sends three events per connection and ends after 0.3 s (a stream that keeps breaking)."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def sse(self, path, max_events=1, timeout=15.0, until=None, on_frame=None):
+        self.calls += 1
+        for i in range(3):
+            on_frame({"event": "room" if i else "status", "id": "e-%d-%d" % (self.calls, i)})
+        time.sleep(0.3)
+        return 200, "text/event-stream", []
+
+
+def test_voice_mode_records_hub_events_and_streams(rehearsal, monkeypatch):
+    client = EventsClient()
+    monkeypatch.setattr(ti, "make_events_client", lambda base_url, ca: client)
+    ctl = Ctl(leak=3.0)
+    run("C", ctl, None, monkeypatch, gen_allowed=False)
+    doc = read(rehearsal, "C")
+    hub, streams = doc["hub_events"], doc["streams"]
+    assert doc["ok"] and hub["events_total"] >= 3 and set(hub["by_kind"]) == {"room", "status"} and hub["measured"]["mean_per_min"] > 0
+    assert hub["events_kib_per_min"] == pytest.approx(hub["measured"]["mean_per_min"] * 1.16, abs=0.01)
+    assert hub["status_rss_slope_kib_per_min"] == 0.0 and hub["ratio_to_rss"] is None and hub["ring_full"] is False and hub["reconnects"] >= 1
+    assert hub["events_per_min_series"][0]["events"] >= 3 and doc["events_note"] == hub["events_note"] and "would NOT be full" in doc["events_note"]
+    assert hub["hub_metric"]["names_seen"] == ["dv_status_events_len"]                               # the fake hub has a gauge with "event" in its name (the real one had none)
+    assert hub["hub_metric"]["series"]["dv_status_events_len"]["kind"] == "gauge" and hub["hub_metric"]["series"]["dv_status_events_len"]["last"] > 100
+    assert streams["streams_total"] > 0 and streams["streams_per_min"] > 0 and set(streams["per_lane"]) <= set(ss.REQUIRED_LANES + ss.OPTIONAL_LANES)
+    assert set(streams["per_module"]) == set(ss.DEFAULT_MODULES.values()) and streams["per_room"] == streams["per_module"]      # the module of each lane
+    router = streams["slope_per_stream"]["dv-router"]
+    assert router["rss_kib_per_min"] > 100 and router["rss_kib_per_stream"] == pytest.approx(router["rss_kib_per_min"] / streams["streams_per_min"], abs=0.01)
+    assert set(streams["slope_per_stream"]) == {"dv-router", "dv-svc-status", "dv-room"} and client.calls >= 2
+
+
+def test_proto_churn_mode_has_events_but_no_streams(rehearsal, monkeypatch):
+    monkeypatch.setattr(ti, "make_events_client", lambda base_url, ca: EventsClient())
+    run("D", Ctl(), None, monkeypatch, gen_allowed=False)
+    doc = read(rehearsal, "D")
+    assert doc["hub_events"]["events_total"] >= 3 and doc["streams"]["streams_total"] == 0 and "no voice" in doc["streams"]["note"]
+
+
+def test_an_unreadable_event_stream_is_recorded_and_does_not_fail_the_case(rehearsal, monkeypatch):
+    def broken(base_url, ca):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(ti, "make_events_client", broken)
+    run("A", Ctl(), None, monkeypatch, gen_allowed=False)
+    doc = read(rehearsal, "A")
+    assert doc["ok"] and doc["hub_events"]["events_total"] == 0 and doc["events_note"].startswith("no event was read from the public stream (OSError: connection refused)")
+    assert doc["streams"]["streams_total"] == 0
+
+
+def test_mode_f_runs_three_times_the_overs_of_c(rehearsal, monkeypatch):
+    monkeypatch.setattr(ti, "make_events_client", lambda base_url, ca: EventsClient())
+    seen = {}
+
+    def scaled(seed, lanes, dur, factor=3, **kw):
+        seen["factor"] = factor
+        return [{"t": 0.1 * i, "lane": lane, "dur_s": 0.3} for i in range(3 * 10) for lane in lanes]          # 3 x the 10 overs a lane of the rehearsal C plan
+
+    monkeypatch.setattr(iso, "build_overs_scaled", scaled)
+    ctl = Ctl()
+    run("F", ctl, None, monkeypatch, gen_allowed=False)
+    doc = read(rehearsal, "F")
+    assert seen["factor"] == 3 and doc["ok"] and doc["mode"] == "F" and doc["name"] == "voice-x3" and doc["generator"] is None
+    assert doc["plan"]["overs_per_lane"]["dstar"] == 30 and doc["plan"]["sessions"] == 0 and doc["plan"]["cycles"] == 0
+    assert {k for k in doc["traffic"]} == set(ss.REQUIRED_LANES + ss.OPTIONAL_LANES)
+    assert all(n.overs > 0 and n.cycles == 0 for n in rehearsal["lanes"].values())
+    assert {c["name"] for c in doc["checks"]} >= {"activity:voice:dstar", "activity:voice:usrp-b", "activity:voice:p25"}
+    assert doc["streams"]["streams_total"] > 0 and doc["hub_events"]["events_total"] >= 3

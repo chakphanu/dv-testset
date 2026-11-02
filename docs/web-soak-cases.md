@@ -171,6 +171,24 @@ and one of phase `warmup` written after the `warmup_end` snapshot counts as `mea
 `dv_launcher_children_unlabelled`, `dv_launcher_config_generation`. There is NO gauge for the status events ring length, positions or text history
 in this image (the `/metrics` of the hub has none), so those cannot be attributed yet: a gauge for each would have to come from DV-Router.
 
+## Hub events and streams (recorded, not asserted)
+
+DV-Router hypothesis: the RSS growth of `dv-svc-status` (about 113 KiB/min in the first full run) is the fill of its events ring (10,000 events of about 1.16 KiB:
+113 KiB/min x 50 minutes = 5.6 MiB, about 97 events a minute), which had not filled in 50 minutes, not a leak; `dv-router` / `dv-room` may grow once per distinct stream
+(a new Zenoh liveliness token key per over). So `soak.json` carries two more records, written with the verdict and never part of it (the verdict is unchanged):
+
+- `hub_events` and `events_note`: a thread (`ss.EventsReader`) counts the events of `GET /api/v1/public/events` (no login, the endpoint of the idle sample) from the start of warmup to
+  the end of the measured part, with arrival times: `events_total`, `by_kind`, `events_per_min_series`, `first_event` / `last_event`, `measured.mean_per_min`,
+  `events_kib_per_min` (= events/min x 1.16), the measured `dv-svc-status` Rss and Anon slopes with `ratio_to_rss` / `ratio_to_anon` (estimate / slope; 1.0 means the events alone explain it),
+  `cumulative_at_end` against `ring` (10000) with `ring_full`, reconnect `gaps` (a gap is excluded from the rate; the reader reconnects after 1, 2, 5 s and never raises) and `hub_metric`
+  (any hub `/metrics` family with "event" in the name; none in the image of the first full run, so the stream is the only count). `events_note` is the same in one sentence, e.g. "... estimate
+  X KiB/min ... ratio R ... the ring of 10000 would NOT be full".
+- `streams`: overs delivered per lane, module and room, `streams_total` and `streams_per_min` over the measured part, and for `dv-router`, `dv-svc-status` and `dv-room` (sum of the ranks)
+  the Rss/Anon slope per stream (KiB/min divided by streams/min).
+
+The key `events` of `soak.json` stays the idle-stream verdict. The same records are written by the RSS isolation experiment (`docs/web-isolation-cases.md`, which lists every key), and its
+mode F runs mode C with three times as many overs to separate growth per stream from growth with time. Pure parts: `dvtest/events.py`; reader: `cases/soak_support.py`.
+
 ## Short mode (validation)
 
 `DVT_SOAK_SHORT=1`: 180 s warmup + 240 s measured, a sample every 15 s, about 10 minutes in all, the same mix, lanes, churn rate and criteria.

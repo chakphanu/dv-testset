@@ -15,12 +15,13 @@ LANES = ["usrp-a", "usrp-b", "dstar", "dmr", "ysf", "m17", "nxdn", "p25"]
 
 # ------------------------------------------------------------------ mode table
 
-def test_the_five_modes_and_their_names():
-    assert list(iso.MODES) == ["A", "B", "C", "D", "E"]
-    assert [m.name for m in iso.MODES.values()] == ["idle", "webrtc-churn", "voice", "proto-churn", "webrtc-voice"]
-    for text, letter in (("A", "A"), ("a", "A"), ("idle", "A"), ("webrtc-churn", "B"), ("Voice", "C"), ("proto-churn", "D"), ("webrtc-voice", "E")):
+def test_the_six_modes_and_their_names():
+    assert list(iso.MODES) == ["A", "B", "C", "D", "E", "F"]
+    assert [m.name for m in iso.MODES.values()] == ["idle", "webrtc-churn", "voice", "proto-churn", "webrtc-voice", "voice-x3"]
+    for text, letter in (("A", "A"), ("a", "A"), ("idle", "A"), ("webrtc-churn", "B"), ("Voice", "C"), ("proto-churn", "D"), ("webrtc-voice", "E"),
+                         ("f", "F"), ("voice-x3", "F")):
         assert iso.resolve(text).letter == letter
-    for bad in ("", "F", "all", "soak", None):
+    for bad in ("", "G", "all", "soak", None):
         with pytest.raises(ValueError, match="not a mode"):
             iso.resolve(bad)
 
@@ -32,8 +33,10 @@ def test_every_mode_runs_exactly_one_activity():
     assert (c.listeners, c.churn_per_min, c.voice, c.proto_churn) == (0, 0, "all", False)
     assert (d.listeners, d.churn_per_min, d.voice, d.proto_churn) == (0, 0, "none", True)
     assert (e.listeners, e.churn_per_min, e.voice, e.proto_churn) == (100, 0, "one", False)
-    assert [m.needs_generator for m in iso.MODES.values()] == [False, True, False, False, True]
-    assert [m.needs_lanes for m in iso.MODES.values()] == [False, False, True, True, True]
+    f = iso.MODES["F"]
+    assert (f.listeners, f.churn_per_min, f.voice, f.proto_churn, f.voice_factor) == (0, 0, "all", False, 3) and c.voice_factor == 1
+    assert [m.needs_generator for m in iso.MODES.values()] == [False, True, False, False, True, False]
+    assert [m.needs_lanes for m in iso.MODES.values()] == [False, False, True, True, True, True]
     for m in iso.MODES.values():                              # one activity: listeners, or voice, or login cycles (E = listeners + voice in one room)
         assert (m.voice != "none") + m.proto_churn + (m.listeners > 0) <= (2 if m.letter == "E" else 1)
         assert not (m.proto_churn and m.voice != "none")
@@ -344,3 +347,87 @@ def test_plugin_loads_in_a_real_pytest_run(tmp_path):
     bad = subprocess.run(cmd[:5] + ["--isolation-env", "HOME=/x", str(test)], cwd=str(tmp_path), env={**__import__("os").environ, "PYTHONPATH": str(root)},
                          capture_output=True, text=True, timeout=120)
     assert bad.returncode == 4 and "DVT_ISOLATION_" in bad.stderr
+
+
+# ------------------------------------------------------------------ mode F: the lane mix of C with 3x the overs
+
+def test_mode_f_plan_is_three_times_c():
+    c, f = iso.MODES["C"], iso.MODES["F"]
+    pc, pf = iso.build_plan(c, "1", 900.0, LANES), iso.build_plan(f, "1", 900.0, LANES)
+    assert pf["lanes"] == pc["lanes"] == LANES and pf["sessions"] == [] and pf["cycles"] == []        # the same lane mix, no listeners, no cycles
+    sc, sf = iso.summarize_plan(pc), iso.summarize_plan(pf)
+    assert sc["overs_per_lane"]["dstar"] == 15 and sf["overs_per_lane"]["dstar"] == 45               # 1 vs 3 a minute for 15 minutes
+    assert sf["overs"] == 3 * sc["overs"] == 3 * 15 * len(LANES)
+    assert {lane: n // 3 for lane, n in sf["overs_per_lane"].items()} == sc["overs_per_lane"]
+    assert iso.build_plan(f, "1", 900.0, LANES) == pf and iso.build_plan(f, "2", 900.0, LANES)["overs"] != pf["overs"]      # deterministic by seed
+    assert iso.build_plan(f, "1", 900.0, ["dstar"])["overs"] and iso.build_plan(f, "1", 900.0, [])["overs"] == []
+
+
+def test_mode_f_overs_three_per_lane_and_minute_and_never_overlap_themselves():
+    overs = iso.build_overs_scaled("1", LANES, 900.0, 3)
+    assert overs == sorted(overs, key=lambda o: (o["t"], o["lane"]))
+    per = {}
+    for o in overs:
+        per.setdefault(o["lane"], []).append(o)
+        assert 9.0 <= o["dur_s"] <= 11.0
+    assert set(per) == set(LANES)
+    for lane, lst in per.items():
+        assert len(lst) == 45
+        gaps = [b["t"] - a["t"] for a, b in zip(lst, lst[1:])]
+        assert min(gaps) >= iso.OVER_GAP_S - 0.01 and min(gaps) > max(o["dur_s"] for o in lst), (lane, min(gaps))        # a lane never talks over itself
+    for minute in range(15):                                                                        # three in every minute of every lane (a push may cross a minute edge by a few seconds)
+        n = sum(1 for o in per["ysf"] if minute * 60 <= o["t"] < (minute + 1) * 60)
+        assert 2 <= n <= 4
+    storm = [o["t"] for o in overs if 240.0 <= o["t"] < 300.0 and o["lane"] != "ysf"]               # minute 4 (every fifth minute) is a storm: all lanes at once, three times
+    assert len(storm) == 3 * (len(LANES) - 1)
+    first_slot = [o["t"] for o in overs if 243.0 <= o["t"] < 248.0]
+    assert len(first_slot) >= len(LANES) - 1                                                         # they start within a second or two of each other
+    assert iso.build_overs_scaled("1", [], 900.0) == []
+    one = iso.build_overs_scaled("1", LANES, 900.0, 1)
+    assert len(one) == 15 * len(LANES)                                                              # factor 1 is the shape of C
+
+
+def test_mode_f_is_in_the_activity_checks_like_c():
+    f = iso.MODES["F"]
+    plan = iso.summarize_plan(iso.build_plan(f, "1", 900.0, LANES))
+    checks = iso.activity_checks(f, plan, iso.summarize(synth()), traffic(n=45, ok=45))
+    assert all(x.ok for x in checks) and len(checks) == 1 + len(LANES)
+    thin = traffic(n=45, ok=45)
+    thin["dmr"]["overs"] = 15                                                                        # a third of the planned overs is below the half
+    assert names(iso.activity_checks(f, plan, iso.summarize(synth()), thin), ok=False) == ["activity:voice:dmr"]
+
+
+# ------------------------------------------------------------------ the events and streams rows of the summarizer
+
+def with_records(doc, mean=100.0, est=116.0, svc=113.0, streams=2.0, router=137.0, room=6.0):
+    doc = dict(doc)
+    doc["hub_events"] = {"measured": {"mean_per_min": mean}, "events_kib_per_min": est, "status_rss_slope_kib_per_min": svc,
+                         "ratio_to_rss": round(est / svc, 3) if svc else None}
+    doc["events_note"] = "100.0 events/min test note"
+    doc["streams"] = {"streams_per_min": streams, "slope_per_stream": {
+        "dv-router": {"rss_kib_per_stream": router / streams}, "dv-room": {"rss_kib_per_stream": room / streams}, "dv-svc-status": {"rss_kib_per_stream": svc / streams}}}
+    return doc
+
+
+def test_events_table_rows_per_mode():
+    assert iso.events_table([document("A")]) == ""                                                  # an older run without the records: no table
+    docs = [with_records(document("C"), mean=97.4, est=113.0, streams=8.0), with_records(document("F"), mean=285.0, est=330.6, streams=24.0), document("A")]
+    text = iso.events_table(docs)
+    lines = text.splitlines()
+    assert lines[0].startswith("mode") and "events/min" in lines[0] and "router/str" in lines[0] and len(lines) == 5          # head, rule, two rows, footnote
+    row_c = lines[2].split()
+    assert row_c[0] == "C" and "97.4" in row_c and row_c.count("113.0") == 2 and "1.00" in row_c and "8.00" in row_c
+    assert "17.12" in row_c                                                                         # 137 / 8 KiB per stream of dv-router
+    assert lines[3].split()[0] == "F" and "285.0" in lines[3] and "24.00" in lines[3]
+    assert "ratio = est / dv-svc-status Rss slope" in lines[-1]
+    gap = iso.events_table([dict(document("B"), hub_events={"events_total": None, "events_note": "x"})])
+    assert "-" in gap.splitlines()[2]                                                               # nothing measured: dashes, no crash
+
+
+def test_main_prints_the_events_table_and_the_note(tmp_path, capsys):
+    web = tmp_path / "run-F" / "web"
+    web.mkdir(parents=True)
+    (web / "isolation-F.json").write_text(json.dumps(with_records(document("F", run="run-F"))))
+    assert iso.main([str(tmp_path / "run-F"), "--children"]) == 0
+    out = capsys.readouterr().out
+    assert "est KiB/m" in out and "events: 100.0 events/min test note" in out and out.index("est KiB/m") > out.index("dv-router KiB/min")
