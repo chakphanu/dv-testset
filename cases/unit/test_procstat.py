@@ -17,7 +17,8 @@ pytestmark = pytest.mark.unit
 LIB = Path(__file__).resolve().parents[2] / "scripts" / "lib" / "procstat.sh"
 SERVICES = ["xlxd-sut", "xlxd-ref", "tester", "XLXD-SUT", "", "*"]
 PROCESSES = ["dv-edge-webrtc", "dv-svc-web", "dv-svc-status", "dv-router", "dv-edge-xlx", "dv-codec-ambed", "dv-edge-webrtc2",
-             "dv-edge-*", "", "sh", "dv-edge-webrtc;id", "../x"]
+             "dv-svc-admin", "dv-room", "dv-recorder", "dv-edge-nxdn", "dv-edge-p25", "dv-edge-usrp", "list", "LIST", "list ", "dv-roo",
+             "dv-edge-*", "", "sh", "dv-edge-webrtc;id", "../x", "dv-router2", "DV-ROUTER"]
 
 
 def bash(script, *args):
@@ -29,11 +30,18 @@ def bash(script, *args):
 
 def test_python_table():
     assert control.proc_stat_allowed("xlxd-sut", "dv-edge-webrtc")
-    assert not control.proc_stat_allowed("xlxd-sut", "dv-router")          # the launcher: not in the table
+    assert control.proc_stat_allowed("xlxd-sut", "dv-router")              # the launcher: read only (never in KILL_PROC_ALLOWED)
+    assert not any(proc == "dv-router" for _svc, proc in control.KILL_PROC_ALLOWED)
     assert not control.proc_stat_allowed("xlxd-ref", "dv-edge-webrtc")
     assert control.proc_stat_line("xlxd-sut", "dv-svc-web") == "proc-stat xlxd-sut dv-svc-web"
+    assert control.proc_stat_line("xlxd-sut", "list") == "proc-stat xlxd-sut list"
     with pytest.raises(ValueError):
-        control.proc_stat_line("xlxd-sut", "dv-edge-xlx")
+        control.proc_stat_line("xlxd-sut", "dv-edge-dextra")
+    with pytest.raises(ValueError):
+        control.proc_stat_line("xlxd-ref", "list")
+    # every name is a plain comm: at most 15 characters (the kernel truncates longer ones), the helper's pattern
+    assert all(len(n) <= 15 and n.replace("-", "").isalnum() and n == n.lower() for n in control.PROC_STAT_NAMES)
+    assert len(set(control.PROC_STAT_NAMES)) == len(control.PROC_STAT_NAMES)
 
 
 def test_bash_and_python_agree_on_every_combination():
@@ -46,11 +54,14 @@ def test_bash_and_python_agree_on_every_combination():
     assert run.returncode == 0, run.stderr
     allowed_bash = {combos[int(i)] for v, i in (line.split() for line in run.stdout.splitlines()) if v == "1"}
     assert allowed_bash == {c for c in combos if control.proc_stat_allowed(*c)}
-    assert len(allowed_bash) == 3
+    assert len(allowed_bash) == len(control.PROC_STAT_NAMES) + 1          # the names and "list", service xlxd-sut
+    assert {p for _s, p in allowed_bash} == set(control.PROC_STAT_NAMES) | {"list"}
 
 
 @pytest.mark.parametrize("line,out", [
     ("proc-stat xlxd-sut dv-edge-webrtc", "xlxd-sut dv-edge-webrtc"),
+    ("proc-stat xlxd-sut dv-router", "xlxd-sut dv-router"),
+    ("proc-stat xlxd-sut list", "xlxd-sut list"),
     ("proc-stat  xlxd-sut\tdv-svc-status  ", "xlxd-sut dv-svc-status"),
 ])
 def test_parse_accepts(line, out):
@@ -58,7 +69,8 @@ def test_parse_accepts(line, out):
     assert run.returncode == 0 and run.stdout == out + "\n", run.stderr
 
 
-@pytest.mark.parametrize("line", ["", "proc-stat", "proc-stat xlxd-sut", "proc-stat xlxd-sut dv-router", "proc-stat xlxd-ref dv-edge-webrtc",
+@pytest.mark.parametrize("line", ["", "proc-stat", "proc-stat xlxd-sut", "proc-stat xlxd-sut dv-router2", "proc-stat xlxd-ref dv-edge-webrtc",
+                                  "proc-stat xlxd-ref list", "proc-stat xlxd-sut list extra", "proc-stat xlxd-sut dv-edge-dextra",
                                   "proc-stat xlxd-sut dv-edge-webrtc extra", "proc-stat xlxd-sut dv-edge-*", "kill-proc xlxd-sut dv-edge-webrtc",
                                   "PROC-STAT xlxd-sut dv-edge-webrtc", "proc-stat xlxd-sut dv-edge-webrtc;id"])
 def test_parse_refuses(line):
@@ -98,9 +110,39 @@ def test_helper_script_reads_exact_comm_only_and_parses():
         assert sample.pid == procs[0].pid and sample.comm == "dvt-procvictim"
         assert sample.clk_tck == os.sysconf("SC_CLK_TCK") and sample.vmhwm_kib >= 8 * 1024 and sample.vmrss_kib > 0
         assert sample.vmhwm_kib >= sample.vmrss_kib
+        assert sample.pid == procs[0].pid
+        assert sample.fds == len(os.listdir("/proc/%d/fd" % procs[0].pid)) and sample.fds >= 3
+        assert sample.starttime == int(Path("/proc/%d/stat" % procs[0].pid).read_text().rsplit(")", 1)[1].split()[19]) > 0
         none = subprocess.run([sys.executable, "-c", script, "dvt-nosuchproc"], capture_output=True, text=True, timeout=30)
         assert none.returncode == 3 and none.stdout.strip() == "none=dvt-nosuchproc"
     finally:
         for p in procs:
             p.kill()
             p.wait(5)
+
+
+def test_helper_script_list_mode_names_every_process_but_itself():
+    if not Path("/proc/self/stat").exists() or not shutil.which("bash"):
+        pytest.skip("/proc or bash missing")
+    script = bash('printf "%s" "$DVT_PROCSTAT_SCRIPT"').stdout
+    run = subprocess.run([sys.executable, "-c", script, "list"], capture_output=True, text=True, timeout=30)
+    assert run.returncode == 0, run.stderr
+    rows = control.parse_proc_list(run.stdout)
+    pids = {pid for pid, _ppid, _comm in rows}
+    assert os.getpid() in pids                                    # this pytest process is listed; the helper itself is not
+    assert all(line.startswith("proc=") for line in run.stdout.splitlines())
+    assert len(rows) == len(run.stdout.splitlines())
+
+
+def test_parse_proc_list_ignores_noise():
+    text = "proc=1 0 dv-router\nproc=7 1 dv-edge-xlx\nproc=9 1 tokio runtime\nnoise\nproc=x 1 y\nproc=3 1\n"
+    assert control.parse_proc_list(text) == [(1, 0, "dv-router"), (7, 1, "dv-edge-xlx"), (9, 1, "tokio runtime")]
+
+
+@pytest.mark.parametrize("user,want", [("", "0:0"), ("1000:1000", "1000:1000"), ("65532", "65532:65532"),
+                                       ("dvrouter", "1000:1000"), ("dv:dv", "1000:1000")])
+def test_helper_runs_as_the_user_of_the_sut_container(user, want):
+    """root when the image names no user, the numeric user otherwise, the host uid for a name the helper image cannot resolve."""
+    run = subprocess.run(["bash", "-c", 'source "$1"; docker() { printf "%s\n" "$FAKE_USER"; }; DVT_UID=1000 DVT_GID=1000; dvt_procstat_user cid',
+                          "x", str(LIB)], capture_output=True, text=True, timeout=30, env={**os.environ, "FAKE_USER": user})
+    assert run.returncode == 0 and run.stdout == want + "\n", run.stderr

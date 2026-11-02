@@ -405,6 +405,8 @@ class ProcSample:
     vmhwm_kib: int
     vmrss_kib: int
     threads: int = 0
+    fds: int = -1               # open file descriptors (/proc/<pid>/fd); -1 when the helper could not read them
+    starttime: int = 0          # field 22 of /proc/<pid>/stat: start in clock ticks after boot (with pid: the process identity)
     raw: dict = field(default_factory=dict, repr=False)
 
     @property
@@ -423,7 +425,8 @@ def parse_procstat_out(text):
         return ProcSample(pid=int(kv["pid"]), comm=kv["comm"], t=float(kv["t"]),
                           ticks=int(kv["utime"]) + int(kv["stime"]), clk_tck=int(kv["clk_tck"]),
                           vmhwm_kib=int(kv["vmhwm_kb"]), vmrss_kib=int(kv["vmrss_kb"]),
-                          threads=int(kv.get("threads", 0)), raw=kv)
+                          threads=int(kv.get("threads", 0)), fds=int(kv.get("fds", -1)),
+                          starttime=int(kv.get("starttime", 0)), raw=kv)
     except KeyError as exc:
         raise ValueError("proc-stat reply lacks %s: %r" % (exc, text[:200])) from exc
     except ValueError as exc:

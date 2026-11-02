@@ -13,9 +13,11 @@ with one line; the host watcher answers with <id>.ack ("ok", "error <rc>" or
   "metrics xlxd-sut"                         the Prometheus text of the sut hub
                                              (127.0.0.1:19108 inside its network
                                              namespace) in <id>.out
-  "proc-stat <service> <process>"            cpu ticks and memory high-water mark of
-                                             one process inside the sut (read only;
-                                             allow-list below), key=value lines in <id>.out
+  "proc-stat <service> <process>"            cpu ticks, memory, threads, open fds and
+                                             start time of one process inside the sut
+                                             (read only; allow-list below), key=value
+                                             lines in <id>.out; process "list": pid,
+                                             ppid and comm of every process
 
 KILL_PROC_ALLOWED is the tester's copy of the allow-list in
 scripts/lib/killproc.sh (the host enforces it; cases/unit/test_control.py
@@ -42,13 +44,18 @@ KILL_PROC_ALLOWED = {
 }
 
 
-# (service, process name = exact /proc comm) whose cpu ticks and VmHWM the host will READ
-# (scripts/lib/procstat.sh; nothing is signalled)
-PROC_STAT_ALLOWED = (
-    ("xlxd-sut", "dv-edge-webrtc"),     # the web load test: edge cpu and peak RSS
-    ("xlxd-sut", "dv-svc-web"),
-    ("xlxd-sut", "dv-svc-status"),
+# exact /proc comm names whose cpu ticks, memory, threads and fd count the host will READ
+# (scripts/lib/procstat.sh DVT_PROCSTAT_NAMES; nothing is signalled). The launcher dv-router is here only to be
+# read: kill-proc never signals it. "list" prints pid, ppid and comm of every process of the container.
+PROC_STAT_NAMES = (
+    "dv-router",                # the launcher
+    "dv-edge-xlx", "dv-edge-nxdn", "dv-edge-p25", "dv-edge-usrp",
+    "dv-edge-webrtc",           # the web load test: edge cpu and peak RSS
+    "dv-svc-status", "dv-svc-web", "dv-svc-admin",
+    "dv-room", "dv-recorder", "dv-codec-ambed",
 )
+PROC_STAT_LIST = "list"
+PROC_STAT_ALLOWED = tuple(("xlxd-sut", name) for name in PROC_STAT_NAMES) + (("xlxd-sut", PROC_STAT_LIST),)
 
 
 def proc_stat_allowed(service, process):
@@ -123,6 +130,20 @@ def parse_kill_out(text):
     return result
 
 
+def parse_proc_list(text):
+    """[(pid, ppid, comm)] of a `proc-stat xlxd-sut list` reply (lines `proc=<pid> <ppid> <comm>`); other lines
+    are ignored."""
+    out = []
+    for line in text.splitlines():
+        key, sep, rest = line.strip().partition("=")
+        if key != "proc" or not sep:
+            continue
+        words = rest.split(None, 2)
+        if len(words) == 3 and words[0].isdigit() and words[1].isdigit():
+            out.append((int(words[0]), int(words[1]), words[2]))
+    return out
+
+
 class RigControl:
     """stop/start/kill of a rig service and kill-proc inside the sut container
     through the run.sh watcher: a request file in $DVT_OUT/control, answered
@@ -175,6 +196,10 @@ class RigControl:
         line = kill_proc_line(service, process, signal)
         name = self._request(line, timeout)
         return parse_kill_out((self.dir / (name + ".out")).read_text())
+
+    def proc_list(self, service="xlxd-sut", timeout=60.0):
+        """[(pid, ppid, comm)] of every process of the container (`proc-stat <service> list`)."""
+        return parse_proc_list(self.proc_stat(service, PROC_STAT_LIST, timeout))
 
     def proc_stat(self, service, process, timeout=60.0):
         """Text of a proc-stat reply (key=value lines; dvtest.webload.parse_procstat_out reads it) for the

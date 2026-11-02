@@ -370,6 +370,12 @@ services:
       DVT_BROWSER: ${DVT_BROWSER:-off}
       # profile webload (cases/test_web_load.py): on when the load generator runs
       DVT_WEBLOAD: ${DVT_WEBLOAD:-off}
+      # cases/test_web_soak.py: 1 starts the 60 minute soak; timing, seed and modules of the mix (docs/web-soak-cases.md)
+      DVT_SOAK: ${DVT_SOAK:-}
+      DVT_SOAK_WARMUP_S: ${DVT_SOAK_WARMUP_S:-600}
+      DVT_SOAK_MEASURED_S: ${DVT_SOAK_MEASURED_S:-3000}
+      DVT_SOAK_SEED: ${DVT_SOAK_SEED:-1}
+      DVT_SOAK_MODULES: ${DVT_SOAK_MODULES:-}
       DVT_WEBLOAD_URL: http://${DVT_NET:-172.30.0}.97:${DVT_WEBLOAD_PORT:-3100}
       # on when rig/config/dv-router/recorder.toml is part of DVT_SUT_CONFIG_EXTRA (run.sh)
       DVT_RECORDER: ${DVT_RECORDER:-off}

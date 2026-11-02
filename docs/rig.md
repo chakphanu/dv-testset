@@ -468,7 +468,7 @@ hooks, WEB2, are not on `wip-f3adb62` yet: a later switch is a change of that on
 ## Web load profile
 
 `scripts/run.sh --profile web,webload` adds the service `webload` (`172.30.0.97`, control server `http://<net>.97:3100`) for the
-W8 load case (`cases/test_web_load.py`, `docs/web-load-cases.md`). `webload` alone is exit 2.
+W8 load case (`cases/test_web_load.py`, `docs/web-load-cases.md`) and the 60 minute soak (`cases/test_web_soak.py`, `docs/web-soak-cases.md`; the generator then also leaves and rejoins listeners: `POST /run` with a `soak` table of sessions). `webload` alone is exit 2.
 
 | What | Detail |
 |------|--------|
@@ -476,7 +476,7 @@ W8 load case (`cases/test_web_load.py`, `docs/web-load-cases.md`). `webload` alo
 | image | `rig/Dockerfile.webload` on `TESTER_BASE_IMAGE` plus the pinned aiortc set `WEBLOAD_PIP_PINS` of `.env.example` (aiortc 1.14.0 and its resolved dependencies, `pip install --no-deps --only-binary`, `pip check`); the build is the only internet use. About 410 MB |
 | caps | own set `x-limits-loadgen`: 3g = swap 3g (`DVT_MEM_LOADGEN`), 4 cpus (`DVT_CPUS_LOADGEN`), 512 pids; read-only root, tmpfs `/tmp`, all capabilities dropped, `out/<run>/web` mounted read-only (the run CA). The control server answers the tester address only |
 | control | `POST /run` (accounts, listener count, workers), `GET /status`, `GET /sample` (cgroup and process cpu), `POST /finish` (statistics of every listener, one JSON document), `POST /abort`. Nothing is written to disk |
-| SUT side | the read-only control action `proc-stat xlxd-sut <process>` (`scripts/lib/procstat.sh`, `dvtest.control.PROC_STAT_ALLOWED`: `dv-edge-webrtc`, `dv-svc-web`, `dv-svc-status`) returns the cpu ticks, thread count and VmHWM/VmRSS of the process by exact `/proc` comm, read by a throwaway tester-image container in the SUT's pid namespace |
+| SUT side | the read-only control action `proc-stat xlxd-sut <process>` (`scripts/lib/procstat.sh`, `dvtest.control.PROC_STAT_NAMES`: the launcher `dv-router`, `dv-edge-xlx`, `-nxdn`, `-p25`, `-usrp`, `-webrtc`, `dv-svc-status`, `-web`, `-admin`, `dv-room`, `dv-recorder`, `dv-codec-ambed`; the word `list` prints pid, ppid and comm of every process) returns the cpu ticks, thread count, VmHWM/VmRSS, the open fd count (`fds`, -1 when unreadable) and the start time of the process by exact `/proc` comm, read by a throwaway tester-image container in the SUT's pid namespace that runs as the SUT container's user (root when its image names none; no capability), because `/proc/<pid>/fd` is readable only for the same uid |
 
 ## NAT profile
 

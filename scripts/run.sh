@@ -144,9 +144,11 @@
 # sut hub, fetched from inside its network namespace by a throwaway tester-image
 # container (scripts/lib/metrics.sh; the DV-Router image has no shell or curl and
 # the hub listens on its loopback only). error 1 = the GET failed.
-# or "proc-stat xlxd-sut <process>" (dv-edge-webrtc, dv-svc-web or dv-svc-status): READS the cpu ticks (utime,
-# stime), the clock ticks per second, the thread count and VmHWM/VmRSS of that process by exact /proc comm
-# from a throwaway tester-image container in the sut's pid namespace (scripts/lib/procstat.sh); <id>.out gets
+# or "proc-stat xlxd-sut <process>" (an exact name of DVT_PROCSTAT_NAMES in scripts/lib/procstat.sh: the launcher
+# dv-router, the dv-edge-*, dv-svc-*, dv-room, dv-recorder and dv-codec-ambed processes; or the word "list"): READS the
+# cpu ticks (utime, stime), the clock ticks per second, the thread count, VmHWM/VmRSS, the number of open file
+# descriptors and the start time of that process by exact /proc comm from a throwaway tester-image container in
+# the sut's pid namespace (scripts/lib/procstat.sh; "list" prints pid, ppid and comm of every process); <id>.out gets
 # key=value lines. Nothing is signalled. error 3 = no such process.
 # "mark begin|end <tag>" only logs: a case brackets deliberately malformed
 # traffic so the capture check can tell it from a fault.

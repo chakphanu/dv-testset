@@ -3,29 +3,42 @@
 #
 #   proc-stat <service> <process>
 #
-# READS the CPU ticks and the memory high-water mark of one process INSIDE a rig container (the web load
-# test measures the WebRTC edge this way). The DV-Router image is scratch (no shell, no ps), its processes
-# belong to root and live in the container's pid namespace, so a throwaway container of the tester image joins
-# that namespace (docker run --pid container:<id>, no network, no capability, read-only root, the
-# dvtest.limits caps, the host uid) and reads /proc/<pid>/{comm,stat,status}, which are world readable. A
-# process is reported only when its comm equals <process> exactly and it is not a zombie. Nothing is signalled.
+# READS the CPU ticks and the memory of one process INSIDE a rig container (the web load test measures the
+# WebRTC edge this way, the web soak test every child of the launcher). The DV-Router image is scratch (no
+# shell, no ps), its processes live in the container's pid namespace, so a throwaway container of the tester
+# image joins that namespace (docker run --pid container:<id>, no network, no capability, read-only root, the
+# dvtest.limits caps) and reads /proc/<pid>/{comm,stat,status,fd}. The helper runs as the user of the SUT
+# container (docker inspect Config.User; root when the image names none; the host uid for a user given by
+# name), because /proc/<pid>/fd of a process is readable only for the same uid (no capability is granted: the
+# uid match is enough); when the fd directory is still unreadable the reply says fds=-1. A process is reported
+# only when its comm equals <process> exactly and it is not a zombie. Nothing is signalled, nothing is written.
 #
-# Allow-list (anything else is "error refused", nothing runs): service xlxd-sut only; the processes of the web
-# stack named below. dvtest/control.py (PROC_STAT_ALLOWED) mirrors the table for the tester;
+# Allow-list (anything else is "error refused", nothing runs): service xlxd-sut only; the exact process names
+# of DVT_PROCSTAT_NAMES below (the launcher dv-router included: it is only READ here, kill-proc never signals
+# it) and the word "list". dvtest/control.py (PROC_STAT_NAMES) mirrors the table for the tester;
 # cases/unit/test_procstat.py checks that the two agree.
+#
+# "proc-stat xlxd-sut list" prints one line "proc=<pid> <ppid> <comm>" for EVERY process of the container (names
+# only, never a command line or an environment), so that a test can see children that are not in the table.
 #
 # dvt_procstat_allowed SERVICE PROCESS   exit 0 when allow-listed
 # dvt_procstat_parse LINE                prints "SERVICE PROCESS" or exit 1
+# dvt_procstat_user CONTAINER            prints the "uid:gid" the helper runs as
 # dvt_procstat_exec CONTAINER IMAGE PROCESS
-#   stdout: pid=, comm=, utime=, stime= (ticks), clk_tck=, threads=, vmhwm_kb=, vmrss_kb=, t=<epoch seconds,
-#   taken right after the reads>; exit 0 ok, 3 no such process, 5 no limits.
+#   stdout: pid=, comm=, utime=, stime= (ticks), clk_tck=, threads=, vmhwm_kb=, vmrss_kb=, fds= (-1 when not
+#   readable), starttime= (clock ticks after boot: with the pid it names the process), t=<epoch seconds, taken
+#   right after the reads>; exit 0 ok, 3 no such process, 5 no limits.
+
+DVT_PROCSTAT_NAMES="dv-router dv-edge-xlx dv-edge-nxdn dv-edge-p25 dv-edge-usrp dv-edge-webrtc dv-svc-status dv-svc-web dv-svc-admin dv-room dv-recorder dv-codec-ambed"
 
 dvt_procstat_allowed() {
   [ "$#" -eq 2 ] || return 1
   [ "$1" = xlxd-sut ] || return 1
-  case "$2" in
-    dv-edge-webrtc|dv-svc-web|dv-svc-status) return 0 ;;
-  esac
+  [ "$2" = list ] && return 0
+  local n
+  for n in $DVT_PROCSTAT_NAMES; do
+    [ "$2" = "$n" ] && return 0
+  done
   return 1
 }
 
@@ -43,6 +56,18 @@ DVT_PROCSTAT_SCRIPT='
 import os, sys, time
 want = sys.argv[1]
 me = os.getpid()
+if want == "list":
+    for name in sorted((d for d in os.listdir("/proc") if d.isdigit()), key=int):
+        try:
+            with open("/proc/%s/comm" % name) as fh:
+                comm = fh.read().strip()
+            with open("/proc/%s/stat" % name) as fh:
+                rest = fh.read().rsplit(")", 1)[1].split()
+        except (OSError, IndexError):
+            continue
+        if int(name) != me and rest[0] != "Z":
+            print("proc=%s %s %s" % (name, rest[1], comm))
+    sys.exit(0)
 for name in sorted((d for d in os.listdir("/proc") if d.isdigit()), key=int):
     pid = int(name)
     if pid == me:
@@ -64,6 +89,10 @@ for name in sorted((d for d in os.listdir("/proc") if d.isdigit()), key=int):
                     mem[key] = value.split()[0]
     except (OSError, IndexError):
         continue
+    try:
+        fds = len(os.listdir("/proc/%d/fd" % pid))
+    except OSError:
+        fds = -1
     now = time.time()
     print("pid=%d" % pid)
     print("comm=%s" % comm)
@@ -73,20 +102,37 @@ for name in sorted((d for d in os.listdir("/proc") if d.isdigit()), key=int):
     print("threads=%s" % rest[17])
     print("vmhwm_kb=%s" % mem.get("VmHWM", "0"))
     print("vmrss_kb=%s" % mem.get("VmRSS", "0"))
+    print("fds=%d" % fds)
+    print("starttime=%s" % rest[19])
     print("t=%.6f" % now)
     sys.exit(0)
 print("none=" + want)
 sys.exit(3)
 '
 
+dvt_procstat_user() {
+  local u
+  u="$(docker inspect -f '{{.Config.User}}' "$1" 2>/dev/null || true)"
+  if [ -z "$u" ]; then
+    printf '0:0\n'
+  elif [[ "$u" =~ ^[0-9]+:[0-9]+$ ]]; then
+    printf '%s\n' "$u"
+  elif [[ "$u" =~ ^[0-9]+$ ]]; then
+    printf '%s:%s\n' "$u" "$u"
+  else
+    printf '%s:%s\n' "${DVT_UID:-1000}" "${DVT_GID:-1000}"
+  fi
+}
+
 dvt_procstat_exec() {
-  local cid="$1" img="$2" proc="$3" lim
+  local cid="$1" img="$2" proc="$3" lim suser
   # defense in depth: the caller checked the allow-list, the helper only ever sees plain names
   [[ "$proc" =~ ^[a-z0-9-]+$ ]] || return 1
   mapfile -t lim < <(python3 -c 'from dvtest.limits import docker_run_args; print("\n".join(docker_run_args()))') || return 5
   [ "${#lim[@]}" -gt 0 ] || return 5
+  suser="$(dvt_procstat_user "$cid")"
   docker run --rm --pull never --network none --pid "container:$cid" \
-    --user "${DVT_UID:-1000}:${DVT_GID:-1000}" \
+    --user "$suser" \
     --cap-drop ALL --security-opt no-new-privileges --read-only "${lim[@]}" \
     --entrypoint python3 "$img" -c "$DVT_PROCSTAT_SCRIPT" "$proc"
 }

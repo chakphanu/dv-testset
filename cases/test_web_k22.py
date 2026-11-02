@@ -14,6 +14,10 @@ the same browser context (same IP, same User-Agent, same cookie jar), which is w
                                                   other peer is untouched
   c  test_guest_lease_without_a_peer              guest: renewed while the peer is up; after the peer is gone 204
                                                   without renewal, then 401 at expiry, then 403 once cleaned up
+  c2 test_silently_closed_peer_leaves_the_edge    EDG1 (K1 fixed, DV-Router wip dbedd14): a peer closed with no revoke leaves the
+                                                  edge (gauge, guest lease) inside the documented bound; needs an image with EDG1
+  c3 test_closing_only_the_ctl_channel_removes_the_peer
+                                                  EDG1: closing just the ctl DataChannel removes the WHOLE peer; others keep hearing
   d  test_foreign_and_malformed_circuits          other guest browser / login / guest-vs-login: 403; bad id: 400
   e  test_guest_b_churn_does_not_stop_guest_a     K22b: peers coming and going do not stop guest A's renewal
   f  test_status_stream_is_quiet_while_idle       no per-5 s event on the public stream with a WebRTC edge up (slow)
@@ -44,6 +48,13 @@ pytestmark = [pytest.mark.rig, pytest.mark.web, pytest.mark.browser, pytest.mark
 ENGINE = "chromium"
 ROOM = "H"
 PROTO_CALL = "N0TEST"
+# EDG1 bounds (web.md ICE1a and EDG1; K22 notes): the edge removes a peer at once on DTLS close_notify / SCTP loss / a closed ctl
+# channel, at the latest 15 s after the last STUN request (its own timeout) or on ICE Disconnected; the gauge is published every
+# ~10 s and the hub caches it (K22 saw up to 35 s), so a removal is SEEN on dv_edge_webrtc_listeners within 15 + 10 + hub caching;
+# the case allows 40 s. A guest's lease then ends like in test_guest_lease_without_a_peer (stale proof 15 s + lease 30 s + 10 s
+# margin), counted from the 15 s STUN timeout at the latest.
+EDG1_GAUGE_S = 40.0
+EDG1_STUN_S = 15.0
 OTHER_UA = "dvt-k22-other-browser/1.0"
 LEASE_S = 30.0              # web.md: authenticated circuits renew to 30 s; the guest lease after a renewal is recorded
 INITIAL_LEASE_S = 15.0
@@ -147,6 +158,16 @@ class K22Page:
 
     def peer_state(self):
         return (self.rtc.state() or {}).get("connection")
+
+    def ctl_close(self):
+        """Close ONLY the control DataChannel of the page's peer (the peer connection, ICE and DTLS stay up in the browser)."""
+        return self.page.evaluate("""() => {
+            const all = (window.__dvtTap && window.__dvtTap.channels) || [];
+            const ctl = all.filter((c) => c.label === 'ctl');
+            const ch = ctl[ctl.length - 1] || all[all.length - 1];
+            if (ch) ch.close();
+            return ch ? ch.label : null;
+        }""")
 
     def pc_close(self):
         """Close the page's own RTCPeerConnection from the outside (a browser that goes away without telling the
@@ -411,40 +432,106 @@ def test_guest_lease_without_a_peer(make_page, web_operator):
     assert t403 is not None, "the expired guest id never turned 403 (cleanup) within 90 s: %s" % summary["runs"][-3:]
 
 
+def stable_listeners(rig_control, at_least=1, budget_s=70.0):
+    """The gauge once two readings 6 s apart agree and are >= at_least (the edge publishes every ~10 s and the hub caches the
+    snapshot, so a fresh connect shows up late); None when it never settled."""
+    end = time.monotonic() + budget_s
+    last = None
+    while time.monotonic() < end:
+        now = listeners(rig_control)
+        if now >= at_least and now == last:
+            return now
+        last = now
+        time.sleep(6.0)
+    return None
+
+
+def gauge_below(rig_control, level, timeout_s, every=2.0):
+    """Seconds (from now) until the gauge reads below `level`, sampled every `every` s; None after timeout_s."""
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < timeout_s:
+        if listeners(rig_control) < level:
+            return round(time.monotonic() - t0, 1)
+        time.sleep(every)
+    return None
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize("who,after_s", [("user", 0), ("guest", 0), ("guest", 45)], ids=["user-at-once", "guest-at-once", "guest-after-45s"])
 def test_silently_closed_peer_leaves_the_edge(make_page, rig_control, who, after_s):
-    """web.md: "The edge independently removes an established ICE-lite peer after 15 s without a STUN Binding request".
-    A browser that closes its RTCPeerConnection without any revoke (pc.close(), the page's own close blocked) stops
-    sending STUN; the listener gauge of the edge (published every 10 s, so read it as +- 10 s) is sampled for 100 s. A
-    difference from the document is a FINDING (recorded, not asserted: web.finding)."""
+    """EDG1 (DV-Router K1, fixed in wip dbedd14; needs an image with it, an older image fails this case): the edge acts on
+    Event::Closed (DTLS close_notify, SCTP loss), so a browser that closes its RTCPeerConnection with no revoke (pc.close(),
+    the page's own close blocked) loses its peer at the edge at once; at the latest the 15 s STUN silence timeout removes
+    it. Asserted: the listener gauge (published every ~10 s, hub caching up to 35 s in K22, so allow EDG1_GAUGE_S = 40 s)
+    drops below its value before the close, and for a guest that keeps calling /rtc/alive the lease stops renewing: a 401
+    follows within the STUN timeout + stale proof 15 s + lease 30 s + 10 s margin. The measured seconds are recorded."""
     kp = make_page("peer", user="N0KA" if who == "user" else None)
     kp.connect()
     kp.abort_close()
-    if kp.user is None:
-        kp.start_poll(kp.sess)                          # a guest that keeps asking for its lease meanwhile
-    time.sleep(after_s)
-    before = listeners(rig_control)
+    kp.start_poll(kp.sess)                              # keeps asking for its lease meanwhile (a logged-in circuit that stopped would be
+    time.sleep(after_s)                                 # swept by its own 30 s lease, which would hide a peer the edge forgot to remove)
+    before = stable_listeners(rig_control)
+    assert before, "the listener gauge never showed the connected peer (>= 1 and steady) within 70 s"
     assert kp.pc_close()
-    samples = []
-    t0 = time.time()
-    while time.time() - t0 < 100.0:
-        time.sleep(7.0)
-        samples.append((round(time.time() - t0), listeners(rig_control)))
-    answers = [s for _t, s in kp.series()] if kp.polling else []
+    t_close = time.time()
+    gone_s = gauge_below(rig_control, before, EDG1_GAUGE_S + 20.0)
     key = "silent close (%s, closed %d s after connecting)" % (who, after_s)
-    note(key + ": edge listeners gauge by seconds after pc.close(); before=%s" % before,
-         {"samples": samples, "lease answers": sorted(set(answers), key=str)})
-    gone = [t for t, n in samples if n < before]
-    if not gone:
-        web.finding("K22: the edge still counted the peer %d s after its browser closed the connection silently (%s; gauge "
-                    "%s before, %s after); web.md: the edge removes an established peer 15 s after the last STUN request. "
-                    "The peer leaves only with the web service's revoke." % (samples[-1][0], who, before, samples[-1][1]))
-    else:
-        note(key + ": first sample without the peer (s)", gone[0])
-        if gone[0] > 15 + 10 + 7:
-            web.finding("K22: the gauge dropped %d s after the silent close (%s); web.md documents 15 s (gauge is published "
-                        "every 10 s, sampled every 7 s)" % (gone[0], who))
+    note(key + ": seconds until the edge listeners gauge fell below %s (EDG1 bound %d s)" % (before, EDG1_GAUGE_S), gone_s)
+    assert gone_s is not None and gone_s <= EDG1_GAUGE_S, \
+        "the edge still counted the peer %s s after its browser closed the connection silently (gauge %s before): EDG1 says it " \
+        "leaves at once (close_notify) or after 15 s without STUN, seen within %d s" % (gone_s or ">%d" % (EDG1_GAUGE_S + 20), before, EDG1_GAUGE_S)
+    if kp.user is None:
+        t401 = poll_until(kp, 401, 75.0, since=t_close)
+        series = [(t, st) for t, st in kp.series() if t >= t_close]
+        summary = k22.alive_summary(series, t_close)
+        note(key + ": guest lease answers after pc.close()", {"first": summary["first"], "runs": summary["runs"][:6]})
+        assert t401 is not None, "the guest lease was still renewed 75 s after its peer closed silently: %s" % summary["runs"][:4]
+        ended = round(t401 - t_close, 1)
+        note(key + ": 401 after pc.close() (s)", ended)
+        bound = EDG1_STUN_S + k22.FRESH_S + LEASE_S + 10.0
+        assert ended <= bound, "401 came %.1f s after the silent close (STUN timeout 15 + stale proof 15 + lease 30 + margin = %.0f s)" % (ended, bound)
+        assert summary["monotonic"], "statuses went back: %s" % summary["runs"]
+
+
+def test_closing_only_the_ctl_channel_removes_the_peer(make_page, proto_peer, rig_control):
+    """EDG1 (DV-Router, wip dbedd14; needs an image with it): a closed ctl DataChannel goes through the edge's removal like a
+    closed connection, so it removes the WHOLE peer; it used to keep listening. Two logged-in listeners A and B hear a protocol
+    talker; only A's ctl channel is closed (page.evaluate on the channel the page opened; the peer connection stays up in the
+    browser, the page's own revoke is blocked). Asserted: the gauge falls by one within EDG1_GAUGE_S = 40 s, A hears nothing from
+    a later over while B hears it in full, and B's lease and peer are untouched."""
+    a = make_page("a", user="N0KA")
+    b = make_page("b", user="N0KB")
+    a.connect()
+    b.connect()
+    a.abort_close()
+    a.rtc.tap_start()
+    b.rtc.tap_start()
+    assert over_heard(a.rtc, proto_peer) >= 100, "A hears nothing before its ctl channel is closed"
+    assert over_heard(b.rtc, proto_peer) >= 100, "B hears nothing before"
+    before = stable_listeners(rig_control, at_least=2)
+    assert before and before >= 2, "the gauge never showed both peers (>= 2, steady): %s" % before
+    closed = a.ctl_close()
+    assert closed, "the page of A has no data channel to close"
+    note("ctl channel close: channel closed", closed)
+    gone_s = gauge_below(rig_control, before, EDG1_GAUGE_S + 20.0)
+    note("ctl channel close: seconds until the gauge fell below %s (EDG1 bound %d s)" % (before, EDG1_GAUGE_S), gone_s)
+    assert gone_s is not None and gone_s <= EDG1_GAUGE_S, \
+        "the edge still counted both peers %s s after only A's ctl channel was closed (EDG1: the whole peer goes)" % (gone_s or ">%d" % (EDG1_GAUGE_S + 20))
+    assert listeners(rig_control) >= 1, "the gauge fell to 0: B's peer went too"
+    time.sleep(2.0)
+    a0, b0 = received(a.rtc), received(b.rtc)
+    talk = Talk(proto_peer, tone_frames(3.0))
+    talk.start()
+    talk.started.wait(5)
+    talk.join(timeout=11.0)
+    time.sleep(0.6)
+    heard_a, heard_b = received(a.rtc) - a0, received(b.rtc) - b0
+    note("ctl channel close: packets heard in a 3 s over after the removal (A, B)", [heard_a, heard_b])
+    assert heard_a < 10, "A still heard %d packets of a 3 s over after its peer should have been removed" % heard_a
+    assert heard_b >= 100, "B heard only %d packets: closing A's ctl channel disturbed an ordinary listener" % heard_b
+    assert b.peer_state() == "connected", "B's peer is %s" % b.peer_state()
+    assert b.alive(b.sess) == 204, "B's own lease call"
+    note("ctl channel close: A's browser peer state afterwards", a.peer_state())
 
 
 # ---------------------------------------------------------------------------------------- d

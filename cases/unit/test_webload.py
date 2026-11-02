@@ -300,6 +300,13 @@ def test_parse_procstat_and_cpu_percent():
         wl.cpu_percent(b, a)
 
 
+def test_parse_procstat_fds_and_start_time():
+    a = wl.parse_procstat_out(PROC_OUT)
+    assert a.fds == -1 and a.starttime == 0                    # an old reply: unknown
+    b = wl.parse_procstat_out(PROC_OUT + "fds=41\nstarttime=123456\n")
+    assert b.fds == 41 and b.starttime == 123456 and (b.pid, b.starttime) == (17, 123456)
+
+
 @pytest.mark.parametrize("text", ["", "pid=1\n", PROC_OUT.replace("utime=612\n", ""), PROC_OUT.replace("t=1000.5", "t=soon")])
 def test_parse_procstat_refuses_bad_replies(text):
     with pytest.raises(ValueError):

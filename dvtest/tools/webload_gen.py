@@ -99,8 +99,10 @@ def read_cgroup():
 class Listener:
     """One receive-only peer: its counters and arrival log. The receive hook runs in the event loop."""
 
-    def __init__(self, slot, plan):
+    def __init__(self, slot, plan, counts_only=False):
         self.slot, self.plan = slot, plan
+        self.counts_only = counts_only      # soak runs: count packets, keep no arrival log
+        self.left = False                   # soak runs: the session ended by its own `leave`
         self.j = slot["j"]
         self.t = array.array("q")           # arrival ns of valid marker packets
         self.idx = array.array("i")         # their source frame indices
@@ -120,6 +122,8 @@ class Listener:
         self.packets += 1
         if len(pkt) < 12 or pkt[0] >> 6 != 2 or (pkt[1] & 0x7F) != 0:
             self.invalid += 1
+            return
+        if self.counts_only:
             return
         b0 = pkt[0]
         start = 12 + 4 * (b0 & 0x0F)
@@ -200,6 +204,7 @@ class Worker:
     def __init__(self, cfg):
         self.cfg = cfg
         self.plan = wl.Plan(**cfg["plan"])
+        self.soak = bool(cfg.get("soak"))
         self.slots = cfg["slots"]
         self.accounts = {a["account"]: (a["callsign"], a["password"]) for a in cfg["accounts"]}
         self.start_mono = cfg["start_mono"]
@@ -250,7 +255,7 @@ class Worker:
     async def listener(self, slot):
         from aiortc import RTCConfiguration, RTCPeerConnection, RTCRtpReceiver, RTCSessionDescription
         loop = asyncio.get_running_loop()
-        lst = Listener(slot, self.plan)
+        lst = Listener(slot, self.plan, counts_only=self.soak)
         self.listeners.append(lst)
         wait = self.start_mono + slot["offset"] - time.monotonic()
         if wait > 0:
@@ -308,13 +313,20 @@ class Worker:
             # the page renews at once, every second until six answers, then every 10 s; a login with eight circuits cannot
             # (8 per second against 2/s per session), and an authenticated circuit needs one renewal within its 15 s:
             # at once, then every 10 s, each through the login's budget
+            leave = slot.get("leave")
+            leave_at = None if leave is None else self.start_mono + leave
             for off in wl.alive_schedule(first_seconds=1):
                 left = t0 + off - loop.time()
+                if leave_at is not None:
+                    left = min(left, leave_at - time.monotonic())
                 try:
                     await asyncio.wait_for(self.stop.wait(), max(left, 0.0))
                     break
                 except asyncio.TimeoutError:
                     pass
+                if leave_at is not None and time.monotonic() >= leave_at:
+                    await self.release(lst, client, pc)
+                    return
                 await self.pace(slot)
                 status = await loop.run_in_executor(self.pool, lambda: self.post(client, ALIVE_PATH, lst.sess_id))
                 lst.alive[status] += 1
@@ -322,7 +334,22 @@ class Worker:
             lst.error = lst.error or "%s: %s" % (type(exc).__name__, str(exc)[:160])
             self.emit(ev="failed", j=lst.j, why=lst.error)
         finally:
-            lst.client, lst.pc = locals().get("client"), pc
+            if not lst.left:
+                lst.client, lst.pc = locals().get("client"), pc
+
+    async def release(self, lst, client, pc):
+        """A soak session ends: revoke the circuit like the page's Disconnect, close the peer and forget it."""
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(self.pool, lambda: self.post(client, CLOSE_PATH, lst.sess_id))
+        try:
+            await asyncio.wait_for(pc.close(), 15)
+        except Exception:                               # noqa: BLE001 - a peer that does not close is still forgotten
+            pass
+        if pc in self.pcs:
+            self.pcs.remove(pc)
+        lst.left = True
+        lst.client = lst.pc = None
+        self.emit(ev="left", j=lst.j)
 
     @staticmethod
     def post(client, path, sess_id):
@@ -339,7 +366,21 @@ class Worker:
             if len(self.lag) < 400000:
                 self.lag.append((t1, (t1 - t0) / 1e6 - 5.0))
 
+    def result_soak(self):
+        """Compact rows of a soak run: no arrival log, one small row per session."""
+        rows = [{"j": lst.j, "seat": lst.slot.get("seat"), "room": lst.slot["room"], "login": lst.slot["login"],
+                 "connect_s": None if lst.connected_at is None else round(lst.connected_at, 3), "packets": lst.packets,
+                 "invalid": lst.invalid, "left": lst.left, "error": lst.error,
+                 "alive": {str(k): v for k, v in sorted(lst.alive.items(), key=str)}}
+                for lst in sorted(self.listeners, key=lambda x: x.j)]
+        ticks, rss = read_proc_ticks()
+        return {"rows": rows, "srtp_errors": _SRTP_ERRORS[0],
+                "loop_lag": {"samples": 0, "p50_ms": None, "p99_ms": None, "max_ms": None}, "pid": os.getpid(),
+                "ticks": ticks, "rss_kib": rss}
+
     def result(self):
+        if self.soak:
+            return self.result_soak()
         rows = []
         lo = hi = None
         for lst in sorted(self.listeners, key=lambda x: x.j):
@@ -377,7 +418,7 @@ class Worker:
     async def run(self):
         install_patches()
         loop = asyncio.get_running_loop()
-        lag_task = asyncio.ensure_future(self.lag_monitor())
+        lag_task = None if self.soak else asyncio.ensure_future(self.lag_monitor())
         tasks = [asyncio.ensure_future(self.listener(s)) for s in self.slots]
         self.emit(ev="ready", n=len(tasks), pid=os.getpid())
 
@@ -391,7 +432,8 @@ class Worker:
         await self.stop.wait()
         res = self.result()
         self.emit(ev="result", **res)
-        lag_task.cancel()
+        if lag_task is not None:
+            lag_task.cancel()
         await self.teardown()
         for t in tasks:
             t.cancel()
@@ -413,6 +455,7 @@ class Job:
         self.state = "starting"
         self.connected = {}                 # j -> connect seconds
         self.failed = {}                    # j -> why
+        self.left = set()                   # soak: sessions that ended by their own leave
         self.workers = []                   # Popen
         self.ready = 0
         self.results = {}                   # worker index -> result event
@@ -424,7 +467,8 @@ class Job:
     def status(self):
         with self.lock:
             return {"state": self.state, "listeners": self.cfg["listeners"], "workers": len(self.workers),
-                    "connected": len(self.connected), "failed": len(self.failed),
+                    "connected": len(self.connected), "failed": len(self.failed), "left": len(self.left),
+                    "live": len(set(self.connected) - self.left),
                     "failures": sorted(set(self.failed.values()))[:5], "ready": self.ready,
                     "results": len(self.results), "closed": self.closed, "error": self.error,
                     "elapsed_s": round(time.time() - self.started, 1)}
@@ -445,15 +489,26 @@ class Server:
             workers = max(1, int(req.get("workers", 4)))
             plan = {"listeners": listeners, **req.get("plan", {})}
             wl.Plan(**plan)
-            slot_rows = [{"j": s.index, "login": s.login, "account": s.account, "room": s.room} for s in wl.slots(listeners)]
-            offsets = wl.paced_offsets(listeners, wl.RTC_IP_RATE, wl.RTC_IP_BURST)
-            for row, off in zip(slot_rows, offsets):
-                row["offset"] = off
+            soak = req.get("soak")
+            if soak:
+                # a soak run: the tester sends the sessions (join and leave offsets, dvtest.soak.build_sessions);
+                # `listeners` is the number of seats held at a time
+                from dvtest import soak as soak_lib
+                slot_rows = [dict(row) for row in soak["sessions"]]
+                problems = soak_lib.validate_sessions(slot_rows)
+                if problems:
+                    raise ValueError("sessions break the budgets: %s" % "; ".join(problems[:3]))
+                offsets = sorted(row["offset"] for row in slot_rows)
+            else:
+                slot_rows = [{"j": s.index, "login": s.login, "account": s.account, "room": s.room} for s in wl.slots(listeners)]
+                offsets = wl.paced_offsets(listeners, wl.RTC_IP_RATE, wl.RTC_IP_BURST)
+                for row, off in zip(slot_rows, offsets):
+                    row["offset"] = off
             accounts = req["accounts"]
             if len(accounts) < wl.accounts_needed(listeners):
                 raise ValueError("%d listeners need %d accounts, got %d" % (listeners, wl.accounts_needed(listeners), len(accounts)))
             cfg = {"listeners": listeners, "workers": workers, "plan": plan, "base_url": req["base_url"], "ca": req["ca"],
-                   "user_agent": req.get("user_agent", "dvt-webload/1"), "threads": req.get("threads", 4)}
+                   "user_agent": req.get("user_agent", "dvt-webload/1"), "threads": req.get("threads", 4), "soak": bool(soak)}
             job = Job(cfg)
             start_mono = time.monotonic() + 2.0
             for w in range(workers):
@@ -486,6 +541,8 @@ class Server:
                     job.ready += 1
                 elif kind == "connected":
                     job.connected[ev["j"]] = ev["s"]
+                elif kind == "left":
+                    job.left.add(ev["j"])
                 elif kind == "failed":
                     job.failed[ev["j"]] = str(ev.get("why", ""))[:200]
                 elif kind == "result":
