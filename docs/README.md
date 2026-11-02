@@ -7,6 +7,7 @@
 | [web-api-cases.md](web-api-cases.md) | web unit stage 2: API cases for DV-Router's HTTP APIs (role matrix, removed URLs, limits, admin), findings, gaps |
 | [web-browser-cases.md](web-browser-cases.md) | web unit stages 3a and 3b: browser cases (UI, XSS, CSP) and WebRTC Listen/Talk, recorder |
 | [web-nat-cases.md](web-nat-cases.md) | web unit stage 4: NAT behaviour of the browser WebRTC path (NAT router, coturn, direct/TURN/blackhole), findings, gaps |
+| [web-k22-cases.md](web-k22-cases.md) | web unit: K22 / K22b cases (RTC circuit identity, revoke, guest lease, edge and hub kills), findings, gaps |
 | [testlist.md](testlist.md) | what has to be verified, the case that verifies it, and the gaps |
 | [protocols/ambed.md](protocols/ambed.md) | AMBEd transcoder link: legacy and extended open, CAPS, data packets, flows, timing |
 | [ambed-fake.md](ambed-fake.md) | fake extended AMBEd transcoder with a bit-exact transform: protocol, modes, control JSON, K table |

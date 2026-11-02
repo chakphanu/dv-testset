@@ -131,8 +131,9 @@
 # file on that node, i.e. keys its USRP channel toward xlxd-sut).
 # or "kill-proc xlxd-sut <process> <signal>": signal one process INSIDE the sut
 # container by exact /proc comm (scripts/lib/killproc.sh): dv-edge-xlx,
-# dv-edge-nxdn, dv-edge-p25 with KILL or USR1 (quiet restart), dv-codec-ambed and dv-svc-web
-# with KILL only (the web cases reset its in-memory limits); never dv-router; anything
+# dv-edge-nxdn, dv-edge-p25 with KILL or USR1 (quiet restart), dv-codec-ambed, dv-svc-web,
+# dv-edge-webrtc and dv-svc-status with KILL only (the web cases reset its in-memory limits;
+# the K22 cases kill the WebRTC edge and the status hub); never dv-router; anything
 # else is refused. <id>.out gets "pid=<n>" per process and "t_kill=<epoch s>";
 # exit 3 (error 3) when no process has that name.
 # or "metrics xlxd-sut" (no other word): <id>.out gets the Prometheus text of the

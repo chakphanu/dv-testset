@@ -15,7 +15,8 @@ loosened: a difference is a FINDING line or a documented status, never a weaker 
 | Stage 3a: browser UI (`test_web_browser.py`) | 648e539 | `20261101T203217Z`, `20261101T205603Z` | 49 / 3 / 5 | 52 / 2 / 3, then 54 / 0 / 3 (two WebKit CSP assertions made findings for that engine; rerun passes) |
 | Stage 3b: WebRTC + recorder (`test_web_webrtc.py`, `test_web_recorder.py`) | 648e539 | `20261101T205817Z` | 45 / 1 (the TALK1 expected failure) / 0 | 55 / 0 / 0 |
 | Stage 4 NAT, TURN off | 3b0724a | `20261101T211249Z`, `20261101T214145Z` | 21 / 0 / 3 (a subset) | 26 / 1 (+2 setup errors) / 15 (1 xfailed); the 3 WebKit failures pass alone (3 / 0 / 0) |
-| Stage 4 NAT, TURN on | 3b0724a | `20261101T214325Z` | 30 / 6 / 8 (+1 error) | NOT COMPLETE: the host filesystem ran out of metadata space after about 24 cases (see Blocked) |
+| Stage 4 NAT, TURN on | 3b0724a | `20261102T004117Z`, `20261102T014441Z`, `20261102T015751Z` | 30 / 6 / 8 (+1 error) | 36 / 2 / 9 (+1 setup error) in 1 h 2 min; the 2 failures and the error were Firefox Talk during a blackhole (documented "Talk release timed out"; the case now skips that engine with the reason) and two Playwright WebKit browser-connection losses, which passed alone (`20261102T014441Z`: WebKit expiry 660 s and WebKit 429); the Talk timeline of Chromium and WebKit in `20261102T015751Z` (2 / 0 / 0). The blackhole case is the ICE1a version (2, 3, 5, 12, 16, 20 s): 9 / 0 / 0 |
+| K22 / K22b (`test_web_k22.py`, web + browser + `guest.toml`) | 3b0724a | `20261102T001500Z` | new | 12 / 0 / 0 in 25 min 33 s (`docs/web-k22-cases.md`) |
 | T14 cross-mode (`test_crossmode_exact.py`, `test_crossmode_failure.py`) | 13e7e70 (the 4 header-gap cases again on 3b0724a) | `20261101T192333Z`, `20261101T214004Z` | 47 / 0 / 0 (wip-265d818) | 49 / 4 / 0 on 13e7e70, then 53 / 0 / 0 (4 new measurement cases fixed in the case, rerun) |
 | M17 (`test_m17_peer_link.py`, `test_m17_relay.py`, `test_m17_packet.py`, native, template only) | 13e7e70 | `20261101T184327Z` | 97 / 0 / 0 | 97 / 0 / 0 (unaffected by the changes; run to prove it) |
 | Data ident, `DVT_REQUIRE_IDENT=true` / `false` | 13e7e70 | `20261101T185433Z`, `20261101T185933Z` | pass | 8 / 0 / 0 each |
@@ -59,8 +60,8 @@ New cases: `test_event_stream_slot_is_freed_on_reload`, `test_talk_hold_10_s_sta
 | stage 2: nine observed statuses outside the specs | API4 | now documented (guard order, 404 route misses, rtc 403, ice 404, totp 400/403, lockout 429, OPTIONS 405, CSP only on static files); the cases assert them as the documented answer |
 | stage 2: 26 operations declare no 2xx; no way to make admin viewer/operator accounts | API4, ADM1 | success codes asserted on real calls; `dv-svc-admin user add` works in a throw-away capped container of the image (`/usr/local/bin/dv-svc-admin`), `argon2_pure.py` kept as fallback |
 | T14 `dplus-join-stream`, USRP end unit open point | XC1 | see above |
-| stage 4 N1 (Firefox 2, 3, 5 s blackhole ends the session) | ICE1a (wip-648e539 and later; wip-3b0724a measured) | with TURN off, all three engines resume 2, 3, 5 and 8 s blackholes on all three NAT types without a new offer (27 of 27 for 2, 3, 5 s). The xfail in `cases/test_web_nat.py` was NOT removed (see New findings) |
-| stage 4 N2 (page closes the peer at the first `disconnected`) | ICE1a | the page now waits: Chromium and Playwright WebKit resume through a 12 s blackhole and give up on a 20 s one about 16.4 s after the start |
+| stage 4 N1 (Firefox 2, 3, 5 s blackhole ends the session) | ICE1a (wip-648e539 and later; wip-3b0724a measured) | TURN off: all three engines resume 2, 3, 5 and 8 s blackholes on all three NAT types without a new offer (27 of 27 for 2, 3, 5 s); TURN on (`20261102T004117Z`): 2, 3, 5 s resume in 27 of 27 again, Firefox included (9 of 9). The N1 xfail is **removed** from `cases/test_web_nat.py` |
+| stage 4 N2 (page closes the peer at the first `disconnected`) | ICE1a | the page now waits and says "Connection interrupted. Waiting to resume." (27 of 27 runs of 12, 16, 20 s): Chromium and Playwright WebKit resume through a 12 s blackhole, and give up on 16 and 20 s breaks when the engine itself fails 10 s after `disconnected` (15 to 17 s after the start); Firefox does not resume a 12 s break (page grace expiry) |
 
 ## NEW findings (observed vs documented)
 
@@ -73,15 +74,12 @@ New cases: `test_event_stream_slot_is_freed_on_reload`, `test_talk_hold_10_s_sta
 | Rig proxy | the stdlib TLS proxy did not pass a client close upstream, so API clients held stream slots until the next heartbeat | fixed in `dvtest/tools/tls_proxy.py` (unit test added) |
 | T14 measurement | with a 0.5 s voiceless header gap and without it, the first transcoded output arrives the same time after the first voice frame: 0.022 s at an OPEN delay of 0 ms and 0.304 s at 300 ms (D-STAR and DPlus); the OPEN reaches the fake within 1 ms of the first voice unit and never during the gap | XC1 / transcoding.md: the OPEN no longer overlaps the header-to-voice gap; the cost is min(OPEN time, gap) = 0.30 s here. Matches |
 
-## Blocked
+## Blocked (resolved)
 
-The TURN-on NAT run (about 1 hour) did not complete: after about 20 minutes the host root filesystem (btrfs, 0 bytes
-unallocated, 226 GiB free by `df`) refused every new file in the repository, the tester's results and `run.sh` own
-lock file ("No space left on device"; docker could not remove containers either). Freeing it needs a `btrfs balance`
-as root or deleting old `out/` runs, both of which need the owner's approval (the workspace rules forbid deleting or
-changing system state unasked). The partial results above (24 cases passed before the failure; relay and Chromium
-blackhole rows as in the TURN-off run) are in `out/20261101T214325Z/web-findings.txt`; no result is claimed from them.
-Rerun after freeing space: see the NAT rerun command in `docs/web-nat-cases.md`.
+The first TURN-on NAT run (`20261101T214325Z`) was cut off when the host root filesystem ran out of metadata space; it was rerun in full in the
+ICE1a pass (`20261102T004117Z`, results in `docs/web-nat-cases.md`). Left over from that incident: stale endpoints of the dead containers in the
+networks `dvt_rig` and `dvt_nat-inside` ("endpoint with name dvt-transcoder-ref-1 already exists"); they were force-disconnected and the two networks
+(compose project `dvt` only) removed so that compose could recreate them.
 
 ## Commands
 
@@ -97,6 +95,9 @@ DVT_USRP_DYNAMIC=1 DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config
 # stage 4 (TURN on, about 1 h; TURN off: drop turn.toml)
 DVT_USRP_DYNAMIC=1 DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/turn.toml \
   scripts/run.sh -m rig --capture --profile web,browser,nat -- cases/test_web_nat.py
+# K22 / K22b (about 26 minutes; guest.toml switches guest Listen on)
+DVT_USRP_DYNAMIC=1 DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/guest.toml \
+  scripts/run.sh -m rig --profile web,browser -- cases/test_web_k22.py
 # T14
 DVT_TRANSCODER_FAKE=1 DVT_USRP_DYNAMIC=1 scripts/run.sh -m crossmode --capture -- cases/test_crossmode_exact.py cases/test_crossmode_failure.py
 # M17, data ident, P19 (import launch for P19)

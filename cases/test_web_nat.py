@@ -14,13 +14,17 @@ criteria") are asserted.
   c  test_turn_relay                    UDP to the media port dropped: the page must use the relay; selected pair is
                                         relay, audio plays, one GET /rtc/ice, credential format, nothing secret in
                                         the page (needs turn.toml)
-  d  test_blackhole_resume_and_failure  2, 3, 5 s UDP blackholes resume without a new offer; longer ones until ICE
-                                        fails: the measured failure interval; manual reconnect with a new offer (slow)
+  d  test_blackhole_resume_and_failure  ICE1a: 2, 3, 5 s UDP blackholes resume without a new offer; from 'disconnected'
+                                        the page says "Connection interrupted. Waiting to resume." (12, 16, 20 s) and waits
+                                        12 s; 12 and 16 s are recorded (resumed, or lost: from which side), 20 s must end
+                                        with "Connection lost. Connect again manually."; a manual connect = one new offer (slow)
+  d2 test_talk_is_released_at_disconnected_and_needs_a_fresh_press  Talk held during a blackhole: released at 'disconnected',
+                                        a held button does not resume after recovery, a fresh press goes on air (slow)
   e  test_turn_credential_expiry        relay session behind the symmetric NAT longer than turn_ttl (slow)
   f  test_ice_404_goes_direct           no TURN configured: GET /rtc/ice answers 404 and the page goes direct
   g  test_ice_429_goes_direct           third connect within a minute: 429 from the issuer, the page goes direct
 
-Calibrated against dv-router:wip-13e7e70: the dashboard renders as served (DASH1, no workaround), the Listen card
+Calibrated against dv-router:wip-13e7e70 and rerun on wip-3b0724a (ICE1a, K22, K22b): the dashboard renders as served (DASH1, no workaround), the Listen card
 is driven through the WEB2 hooks of cases/web_pages.py and its data-state (connected, failed, closed), and the
 browser fixtures start only after GET /ready of dv-svc-web answered 200 (browser_fixtures.web_ready). The protocol
 talker is a USRP dynamic client (DVT_USRP_DYNAMIC=1).
@@ -37,19 +41,23 @@ pytest.importorskip("playwright.sync_api", reason="the playwright Python package
 import web_pages as pages  # noqa: E402
 from browser_fixtures import _rtc_end, _rtc_page  # noqa: E402
 from dvtest import browser as brlib  # noqa: E402
-from dvtest import nat, turn, web  # noqa: E402
+from dvtest import k22, nat, turn, web  # noqa: E402
 from nat_support import (  # noqa: E402
     CONNECT_BUDGET_S, JITTER_MAX_MS, JITTER_P99_MS, NAT_TYPES, IcePacer, NatRtc, rig_client, turn_on, turn_secret, turn_ttl)
-from webrtc_support import TONE_HZ, TONE_TOL_HZ, Talk, tone_frames, usrp_client  # noqa: E402
+from webrtc_support import (  # noqa: E402
+    MIC_UNAVAILABLE, TONE_HZ, TONE_TOL_HZ, Talk, on_air_or_end, press, pump_while, release, tone_frames, usrp_client, voice_frames,
+    wait_talk_text)
 
 pytestmark = [pytest.mark.rig, pytest.mark.web, pytest.mark.browser, pytest.mark.webrtc, pytest.mark.nat]
 
 ROOM_DIRECT, ROOM_TURN, ROOM_HOLE, ROOM_EXPIRE, ROOM_FALLBACK = "HJKLQ"
+ROOM_TALK = "W"
 PROTO_CALL = "N0TEST"
 EXPECTED_CLASS = {"full_cone": (nat.EI, nat.EI), "port_restricted": (nat.EI, nat.APD), "symmetric": (nat.APD, nat.APD)}
-BLACKHOLE_SHORT = (2, 3, 5)
-BLACKHOLE_LONG = (8, 12, 20, 30)
-BLACKHOLE_CAP_S = 150
+BLACKHOLE_SHORT = (2, 3, 5)          # must resume without a new offer
+BLACKHOLE_GRACE = (12,)              # the page's 12 s grace (ICE1a): recorded, the interrupted text is asserted
+BLACKHOLE_EDGE_ZONE = (16,)          # between the edge's 15 s STUN timeout and the end of the page's grace: recorded
+BLACKHOLE_LONG = (20,)               # clearly longer than the grace: must end with "Connection lost. Connect again manually."
 EXPIRY_OBSERVE_S = int(os.environ.get("DVT_NAT_EXPIRY_S", "660"))
 _SEEN = set()
 _PACER = IcePacer()
@@ -87,6 +95,8 @@ def nat_users(web_operator, web_user):
         web_user("N0NA%d" % i, may_tx=False)
     for i in range(1, len(brlib.ENGINES) + 1):
         web_user("N0NB%d" % i, may_tx=False)
+    for i in range(1, len(brlib.ENGINES) + 1):
+        web_user("N0NT%d" % i, may_tx=True)
 
 
 @pytest.fixture(scope="session")
@@ -349,44 +359,76 @@ def test_turn_relay(engine, nat_type, nat_page, nat_ctl, target):
 
 # ---------------------------------------------------------------------------------------- d
 
-SETTLE_S = 10.0          # how long after the end of a blackhole the page is watched for a late loss (Firefox reports
-                         # the broken path only after the blackhole is over)
+SETTLE_S = 10.0          # how long after the end of a blackhole the page must stay connected before it counts as resumed
+                         # (Firefox reports the broken path only after the blackhole is over)
 
 
 def window(rtc, nat_ctl, seconds):
-    """One UDP blackhole of `seconds` during a listen session, watched until SETTLE_S after its end; returns what the
-    page did: whether it gave up (`lost`, `lost_wall_s` = seconds from the start of the blackhole to the poll that saw
-    the page's loss text or a closed peer, polled every 0.25 s) and the page-clock state changes relative to the start."""
+    """One UDP blackhole of `seconds` during a listen session. ICE1a: the page shows "Connection interrupted. Waiting to
+    resume." at the first 'disconnected' and gives up 12 s later ("Connection lost. Connect again manually.") unless
+    connectivity returns. Polled every 0.25 s from the start of the break until the page has been connected and
+    "Listening" for SETTLE_S after the break (resumed), or it gave up (`lost`, `lost_wall_s` = seconds from the start of
+    the blackhole to the poll that saw the loss). Returns what the page did, with `interrupted` (the interrupted status
+    text or data-state 'disconnected' was seen), `interrupted_first_s`, `lost_during_break` and the page-clock state
+    changes relative to the start."""
     offers = len(rtc.offers)
     t0 = rtc.clock()
     nat_ctl.ctl("blackhole", state="for", seconds=seconds)
     wall = time.monotonic()
     lost, lost_wall = False, None
-    while time.monotonic() - wall < seconds + SETTLE_S:
-        time.sleep(0.25)
-        st = rtc.state() or {}
-        if rtc.lost_text() or st.get("connection") in ("failed", "closed"):
-            lost, lost_wall = True, time.monotonic() - wall
+    interrupted_first = None
+    stable_since = None
+    texts = []
+    while True:
+        elapsed = time.monotonic() - wall
+        if elapsed > seconds + SETTLE_S + k22.GRACE_S + 6.0:
             break
-    if not lost:                                    # the session is up: wait for the status line of a listening page
-        deadline = time.monotonic() + 10.0
-        while time.monotonic() < deadline and not rtc.status().startswith("Listening"):
-            time.sleep(0.25)
+        time.sleep(0.25)
+        elapsed = time.monotonic() - wall
+        status = rtc.status()
+        st = rtc.state() or {}
+        if not texts or texts[-1] != status:
+            texts.append(status)
+        if rtc.lost_text() or st.get("connection") in ("failed", "closed"):
+            lost, lost_wall = True, elapsed
+            break
+        if status == pages.LISTEN_INTERRUPTED_TEXT or rtc.panel_state() == "disconnected":
+            interrupted_first = elapsed if interrupted_first is None else interrupted_first
+            stable_since = None
+        elif elapsed >= seconds and st.get("connection") == "connected" and status.startswith("Listening"):
+            stable_since = stable_since if stable_since is not None else time.monotonic()
+            if time.monotonic() - stable_since >= SETTLE_S:
+                break
+        else:
+            stable_since = None
     events = [(round(t - t0), st) for t, st in rtc.state_events(t0)]
     first = {}
     for ms, st in events:
         first.setdefault(st, ms)
-    return {"seconds": seconds, "lost": lost, "lost_wall_s": round(lost_wall, 2) if lost_wall else None, "first_state_ms": first,
-            "events": events, "status": rtc.status(), "new_offers": len(rtc.offers) - offers,
-            "router": nat_ctl.status().get("last_blackhole"), "peer": (rtc.state() or {}).get("connection")}
+    w = {"seconds": seconds, "lost": lost, "lost_wall_s": round(lost_wall, 2) if lost_wall else None, "first_state_ms": first,
+         "events": events, "status": rtc.status(), "statuses": texts[:8], "new_offers": len(rtc.offers) - offers,
+         "interrupted": interrupted_first is not None or "ice:disconnected" in first or "conn:disconnected" in first,
+         "interrupted_text_seen": pages.LISTEN_INTERRUPTED_TEXT in texts,
+         "interrupted_first_s": round(interrupted_first, 2) if interrupted_first is not None else None,
+         "lost_during_break": bool(lost and lost_wall < seconds),
+         "router": nat_ctl.status().get("last_blackhole"), "peer": (rtc.state() or {}).get("connection")}
+    if lost:
+        w["judge"] = k22.judge_loss(first, w["lost_wall_s"], seconds)
+        remaining = seconds - (time.monotonic() - wall)
+        if remaining > 0:
+            time.sleep(remaining + 0.5)                 # let the router end the break before the manual connect
+    return w
 
 
 @pytest.mark.slow
 def test_blackhole_resume_and_failure(engine, nat_type, nat_page, nat_ctl, target):
-    """A UDP blackhole during a listen session: 2, 3 and 5 s must resume without a new offer; then longer ones
-    (8, 12, 20, 30 s, then open ended up to 150 s) until the page loses the connection: the measured failure
-    interval. After a loss the page must ask the user to connect again (no automatic offer) and a manual
-    reconnect with a new offer must work. ICE restart and automatic reconnect are not built (DV-Router ICE1)."""
+    """A UDP blackhole during a listen session (ICE1a, web.md "Listen"): 2, 3 and 5 s must resume without a new offer;
+    from the first ICE / peer 'disconnected' the page shows "Connection interrupted. Waiting to resume." (asserted for
+    the 12 s and longer breaks) and waits 12 s; a break clearly longer than that (20 s) must end with "Connection lost.
+    Connect again manually."; the 12 s and 16 s breaks are recorded (resumed, or lost: from which side: the page's grace
+    expiry or the engine's ICE failure after the edge removed the peer, which the edge does 15 s after the last STUN
+    request). After every loss the page sends no offer by itself and a manual connect sends exactly one new offer with
+    a new circuit and audio flows."""
     bp = nat_page
     rtc = NatRtc(bp)
     rtc.open()
@@ -402,75 +444,199 @@ def test_blackhole_resume_and_failure(engine, nat_type, nat_page, nat_ctl, targe
         peer.close()
 
 
+def _manual_reconnect(engine, nat_type, bp, rtc, target, peer, seconds):
+    """After the page gave up: no offer by itself, the documented text, a Listen / Connect button, then one manual
+    connect = exactly one new offer with a new circuit, and audio. Returns the violations."""
+    bad = []
+    offers_before = len(rtc.offers)
+    time.sleep(4.0)
+    text = rtc.status()
+    note(engine, nat_type, "page text after the %s s loss" % seconds, text)
+    if text != pages.LISTEN_LOST_TEXT:
+        web.finding("%s / %s: after the loss the page says %r, web.md documents %r"
+                    % (brlib.label(engine), nat_type, text, pages.LISTEN_LOST_TEXT))
+    assert len(rtc.offers) == offers_before, "the page sent a new offer by itself after the loss"
+    assert pages.listen_button(bp.page).inner_text().strip().startswith("Listen"), "no Listen / Connect button after the loss"
+    pace_ice(bp, 1)
+    rtc.connect(ROOM_HOLE, timeout_s=25.0)
+    used_ice(bp, rtc)
+    if len(rtc.offers) != offers_before + 1:
+        bad.append("a manual reconnect must send exactly one new offer (%d sent)" % (len(rtc.offers) - offers_before))
+    if len(set(rtc.offers)) != len(rtc.offers):
+        bad.append("the new offer got the circuit of an old one")
+    ok, got = short_over_heard(rtc, target, ROOM_HOLE, peer=peer)
+    if not ok:
+        bad.append("no audio after the manual reconnect (%d packets)" % got)
+    return bad
+
+
 def _blackhole_body(engine, nat_type, bp, rtc, nat_ctl, target, peer):
     ok, got = short_over_heard(rtc, target, ROOM_HOLE, peer=peer)
     assert ok, "no audio before the first blackhole (%d packets)" % got
 
-    results, violations, failed_at = [], [], None
-    for seconds in BLACKHOLE_SHORT + BLACKHOLE_LONG:
+    short_bad, other_bad, results = [], [], []
+    for seconds in BLACKHOLE_SHORT + BLACKHOLE_GRACE + BLACKHOLE_EDGE_ZONE + BLACKHOLE_LONG:
         w = window(rtc, nat_ctl, seconds)
+        results.append(w)
         if not w["lost"]:
             heard, packets = short_over_heard(rtc, target, ROOM_HOLE, peer=peer)
             w["audio_after"], w["audio_packets"], w["over_counters"] = heard, packets, rtc.last_over
-        results.append(w)
-        note(engine, nat_type, "blackhole %d s" % seconds, {k: w[k] for k in w if k != "events"} | {"events": w["events"][:6]})
+        note(engine, nat_type, "blackhole %d s" % seconds, {k: w[k] for k in w if k != "events"} | {"events": w["events"][:8]})
+        bad = short_bad if seconds <= max(BLACKHOLE_SHORT) else other_bad
+        if seconds <= max(BLACKHOLE_SHORT):
+            if w["lost"]:
+                bad.append("a %d s UDP blackhole ended the session (it must resume without a new offer): %s" % (seconds, w["events"]))
+            elif w["new_offers"] or not w["audio_after"]:
+                bad.append("%d s blackhole: new offers %d, audio after %s" % (seconds, w["new_offers"], w.get("audio_packets")))
+        else:
+            if seconds >= min(BLACKHOLE_GRACE):
+                if not w["interrupted"]:
+                    bad.append("%d s blackhole: the page never showed %r (no ICE / peer 'disconnected' seen)"
+                               % (seconds, pages.LISTEN_INTERRUPTED_TEXT))
+                elif not w["interrupted_text_seen"]:
+                    bad.append("%d s blackhole: 'disconnected' fired (%s) but the status line never read %r (statuses %s)"
+                               % (seconds, w["first_state_ms"], pages.LISTEN_INTERRUPTED_TEXT, w["statuses"]))
+            if seconds >= min(BLACKHOLE_LONG) and not w["lost"]:
+                bad.append("a %d s blackhole did not end the session (the 12 s grace should have expired)" % seconds)
+            if not w["lost"] and (w["new_offers"] or not w.get("audio_after")):
+                bad.append("%d s blackhole resumed with new offers %d / audio after %s" % (seconds, w["new_offers"], w.get("audio_packets")))
+            if w["lost"]:
+                note(engine, nat_type, "blackhole %d s: how it ended" % seconds, {
+                    "judge": w["judge"], "lost_wall_s": w["lost_wall_s"], "status": w["status"],
+                    "first_ice_disconnected_ms": w["first_state_ms"].get("ice:disconnected"),
+                    "first_ice_failed_ms": w["first_state_ms"].get("ice:failed")})
         if w["lost"]:
-            failed_at = w
-            if seconds <= max(BLACKHOLE_SHORT):
-                violations.append("a %d s UDP blackhole ended the session (it must resume without a new offer): %s" % (seconds, w["events"]))
-            break
-        if w["new_offers"] or not w["audio_after"]:
-            violations.append("%d s blackhole: new offers %d, audio after %s" % (seconds, w["new_offers"], w.get("audio_packets")))
-            break
-    if failed_at is None:
-        # open ended: until the page gives up (cap)
-        offers = len(rtc.offers)
-        t0 = rtc.clock()
+            fixes = _manual_reconnect(engine, nat_type, bp, rtc, target, peer, seconds)
+            (short_bad if seconds <= max(BLACKHOLE_SHORT) else other_bad).extend(fixes)
+    nat_ctl.ctl("blackhole", state="off")
+    note(engine, nat_type, "blackhole summary", [
+        {"s": w["seconds"], "outcome": "lost" if w["lost"] else "resumed", "interrupted": w["interrupted"],
+         "lost_during_break": w["lost_during_break"], "side": (w.get("judge") or {}).get("side"),
+         "lost_wall_s": w["lost_wall_s"], "new_offers": w["new_offers"]} for w in results])
+    assert not short_bad and not other_bad, short_bad + other_bad
+
+
+def _talk_user(engine):
+    return "N0NT%d" % (brlib.ENGINES.index(engine) + 1)
+
+
+@pytest.fixture
+def nat_talk_page(nat_ctl, engine, engine_browsers, web_base_url, request, web_user):
+    """A page signed in as the may_tx account of the engine, with the microphone permission (Chromium, WebKit) or the
+    fake-device prefs (Firefox)."""
+    user = web_user(_talk_user(engine), may_tx=True)
+    bp = _rtc_page(engine, engine_browsers, web_base_url, request, user, talk=True)
+    bp.nat_key = user.callsign
+    yield bp
+    _rtc_end(bp, request)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("nat_type", ["port_restricted"], indirect=True)
+def test_talk_is_released_at_disconnected_and_needs_a_fresh_press(engine, nat_type, nat_talk_page, nat_ctl, target):
+    """ICE1a (web.md "Listen"): while the Talk button is held, a UDP blackhole makes the browser report 'disconnected';
+    the page releases Talk at once (the status leaves "On air", the microphone is muted; in a blackhole the 4 s PTT
+    watchdog has already ended the over at about 3.4 s, before any engine reports 'disconnected', so the timeline is
+    recorded), keeps listening, and when
+    connectivity returns inside the grace window the held button does NOT resume the transmission: the protocol listener
+    hears nothing new while the button stays down, and a fresh press goes on air again. One NAT type (port restricted)
+    per engine."""
+    bp = nat_talk_page
+    rtc = NatRtc(bp)
+    rtc.open()
+    assert pages.talk_button(bp.page).inner_text().strip() == "Hold Talk"
+    pace_ice(bp, 1)
+    rtc.connect(ROOM_TALK, timeout_s=25.0)
+    used_ice(bp, rtc)
+    listener = usrp_client(target, PROTO_CALL, ROOM_TALK)
+    try:
+        press(rtc)
+        text, took = wait_talk_text(rtc, on_air_or_end, 30.0)
+        if text.startswith(MIC_UNAVAILABLE):
+            release(rtc)
+            note(engine, nat_type, "talk during blackhole: fake microphone", "not usable (%r)" % text)
+            pytest.skip("%s: no fake microphone (talk status %r)" % (brlib.label(engine), text))
+        assert text == pages.TALK_ON_AIR_TEXT, "talk status %r after pressing (panel %r)" % (text, rtc.status())
+        pump_while(listener, 1.5)
+        before = len(voice_frames(listener))
+        assert before > 0, "no voice frames at the protocol listener while on air"
+
         nat_ctl.ctl("blackhole", state="on")
         wall = time.monotonic()
-        while time.monotonic() - wall < BLACKHOLE_CAP_S and not rtc.lost_text():
-            time.sleep(0.25)
-        lost_wall = time.monotonic() - wall
-        events = [(round(t_ - t0), st) for t_, st in rtc.state_events(t0)]
-        failed_at = {"seconds": "open", "lost": rtc.lost_text(), "lost_wall_s": round(lost_wall, 2), "events": events, "status": rtc.status(), "new_offers": len(rtc.offers) - offers,
-                     "first_state_ms": {}}
-        for ms, st in events:
-            failed_at["first_state_ms"].setdefault(st, ms)
-        results.append(failed_at)
-        note(engine, nat_type, "blackhole open ended", failed_at)
-    nat_ctl.ctl("blackhole", state="off")
-
-    fs = failed_at["first_state_ms"]
-    interval = {"shortest_window_s": failed_at["seconds"], "first_ice_disconnected_ms": fs.get("ice:disconnected"),
-                "first_ice_failed_ms": fs.get("ice:failed"), "first_conn_disconnected_ms": fs.get("conn:disconnected"),
-                "first_conn_failed_ms": fs.get("conn:failed"), "lost_seen_by_poll_s": failed_at.get("lost_wall_s"), "page_text": failed_at["status"], "events": failed_at["events"][:8]}
-    note(engine, nat_type, "ICE failure interval", interval)
-
-    # after the loss: the page asks the user to connect again, no automatic offer, manual reconnect works
-    if failed_at["lost"]:
-        offers_before = len(rtc.offers)
-        time.sleep(4.0)
-        text = rtc.status()
-        note(engine, nat_type, "page text after the loss", text)
-        if "connect again" not in text.lower():
-            web.finding("%s / %s: after the loss the page says %r, web.md documents 'Connection lost. Connect again manually.'"
-                        % (brlib.label(engine), nat_type, text))
-        assert len(rtc.offers) == offers_before, "the page sent a new offer by itself after the loss"
-        assert pages.listen_button(bp.page).inner_text().strip().startswith("Listen"), "no Listen / Connect button after the loss"
-        rtc.connect(ROOM_HOLE, timeout_s=25.0)
-        used_ice(bp, rtc)
-        assert len(rtc.offers) == offers_before + 1, "a manual reconnect must send exactly one new offer"
-        assert len(set(rtc.offers)) == len(rtc.offers), "the new offer got the circuit of an old one"
-        ok, got = short_over_heard(rtc, target, ROOM_HOLE, peer=peer)
-        assert ok, "no audio after the manual reconnect (%d packets)" % got
-    else:
-        violations.append("the page never gave up in %d s of blackhole: ICE did not fail" % BLACKHOLE_CAP_S)
-    if violations and engine == "firefox":
-        # N1 (stage 4): Playwright Firefox ends the session on a 2-5 s UDP blackhole in every run, the adopted
-        # criterion (resume without a new offer) is not met. Judged last, so everything above still ran; an
-        # expected failure until Firefox or the page changes, and it passes silently when it is met.
-        pytest.xfail("N1: " + "; ".join(violations))
-    assert not violations, violations
+        seen = None
+        timeline = []                                   # (seconds, listen status, talk status) at every change
+        while time.monotonic() - wall < 40.0:
+            listener.pump(0.05)
+            status, talk_now = rtc.status(), rtc.talk_status()
+            if not timeline or timeline[-1][1:] != (status, talk_now):
+                timeline.append((round(time.monotonic() - wall, 2), status, talk_now))
+            if status == pages.LISTEN_INTERRUPTED_TEXT or rtc.panel_state() == "disconnected":
+                seen = {"after_s": round(time.monotonic() - wall, 2), "listen": status, "talk": talk_now}
+                break
+            if rtc.lost_text():
+                break
+        if seen is None:
+            nat_ctl.ctl("blackhole", state="off")
+            note(engine, nat_type, "talk during blackhole: the page ended before 'disconnected'", timeline[:8])
+            if "release timed out" in rtc.status().lower() or "release timed out" in rtc.talk_status().lower():
+                # web.md (PTT): no renewal ack in 4 s ends the over, and no terminal reply to the release within 4 s closes
+                # the peer; that acknowledgement deadline is suspended only from the browser's 'disconnected' on. An engine
+                # that reports 'disconnected' later than about 8 s after the start of the break (Firefox: 4.6 to 10.9 s) is
+                # ended by it first: the documented path, so the ICE1a release at 'disconnected' was not reached here.
+                web.finding("%s / %s: with Talk held the page ended with %r before the engine reported 'disconnected' "
+                            "(timeline %s): the 4 s release acknowledgement deadline of web.md ran out first"
+                            % (brlib.label(engine), nat_type, rtc.status(), timeline[:6]))
+                pytest.skip("%s: the engine reported 'disconnected' later than the 4 s PTT release deadline (documented 'Talk "
+                            "release timed out'); the release-at-'disconnected' rule was not reached" % brlib.label(engine))
+        assert seen is not None, "the page never showed 'disconnected' in 40 s of blackhole (status %r)" % rtc.status()
+        seen["timeline"] = timeline[:8]
+        note(engine, nat_type, "talk during blackhole: at the first 'disconnected'", seen)
+        assert seen["talk"] != pages.TALK_ON_AIR_TEXT, "Talk was not released at 'disconnected': %r" % seen
+        frames_at_release = len(voice_frames(listener))
+        pump_while(listener, 2.0)                      # the button is still down, the path still broken
+        nat_ctl.ctl("blackhole", state="off")
+        t_back = time.monotonic()
+        end = t_back + 30.0
+        while time.monotonic() < end and not (rtc.status().startswith("Listening") and (rtc.state() or {}).get("connection") == "connected"):
+            listener.pump(0.05)
+            if rtc.lost_text():
+                break
+        resumed = rtc.status().startswith("Listening")
+        note(engine, nat_type, "talk during blackhole: after the path returned", {
+            "resumed": resumed, "seconds": round(time.monotonic() - t_back, 2), "listen": rtc.status(), "talk": rtc.talk_status()})
+        assert resumed, "the session did not resume 2 s after 'disconnected' (status %r)" % rtc.status()
+        assert rtc.talk_status() != pages.TALK_ON_AIR_TEXT, "the held button went back on air after recovery"
+        frames_resumed = len(voice_frames(listener))
+        pump_while(listener, 3.0)
+        after_hold = len(voice_frames(listener))
+        late = after_hold - frames_resumed
+        talk_after = rtc.talk_status()
+        note(engine, nat_type, "talk during blackhole: held button after recovery", {
+            "voice_frames_during_interruption": frames_resumed - frames_at_release, "voice_frames_in_3s_after_recovery": late,
+            "talk": talk_after})
+        assert talk_after != pages.TALK_ON_AIR_TEXT, "the held button resumed the transmission (status %r)" % talk_after
+        assert late <= 5, "%d voice frames reached the protocol listener in 3 s after recovery while the button was only held" % late
+        release(rtc)
+        time.sleep(0.5)
+        # a fresh press goes on air again
+        listener.inbox.clear()
+        press(rtc)
+        text2, took2 = wait_talk_text(rtc, on_air_or_end, 30.0)
+        note(engine, nat_type, "talk during blackhole: fresh press", {"status": text2, "seconds": round(took2, 2) if took2 else None})
+        assert text2 == pages.TALK_ON_AIR_TEXT, "a fresh press after recovery did not go on air: %r" % text2
+        pump_while(listener, 2.0)
+        fresh = len(voice_frames(listener))
+        release(rtc)
+        ended, _t = wait_talk_text(rtc, lambda s: s != pages.TALK_ON_AIR_TEXT, 8.0)
+        note(engine, nat_type, "talk during blackhole: fresh press heard / after release", {"frames": fresh, "status": ended})
+        assert fresh > 50, "a fresh press after recovery: %d voice frames in 2 s" % fresh
+    finally:
+        try:
+            release(rtc)
+        except Exception:                               # noqa: BLE001
+            pass
+        nat_ctl.ctl("blackhole", state="off")
+        listener.close()
 
 
 # ---------------------------------------------------------------------------------------- e

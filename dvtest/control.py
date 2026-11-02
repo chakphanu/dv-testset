@@ -34,6 +34,8 @@ KILL_PROC_ALLOWED = {
     ("xlxd-sut", "dv-edge-p25"): ("KILL", "USR1"),
     ("xlxd-sut", "dv-codec-ambed"): ("KILL",),
     ("xlxd-sut", "dv-svc-web"): ("KILL",),       # resets the web service's in-memory limits and lockouts
+    ("xlxd-sut", "dv-edge-webrtc"): ("KILL",),   # K22: a dropped Disconnect, guests calling /rtc/alive meanwhile
+    ("xlxd-sut", "dv-svc-status"): ("KILL",),    # K22: the status hub's snapshots carry the guest proof
 }
 
 

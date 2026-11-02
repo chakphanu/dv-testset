@@ -270,6 +270,8 @@ def admin_sign_in_heading(page):
 
 # ---- Listen / Talk panel of the dashboard (public.js ListenPanel; shown on route #/ to a signed-in user)
 LISTEN_IDLE_TEXT = "Idle"
+LISTEN_INTERRUPTED_TEXT = "Connection interrupted. Waiting to resume."      # ICE1a: data-state disconnected
+LISTEN_LOST_TEXT = "Connection lost. Connect again manually."
 TALK_READY_TEXT = "Ready"
 TALK_ON_AIR_TEXT = "On air"
 TALK_RELEASED_TEXT = "Ended: Button released."          # talkStatus('ended', 'released')

@@ -313,6 +313,7 @@ another launch mode the variable draws a warning. Snippets in
 | `xlx-peer.toml` | `[[edges.xlx.peer]]` XLX998 at `<NET>.12` on modules `DE` |
 | `web.toml` | the web service, a persistent state dir and the WebRTC edge; added by `--profile web` itself (next section) |
 | `recorder.toml` | the recorder (K14b): `[recorder] dir = "/var/lib/dv-recorder"`, `keep_days = 7`, `max_gb = 1`; naming it in `DVT_SUT_CONFIG_EXTRA` is the switch (see "Recorder" in the web profile section) |
+| `guest.toml` | `[web] guest_listen = true`: anonymous guests may Listen (two per IPv4, no Talk); used by the K22 cases (`docs/web-k22-cases.md`); name it after `web.toml` |
 
 The XLX peer row names `xlxd-peer-sut` (`<NET>.12`, XLX998), not `xlxd-peer-ref`
 (`.13`): `xlxd-peer-sut` is configured to link with `xlxd-sut` (`.11`, XLX999),
@@ -564,7 +565,7 @@ namespace (`docker run --pid container:<id>`, `dvtest.limits.docker_run_args()`
 caps, no network, only CAP_KILL) and walks `/proc/<pid>/comm`: a process is
 signalled only when its comm equals `<process>` exactly and it is not a zombie.
 Allow-list: `dv-edge-xlx`, `dv-edge-nxdn`, `dv-edge-p25` with `KILL` or `USR1` (quiet restart: the edge saves its sessions, exits and the
-launcher respawns it) the codec worker `dv-codec-ambed` and the web service `dv-svc-web` (its in-memory login/register limits and lockouts) with `KILL` only; the launcher `dv-router` is never signalled (no handler, a
+launcher respawns it) the codec worker `dv-codec-ambed`, the web service `dv-svc-web` (its in-memory login/register limits and lockouts), the WebRTC edge `dv-edge-webrtc` and the status hub `dv-svc-status` (K22 cases, `docs/web-k22-cases.md`) with `KILL` only; the launcher `dv-router` is never signalled (no handler, a
 stray signal kills the node); anything else
 is `error refused`. `<id>.out` has `pid=<n>` per process and `t_kill=<epoch s>`
 (taken in the container right after the signals); `error 3` = no such process.

@@ -1,11 +1,11 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Web unit, stage 4: NAT behaviour of the browser WebRTC path
 
-`cases/test_web_nat.py` (7 case functions, 45 runs: classification x3 NAT types, then each browser case on three engines
-x three NAT types, the expiry case behind the symmetric NAT only, the 429 case behind the port restricted NAT) and the helpers
+`cases/test_web_nat.py` (8 case functions, 48 runs: classification x3 NAT types, then each browser case on three engines
+x three NAT types, the expiry case behind the symmetric NAT only, the 429 case and the talk-during-blackhole case behind the port restricted NAT) and the helpers
 `cases/nat_support.py`, `dvtest/nat.py`, `dvtest/turn.py`. Built on the web, browser and WebRTC stages (`docs/rig.md` "Web
 profile", "Browser profile", `docs/web-browser-cases.md`) and on the new compose profile `nat` (`docs/rig.md` "NAT profile").
-Calibrated against the image **`dv-router:wip-5aa7cfd`** (native launch). DV-Router documents read: `docs/design/web.md` (WebRTC edge,
+Calibrated against the image **`dv-router:wip-5aa7cfd`** (native launch); the blackhole case was re-judged on **`dv-router:wip-3b0724a`** for ICE1a (section "ICE1a re-judgement"). DV-Router documents read: `docs/design/web.md` (WebRTC edge,
 signalling handoff, ICE/TURN), `docs/design/deployment.md` ("Test rig", "Owner-run TURN"), `docs/project/testing.md` ("Browser/NAT rig
 criteria"), `config.md` (`web.turn_*`), from a tree a few documentation commits ahead of the image (the TURN issuer and the page's
 use of it, WTURN1, are in the image).
@@ -77,7 +77,8 @@ never goes on the wire, only the HMAC credential) and found nothing.
 | `test_nat_classification` (3) | the router's three types classify as built (table below) |
 | `test_direct_listen` (9) | answer to `connected` and answer to first audio packet within 10 s; 20 s of arrival timing in the page with p99 <= 20 ms and max <= 60 ms; one `GET /rtc/ice` (200 with TURN, 404 without); the selected pair is not a relay; the tone (700 Hz) where the engine feeds Web Audio |
 | `test_turn_relay` (9) | `drop_direct` on (the router drops UDP to `<net>.11:50000`): one `GET /rtc/ice` = 200 with `X-DV-RTC-Session`; the credential has the shape `<expiry>:<opaque>`, expiry = issue time + `turn_ttl`, credential = base64(HMAC-SHA1(secret, username)); the selected pair is `relay`; audio plays within 10 s of the answer; the credential and the secret are in no page text, HTML, web storage, cookie, console line or page error; datagrams were dropped toward the media port |
-| `test_blackhole_resume_and_failure` (9, slow) | UDP blackholes of 2, 3, 5 s end with the same peer, the same circuit (no new `POST /rtc/offer`) and audio; then 8, 12, 20, 30 s and an open one (cap 150 s) until the page gives up: the failure interval is recorded; after the loss the page says to connect again, sends no offer by itself, and a manual connect sends exactly one new offer with a new circuit and audio flows |
+| `test_blackhole_resume_and_failure` (9, slow) | ICE1a (wip-3b0724a): UDP blackholes of 2, 3, 5 s end with the same peer, the same circuit (no new `POST /rtc/offer`) and audio; for 12, 16 and 20 s the status line must have read "Connection interrupted. Waiting to resume." (asserted) and the outcome is recorded (resumed, or lost and from which side); a 20 s break (clearly longer than the 12 s grace) must end with "Connection lost. Connect again manually."; after every loss the page sends no offer by itself and a manual connect sends exactly one new offer with a new circuit and audio flows |
+| `test_talk_is_released_at_disconnected_and_needs_a_fresh_press` (3, slow) | port restricted NAT only: Talk held, blackhole on; at the first 'disconnected' ("Connection interrupted...") the talk status has left "On air"; 2 s later the path returns, the session resumes, the still-held button does not go back on air and the protocol listener hears nothing new in 3 s; a fresh press goes on air and is heard |
 | `test_turn_credential_expiry` (3, slow) | relay session behind the symmetric NAT for 660 s (`turn_ttl` 120 s, TURN permissions 300 s, allocation 600 s): a 3 s over every 12 s; audio must work before the credential expires; what happens after is recorded |
 | `test_ice_404_goes_direct` (9, run without `turn.toml`) | `GET /rtc/ice` = 404 once, no credential, direct connection, audio |
 | `test_ice_429_goes_direct` (3) | the third connect of one login within a minute gets 429 (burst of two), the page still connects direct, the fourth is 429 too |
@@ -93,7 +94,12 @@ and cannot give a packet cadence).
 
 Run `out/20261101T172915Z` (TURN on; classification, direct, relay, blackhole, expiry), `out/20261101T182350Z` (no TURN: direct and the
 404 case), `out/20261101T183126Z` (TURN on: classification and the 429 case, after that case got its accounts up front); image `dv-router:wip-5aa7cfd`; all measurements from the
-tester's `out/<run>/web/nat-results.jsonl`, each also a `FINDING:` line in `out/<run>/web-findings.txt`.
+tester's `out/<run>/web/nat-results.jsonl`, each also a `FINDING:` line in `out/<run>/web-findings.txt`. The direct, relay, expiry and 429 tables below
+are the 5aa7cfd measurements; they were not redone on 3b0724a except that the same cases passed in the ICE1a run (TURN on, `out/20261102T004117Z`, 1 h 2 min, wip-3b0724a):
+**36 passed, 2 failed, 1 setup error, 9 skipped (the 404 cases, TURN is on)**. The failures: the Firefox talk case (N10; the case now skips for that documented reason),
+and two Playwright WebKit browser-connection losses at the 40 to 60 minute mark (`Page.goto: Provisional navigation canceled` in the setup of the WebKit expiry case, the
+WebKit 429 case `TargetClosedError`), the known "shared run-server dies in long sessions" matter of `docs/results-adaptation.md`. The WebKit expiry and 429 cases and the talk case were rerun alone
+(`out/20261102T014441Z`, TURN on: WebKit expiry 660 s with the relay pair and all rounds heard, `/rtc/alive` 71 posts, WebKit 429 `[200, 200, 429]`, 2 passed, the Firefox talk case skipped).
 
 ### Classification self-test (mapping as seen by the reflectors; unsolicited datagrams reaching the inside socket)
 
@@ -149,7 +155,7 @@ page, the username expiry was `turn_ttl` after issue and the credential matched 
 
 The relay path meets the direct-path limits too (worst max 11 ms). Playwright WebKit does not report `relayProtocol` in `getStats`.
 
-### UDP blackhole and the ICE failure interval (`out/20261101T172915Z`; the router's counters showed datagrams dropped in every window)
+### UDP blackhole and the ICE failure interval, BEFORE ICE1a (image 5aa7cfd, `out/20261101T172915Z`; superseded by the next section)
 
 "Lost" means the page gave up: status "Connection lost. Connect again manually.", peer closed, no new offer by itself. The interval
 column is the page-clock time from the start of the blackhole to the browser's ICE state `disconnected` (the page closes its peer at
@@ -176,6 +182,57 @@ of the NAT type** (the break is on the path, not in the mapping: after it the ma
 Every loss was followed by the documented behaviour: "Connection lost. Connect again manually.", no automatic offer, a manual
 connect sent exactly one new `POST /rtc/offer` with a new circuit and audio flowed again (all 9 runs).
 
+### ICE1a re-judgement (image `dv-router:wip-3b0724a`, TURN on, `out/20261102T004117Z`; 2 s, 3 s, 5 s, 12 s, 16 s, 20 s per engine x NAT type)
+
+DV-Router ICE1a (web.md "Listen", `web/site/public.js`): at the first ICE or peer `disconnected` the page shows "Connection interrupted.
+Waiting to resume.", keeps the peer, releases Talk at once, and gives up 12 s later with "Connection lost. Connect again manually." unless
+connectivity returns; peer or ICE `failed` closes at once; the edge drops an established peer 15 s after the last STUN request. The case now
+breaks the UDP path for 2, 3, 5, 12, 16 and 20 s in one session per (engine, NAT type); after every loss it checks the text, that no offer
+was sent by itself, and that a manual connect sends exactly one new offer with a new circuit and audio. Asserted: 2, 3, 5 s resume with no new
+offer and audio; for 12, 16, 20 s the status line read the interrupted text; the 20 s break is lost with the lost text. Recorded: the 12 s
+and 16 s outcomes and the side. All nine blackhole runs passed. `R` = resumed with the same peer and circuit, no new offer, audio after;
+`i` = the interrupted text was seen; `L` = lost; page-clock seconds are from the start of the break.
+
+| Engine | NAT | 2 s | 3 s | 5 s | 12 s | 16 s | 20 s |
+|--------|-----|-----|-----|-----|------|------|------|
+| Chromium | full cone | R | R | R | R i | L i, engine `failed` at 15.9 s | L i, engine `failed` at 15.1 s |
+| Chromium | port restricted | R | R | R | R i | L i, `failed` 15.9 s | L i, `failed` 15.1 s |
+| Chromium | symmetric | R | R | R | R i | L i, `failed` 15.8 s | L i, `failed` 15.1 s |
+| Firefox | full cone | R | R | R i | **L** i, grace expiry at 17.5 s | L i, grace 18.6 s | L i, grace 16.9 s |
+| Firefox | port restricted | R | R | R i | **L** i, grace 22.1 s | L i, grace 22.3 s | L i, grace 22.8 s |
+| Firefox | symmetric | R | R i | R i | **L** i, grace 20.7 s | L i, grace 17.3 s | L i, grace 17.7 s |
+| WebKit | full cone | R | R | R | R i | L i, ICE `failed` at 15.4 s | L i, `failed` at 17.2 s |
+| WebKit | port restricted | R | R | R | R i | L i, `failed` 15.1 s | L i, `failed` 17.2 s |
+| WebKit | symmetric | R | R | R | R i | L i, `failed` 15.1 s | L i, `failed` 17.4 s |
+
+**Interrupted text and times.** "Connection interrupted. Waiting to resume." was on the status line in every 12, 16 and 20 s run (27 of 27). First ICE
+`disconnected` after the start of the break: Chromium 5.1 to 6.0 s, Playwright WebKit 5.1 to 7.4 s, Firefox 4.6 to 10.8 s (it varies by run; in the
+2, 3 and 5 s runs Firefox reported `disconnected` 5.6 to 9.1 s after the start, i.e. after the break was over, and came back within the
+same second: it resumed, with the interrupted text for a moment in the 5 s runs).
+
+**N1 (Firefox 2, 3, 5 s).** Resumed with no new offer and audio in 9 of 9 (3 NAT types x 3 windows). The `xfail` for N1 is **removed** from the case.
+
+**How the 16 s and 20 s breaks ended, and from which side.** In Chromium and Playwright WebKit the engine itself declared the session `failed`
+(Chromium `conn:failed`, WebKit `ice:failed`) 10.0 s after it reported `disconnected`, i.e. 15.1 to 16.0 s after the start of the
+break for Chromium and 15.1 to 17.4 s for WebKit, so the page's 12 s grace (which would end 17 to 19 s after the start) is never reached in these two
+engines; the page reacts to `failed` at once. The edge's own 15 s STUN timeout falls in the same second, and nothing observable from the page tells the two apart (the
+listener gauge is published every 10 s). Firefox does not fail by itself in that time: its loss is the page's grace expiry, 12.0 s after its `disconnected` (the
+`judge_loss` gap is 12.0 +- 0.3 s), 16.9 to 22.8 s after the start. The 20 s break is lost in 9 of 9, in 8 of 9 while the break was still on (the exception: Firefox port restricted, 22.8 s). The 16 s break is lost in 9 of 9, in 4 of 9 while the break was still on (Chromium symmetric and the three WebKit runs).
+
+**12 s.** Chromium and Playwright WebKit resume in 6 of 6 runs (the engine had been disconnected for about 6 s; the edge still had the peer). Firefox is **lost** in 3 of 3 (page grace
+expiry 5.5 to 10.1 s after the break had ended): its ICE did not recover after the path came back inside the grace window. An earlier TURN-off run
+(`out/20261101T211249Z`, wip-3b0724a) had the Firefox full cone 12 s run not lost but without audio at the check; the outcome is not uniform.
+
+**Talk during a blackhole** (`test_talk_is_released_at_disconnected_and_needs_a_fresh_press`, port restricted NAT, direct path; runs
+`out/20261102T004117Z`, `out/20261102T014441Z`, `out/20261102T015751Z` for the timeline of Chromium and WebKit): Chromium and Playwright WebKit: with the button held, the talk
+status left "On air" for "Ready" **3.4 s after the start of the break** (the 4 s PTT watchdog of TALK1: no renewal ack from the edge), 2.2 s *before* the engine reported
+`disconnected` (5.6 to 5.7 s) and the interrupted text appeared; the session resumed 0.02 to 0.09 s after the path returned, the held button stayed
+"Ready" and the protocol listener got 0 voice frames during the interruption and in the 3 s after recovery; a fresh press went "On air" in 0.01 s and 91 to 102
+voice frames reached the listener in 2 s. So Talk is gone at 'disconnected' and a fresh press is needed, as ICE1a says, but in a UDP blackhole the **watchdog ends the over first**
+(no engine reports `disconnected` before about 4.6 s), so the page's release at `disconnected` has nothing left to release and is not what the case sees. Firefox:
+the same 3.4 s watchdog, then the 4 s release acknowledgement deadline ran out (about 7.4 s) before Firefox reported `disconnected` and the page closed with "Talk release timed out.
+Connect again manually." (N10); the case is skipped for Firefox with that reason.
+
 ### TURN credential expiry (symmetric NAT, relay only, 660 s)
 
 | Engine | Result |
@@ -192,13 +249,13 @@ connect sent exactly one new `POST /rtc/offer` with a new circuit and audio flow
 
 ## Findings (observed vs documented)
 
-Each is a `FINDING:` line; the numbered ones are the ones that differ from or add to the documents. The first is asserted by the case
-(the adopted criterion) and fails on Firefox; none of the others is asserted.
+Each is a `FINDING:` line; the numbered ones are the ones that differ from or add to the documents. N1 (the adopted criterion, 2-5 s
+resume) is asserted by the case and now holds on all three engines; none of the others is asserted.
 
 | # | Observed | Documented / expected |
 |---|----------|-----------------------|
-| N1 | **Firefox does not meet "a 2-5 s blackhole resumes without a new offer"**: in 6 of 6 runs (3 in the last full run, 3 earlier) a break of 2 s (twice), 3 s (once) or 5 s (three times) ended the session (ICE `disconnected` 4.6 to 8.3 s after the start of the break, even after the break was over). Chromium and Playwright WebKit pass 2, 3 and 5 s in every run (loss at 8 s) | testing.md: 2-5 s "shorter than the measured ICE failure interval" must resume; the interval was to be measured. It is 4.6 to 8.3 s for Firefox, so 5 s is not below it |
-| N2 | the page closes its peer at the first ICE `disconnected` of the engine (5 to 8 s), so the 30 s ICE `failed` of the engines is never reached and a listener loses audio after 5 to 8 s of silence on the path, not 30 s | web.md: "When the browser reports peer/ICE failure or disconnection ... closes the old peer ... Connection lost. Connect again manually." and "Browser detection time is not fixed by the page"; consistent, but the practical interval is the `disconnected` one |
+| N1 | (5aa7cfd) Firefox ended the session on a 2-5 s blackhole in 6 of 6 runs. **ICE1a (3b0724a): closed.** Firefox resumed 2, 3, 5 s in 9 of 9 runs (3 NAT types x 3 windows) with no new offer and audio; the xfail is removed from the case | testing.md: 2-5 s must resume without a new offer |
+| N2 | (5aa7cfd) the page closed its peer at the first ICE `disconnected` (5 to 8 s). **ICE1a: changed.** The page waits up to 12 s from `disconnected`; Chromium and WebKit fail by themselves 10.0 s after `disconnected` (15 to 17 s after the start of a break) so the grace is cut short by the engine there, Firefox waits the whole 12 s and loses the session by the page's grace | web.md ICE1a: 12 s grace, `failed` closes at once; consistent |
 | N3 | the page's loss does not fire `connectionstatechange` (the close is synchronous in the ICE handler): the first and only state event of the page in a loss is `iceconnectionstatechange: disconnected` | not documented |
 | N4 | the relay works through all three NAT types with a real coturn and the SUT's credentials; the selected pair is `relay`; the page makes one `GET /rtc/ice` per connect; username `<expiry>:<opaque>`, credential HMAC-SHA1 as documented; no secret or credential in the page | as documented (deployment.md "Owner-run TURN", web.md) |
 | N5 | an established relay session was not cut by the credential's expiry (120 s) in 660 s on any engine | deployment.md: "existing credentials expire at the issued timestamp"; what coturn does to a running allocation is not stated. The TTL of one credential is not the lifetime of a relay session |
@@ -206,6 +263,9 @@ Each is a `FINDING:` line; the numbered ones are the ones that differ from or ad
 | N7 | with TURN configured the browser also gathers a `srflx` candidate from coturn's STUN and the direct pair is `srflx` where the NAT keeps the mapping; without TURN the pair is `prflx` (the edge's STUN reply names the mapping) | not documented (no STUN server of the product) |
 | N8 | the capture check lists the browsers' STUN checks to `<SUT>:50000` as `other.unclassified` warnings (34 datagrams in the run) | known: dvcheck knows no STUN |
 | N9 | rig: the SUT's dynamic USRP hub keeps a closed client until its idle timeout; 36 new clients in 7 minutes (one per over) made later clients get no `REG:OK`, so the long cases reuse one client | rig matter, not a product claim |
+| N10 | with Talk held in a blackhole the over ends at 3.4 s (watchdog, no renewal ack for 4 s) on all three engines, before any `disconnected` (4.6 s at the earliest); on Chromium and WebKit the interrupted state follows at 5.6 s and the session resumes; on **Firefox** the 4 s release acknowledgement deadline (about 7.4 s) ran out before Firefox reported `disconnected` and the page closed the peer: "Talk release timed out. Connect again manually." | web.md: no renewal ack in 4 s ends the over; no terminal reply to the release within 4 s closes the peer, the deadline being suspended only from `disconnected` on. Consistent, but ICE1a's grace does not protect a talking Firefox, and the 'release at disconnected' rule cannot be isolated in a blackhole (the watchdog is first) |
+| N11 | ICE `failed` 10.0 s after `disconnected` in Chromium and Playwright WebKit, in every 16 s and 20 s run | not documented; the page's 12 s grace is longer than that, so these two engines never use it |
+| N12 | the edge's 15 s STUN timeout is not visible from a page; the silent-close probe of `docs/web-k22-cases.md` (K1) did not see the edge drop a silently closed peer within 100 s | web.md ICE1a: 15 s without a STUN request |
 
 Other FINDING lines (arrival statistics, pairs, connection times) are measurements, not differences.
 
@@ -218,20 +278,20 @@ Other FINDING lines (arrival statistics, pairs, connection times) are measuremen
 | IPv6, NAT64 | rig is IPv4 only (the edge needs `public_ips` in the socket's family) |
 | address-restricted cone | not built (the self-test would classify it as "restricted_cone" if it were) |
 | `turns:`, TURN over TCP, UDP-blocked networks | coturn without TLS and UDP only; TCP relay denied (`no-tcp-relay`) |
-| the engines' own ICE `failed` interval (30 s) | the page closes the peer at `disconnected`; a raw `RTCPeerConnection` page would be needed |
-| Talk (uplink) through the NAT and through the relay | only Listen is covered |
+| the engines' own ICE `failed` interval beyond a break of 20 s | measured through the page: Chromium and WebKit fail 10.0 s after `disconnected`; Firefox never fails inside the page's 12 s grace, so its own interval is not seen |
+| Talk (uplink) through the NAT and through the relay | Listen everywhere; Talk only in the blackhole case (port restricted NAT, direct) |
 | NAT mapping timeouts (UDP idle), port-exhaustion, `none` mode in a browser case | not exercised |
 | many listeners behind one NAT address (edge per-IP limits) | one listener at a time |
-| ICE restart, automatic reconnect | not built (DV-Router ICE1); nothing here asserts them |
+| ICE restart, automatic reconnect | not built (DV-Router ICE1); nothing here asserts them. ICE1a (grace window, no restart) is covered by the blackhole case |
 | ice 503 | not reachable (see above) |
 | ICE failure under packet loss or latency (netem) instead of a blackhole | netem sidecars exist but are not combined with the NAT profile |
 
 ## Rerun
 
 ```sh
-export XLXD_SUT_IMAGE=dv-router:wip-5aa7cfd DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-router DVT_SUT_LAUNCH=native \
+export XLXD_SUT_IMAGE=dv-router:wip-3b0724a DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-router DVT_SUT_LAUNCH=native \
   DVT_USRP_DYNAMIC=1 DVT_SUT_CONFIG=<template path>
-# TURN on: classification, direct, relay, blackhole, expiry, 429 (about 1 hour; the expiry cases are 11 minutes each)
+# TURN on: classification, direct, relay, blackhole (ICE1a, 2-20 s) and talk, expiry, 429 (about 1 hour; the expiry cases are 11 minutes each)
 DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/turn.toml \
   scripts/run.sh -m rig --capture --profile web,browser,nat -- cases/test_web_nat.py
 # TURN off: classification, direct, 404 fallback (7 minutes)
@@ -239,6 +299,6 @@ DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml \
   scripts/run.sh -m rig --capture --profile web,browser,nat -- cases/test_web_nat.py
 ```
 
-`-k classification`, `-k direct`, `-k turn_relay`, `-k blackhole`, `-k expiry`, `-k 429`, `-k 404` and `-k chromium` select parts; the cases
+`-k classification`, `-k direct`, `-k turn_relay`, `-k blackhole`, `-k talk`, `-k expiry`, `-k 429`, `-k 404` and `-k chromium` select parts (`--capture` is left out of the commands here: the cases do not need the capture check and a pcap makes the run directory larger); the cases
 that need TURN skip without `turn.toml` and the 404 case skips with it. `DVT_NAT_EXPIRY_S` (default 660) sets the length of the expiry
 case. Pull `COTURN_IMAGE` once (`docker pull coturn/coturn:4.18.0`). Run alone and one rig at a time (`scripts/run.sh` takes the lock).

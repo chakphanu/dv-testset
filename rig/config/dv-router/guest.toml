@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/rig.md): guest Listen (no account) for the K22 cases
+# (cases/test_web_k22.py, docs/web-k22-cases.md). Name it after web.toml; the web profile adds web.toml itself.
+# Guests listen only; DV-Router limits them to two per IPv4 address (or IPv6 /64) and 25 % of the listener cap.
+# [web] is merged into the template's own table (dvtest/sut_config.py), so only this key changes.
+[web]
+guest_listen = true
