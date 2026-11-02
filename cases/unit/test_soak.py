@@ -211,7 +211,7 @@ def test_flat_families_are_the_eleven_strict_ones_and_the_drops_family_is_judged
     assert soak.FLAT_OVERRIDES == {}                                         # starts empty, DV-Router rules on growth
     assert soak.DROPS_FAMILY == "dv_edge_drops_total" and soak.DROPS_FAMILY not in soak.FLAT_FAMILIES
     assert soak.DROPS_FAMILY in soak.SNAPSHOT_FAMILIES and len(soak.SNAPSHOT_FAMILIES) == 12
-    assert soak.DROPS_LEGIT == ("link_timeout", "no_session", "rx_ignored", "x_stale") and soak.DROPS_RATE_FLAG_PER_S == 1.0
+    assert soak.DROPS_LEGIT == ("link_timeout", "no_session", "rx_ignored", "x_stale", "id_held") and soak.DROPS_RATE_FLAG_PER_S == 1.0
     assert set(soak.LAZY_FAMILIES) == {"dv_edge_tx_refused_total", "dv_recorder_dropped_total", "dv_room_shell_errors_total"}
     assert set(soak.LAZY_FAMILIES) <= set(soak.FLAT_FAMILIES)
 

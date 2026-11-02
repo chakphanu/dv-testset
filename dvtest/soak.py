@@ -95,7 +95,7 @@ LAZY_FAMILIES = ("dv_edge_tx_refused_total", "dv_recorder_dropped_total", "dv_ro
 # by reason (judge_drops), not flat. Idle window: no reason grows. Measured window: a reason outside DROPS_LEGIT
 # fails; the legit ones are recorded with their rate and flagged (a warning) above DROPS_RATE_FLAG_PER_S in total.
 DROPS_FAMILY = "dv_edge_drops_total"
-DROPS_LEGIT = ("link_timeout", "no_session", "rx_ignored", "x_stale")
+DROPS_LEGIT = ("link_timeout", "no_session", "rx_ignored", "x_stale", "id_held")   # id_held: datagram held while a radio-id lookup is pending (DV-Router ruling)
 DROPS_RATE_FLAG_PER_S = 1.0
 SNAPSHOT_FAMILIES = FLAT_FAMILIES + (DROPS_FAMILY,)               # what the counter snapshots keep
 # Per-family overrides, {family: reason}: a family that grows with the traffic mix is NOT asserted but recorded with
