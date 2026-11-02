@@ -36,6 +36,9 @@
 #            official Playwright image, rig/Dockerfile.browser) for the browser cases; used
 #            together with web (--profile web,browser); the tester gets DVT_BROWSER=on and
 #            DVT_BROWSER_WS=ws://<net>.91:3000/. Its own limit set x-limits-browser
+#   webload  the WebRTC load generator (webload, .97) of the W8 load case; used with web
+#            (--profile web,webload; docs/web-load-cases.md); the tester gets DVT_WEBLOAD=on
+#            and DVT_WEBLOAD_URL=http://<net>.97:3100. Its own limit set x-limits-loadgen
 #   nat      NAT behaviour of the browser path (used with web,browser: --profile web,browser,nat; docs/rig.md
 #            "NAT profile"): nat-router (.92, outside; alias .93 for the full cone NAT) between the rig network
 #            and the internal network nat-inside (DVT_NAT_NET, default 172.31.0.0/24) where the browser
@@ -69,7 +72,8 @@
 #
 # Fixed addresses: xlxd-ref .10, xlxd-sut .11, transcoder-ref .20,
 # transcoder-sut .21, tester .30, allstar .40, web-proxy .90, browser .91 (profile nat: nat-router .92,
-# alias .93, coturn .94, nat-ref-a .95, nat-ref-b .96; the browser is then at <DVT_NAT_NET>.91 behind the router).
+# alias .93, coturn .94, nat-ref-a .95, nat-ref-b .96; the browser is then at <DVT_NAT_NET>.91 behind the router),
+# webload .97 (profile webload).
 
 name: dvt
 
@@ -81,6 +85,8 @@ name: dvt
 #   medium  xlxd, transcoders, URFd, mrefd, AllStarLink (the systems under test)
 #   tester  the pytest runner
 #   browser the Playwright browsers (chromium + firefox + WebKit at once; shm_size is part of the memory cap)
+#   loadgen the WebRTC load generator of the web load test (profile webload): 200 receive-only aiortc peers in
+#           4 python processes
 x-limits-small: &limits-small
   mem_limit: ${DVT_MEM_SMALL:-256m}
   memswap_limit: ${DVT_MEM_SMALL:-256m}
@@ -96,6 +102,11 @@ x-limits-browser: &limits-browser
   memswap_limit: ${DVT_MEM_BROWSER:-3g}
   cpus: ${DVT_CPUS_BROWSER:-2}
   pids_limit: ${DVT_PIDS_BROWSER:-1024}
+x-limits-loadgen: &limits-loadgen
+  mem_limit: ${DVT_MEM_LOADGEN:-3g}
+  memswap_limit: ${DVT_MEM_LOADGEN:-3g}
+  cpus: ${DVT_CPUS_LOADGEN:-4}
+  pids_limit: ${DVT_PIDS_LOADGEN:-512}
 x-limits-tester: &limits-tester
   mem_limit: ${DVT_MEM_TESTER:-2g}
   memswap_limit: ${DVT_MEM_TESTER:-2g}
@@ -357,6 +368,9 @@ services:
       DVT_ADMIN_URL: https://${DVT_ADMIN_HOST:-dvt-admin}:${DVT_ADMIN_PORT:-8443}
       # profile browser (cases/browser_fixtures.py): on when the browser service runs
       DVT_BROWSER: ${DVT_BROWSER:-off}
+      # profile webload (cases/test_web_load.py): on when the load generator runs
+      DVT_WEBLOAD: ${DVT_WEBLOAD:-off}
+      DVT_WEBLOAD_URL: http://${DVT_NET:-172.30.0}.97:${DVT_WEBLOAD_PORT:-3100}
       # on when rig/config/dv-router/recorder.toml is part of DVT_SUT_CONFIG_EXTRA (run.sh)
       DVT_RECORDER: ${DVT_RECORDER:-off}
       # profile nat: the browser is behind the NAT router, the tester reaches its server through the router's forward
@@ -708,6 +722,38 @@ services:
         aliases:
           - ${DVT_WEB_HOST:-dvt-web}
           - ${DVT_ADMIN_HOST:-dvt-admin}
+
+  # Load generator of the web load test (profile webload, together with web): many receive-only WebRTC
+  # listeners (aiortc, pinned in .env.example) through the real HTTP signalling relay. A control server
+  # (dvtest/tools/webload_gen.py serve) answers the tester only; it starts worker processes that each hold
+  # whole logins. Own address (.97) = own login/join budgets of the web service (they count per client address).
+  # The run CA is read from out/<run>/web (read-only). Nothing is written: tmpfs /tmp only, results leave as JSON.
+  webload:
+    <<: *limits-loadgen
+    profiles: [webload]
+    init: true
+    restart: "no"
+    image: dvt-webload:local
+    build:
+      context: .
+      dockerfile: Dockerfile.webload
+      args:
+        TESTER_BASE_IMAGE: ${TESTER_BASE_IMAGE:-error-set-tester-base-image-see-env-example}
+        WEBLOAD_PIP_PINS: ${WEBLOAD_PIP_PINS:-error-set-webload-pip-pins-see-env-example}
+      additional_contexts:
+        dvtest: ../dvtest
+    user: "${DVT_UID:-1000}:${DVT_GID:-1000}"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp
+    command: ["serve", "--port", "${DVT_WEBLOAD_PORT:-3100}", "--allow", "${DVT_NET:-172.30.0}.30"]
+    volumes:
+      - ../out/${DVT_RUN_ID:-manual}/web:/webout:ro
+    networks:
+      rig:
+        ipv4_address: "${DVT_NET:-172.30.0}.97"
 
   # Browsers for the browser cases (profile browser, together with web): `playwright run-server`
   # of the pinned official Playwright image (rig/Dockerfile.browser). The tester connects with the

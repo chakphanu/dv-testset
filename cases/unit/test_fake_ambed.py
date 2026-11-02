@@ -637,6 +637,9 @@ def test_log_records_every_datagram_in_order(worker, server):
     st.reply()
     st.close()
     assert wait_for(lambda: server.count_of("cs") == 1)
+    # the rx of the last datagram and the tx of the earlier replies are logged by different threads: wait for
+    # all nine entries before reading (a loaded host once read the log before the last tx was in it)
+    assert wait_for(lambda: len(server.log_entries()) >= 9)
     log = server.log_entries()
     kinds = [(e["dir"], e["kind"]) for e in log]
     assert kinds == [("rx", "ping"), ("tx", "pong"), ("rx", "caps_request"), ("tx", "caps_reply"),

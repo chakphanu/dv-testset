@@ -13,6 +13,9 @@ with one line; the host watcher answers with <id>.ack ("ok", "error <rc>" or
   "metrics xlxd-sut"                         the Prometheus text of the sut hub
                                              (127.0.0.1:19108 inside its network
                                              namespace) in <id>.out
+  "proc-stat <service> <process>"            cpu ticks and memory high-water mark of
+                                             one process inside the sut (read only;
+                                             allow-list below), key=value lines in <id>.out
 
 KILL_PROC_ALLOWED is the tester's copy of the allow-list in
 scripts/lib/killproc.sh (the host enforces it; cases/unit/test_control.py
@@ -37,6 +40,27 @@ KILL_PROC_ALLOWED = {
     ("xlxd-sut", "dv-edge-webrtc"): ("KILL",),   # K22: a dropped Disconnect, guests calling /rtc/alive meanwhile
     ("xlxd-sut", "dv-svc-status"): ("KILL",),    # K22: the status hub's snapshots carry the guest proof
 }
+
+
+# (service, process name = exact /proc comm) whose cpu ticks and VmHWM the host will READ
+# (scripts/lib/procstat.sh; nothing is signalled)
+PROC_STAT_ALLOWED = (
+    ("xlxd-sut", "dv-edge-webrtc"),     # the web load test: edge cpu and peak RSS
+    ("xlxd-sut", "dv-svc-web"),
+    ("xlxd-sut", "dv-svc-status"),
+)
+
+
+def proc_stat_allowed(service, process):
+    """True when the host watcher would run `proc-stat service process`."""
+    return (service, process) in PROC_STAT_ALLOWED
+
+
+def proc_stat_line(service, process):
+    """The request line, or ValueError for a pair outside the allow-list."""
+    if not proc_stat_allowed(service, process):
+        raise ValueError("proc-stat %s %s is not allow-listed" % (service, process))
+    return "proc-stat %s %s" % (service, process)
 
 
 # services whose hub the host will scrape (scripts/lib/metrics.sh), no arguments
@@ -151,6 +175,13 @@ class RigControl:
         line = kill_proc_line(service, process, signal)
         name = self._request(line, timeout)
         return parse_kill_out((self.dir / (name + ".out")).read_text())
+
+    def proc_stat(self, service, process, timeout=60.0):
+        """Text of a proc-stat reply (key=value lines; dvtest.webload.parse_procstat_out reads it) for the
+        process called `process` inside `service` (allow-list: PROC_STAT_ALLOWED). ValueError before
+        sending when not allow-listed, RuntimeError("... error 3") when no such process runs."""
+        name = self._request(proc_stat_line(service, process), timeout)
+        return (self.dir / (name + ".out")).read_text(encoding="utf-8", errors="replace")
 
     def metrics(self, service="xlxd-sut", timeout=30.0):
         """The Prometheus text of the hub of `service` (allow-list:

@@ -42,6 +42,10 @@
 #                      (docs/rig.md "Web profile"). With rig/config/dv-router/recorder.toml in
 #                      DVT_SUT_CONFIG_EXTRA the recorder is on too: host directory
 #                      out/<utc>/recorder mounted read-write at /var/lib/dv-recorder (DVT_RECORDER=on)
+#   --profile webload  the WebRTC load generator (webload, .97: aiortc, control server on :3100 for the tester
+#                      only) of the W8 load case, used together with web (--profile web,webload; exit 2
+#                      without it); the tester gets DVT_WEBLOAD=on and DVT_WEBLOAD_URL (docs/web-load-cases.md,
+#                      docs/rig.md "Web load profile"); the image is built with the pins WEBLOAD_PIP_PINS
 #   --profile nat      NAT behaviour of the browser path (docs/rig.md "NAT profile"), used together with
 #                      web and browser (--profile web,browser,nat; exit 2 otherwise): nat-router (.92,
 #                      outside, alias .93) between the rig network and the internal network nat-inside
@@ -140,6 +144,10 @@
 # sut hub, fetched from inside its network namespace by a throwaway tester-image
 # container (scripts/lib/metrics.sh; the DV-Router image has no shell or curl and
 # the hub listens on its loopback only). error 1 = the GET failed.
+# or "proc-stat xlxd-sut <process>" (dv-edge-webrtc, dv-svc-web or dv-svc-status): READS the cpu ticks (utime,
+# stime), the clock ticks per second, the thread count and VmHWM/VmRSS of that process by exact /proc comm
+# from a throwaway tester-image container in the sut's pid namespace (scripts/lib/procstat.sh); <id>.out gets
+# key=value lines. Nothing is signalled. error 3 = no such process.
 # "mark begin|end <tag>" only logs: a case brackets deliberately malformed
 # traffic so the capture check can tell it from a fault.
 # The answer is <id>.ack: "ok", "error <rc>" or "error refused" (anything else
@@ -154,6 +162,7 @@ set -euo pipefail
 . "$(dirname "$0")/lib/env.sh"
 . "$(dirname "$0")/lib/killproc.sh"
 . "$(dirname "$0")/lib/metrics.sh"
+. "$(dirname "$0")/lib/procstat.sh"
 dvt_load_env
 cd "$DVT_ROOT"
 
@@ -344,7 +353,7 @@ compose_all=(docker compose -p "${COMPOSE_PROJECT_NAME:-dvt}" "${compose_files[@
   --profile capture-nxdn --profile p25 --profile capture-p25 --profile interlink
   --profile capture-interlink --profile load --profile netem --profile g3
   --profile urfd --profile capture-urfd --profile mrefd --profile capture-mrefd --profile web --profile browser
-  --profile nat)
+  --profile webload --profile nat)
 
 if [ "$down_only" = 1 ]; then
   take_lock
@@ -419,6 +428,12 @@ for p in "${wanted[@]}"; do
       profiles+=(--profile browser)
       export DVT_BROWSER=on
       ;;
+    webload)
+      # the listeners sign in at the web service: only meaningful together with web
+      case ",$profile," in *,web,*) ;; *) echo "run.sh: --profile webload needs --profile web (--profile web,webload)" >&2; exit 2 ;; esac
+      profiles+=(--profile webload)
+      export DVT_WEBLOAD=on
+      ;;
     nat)
       # checked above (needs web and browser); the browser moves behind the router (rig/compose.nat.yml)
       profiles+=(--profile nat)
@@ -431,7 +446,7 @@ for p in "${wanted[@]}"; do
     mrefd)
       has_mrefd=1
       ;;
-    *) echo "run.sh: --profile takes core, allstar, nxdn, p25, interlink, load, g3, urfd, mrefd, web, browser, nat or a comma list" >&2; exit 2 ;;
+    *) echo "run.sh: --profile takes core, allstar, nxdn, p25, interlink, load, g3, urfd, mrefd, web, browser, webload, nat or a comma list" >&2; exit 2 ;;
   esac
 done
 # native launch reads no xlxd.* file: these settings only change the reference side
@@ -748,7 +763,7 @@ for row in sys.stdin:
 control="$out/control"
 
 watch_control() {
-  local req id line action svc extra rc sniffer args target node mt mcid mimg kp ksvc kproc ksig kcid kimg
+  local req id line action svc extra rc sniffer args target node mt mcid mimg kp ksvc kproc ksig kcid kimg ps_ psvc pproc pcid pimg
   while :; do
     for req in "$control"/*.req; do
       [ -e "$req" ] || continue
@@ -799,6 +814,19 @@ watch_control() {
             echo "metrics: no running $mt or tester container" > "$control/$id.out"; rc=4
           else
             dvt_metrics_exec "$mcid" "$mimg" > "$control/$id.out" 2>> "$control/control.log" || rc=$?
+          fi
+        fi
+      elif [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$action" = proc-stat ]; then
+        # "proc-stat xlxd-sut <process>": see scripts/lib/procstat.sh (allow-list, exact comm, read only)
+        if ps_="$(dvt_procstat_parse "$line")"; then
+          read -r psvc pproc <<< "$ps_"
+          pcid="$("${compose[@]}" ps -q "$psvc" 2>/dev/null | head -n 1 || true)"
+          pimg="$(docker inspect -f '{{.Image}}' "$("${compose[@]}" ps -q tester 2>/dev/null | head -n 1 || true)" 2>/dev/null || true)"
+          rc=0
+          if [ -z "$pcid" ] || [ -z "$pimg" ]; then
+            echo "proc-stat: no running $psvc or tester container" > "$control/$id.out"; rc=4
+          else
+            dvt_procstat_exec "$pcid" "$pimg" "$pproc" > "$control/$id.out" 2>> "$control/control.log" || rc=$?
           fi
         fi
       elif [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$action" = asl ] && [ -z "$extra" ]; then

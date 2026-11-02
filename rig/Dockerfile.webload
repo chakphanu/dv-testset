@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# Load generator of the web load test (service webload, profile webload): the python of the tester base image,
+# the pinned aiortc set (WEBLOAD_PIP_PINS of .env.example, installed --no-deps so that exactly those versions
+# and nothing else land in the image; the build is the only internet use, the rig network has none) and the
+# stdlib-only dvtest package, passed in as the named build context "dvtest". Nothing is compiled: every
+# package is a manylinux wheel for python 3.12 (--only-binary).
+ARG TESTER_BASE_IMAGE
+FROM ${TESTER_BASE_IMAGE}
+ARG WEBLOAD_PIP_PINS
+RUN test -n "$WEBLOAD_PIP_PINS" || { echo "WEBLOAD_PIP_PINS build arg missing (see .env.example)" >&2; exit 1; } \
+    && pip install --no-cache-dir --no-deps --only-binary=:all: $WEBLOAD_PIP_PINS \
+    && pip check \
+    && python -c "import aiortc, aioice, pylibsrtp; print('aiortc', aiortc.__version__)"
+COPY --from=dvtest . /app/dvtest/
+ENV PYTHONPATH=/app PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 HOME=/tmp
+EXPOSE 3100
+ENTRYPOINT ["python", "-m", "dvtest.tools.webload_gen"]
+CMD ["serve", "--port", "3100"]

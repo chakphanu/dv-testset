@@ -29,6 +29,7 @@ rig (`rig/`; the service names `xlxd-ref` / `xlxd-sut` are historical).
 | Rig, DV-Router WebRTC Listen/Talk and recorder in browsers (native launch) | `DVT_USRP_DYNAMIC=1 ... DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/recorder.toml scripts/run.sh -m rig --capture --profile web,browser -- cases/test_web_webrtc.py cases/test_web_recorder.py` (`docs/web-browser-cases.md`, "Stage 3b") | as above; a USRP dynamic hub (`DVT_USRP_DYNAMIC=1`) for the protocol talker; `recorder.toml` for the recorder cases |
 | Rig, DV-Router NAT behaviour of WebRTC in browsers (native launch) | `DVT_USRP_DYNAMIC=1 ... DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/turn.toml scripts/run.sh -m rig --capture --profile web,browser,nat -- cases/test_web_nat.py` (NAT router, coturn, per-run TURN secret; about 1 hour; `docs/web-nat-cases.md`) | as above; `docker pull` of `COTURN_IMAGE` once; without `turn.toml` only the direct and 404 cases run; `docs/rig.md` "NAT profile" |
 | Rig, DV-Router K22 / K22b circuit and guest-lease cases (native launch) | `DVT_USRP_DYNAMIC=1 ... DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/guest.toml scripts/run.sh -m rig --profile web,browser -- cases/test_web_k22.py` (about 30 minutes with the 10 minute idle sample; `docs/web-k22-cases.md`) | as above; kills `dv-edge-webrtc` and `dv-svc-status` through the control channel; do not combine with `cases/test_web_webrtc.py` (guests off there) |
+| Rig, DV-Router W8 load: 200 WebRTC listeners x 50 pps through the HTTP relay (native launch) | `DVT_USRP_DYNAMIC=1 ... scripts/run.sh -m rig --profile web,webload -- cases/test_web_load.py` (calibration 1/10/50, the 200 x 50 pps gate, a short bounded flood; about 15 minutes; `docs/web-load-cases.md`) | as above; the service `webload` (aiortc, pinned by `WEBLOAD_PIP_PINS`, image built from the base image with the one internet use of pip); JSON summary `out/<run>/web/load.json`; reads the SUT edge's cpu and VmHWM through the read-only `proc-stat` control action |
 | Rig + AllStarLink | `scripts/run.sh -m "rig or allstar" --profile allstar` | as above, `scripts/gen-local.sh` once |
 
 First time: `scripts/pre-fetch-xlxd.sh`, `scripts/pre-fetch-codec2.sh`,
@@ -62,7 +63,7 @@ limits"):
   log or copy secret values; `Target.iax_secret` is hidden from repr.
 - `dvtest/target.py` documents every `DVT_*` variable. Rig addresses default
   to 172.30.0.0/24: xlxd-ref .10, xlxd-sut .11, transcoder-ref .20,
-  transcoder-sut .21, tester .30, allstar .40, web-proxy .90, browser .91 (profile nat: router .92 / alias .93, coturn .94, reflectors .95 / .96).
+  transcoder-sut .21, tester .30, allstar .40, web-proxy .90, browser .91 (profile nat: router .92 / alias .93, coturn .94, reflectors .95 / .96), webload .97.
 
 ## Results
 
@@ -106,6 +107,8 @@ and hashes; never publish raw captures.
   `scripts/run.sh`, or pass `--env-file .env.example --env-file .env`.
 - Use only the compose project `dvt`; never stop, remove or prune other
   containers, images or volumes.
+
+- Load case (`cases/test_web_load.py`, `dvtest/webload.py`, `dvtest/tools/webload_gen.py`): disk is checked with `touch` before every run, no `--capture`, one JSON summary and no per-listener files, at most a few runs; the load generator is the only third-party client (aiortc) and lives only in its own image.
 
 - Web unit: use `dvtest/web.py` (HTTPS client with the run CA, TOTP, `Pacer` for the
   login/register budgets, account helpers) and the fixtures `web_operator` /

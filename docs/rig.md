@@ -47,6 +47,7 @@ internet, and every address is fixed.
 | xlxd-peer-sut / xlxd-peer-ref | 172.30.0.12 / .13 | interlink | XLX998, interlinked with xlxd-sut / xlxd-ref on `DVT_INTERLINK_MODULES` |
 | urfd | 172.30.0.70 | urfd | URFd (`URF999`, modules A-Z), a second reference reflector; see "URFd as the reference" |
 | mrefd | 172.30.0.80 | mrefd | mrefd (`M17-REF`, modules `MNOP`), the M17 Project reflector, with interlink peers M17-DVT / M17-DVU at the tester; see "mrefd as an extra reference" |
+| webload | 172.30.0.97 | webload | WebRTC load generator (aiortc), control server :3100 for the tester only; see "Web load profile" |
 | web-proxy | 172.30.0.90 (aliases `dvt-web`, `dvt-admin`) | web | TLS reverse proxy: HTTPS 443 to dv-svc-web of the SUT (`<net>.11:8081`) and HTTPS 8443 to dv-svc-admin (`<net>.11:8080`), self-signed CA in `out/<run>/web/ca.pem`; see "Web profile" |
 | browser | 172.30.0.91 | browser | Playwright browsers (`playwright run-server`, chromium + firefox + WebKit) for the browser cases, used with `web`; see "Browser profile" |
 | nat-router | 172.30.0.92 (alias .93; inside 172.31.0.2) | nat | NAT router in front of the browser, control server (JSON lines) on TCP 9100; see "NAT profile" |
@@ -463,6 +464,19 @@ The fixtures (`cases/browser_fixtures.py`): `engine` (chromium, firefox, webkit)
 log (console, page errors, every request with its status, dialogs, CSP reports) and `problems()`.
 All selectors are in `cases/web_pages.py` (role, text, aria-label, ids; DV-Router's `data-testid`
 hooks, WEB2, are not on `wip-f3adb62` yet: a later switch is a change of that one module).
+
+## Web load profile
+
+`scripts/run.sh --profile web,webload` adds the service `webload` (`172.30.0.97`, control server `http://<net>.97:3100`) for the
+W8 load case (`cases/test_web_load.py`, `docs/web-load-cases.md`). `webload` alone is exit 2.
+
+| What | Detail |
+|------|--------|
+| why a service | 200 receive-only WebRTC peers need a real WebRTC stack (ICE, DTLS-SRTP) and the tester image is stdlib only. The peers run in their own container, own address (the web service counts logins and joins per client address, so the generator has its own budgets), and the tester drives them over a small HTTP/JSON control server |
+| image | `rig/Dockerfile.webload` on `TESTER_BASE_IMAGE` plus the pinned aiortc set `WEBLOAD_PIP_PINS` of `.env.example` (aiortc 1.14.0 and its resolved dependencies, `pip install --no-deps --only-binary`, `pip check`); the build is the only internet use. About 410 MB |
+| caps | own set `x-limits-loadgen`: 3g = swap 3g (`DVT_MEM_LOADGEN`), 4 cpus (`DVT_CPUS_LOADGEN`), 512 pids; read-only root, tmpfs `/tmp`, all capabilities dropped, `out/<run>/web` mounted read-only (the run CA). The control server answers the tester address only |
+| control | `POST /run` (accounts, listener count, workers), `GET /status`, `GET /sample` (cgroup and process cpu), `POST /finish` (statistics of every listener, one JSON document), `POST /abort`. Nothing is written to disk |
+| SUT side | the read-only control action `proc-stat xlxd-sut <process>` (`scripts/lib/procstat.sh`, `dvtest.control.PROC_STAT_ALLOWED`: `dv-edge-webrtc`, `dv-svc-web`, `dv-svc-status`) returns the cpu ticks, thread count and VmHWM/VmRSS of the process by exact `/proc` comm, read by a throwaway tester-image container in the SUT's pid namespace |
 
 ## NAT profile
 
