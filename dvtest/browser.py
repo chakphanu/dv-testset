@@ -203,6 +203,32 @@ def cookie_problems(cookie, name=SESSION_COOKIE):
 
 # ---------------------------------------------------------------- artifacts
 
+# The Recordings page maps the fixed end-reason vocabulary of the recorder API to readable labels (I18N1; DV-Router
+# web/site/recordings/recordings.js:10-18; dv-router ruling F8, 2026-11-04: INTENDED). The API keeps the raw value
+# ("terminator"); any value outside the map is shown raw.
+END_REASON_LABELS = {
+    "terminator": "Transmission ended",
+    "silence": "No audio",
+    "tot": "Transmit time limit",
+    "revoke": "Transmit permission revoked",
+    "leave": "Left the room",
+    "disconnect": "Disconnected",
+    "epoch_end": "Controller restarted",
+    "grant_deadline": "Transmit grant expired",
+    "replaced": "Replaced by another transmission",
+    "offair": "Off air",
+    "timeout": "Timed out",
+    "shutdown": "Node shut down",
+    "ended": "Transmission ended",
+    "unknown": "unknown",
+}
+
+
+def end_reason_label(reason):
+    """The text the Recordings page shows for an API end reason: the label of the fixed vocabulary, else the raw value."""
+    return END_REASON_LABELS.get(reason, str(reason))
+
+
 OPS_TIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
 
 

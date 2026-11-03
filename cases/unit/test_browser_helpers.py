@@ -224,3 +224,24 @@ def test_compare_event_times():
     assert b.compare_event_times(shown, items) == (2, [(91, "2026-11-03 20:33:36", "2026-11-03 20:33:37")])
     assert b.compare_event_times({}, items) == (0, [])
     assert b.compare_event_times(shown, [{"id": 92}]) == (0, [])           # the API exposes no ts_ms
+
+
+F8_VOCABULARY = {
+    "terminator": "Transmission ended", "silence": "No audio", "tot": "Transmit time limit",
+    "revoke": "Transmit permission revoked", "leave": "Left the room", "disconnect": "Disconnected",
+    "epoch_end": "Controller restarted", "grant_deadline": "Transmit grant expired",
+    "replaced": "Replaced by another transmission", "offair": "Off air", "timeout": "Timed out",
+    "shutdown": "Node shut down", "ended": "Transmission ended", "unknown": "unknown",
+}
+
+
+@pytest.mark.parametrize("reason,label", sorted(F8_VOCABULARY.items()))
+def test_end_reason_label_vocabulary(reason, label):
+    """The Recordings page labels of the fixed end-reason vocabulary (I18N1, dv-router ruling F8 2026-11-04)."""
+    assert b.end_reason_label(reason) == label
+
+
+def test_end_reason_label_map_is_exactly_the_vocabulary_and_other_values_stay_raw():
+    assert b.END_REASON_LABELS == F8_VOCABULARY
+    for raw in ("something-new", "Terminator", "", "tot "):
+        assert b.end_reason_label(raw) == raw

@@ -428,8 +428,12 @@ def test_recordings_page_lists_and_plays(engine, rec_page, seeded, web_operator)
     cell = pages.recording_row(page, row["id"])
     cell.wait_for(state="visible", timeout=10000)
     text = cell.inner_text()
-    for want in (row["room"], row["callsign"], row["protocol"], row["reason"], str(row["lost_units"])):
+    # since I18N1 the page shows a readable label for the end reason (dv-router ruling F8, 2026-11-04: INTENDED; the API keeps the
+    # raw value, asserted by test_browser_talk_is_recorded_as_webrtc and listed in the seeded-rows case): brlib.end_reason_label maps whatever reason the recording really has
+    for want in (row["room"], row["callsign"], row["protocol"], brlib.end_reason_label(row["reason"]), str(row["lost_units"])):
         assert str(want) in text, (want, text)
+    if row["reason"] == "terminator":                  # the seeded USRP over: the literal label, not via the helper
+        assert "Transmission ended" in text, text
     web.finding("%s: recordings page row text %r" % (brlib.label(engine), text.replace("\t", " | ")))
     # play: the shared audio element
     pages.recording_play_button(page, row["id"]).click()
