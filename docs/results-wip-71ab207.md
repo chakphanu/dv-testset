@@ -30,7 +30,7 @@ unit test in `cases/unit/test_sut_config.py`) restores the enrol-first behaviour
 | ID | Area | Observed on wip-71ab207 | Before | Status |
 |----|------|--------------------------|--------|--------|
 | F1 | TOTP1 default | With `operator_totp = true` / `admin.totp = true` only: first operator login `totp: off` (no enrolment step), admin password-only login 200, admin session `totp: off` | enrol-first, password-only login 401 `totp_required` | needs dv-router ruling (forwarded by the main session); rig now sets `totp_required = true`; no case asserts the optional default |
-| F2 | TOTP1 step-up | `POST auth/session/totp` as a `user` account answers 403 `step_up_required` (case `test_prefix_minimum_role[POST auth/session/totp \| user]`, `out/20261103T193312Z`) | 400 (API4 documented) | needs dv-router ruling; assertion unchanged, case fails |
+| F2 | TOTP1 step-up | `POST auth/session/totp` as a `user` account answers 403 `step_up_required` (case `test_prefix_minimum_role[POST auth/session/totp \| user]`, `out/20261103T193312Z`) | 400 (API4 documented) | ruled 2026-11-04 (dv-router): TOTP1 supersedes API4's 400; the matrix assertion is now 403 `step_up_required` and `test_user_totp_offer_needs_step_up` covers the step-up path (200 offer, 400 for a malformed body after it) |
 
 ## Load flakes
 

@@ -134,8 +134,9 @@ WEB_OPS = (
     _op("GET", "/api/v1/auth/session", "user"),
     _op("DELETE", "/api/v1/auth/session", "user", fresh=True, success=204),
     _op("POST", "/api/v1/auth/session/totp", "user", body={},
-        note="400 for a user (no TOTP in v1); an enrolled operator without X-DV-TOTP: 403 totp_invalid and a "
-             "lockout failure (API4, web.md Account API)"),
+        note="a user without a password step-up window: 403 step_up_required before the body is read (TOTP1, dv-router "
+             "ruling 2026-11-04; API4's unconditional 400 is superseded, the 400 is an invalid body after a "
+             "step-up); an enrolled operator without X-DV-TOTP: 403 totp_invalid and a lockout failure (API4)"),
     _op("POST", "/api/v1/auth/session/totp/confirm", "user", body={}),
     _op("POST", "/api/v1/auth/password", "user", body={}, note="no password is changed with an empty body"),
     _op("PUT", "/api/v1/auth/password", "user", body={}),

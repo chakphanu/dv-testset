@@ -41,6 +41,7 @@ import pytest
 
 from dvtest import admin as admin_mod
 from dvtest import api_admin, api_probe, api_web, web
+from dvtest import totp_optional as to
 from web_fixtures import make_operator
 
 pytestmark = [pytest.mark.rig, pytest.mark.web]
@@ -291,8 +292,12 @@ WEB_MATRIX = [(op, role) for op in api_web.WEB_OPS + api_web.WEB_ROOT_OPS for ro
 # Answers of matrix probes that DV-Router documents exactly since API4 (asserted on top of the class):
 # (method, path) -> {role: (status, problem code or None)}
 DOCUMENTED_PROBE_ANSWERS = {
-    # web.md Account API: offer is 400 for users; an enrolled operator without X-DV-TOTP gets 403 totp_invalid
-    ("POST", "/api/v1/auth/session/totp"): {"user": (400, None), "operator": (403, "totp_invalid")},
+    # TOTP1 superseded API4's unconditional 400 for a user (dv-router ruling 2026-11-04, F2): the first optional
+    # enrolment from a full session needs a password step-up before any offer, and that check runs before the body
+    # is read, so a user without a window gets 403 step_up_required (the 400 is the invalid body AFTER a step-up:
+    # test_user_totp_offer_needs_step_up). An enrolled operator without X-DV-TOTP still gets 403 totp_invalid
+    # (API4, web.md Account API; the mandatory and the optional policy agree: the current code, not a window).
+    ("POST", "/api/v1/auth/session/totp"): {"user": (403, "step_up_required"), "operator": (403, "totp_invalid")},
     # web.md "Guard order": Origin/JSON (403 csrf) before the audience floor and the handler; README UI1:
     # force checks the media type of a nonempty body
     ("POST", "/api/v1/operator/ids/sync/force"): {"user": (403, "csrf"), "operator": (403, "csrf")},
@@ -333,7 +338,7 @@ def test_prefix_minimum_role(op, role, anon, rx_user, tx_user, web_operator, web
     if documented:
         status, code = documented
         assert res.status == status and (code is None or res.code() == code), \
-            "%s as %s: %s, documented by API4: HTTP %d %s" % (op_id(op), role, res.brief(), status, code or "")
+            "%s as %s: %s, documented (API4, TOTP1): HTTP %d %s" % (op_id(op), role, res.brief(), status, code or "")
     elif res.status == 403 and expect == "allow" and res.code() != "forbidden":
         web.finding("%s as %s: 403 %s although the role is at or above the floor (a guard the documents do not "
                     "list for this probe)" % (op_id(op), role, res.code()))
@@ -654,6 +659,44 @@ def test_operator_totp_rules(web_operator2, web_client):
     assert "secret" not in offer.text(), "a refused offer must not carry a new secret"
     assert offer.json().get("code") == "totp_invalid", \
         "re-enrolment without a code: 403 code %r, documented totp_invalid" % offer.json().get("code")
+
+
+def test_user_totp_offer_needs_step_up(one_user):
+    """TOTP1 (dv-router ruling 2026-11-04, F2; docs/design/admin.md, web.md "Account API"): for a `user` account
+    POST /api/v1/auth/session/totp used to be an unconditional 400 (API4); it is now the first optional
+    enrolment from a full session. Without a reauthentication window of the last five minutes the answer is
+    403 `step_up_required`, and the check runs BEFORE the body is read (even a malformed body gets it). After
+    the password step-up the offer is 200 (secret, uri, 6 digits, 30 s) and only then is the body read: a
+    malformed one is 400 (BadRequest). Nothing is confirmed, so the account stays without a secret. The mandatory policy
+    (totp-required.toml) changes operators only; the answers here are the same with it. The optional-default
+    flows are in cases/test_web_totp_optional.py."""
+    path = "/api/v1/auth/session/totp"
+    junk = {"raw_body": b"{", "headers": {"Content-Type": "application/json"}}
+    client = fresh_login(one_user)
+    nothing = client.request("POST", path, json_body={})
+    res = api_probe.Result(nothing.status, nothing.headers, nothing.body)
+    assert (res.status, res.code()) == (403, "step_up_required"), \
+        "offer without a step-up window: %s, documented 403 step_up_required (TOTP1)" % res.brief()
+    assert "secret" not in nothing.text(), "a refused offer carries no secret"
+    early = client.request("POST", path, **junk)
+    res = api_probe.Result(early.status, early.headers, early.body)
+    assert (res.status, res.code()) == (403, "step_up_required"), \
+        "malformed offer body without a window: %s, documented 403 step_up_required (the check runs before " \
+        "the body is read)" % res.brief()
+    up = to.step_up_password(client, to.WEB, one_user.password)
+    assert up.status == 200, "password step-up of an account without a secret: %s" % to.brief(up)
+    offer = client.request("POST", path, json_body={})
+    assert offer.status == 200, "offer after the step-up: %s" % to.brief(offer)
+    secret, _uri, digits, period = to.parse_offer(offer)
+    client.hide(secret)
+    assert (digits, period) == (6, 30) and to.no_store(offer)
+    bad = client.request("POST", path, **junk)
+    res = api_probe.Result(bad.status, bad.headers, bad.body)
+    assert res.status == 400, "malformed offer body after the step-up: %s, documented 400 (BadRequest)" % res.brief()
+    if res.code() != "bad_request":
+        web.finding("malformed offer body after the step-up: 400 code %r (admin.md names bad_request for 400)"
+                    % res.code())
+    assert client.session()["totp"] == "off", "an unconfirmed offer must leave the account without a secret"
 
 
 def _hide_body_strings(client, resp):

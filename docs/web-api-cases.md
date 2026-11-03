@@ -81,7 +81,7 @@ asserted, now as the documented answer; `web.finding()` is kept only for a real 
 | unknown API paths | 404 `application/problem+json` `not_found`, the same as a handler's "no such target" | documented by API4; remains a limit of the probes (a route miss and a missing target look alike) |
 | `GET /api/v1/rtc/ice` | 404 (TURN disabled) for anonymous callers too | documented by API4 (web.md RTC); asserted when TURN is off |
 | `POST /api/v1/rtc/{close,alive}` | 403 `forbidden` for an unknown or foreign circuit | documented by API4 (web.md RTC rows; DOC6 adds the alive statuses); asserted |
-| `POST /api/v1/auth/session/totp` | user 400; operator without `X-DV-TOTP` 403 `totp_invalid` | documented by API4 (web.md Account API); asserted |
+| `POST /api/v1/auth/session/totp` | user without a password step-up window 403 `step_up_required` (the check runs before the body is read); after `session/step-up {password}` the offer is 200 and a malformed body 400 (`test_user_totp_offer_needs_step_up`); operator without `X-DV-TOTP` 403 `totp_invalid` | TOTP1 (dv-router ruling 2026-11-04, F2: `docs/design/admin.md`, web.md, deployment.md) superseded API4's unconditional 400 for a user; the operator answer is API4 (web.md Account API); asserted |
 | login lockout | right password after 5 failures: 429 `rate_limited`, `Retry-After` 899 | documented by API4 (LOGIN1 table of web.md); asserted |
 | `GET /api/v1/user/recordings*` | 503 without a recorder | listed as 503 in the OpenAPI (unchanged, consistent) |
 | admin legacy direct mount | not reachable from the tester | unchanged: not exercised (FINDING line) |
