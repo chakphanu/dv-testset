@@ -1,0 +1,77 @@
+{
+ "version": 1,
+ "source": "edge.pcap",
+ "ports": [
+  4569
+ ],
+ "frames": 6,
+ "skipped": {
+  "non_iax_port": 26,
+  "bad": 0
+ },
+ "capture_stats": {
+  "packets": 32,
+  "udp": 32
+ },
+ "summary": {
+  "iax.NEW": 6
+ },
+ "types": {
+  "iax.NEW": [
+   {
+    "frame": 20,
+    "t": 0.0,
+    "src": "192.0.2.1:45802",
+    "dst": "192.0.2.2:4569",
+    "type": "iax.NEW",
+    "form": "full",
+    "scall": 10511,
+    "dcall": 0,
+    "retrans": false,
+    "ts": 0,
+    "oseq": 0,
+    "iseq": 0,
+    "kind": 6,
+    "subclass": 1,
+    "payload_len": 2,
+    "ies": [
+     {
+      "ie": 54,
+      "name": "CALLTOKEN",
+      "len": 0,
+      "hex": ""
+     }
+    ],
+    "hex": "a90f000000000000000006013600"
+   },
+   {
+    "frame": 21,
+    "t": 0.500597,
+    "src": "192.0.2.1:45802",
+    "dst": "192.0.2.2:4569",
+    "type": "iax.NEW",
+    "form": "full",
+    "scall": 10511,
+    "dcall": 0,
+    "retrans": true,
+    "ts": 0,
+    "oseq": 0,
+    "iseq": 0,
+    "kind": 6,
+    "subclass": 1,
+    "payload_len": 2,
+    "ies": [
+     {
+      "ie": 54,
+      "name": "CALLTOKEN",
+      "len": 0,
+      "hex": ""
+     }
+    ],
+    "hex": "a90f800000000000000006013600"
+   }
+  ]
+ },
+ "ts16_wraps": [],
+ "dns": []
+}

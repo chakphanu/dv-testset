@@ -1,0 +1,297 @@
+{
+ "version": 1,
+ "source": "edge.pcap",
+ "ports": [
+  4569
+ ],
+ "frames": 18,
+ "skipped": {
+  "non_iax_port": 55,
+  "bad": 0
+ },
+ "capture_stats": {
+  "packets": 73,
+  "udp": 73
+ },
+ "summary": {
+  "iax.ACK": 6,
+  "iax.CALLTOKEN": 4,
+  "iax.NEW": 4,
+  "iax.REGREJ": 2,
+  "iax.REGREQ": 2
+ },
+ "types": {
+  "iax.ACK": [
+   {
+    "frame": 16,
+    "t": 0.000414,
+    "src": "192.0.2.1:45802",
+    "dst": "192.0.2.2:4569",
+    "type": "iax.ACK",
+    "form": "full",
+    "scall": 10716,
+    "dcall": 1,
+    "retrans": false,
+    "ts": 0,
+    "oseq": 1,
+    "iseq": 1,
+    "kind": 6,
+    "subclass": 4,
+    "payload_len": 0,
+    "ies": [],
+    "hex": "a9dc00010000000001010604"
+   },
+   {
+    "frame": 19,
+    "t": 0.032148,
+    "src": "192.0.2.1:45802",
+    "dst": "192.0.2.2:4569",
+    "type": "iax.ACK",
+    "form": "full",
+    "scall": 10717,
+    "dcall": 1,
+    "retrans": false,
+    "ts": 0,
+    "oseq": 1,
+    "iseq": 1,
+    "kind": 6,
+    "subclass": 4,
+    "payload_len": 0,
+    "ies": [],
+    "hex": "a9dd00010000000001010604"
+   }
+  ],
+  "iax.CALLTOKEN": [
+   {
+    "frame": 15,
+    "t": 0.000106,
+    "src": "192.0.2.2:4569",
+    "dst": "192.0.2.1:45802",
+    "type": "iax.CALLTOKEN",
+    "form": "full",
+    "scall": 1,
+    "dcall": 10716,
+    "retrans": false,
+    "ts": 0,
+    "oseq": 0,
+    "iseq": 1,
+    "kind": 6,
+    "subclass": 40,
+    "payload_len": 29,
+    "ies": [
+     {
+      "ie": 54,
+      "name": "CALLTOKEN",
+      "len": 27,
+      "hex": "313739333733303430323f33666563653364393462646438353463"
+     }
+    ],
+    "hex": "800129dc0000000000010628361b313739333733303430323f33666563653364393462646438353463"
+   },
+   {
+    "frame": 18,
+    "t": 0.030958,
+    "src": "192.0.2.2:4569",
+    "dst": "192.0.2.1:45802",
+    "type": "iax.CALLTOKEN",
+    "form": "full",
+    "scall": 1,
+    "dcall": 10717,
+    "retrans": false,
+    "ts": 0,
+    "oseq": 0,
+    "iseq": 1,
+    "kind": 6,
+    "subclass": 40,
+    "payload_len": 29,
+    "ies": [
+     {
+      "ie": 54,
+      "name": "CALLTOKEN",
+      "len": 27,
+      "hex": "313739333733303430323f33666563653364393462646438353463"
+     }
+    ],
+    "hex": "800129dd0000000000010628361b313739333733303430323f33666563653364393462646438353463"
+   }
+  ],
+  "iax.NEW": [
+   {
+    "frame": 14,
+    "t": 0.0,
+    "src": "192.0.2.1:45802",
+    "dst": "192.0.2.2:4569",
+    "type": "iax.NEW",
+    "form": "full",
+    "scall": 10716,
+    "dcall": 0,
+    "retrans": false,
+    "ts": 0,
+    "oseq": 0,
+    "iseq": 0,
+    "kind": 6,
+    "subclass": 1,
+    "payload_len": 2,
+    "ies": [
+     {
+      "ie": 54,
+      "name": "CALLTOKEN",
+      "len": 0,
+      "hex": ""
+     }
+    ],
+    "hex": "a9dc000000000000000006013600"
+   },
+   {
+    "frame": 17,
+    "t": 0.030845,
+    "src": "192.0.2.1:45802",
+    "dst": "192.0.2.2:4569",
+    "type": "iax.NEW",
+    "form": "full",
+    "scall": 10717,
+    "dcall": 0,
+    "retrans": false,
+    "ts": 0,
+    "oseq": 0,
+    "iseq": 0,
+    "kind": 6,
+    "subclass": 1,
+    "payload_len": 2,
+    "ies": [
+     {
+      "ie": 54,
+      "name": "CALLTOKEN",
+      "len": 0,
+      "hex": ""
+     }
+    ],
+    "hex": "a9dd000000000000000006013600"
+   }
+  ],
+  "iax.REGREJ": [
+   {
+    "frame": 21,
+    "t": 0.033394,
+    "src": "192.0.2.2:4569",
+    "dst": "192.0.2.1:45802",
+    "type": "iax.REGREJ",
+    "form": "full",
+    "scall": 1,
+    "dcall": 10718,
+    "retrans": false,
+    "ts": 0,
+    "oseq": 0,
+    "iseq": 0,
+    "kind": 6,
+    "subclass": 16,
+    "payload_len": 0,
+    "ies": [],
+    "hex": "800129de0000000000000610"
+   },
+   {
+    "frame": 66,
+    "t": 50.188305,
+    "src": "192.0.2.2:4569",
+    "dst": "192.0.2.1:45802",
+    "type": "iax.REGREJ",
+    "form": "full",
+    "scall": 1,
+    "dcall": 10914,
+    "retrans": false,
+    "ts": 0,
+    "oseq": 0,
+    "iseq": 0,
+    "kind": 6,
+    "subclass": 16,
+    "payload_len": 0,
+    "ies": [],
+    "hex": "80012aa20000000000000610"
+   }
+  ],
+  "iax.REGREQ": [
+   {
+    "frame": 20,
+    "t": 0.033359,
+    "src": "192.0.2.1:45802",
+    "dst": "192.0.2.2:4569",
+    "type": "iax.REGREQ",
+    "form": "full",
+    "scall": 10718,
+    "dcall": 0,
+    "retrans": false,
+    "ts": 0,
+    "oseq": 0,
+    "iseq": 0,
+    "kind": 6,
+    "subclass": 13,
+    "payload_len": 43,
+    "ies": [
+     {
+      "ie": 6,
+      "name": "USERNAME",
+      "len": 8,
+      "hex": "70686f6e652d726f",
+      "text": "phone-ro"
+     },
+     {
+      "ie": 19,
+      "name": "REFRESH",
+      "len": 2,
+      "hex": "003c",
+      "int": 60
+     },
+     {
+      "ie": 54,
+      "name": "CALLTOKEN",
+      "len": 27,
+      "hex": "313739333733303430323f33666563653364393462646438353463"
+     }
+    ],
+    "hex": "a9de0000000000000000060d060870686f6e652d726f1302003c361b313739333733303430323f33666563653364393462646438353463"
+   },
+   {
+    "frame": 65,
+    "t": 50.188273,
+    "src": "192.0.2.1:45802",
+    "dst": "192.0.2.2:4569",
+    "type": "iax.REGREQ",
+    "form": "full",
+    "scall": 10914,
+    "dcall": 0,
+    "retrans": false,
+    "ts": 0,
+    "oseq": 0,
+    "iseq": 0,
+    "kind": 6,
+    "subclass": 13,
+    "payload_len": 43,
+    "ies": [
+     {
+      "ie": 6,
+      "name": "USERNAME",
+      "len": 8,
+      "hex": "70686f6e652d726f",
+      "text": "phone-ro"
+     },
+     {
+      "ie": 19,
+      "name": "REFRESH",
+      "len": 2,
+      "hex": "003c",
+      "int": 60
+     },
+     {
+      "ie": 54,
+      "name": "CALLTOKEN",
+      "len": 27,
+      "hex": "313739333733303435323f33323235333233643736376531643962"
+     }
+    ],
+    "hex": "aaa20000000000000000060d060870686f6e652d726f1302003c361b313739333733303435323f33323235333233643736376531643962"
+   }
+  ]
+ },
+ "ts16_wraps": [],
+ "dns": []
+}
