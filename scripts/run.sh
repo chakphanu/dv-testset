@@ -40,6 +40,14 @@
 #                      /etc/dv-router/asl-secrets. Alone it starts tester, xlxd-sut, transcoder-sut, the four lab
 #                      hosts and netem sidecars for the edge and the lab nodes (control: netem edge|asl <args>).
 #                      The tester gets DVT_ASL_EDGE=on. Select with -m asl_lab; docs/asl-edge-results.md
+#   --profile asl-ext  EXTERNAL, the only profile that leaves the rig: the real AllStarLink node 400169 (service asl-ext,
+#                      .45), outbound only, registered with the real registry and dialling real nodes listen-only
+#                      (cases/test_asl_ext.py, docs/asl-edge-results.md "External dial T12"). It must be the only
+#                      profile, needs DVT_ASL_EXT_GO=400169 (an explicit go, never set by default) and the password
+#                      FILE .local/secrets/asl-400169.pw (dir 0700, file 0600; mounted read-only, never printed).
+#                      asl-ext is also on asl-ext-out, a non-internal network (docker NAT, nothing published); every
+#                      other host stays on the internal rig network. After the run the output directory is scanned
+#                      for the password (paths only; exit 5 on a hit). Select with -m asl_ext
 #   --profile g3       a second Icom G3 terminal: relay g3-term2 at .31 (DVT_G3=on)
 #   --profile browser  the Playwright browser service (browser, .91, ws://<net>.91:3000/:
 #                      chromium, firefox, WebKit of the pinned official Playwright image),
@@ -395,7 +403,7 @@ compose_all=(docker compose -p "${COMPOSE_PROJECT_NAME:-dvt}" "${compose_files[@
   --profile capture-nxdn --profile p25 --profile capture-p25 --profile interlink
   --profile capture-interlink --profile load --profile netem --profile g3
   --profile urfd --profile capture-urfd --profile mrefd --profile capture-mrefd --profile web --profile browser
-  --profile webload --profile nat --profile asl-lab)
+  --profile webload --profile nat --profile asl-lab --profile asl-ext)
 
 if [ "$down_only" = 1 ]; then
   take_lock
@@ -412,6 +420,7 @@ has_urfd=0
 has_mrefd=0
 has_load=0
 has_asl_lab=0
+has_asl_ext=0
 IFS=, read -r -a wanted <<< "$profile"
 for p in "${wanted[@]}"; do
   case "$p" in
@@ -468,6 +477,19 @@ for p in "${wanted[@]}"; do
       profiles+=(--profile asl-lab --profile netem)
       export DVT_ASL_LAB=on DVT_ASL_EDGE=on
       ;;
+    asl-ext)
+      # the real node 400169 on the real network: alone, explicit go, secret file checked (mode, never content)
+      [ "$profile" = asl-ext ] || { echo "run.sh: --profile asl-ext must be the only profile" >&2; exit 2; }
+      [ "${DVT_ASL_EXT_GO:-}" = 400169 ] \
+        || { echo "run.sh: --profile asl-ext registers the real node 400169; set DVT_ASL_EXT_GO=400169 to confirm" >&2; exit 2; }
+      ext_pw=".local/secrets/asl-400169.pw"
+      [ -f "$ext_pw" ] && [ ! -L "$ext_pw" ] && [ "$(stat -c %a "$ext_pw")" = 600 ] && [ "$(stat -c %a "$(dirname "$ext_pw")")" = 700 ] \
+        || { echo "run.sh: $ext_pw must be a regular file, mode 600, in a directory of mode 700" >&2; exit 2; }
+      has_asl_lab=1
+      has_asl_ext=1
+      profiles+=(--profile asl-ext)
+      export DVT_ASL_EXT=on
+      ;;
     g3)
       profiles+=(--profile g3)
       export DVT_G3=on
@@ -500,7 +522,7 @@ for p in "${wanted[@]}"; do
     mrefd)
       has_mrefd=1
       ;;
-    *) echo "run.sh: --profile takes core, allstar, asl-lab, asl-edge, nxdn, p25, interlink, load, g3, urfd, mrefd, web, browser, webload, nat or a comma list" >&2; exit 2 ;;
+    *) echo "run.sh: --profile takes core, allstar, asl-lab, asl-edge, asl-ext, nxdn, p25, interlink, load, g3, urfd, mrefd, web, browser, webload, nat or a comma list" >&2; exit 2 ;;
   esac
 done
 # native launch reads no xlxd.* file: these settings only change the reference side
@@ -599,7 +621,7 @@ fi
 # --profile asl-lab alone: only the tester and the four lab hosts start; the reflector sources, the
 # transcoder image and the prebuilt-image checks below do not apply
 lab_only=0
-{ [ "$profile" = asl-lab ] || [ "$profile" = asl-edge ]; } && lab_only=1
+{ [ "$profile" = asl-lab ] || [ "$profile" = asl-edge ] || [ "$profile" = asl-ext ]; } && lab_only=1
 if [ "$lab_only" = 0 ] && [ -z "${TRANSCODER_IMAGE:-}" ]; then
   echo "run.sh: TRANSCODER_IMAGE is not set; set it in .env (TRANSCODER_IMAGE=<your-ambed-image>)" >&2
   exit 2
@@ -1020,6 +1042,7 @@ cat ".cache/xlxd/${XLXD_REF_DIR:-ref}.fetched" ".cache/xlxd/${XLXD_SUT_DIR:-sut}
   # prebuilt reflector images are used as they are, never built over
   mapfile -t to_build < <("${compose[@]}" config --services | grep -vxF -f <(printf '%s\n' "${prebuilt[@]}" "-"))
   [ "$lab_only" = 0 ] || to_build=(tester asl-reg asl-a asl-b asl-e)
+  [ "$has_asl_ext" = 0 ] || to_build=(tester asl-ext)
   [ "$has_asl_edge" = 0 ] || to_build+=(asl-tap netem-xlxd-sut netem-asl-a netem-asl-b netem-asl-e)
   # the lab image is built FROM the allstar image (Dockerfile.allstar, the ASL3 package pins): build that first
   if [ "$has_asl_lab" = 1 ] && ! docker image inspect "${ASL_LAB_BASE_IMAGE:-dvt-allstar:local}" > /dev/null 2>&1; then
@@ -1034,6 +1057,8 @@ cat ".cache/xlxd/${XLXD_REF_DIR:-ref}.fetched" ".cache/xlxd/${XLXD_SUT_DIR:-sut}
 # everything was built above; up never builds (a prebuilt image is never replaced)
 if [ "$has_asl_edge" = 1 ]; then
   "${compose[@]}" up -d --no-build tester transcoder-sut xlxd-sut asl-reg asl-a asl-b asl-e asl-tap netem-xlxd-sut netem-asl-a netem-asl-b netem-asl-e
+elif [ "$has_asl_ext" = 1 ]; then
+  "${compose[@]}" up -d --no-build tester asl-ext
 elif [ "$lab_only" = 1 ]; then
   "${compose[@]}" up -d --no-build tester asl-reg asl-a asl-b asl-e
 else
@@ -1074,6 +1099,17 @@ if [ "$has_nat" = 1 ]; then
   if [ "$scan_rc" != 0 ]; then
     echo "run.sh: the TURN secret was found in the output above (exit $scan_rc)" >&2
     [ "$rc" != 0 ] || rc=5
+  fi
+fi
+# --profile asl-ext: the registration password must be in no file of the output directory (paths only, never the value)
+if [ "$has_asl_ext" = 1 ]; then
+  scan_rc=0
+  PYTHONPATH="$DVT_ROOT" python3 -m dvtest.secretscan --secret-file ".local/secrets/asl-400169.pw" --root "$out" || scan_rc=$?
+  if [ "$scan_rc" != 0 ]; then
+    echo "run.sh: the asl-400169 password was found in the output above (exit $scan_rc)" >&2
+    [ "$rc" != 0 ] || rc=5
+  else
+    echo "run.sh: asl-ext: password scan of $out clean"
   fi
 fi
 if [ "$capture" = 1 ]; then

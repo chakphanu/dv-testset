@@ -71,7 +71,7 @@
 # TRANSCODER_SUT_IMAGE; transcoder-ref stays the real image.
 #
 # Fixed addresses: xlxd-ref .10, xlxd-sut .11, transcoder-ref .20,
-# transcoder-sut .21, tester .30, allstar .40, asl-reg .41 / asl-a .42 / asl-b .43 / asl-e .44 (profile asl-lab), web-proxy .90, browser .91 (profile nat: nat-router .92,
+# transcoder-sut .21, tester .30, allstar .40, asl-reg .41 / asl-a .42 / asl-b .43 / asl-e .44 (profile asl-lab), asl-ext .45 (profile asl-ext), web-proxy .90, browser .91 (profile nat: nat-router .92,
 # alias .93, coturn .94, nat-ref-a .95, nat-ref-b .96; the browser is then at <DVT_NAT_NET>.91 behind the router),
 # webload .97 (profile webload).
 
@@ -445,6 +445,13 @@ services:
       DVT_ASL_EDGE_REG: ${DVT_ASL_EDGE_REG:-}
       DVT_ASL_EDGE_LOOKUP: ${DVT_ASL_EDGE_LOOKUP:-}
       DVT_ASL_REG_HTTP_PORT: ${DVT_ASL_HTTP_REG_PORT:-8082}
+      # profile asl-ext (cases/test_asl_ext.py): the real node 400169, outbound only
+      DVT_ASL_EXT: ${DVT_ASL_EXT:-off}
+      DVT_ASL_EXT_IP: ${DVT_NET:-172.30.0}.45
+      DVT_ASL_EXT_NODE: ${DVT_ASL_EXT_NODE:-400169}
+      DVT_ASL_EXT_GO: ${DVT_ASL_EXT_GO:-}
+      DVT_ASL_EXT_MODULES: ${DVT_ASL_EXT_MODULES:-400161,400168}
+      DVT_ASL_EXT_REGISTRY: ${DVT_ASL_EXT_REGISTRY:-register.allstarlink.org}
       DVT_SUBNET: ${DVT_NET:-172.30.0}.0/24
       DVT_NXDN: ${DVT_NXDN:-off}
       DVT_NXDN_REF: ${DVT_NET:-172.30.0}.50
@@ -575,6 +582,35 @@ services:
       DVT_ASL_USRP_RX: "32103"
     networks:
       rig: {ipv4_address: "${DVT_NET:-172.30.0}.44"}
+
+  # ---- profile asl-ext: the REAL node 400169, outbound only (docs/asl-edge-results.md "External dial T12") ----
+  # The only service with internet access: it is on the internal rig network (for the tester's agent calls) and on
+  # asl-ext-out, a normal bridge network that gives it a default route (docker NAT, nothing published). The
+  # registration password is a file of the host (mode 0600), mounted read-only; the entry script turns it into
+  # the Asterisk config inside the container. create_host_path false: a missing file is an error, never an empty
+  # directory made by docker.
+  asl-ext:
+    <<: [*asl-lab, *limits-medium]
+    profiles: [asl-ext]
+    dns_search: ["."]
+    environment:
+      <<: *asl-lab-env
+      DVT_ASL_ROLE: node-ext
+      DVT_ASL_NODE: ${DVT_ASL_EXT_NODE:-400169}
+      DVT_ASL_USRP_TX: "34104"
+      DVT_ASL_USRP_RX: "32104"
+      DVT_ASL_CAP_FILTER: "udp or tcp port 443 or tcp port 53"
+      DVT_ASL_EXT_REGISTRY: ${DVT_ASL_EXT_REGISTRY:-register.allstarlink.org}
+    volumes:
+      - type: bind
+        source: ../.local/secrets/asl-400169.pw
+        target: /run/dvt-secret/node.pw
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.45"}
+      asl-ext-out: {}
 
   # ---- sniffers (profile capture; capture-allstar also needs allstar) ----
   capture-xlxd-ref:
@@ -1200,3 +1236,7 @@ networks:
         - subnet: ${DVT_NET:-172.30.0}.0/24
           # dynamic addresses (load-node replicas) stay above the fixed ones
           ip_range: ${DVT_NET:-172.30.0}.128/25
+  # profile asl-ext: the one network with a way out, attached to the service asl-ext only (docker NAT; no port is
+  # published anywhere). Normal runs never create it.
+  asl-ext-out:
+    driver: bridge

@@ -215,6 +215,18 @@ The control channel (kill-proc, proc-stat, netem, restart) only exists while `ru
 watcher stops with that run even under `--keep`. Cases that need it run inside one `run.sh -- cases/...` call;
 a kept rig can still be driven by `docker compose exec tester` for everything else.
 
+## Profile asl-ext: the real node 400169 (external, outbound only)
+
+`DVT_ASL_EXT_GO=400169 scripts/run.sh --profile asl-ext -m asl_ext -- cases/test_asl_ext.py` leaves the lab on purpose:
+service `asl-ext` (`<net>.45`, the lab image, role `node-ext`) registers the real node 400169 with the real registry
+(`res_rpt_http_registrations`, HTTPS) and dials real nodes listen-only. It is the only service on `asl-ext-out`, a
+non-internal bridge (docker NAT, nothing published), must be the only profile, and reads its password from the file
+`.local/secrets/asl-400169.pw` (mounted read-only, never printed; `run.sh` scans `out/<run>` for it afterwards with
+`dvtest.secretscan`). `DVT_ASL_EXT_MODULES` (default `400161,400168`) names the nodes dialled; `DVT_ASL_EXT_REGISTRY` other
+than `register.allstarlink.org` makes it a dry run (no dial). Setup, timeline and results: `docs/asl-edge-results.md`,
+"External dial T12". Run it only with the node owner's agreement: the registration takes the node away from wherever it
+is registered.
+
 ## Byte vectors for the parser tests
 
 `python3 -m dvtest.iax2_frames <pcap> -o <json> [--limit N] [--anon] [--port 4569]`

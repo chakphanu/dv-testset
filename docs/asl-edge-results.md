@@ -113,3 +113,101 @@ heard 1.26 of 3 s). No audio was forwarded twice (B never sent voice into the ed
 - T5 with a real NAT in the path; T11 with real source-address spoofing (see the table).
 - DNS lookup of nodes through the lab zone by the edge: static rows cover every node a case dials; the
   `-lookup` snippet only sets the domain. A lookup case without static rows is open.
+
+## External dial T12 (ASL1b)
+
+The only test that leaves the rig. The user authorised exactly this, in the main session: register the real node
+400169 (XLX345's node number) with the real AllStarLink registry and dial XLX345 module A (node 400161) and module H
+(node 400168), listen only. Profile `asl-ext`, service `asl-ext` (the lab image, role `node-ext`), case
+`cases/test_asl_ext.py`, run `20261103T182029Z` (UTC 2026-11-03).
+
+```
+DVT_ASL_EXT_GO=400169 scripts/run.sh --profile asl-ext -m asl_ext -- cases/test_asl_ext.py     # about 4.5 minutes
+```
+
+### How the node is built and fenced
+
+| Point | What was done |
+|-------|---------------|
+| node | ASL3 Asterisk 22.10.1 (`2:22.10.1+asl3-3.10.8-1.deb13`), app_rpt, node 400169 (`rpt.conf`: `node_lookup_method = dns`, the default domain `nodes.allstarlink.org`), `chan_usrp` to a dummy local address (no radio), `idrecording` empty, telemetry 0, no statpost |
+| no transmit path | no tone playback, no MixMonitor, no dialplan beyond hang-up; functions 1 (disconnect), 3 (connect) and 6 (disconnect all) only; no IAX2 user or account at all (an inbound NEW is refused) |
+| registration | the ASL3 way: `res_rpt_http_registrations` (HTTPS to `register.allstarlink.org`, `register => 400169:<password>@register.allstarlink.org`, interval 180 s), not IAX2 `register =>` |
+| password | a host file (`.local/secrets`, dir 0700, file 0600), mounted read-only into the container; `rig/asl-lab-entry.sh` writes the registration line into a root-only (0600) staged file inside the container; the agent moves it into `rpt_http_registrations.conf` (0600, owner asterisk) when the case asks, so the node does not register at start. It was never an argument, an environment variable or a log line; `scripts/run.sh` scans the whole output directory for it after every asl-ext run (`dvtest.secretscan`, paths only, exit 5 on a hit): clean |
+| network | `asl-ext` is on the internal `rig` network (the tester's agent calls) and on `asl-ext-out`, a plain bridge network (docker NAT, nothing published); every other host stays internal; normal runs never create the network. The profile needs `DVT_ASL_EXT_GO=400169`, must be the only profile, and checks the file modes |
+| limits | `limits-medium` (512 MiB, 2 cpus, 512 pids) inside the `dvt-rig.scope` of `scripts/run.sh` |
+| capture | `tcpdump` on the default-route interface, filter `udp or tcp port 443 or tcp port 53`: IAX2 and the TLS flow to the registry (the docker resolver is not on eth0, so DNS is not in the pcap: the agent asks the same resolver itself and the case records SRV, A and TXT of each node in `dns.jsonl`) |
+| limits of the test | at most two attempts per node, 60 s apart (not needed), one rig, no loop; `out/<run>/asl-ext/stop` ends it at the next check |
+
+### Timeline (UTC, 2026-11-03)
+
+| Time | Event |
+|------|-------|
+| 18:20:31.8 | case starts, capture running; 18:20:31.9 registration switched on (module reload with the real line) |
+| 18:20:33.9 | **registered**: the module's own table (`rpt show registrations`) says `Registered`, 2.0 s after the request, refresh 179 s; the registry reported the node's public address with port 4569 (the node's IAX2 bindport, sent in the request) |
+| 18:20:33 to 18:21:24 | the registry's DNS A / TXT record of 400169 still named the previous holder only |
+| 18:21:34 | two A / TXT records for 400169 (the previous holder and this node) |
+| 18:21:44 | only this node's address: DNS agrees with the registration, 70 s after it |
+| 18:21:44.7 | dial 400161 (`rpt fun 400169 *3400161`) |
+| 18:21:46.3 | link ESTABLISHED (`rpt lstats`) |
+| 18:22:48.9 | after 60 s ESTABLISHED, disconnect (`*1400161`), link gone, channel gone |
+| 18:23:34.5 | dial 400168 |
+| 18:23:35.5 | link ESTABLISHED |
+| 18:24:38.2 | after 60 s ESTABLISHED, disconnect (`*1400168`) |
+| 18:24:39.7 | registration withdrawn (module reloaded with an empty list) |
+| 18:24:45.9 | Asterisk stopped (`core stop gracefully`), containers and `asl-ext-out` removed; node held 18:20:31 to 18:24:46 |
+
+### Result per dial
+
+| Dial | Lookup | IAX2 setup | Link | Result |
+|------|--------|-----------|------|--------|
+| 400161 (module A) | SRV `10 10 4569 <node>.nodes.allstarlink.org`, A one address, TXT `NN=400161 IP=<ip> PT=4569`, all rcode 0 (SRV points at port 4569, UDP; address in `out/` only) | NEW (empty call token), CALLTOKEN 9 ms later, NEW with the token, ACCEPT 9 ms after that (format ulaw), ANSWER 0.2 s after the first NEW | ESTABLISHED for the whole 60 s (6 samples, `rpt lstats` / `iax2 show channels` / `rpt nodes`: peer `T400161`, user `radio`, 1 IAX2 channel) | success, first attempt |
+| 400168 (module H) | same shape, SRV port 4569 | same, ANSWER 0.11 s after the first NEW | ESTABLISHED for the whole 60 s | success, first attempt |
+
+NEW carried VERSION 2, CALLED_NUMBER, CALLING_NUMBER `400169`, USERNAME `radio`, FORMAT ulaw, CAPABILITY gsm / ulaw /
+adpcm and the call token, like the lab's nodes. No error text on either call.
+
+### Link text exchange and what arrived
+
+Both calls show the same pattern (t in seconds from the NEW, call 1; call 2 is the same within 0.2 s):
+
+| t | From | Text |
+|---|------|------|
+| 0.22 | far node | `!NEWKEY1!` (right after ANSWER) |
+| 0.26 | this node | `!NEWKEY1!`, `T 400169 COMPLETE`, `L ` (empty), `T 400169 CONNECTED,400169,<far>` (one burst) |
+| 0.38 / 0.54 | far / this | `L ` (empty) each |
+| 30.4 / 30.5, 60.4 / 60.5 | far / this | `L ` (empty) every 30 s from both ends (the ASL3 default `linkpost_time`; the lab uses 10 s) |
+| 61.68 | this node | `!!DISCONNECT!!`, `T 400169 COMPLETE`; the far node's HANGUP follows 9 ms later |
+
+The far node's own link list is empty (`L `), so neither module had another link during the hold. LAGRQ / LAGRP every
+10 s and PING / PONG every 21 s from both ends, as in the lab. **No voice, no CNG, no RADIO_KEY or RADIO_UNKEY
+arrived on either call**: nobody keyed during the 2 x 60 s, so there is no received audio (`rx_bytes` 0, no
+`rx-*.ulaw` file). This node sent no voice frame either (it cannot). Asterisk logged "Silently dropping frame without
+existent call number" once per call for a late frame after the hang-up; nothing else abnormal.
+
+### Findings
+
+1. **A stock ASL3 node needs no tweak to dial XLX345.** The lab's findings hold on the real network: call token
+   exchange first, ulaw only, `!NEWKEY1!` both ways, no RADIO_KEY in new mode, `L` lists, `!!DISCONNECT!!` then
+   HANGUP. The far side behaves like the lab's ASL3 node, except that its `L` period is 30 s.
+2. **DNS lags the registration by about 70 s.** After the registration the registry's DNS A / TXT record kept the
+   previous holder's address for 50 s, then listed both, then only the new one. The far node validates the caller by
+   that lookup, so a dial placed earlier would risk the "does not match link IP" refusal that the lab reproduced
+   (`minimal-new`); the case waits for agreement before dialling.
+3. **Outbound-only works through docker NAT with nothing published**: the replies to the NEW came back on the same
+   UDP flow, 4569 on both ends, and no inbound packet was needed for the calls to stay up for 60 s.
+4. **Reload starts a registration at once.** `module reload res_rpt_http_registrations.so` made the first request
+   within milliseconds (dry run: 2 ms after the reload; the module otherwise waits for the 180 s interval); an empty
+   list withdraws it. The module has no
+   deregister request: the registry forgets the node when the next holder registers or the entry ages out.
+5. The docker embedded resolver answers app_rpt's SRV / A queries, but its upstream queries are not on the container's
+   eth0, so a pcap taken there holds no DNS; the agent's `/resolve` asks the same resolver and the case records it.
+
+Files (local, never committed): `out/20261103T182029Z/asl-ext/` holds `timeline.jsonl`, `summary.json`, `frames.json`,
+`dns.jsonl` and `dns-self.json` (addresses), `registrations-*.txt`, `state-*.txt`, `asl-ext.pcap` (56 KB) and
+`out/20261103T182029Z/logs/asl-ext.log`.
+
+Secret check: the exact-value scan of the password file ran on the whole output directory at the end of the run (clean).
+The password file was removed by its owner right after the node was released, so the staged diff could only be checked
+by heuristic (no `.local` or `out` path staged, no added line giving a 12 character alphanumeric value to a
+password-like key); the author never read the value. A dry run of the same rig against a registry name that does not resolve
+(`DVT_ASL_EXT_REGISTRY=register.invalid`, no dial) came first and is `out/20261103T181938Z`.

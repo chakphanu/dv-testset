@@ -3,7 +3,9 @@
 # asl-lab container entry: render the private config for this host, start the
 # control agent (and dnsmasq on the registrar), run asterisk in the foreground.
 #   env DVT_NET             rig /24 prefix (required)
-#   env DVT_ASL_ROLE        node | registrar | tap (required; tap = agent only, in another container's netns)
+#   env DVT_ASL_ROLE        node | registrar | tap | node-ext (required; tap = agent only, in another container's netns;
+#                           node-ext = the external node of profile asl-ext: real node number, registers with the real
+#                           registry, password read from the mounted file /run/dvt-secret/node.pw, outbound only)
 #   env DVT_ASL_NODE        private test node number (role node)
 #   env DVT_ASL_USRP_TX/RX  chan_usrp ports (role node; nothing listens there)
 #   env DVT_ASL_IAX_PORT    IAX2 UDP port (default 4569)
@@ -46,6 +48,45 @@ case "$role" in
         -e "s/@USRP_TX@/$utx/g" -e "s/@USRP_RX@/$urx/g" "$src/rpt.conf.in" > "$etc/rpt.conf"
     export DVT_NODE="$node"
     ;;
+  node-ext)
+    # profile asl-ext: the real node number, outbound only. The registration password is a FILE (mounted read-only);
+    # it is copied into the Asterisk config here with mode 0600 and never goes through a variable, an argument,
+    # an environment variable or a log line.
+    node="${DVT_ASL_NODE:?DVT_ASL_NODE is required}"
+    case "$node" in ''|*[!0-9]*) echo "dvt-asl-lab: DVT_ASL_NODE must be digits" >&2; exit 2 ;; esac
+    utx="${DVT_ASL_USRP_TX:?}"; urx="${DVT_ASL_USRP_RX:?}"
+    reg="${DVT_ASL_EXT_REGISTRY:-register.allstarlink.org}"
+    case "$reg" in ''|*[!A-Za-z0-9.-]*) echo "dvt-asl-lab: DVT_ASL_EXT_REGISTRY has odd characters" >&2; exit 2 ;; esac
+    pwf=/run/dvt-secret/node.pw
+    [ -f "$pwf" ] && [ -r "$pwf" ] && [ -s "$pwf" ] || { echo "dvt-asl-lab: node-ext needs the password file $pwf" >&2; exit 2; }
+    sed -e "s/@PORT@/$port/g" "$src/ext/iax.conf.in" > "$etc/iax.conf"
+    sed -e "s/@NODE@/$node/g" -e "s/@PORT@/$port/g" \
+        -e "s/@USRP_TX@/$utx/g" -e "s/@USRP_RX@/$urx/g" "$src/ext/rpt.conf.in" > "$etc/rpt.conf"
+    cp "$src/ext/extensions.conf" "$etc/extensions.conf"
+    # The live registration file starts with no entry: the node does NOT register when Asterisk starts. The
+    # staged copy (root only, mode 0600) holds the real line; the agent's POST /ext/register moves it into place
+    # and reloads the module, so the case chooses the moment (capture running first) and can withdraw it again.
+    ( umask 077
+      printf '[general]\nregister_interval = 180\n\n[registrations]\n' > "$etc/rpt_http_registrations.conf"
+      {
+        printf '[general]\nregister_interval = 180\n\n[registrations]\n'
+        printf 'register => %s:' "$node"
+        tr -d '\r\n' < "$pwf"
+        printf '@%s\n' "$reg"
+      } > /etc/asterisk/dvt-ext-registration.staged )
+    chown root:root /etc/asterisk/dvt-ext-registration.staged
+    chown asterisk:asterisk "$etc/rpt_http_registrations.conf" "$etc/rpt.conf" "$etc/extensions.conf" "$etc/iax.conf"
+    chmod 600 "$etc/rpt_http_registrations.conf" /etc/asterisk/dvt-ext-registration.staged
+    chmod 640 "$etc/iax.conf"
+    # chan_usrp on; nothing else changed: res_rpt_http_registrations stays loaded (it is "require" in the ASL3 default)
+    sed -i -E -e 's/^(noload|load)( *= *chan_usrp\.so)/require\2/' "$etc/modules.conf"
+    mkdir -p /var/run/asterisk /var/lib/dvt-lab/pcap
+    chown asterisk:asterisk /var/run/asterisk
+    echo "dvt-asl-lab: role=$role node=$node registry=$reg $(tr '\n' ' ' < "$etc/dvt-versions.txt")"
+    export DVT_NODE="$node" DVT_ASL_EXT=1
+    python3 /usr/local/sbin/dvt-asl-lab-agent &
+    exec asterisk -f -n -U asterisk -G asterisk -vvv
+    ;;
   registrar)
     own="${DVT_ASL_OWN_IP:?DVT_ASL_OWN_IP is required}"
     zone="${DVT_ASL_ZONE:?DVT_ASL_ZONE is required}"
@@ -87,7 +128,7 @@ case "$role" in
       } >> "$etc/iax.conf"
     done
     ;;
-  *) echo "dvt-asl-lab: DVT_ASL_ROLE must be node or registrar" >&2; exit 2 ;;
+  *) echo "dvt-asl-lab: DVT_ASL_ROLE must be node, registrar, tap or node-ext" >&2; exit 2 ;;
 esac
 
 cp "$src/extensions.conf" "$etc/extensions.conf"

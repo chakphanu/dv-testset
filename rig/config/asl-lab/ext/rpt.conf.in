@@ -1,0 +1,42 @@
+; SPDX-License-Identifier: MIT
+; External node of the asl-ext profile: node @NODE@ (the real node number, registered
+; with the real registry by res_rpt_http_registrations). Remote nodes are found by
+; DNS exactly as ASL3 does (the default domain, nodes.allstarlink.org, is not set here).
+; No transmit path: rxchannel is chan_usrp to a dummy local address (no radio, no DAHDI),
+; no ID recording, no telemetry, no statpost. Functions: connect (3), disconnect (1) and
+; disconnect all (6) only.
+
+[general]
+node_lookup_method = dns
+
+[nodes]
+@NODE@ = radio@127.0.0.1:@PORT@/@NODE@,NONE
+
+[@NODE@]
+rxchannel = USRP/127.0.0.1:@USRP_TX@:@USRP_RX@
+duplex = 1
+hangtime = 0
+althangtime = 0
+totime = 180000
+context = radio-local
+telemdefault = 0
+holdofftelem = 0
+idrecording =
+linktolink = no
+functions = functions
+link_functions = functions
+phone_functions = functions
+telemetry = telemetry
+morse = morse
+wait_times = wait-times
+
+[functions]
+1 = ilink,1
+3 = ilink,3
+6 = ilink,6
+
+[telemetry]
+
+[morse]
+
+[wait-times]

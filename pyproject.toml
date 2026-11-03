@@ -25,6 +25,7 @@ markers = [
     "rig: needs the docker rig (rig/compose.yml, profile core)",
     "allstar: needs the docker rig with profile allstar",
     "asl_lab: needs the docker rig with profile asl-lab (AllStarLink test lab, docs/asl-lab.md)",
+    "asl_ext: EXTERNAL (real AllStarLink network): needs --profile asl-ext, DVT_ASL_EXT_GO and the node password file (cases/test_asl_ext.py)",
     "nxdn: needs the docker rig with profile nxdn",
     "p25: needs the docker rig with profile p25",
     "load: needs the docker rig with profile load (many modules at once)",

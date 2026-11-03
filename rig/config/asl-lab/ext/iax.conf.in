@@ -1,0 +1,26 @@
+; SPDX-License-Identifier: MIT
+; IAX2 side of the external node (profile asl-ext, docs/asl-edge-results.md "External dial T12").
+; Outbound only: there is NO [radio] user and no account, so an inbound NEW is
+; rejected. Codecs and jitter buffer as in the ASL3 default. The registration with
+; the real registry is not IAX2 (see rpt_http_registrations.conf, written by
+; dvt-asl-lab-entry from a mounted secret file).
+[general]
+bindport = @PORT@
+bindaddr = 0.0.0.0
+disallow = all
+allow = ulaw
+allow = adpcm
+allow = gsm
+jitterbuffer = yes
+forcejitterbuffer = yes
+dropcount = 2
+maxjitterbuffer = 1000
+maxjitterinterps = 10
+resyncthreshold = 500
+maxexcessbuffer = 80
+minexcessbuffer = 10
+jittershrinkrate = 1
+tos = 0x1E
+autokill = yes
+delayreject = yes
+maxcallnumbers_nonvalidated = 10
