@@ -1,0 +1,374 @@
+{
+ "version": 1,
+ "source": "reg.pcap",
+ "ports": [
+  4569
+ ],
+ "frames": 18,
+ "skipped": {
+  "non_iax_port": 0,
+  "bad": 0
+ },
+ "capture_stats": {
+  "packets": 18,
+  "udp": 18
+ },
+ "summary": {
+  "iax.ACK": 6,
+  "iax.CALLTOKEN": 2,
+  "iax.REGACK": 1,
+  "iax.REGAUTH": 2,
+  "iax.REGREJ": 1,
+  "iax.REGREQ": 6
+ },
+ "types": {
+  "iax.ACK": [
+   {
+    "frame": 4,
+    "t": 0.000458,
+    "src": "192.0.2.2:4569",
+    "dst": "192.0.2.1:4569",
+    "type": "iax.ACK",
+    "form": "full",
+    "scall": 16086,
+    "dcall": 14371,
+    "retrans": false,
+    "ts": 13,
+    "oseq": 0,
+    "iseq": 1,
+    "kind": 6,
+    "subclass": 4,
+    "payload_len": 0,
+    "ies": [],
+    "hex": "bed638230000000d00010604"
+   },
+   {
+    "frame": 7,
+    "t": 0.000558,
+    "src": "192.0.2.2:4569",
+    "dst": "192.0.2.1:4569",
+    "type": "iax.ACK",
+    "form": "full",
+    "scall": 16086,
+    "dcall": 14371,
+    "retrans": false,
+    "ts": 16,
+    "oseq": 1,
+    "iseq": 2,
+    "kind": 6,
+    "subclass": 4,
+    "payload_len": 0,
+    "ies": [],
+    "hex": "bed638230000001001020604"
+   }
+  ],
+  "iax.CALLTOKEN": [
+   {
+    "frame": 2,
+    "t": 0.00016,
+    "src": "192.0.2.2:4569",
+    "dst": "192.0.2.1:4569",
+    "type": "iax.CALLTOKEN",
+    "form": "full",
+    "scall": 1,
+    "dcall": 14371,
+    "retrans": false,
+    "ts": 10,
+    "oseq": 0,
+    "iseq": 1,
+    "kind": 6,
+    "subclass": 40,
+    "payload_len": 53,
+    "ies": [
+     {
+      "ie": 54,
+      "name": "CALLTOKEN",
+      "len": 51,
+      "hex": "313739333637323932363f36666635306663623166383836373938643863646336333438373465663164363662633935316662"
+     }
+    ],
+    "hex": "800138230000000a000106283633313739333637323932363f36666635306663623166383836373938643863646336333438373465663164363662633935316662"
+   },
+   {
+    "frame": 11,
+    "t": 0.531627,
+    "src": "192.0.2.2:4569",
+    "dst": "192.0.2.1:4569",
+    "type": "iax.CALLTOKEN",
+    "form": "full",
+    "scall": 1,
+    "dcall": 2629,
+    "retrans": false,
+    "ts": 1,
+    "oseq": 0,
+    "iseq": 1,
+    "kind": 6,
+    "subclass": 40,
+    "payload_len": 53,
+    "ies": [
+     {
+      "ie": 54,
+      "name": "CALLTOKEN",
+      "len": 51,
+      "hex": "313739333637323932373f64366665626133633436633735376164393361633039313131396336313939626533353232636661"
+     }
+    ],
+    "hex": "80010a4500000001000106283633313739333637323932373f64366665626133633436633735376164393361633039313131396336313939626533353232636661"
+   }
+  ],
+  "iax.REGACK": [
+   {
+    "frame": 8,
+    "t": 0.000852,
+    "src": "192.0.2.2:4569",
+    "dst": "192.0.2.1:4569",
+    "type": "iax.REGACK",
+    "form": "full",
+    "scall": 16086,
+    "dcall": 14371,
+    "retrans": false,
+    "ts": 11,
+    "oseq": 1,
+    "iseq": 2,
+    "kind": 6,
+    "subclass": 15,
+    "payload_len": 36,
+    "ies": [
+     {
+      "ie": 6,
+      "name": "USERNAME",
+      "len": 6,
+      "hex": "313939393031",
+      "text": "199901"
+     },
+     {
+      "ie": 31,
+      "name": "DATETIME",
+      "len": 4,
+      "hex": "35631397",
+      "int": 895685527
+     },
+     {
+      "ie": 19,
+      "name": "REFRESH",
+      "len": 2,
+      "hex": "00b4",
+      "int": 180
+     },
+     {
+      "ie": 18,
+      "name": "APPARENT_ADDR",
+      "len": 16,
+      "hex": "020011d9ac1e002a0000000000000000",
+      "addr": "172.30.0.42:4569"
+     }
+    ],
+    "hex": "bed638230000000b0102060f06063139393930311f0435631397130200b41210020011d9ac1e002a0000000000000000"
+   }
+  ],
+  "iax.REGAUTH": [
+   {
+    "frame": 5,
+    "t": 0.000493,
+    "src": "192.0.2.2:4569",
+    "dst": "192.0.2.1:4569",
+    "type": "iax.REGAUTH",
+    "form": "full",
+    "scall": 16086,
+    "dcall": 14371,
+    "retrans": false,
+    "ts": 10,
+    "oseq": 0,
+    "iseq": 1,
+    "kind": 6,
+    "subclass": 14,
+    "payload_len": 23,
+    "ies": [
+     {
+      "ie": 14,
+      "name": "AUTHMETHODS",
+      "len": 2,
+      "hex": "0002",
+      "int": 2
+     },
+     {
+      "ie": 15,
+      "name": "CHALLENGE",
+      "len": 9,
+      "hex": "323032353339373730",
+      "text": "202539770"
+     },
+     {
+      "ie": 6,
+      "name": "USERNAME",
+      "len": 6,
+      "hex": "313939393031",
+      "text": "199901"
+     }
+    ],
+    "hex": "bed638230000000a0001060e0e0200020f093230323533393737300606313939393031"
+   },
+   {
+    "frame": 14,
+    "t": 0.531765,
+    "src": "192.0.2.2:4569",
+    "dst": "192.0.2.1:4569",
+    "type": "iax.REGAUTH",
+    "form": "full",
+    "scall": 6698,
+    "dcall": 2629,
+    "retrans": false,
+    "ts": 2,
+    "oseq": 0,
+    "iseq": 1,
+    "kind": 6,
+    "subclass": 14,
+    "payload_len": 23,
+    "ies": [
+     {
+      "ie": 14,
+      "name": "AUTHMETHODS",
+      "len": 2,
+      "hex": "0002",
+      "int": 2
+     },
+     {
+      "ie": 15,
+      "name": "CHALLENGE",
+      "len": 9,
+      "hex": "323038363735333735",
+      "text": "208675375"
+     },
+     {
+      "ie": 6,
+      "name": "USERNAME",
+      "len": 6,
+      "hex": "313939393031",
+      "text": "199901"
+     }
+    ],
+    "hex": "9a2a0a45000000020001060e0e0200020f093230383637353337350606313939393031"
+   }
+  ],
+  "iax.REGREJ": [
+   {
+    "frame": 17,
+    "t": 1.531014,
+    "src": "192.0.2.2:4569",
+    "dst": "192.0.2.1:4569",
+    "type": "iax.REGREJ",
+    "form": "full",
+    "scall": 6698,
+    "dcall": 2629,
+    "retrans": false,
+    "ts": 1001,
+    "oseq": 1,
+    "iseq": 2,
+    "kind": 6,
+    "subclass": 16,
+    "payload_len": 25,
+    "ies": [
+     {
+      "ie": 22,
+      "name": "CAUSE",
+      "len": 20,
+      "hex": "526567697374726174696f6e2052656675736564",
+      "text": "Registration Refused"
+     },
+     {
+      "ie": 42,
+      "name": "CAUSECODE",
+      "len": 1,
+      "hex": "1d",
+      "int": 29
+     }
+    ],
+    "hex": "9a2a0a45000003e9010206101614526567697374726174696f6e20526566757365642a011d"
+   }
+  ],
+  "iax.REGREQ": [
+   {
+    "frame": 1,
+    "t": 0.0,
+    "src": "192.0.2.1:4569",
+    "dst": "192.0.2.2:4569",
+    "type": "iax.REGREQ",
+    "form": "full",
+    "scall": 14371,
+    "dcall": 0,
+    "retrans": false,
+    "ts": 10,
+    "oseq": 0,
+    "iseq": 0,
+    "kind": 6,
+    "subclass": 13,
+    "payload_len": 14,
+    "ies": [
+     {
+      "ie": 6,
+      "name": "USERNAME",
+      "len": 6,
+      "hex": "313939393031",
+      "text": "199901"
+     },
+     {
+      "ie": 19,
+      "name": "REFRESH",
+      "len": 2,
+      "hex": "003c",
+      "int": 60
+     },
+     {
+      "ie": 54,
+      "name": "CALLTOKEN",
+      "len": 0,
+      "hex": ""
+     }
+    ],
+    "hex": "b82300000000000a0000060d06063139393930311302003c3600"
+   },
+   {
+    "frame": 3,
+    "t": 0.000374,
+    "src": "192.0.2.1:4569",
+    "dst": "192.0.2.2:4569",
+    "type": "iax.REGREQ",
+    "form": "full",
+    "scall": 14371,
+    "dcall": 0,
+    "retrans": false,
+    "ts": 13,
+    "oseq": 0,
+    "iseq": 0,
+    "kind": 6,
+    "subclass": 13,
+    "payload_len": 65,
+    "ies": [
+     {
+      "ie": 6,
+      "name": "USERNAME",
+      "len": 6,
+      "hex": "313939393031",
+      "text": "199901"
+     },
+     {
+      "ie": 19,
+      "name": "REFRESH",
+      "len": 2,
+      "hex": "003c",
+      "int": 60
+     },
+     {
+      "ie": 54,
+      "name": "CALLTOKEN",
+      "len": 51,
+      "hex": "313739333637323932363f36666635306663623166383836373938643863646336333438373465663164363662633935316662"
+     }
+    ],
+    "hex": "b82300000000000d0000060d06063139393930311302003c3633313739333637323932363f36666635306663623166383836373938643863646336333438373465663164363662633935316662"
+   }
+  ]
+ },
+ "ts16_wraps": [],
+ "dns": []
+}

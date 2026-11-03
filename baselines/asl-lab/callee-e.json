@@ -1,0 +1,772 @@
+{
+ "version": 1,
+ "source": "e.pcap",
+ "ports": [
+  4569
+ ],
+ "frames": 231,
+ "skipped": {
+  "non_iax_port": 0,
+  "bad": 0
+ },
+ "capture_stats": {
+  "packets": 239,
+  "udp": 239
+ },
+ "summary": {
+  "cng": 1,
+  "control.ANSWER": 1,
+  "control.RADIO_UNKEY": 1,
+  "control.STOP_SOUND": 1,
+  "iax.ACCEPT": 1,
+  "iax.ACK": 15,
+  "iax.CALLTOKEN": 1,
+  "iax.HANGUP": 1,
+  "iax.NEW": 2,
+  "text": 7,
+  "voice.full": 1,
+  "voice.mini": 199
+ },
+ "types": {
+  "cng": [
+   {
+    "frame": 235,
+    "t": 5.979633,
+    "src": "192.0.2.1:4569",
+    "dst": "192.0.2.2:4569",
+    "type": "cng",
+    "form": "full",
+    "scall": 11873,
+    "dcall": 11940,
+    "retrans": false,
+    "ts": 5786,
+    "oseq": 8,
+    "iseq": 5,
+    "kind": 10,
+    "subclass": 0,
+    "payload_len": 0,
+    "hex": "ae612ea40000169a08050a00"
+   }
+  ],
+  "control.ANSWER": [
+   {
+    "frame": 15,
+    "t": 0.205045,
+    "src": "192.0.2.2:4569",
+    "dst": "192.0.2.1:4569",
+    "type": "control.ANSWER",
+    "form": "full",
+    "scall": 11940,
+    "dcall": 11873,
+    "retrans": false,
+    "ts": 20,
+    "oseq": 1,
+    "iseq": 1,
+    "kind": 4,
+    "subclass": 4,
+    "payload_len": 0,
+    "hex": "aea42e610000001401010404"
+   }
+  ],
+  "control.RADIO_UNKEY": [
+   {
+    "frame": 234,
+    "t": 5.979582,
+    "src": "192.0.2.1:4569",
+    "dst": "192.0.2.2:4569",
+    "type": "control.RADIO_UNKEY",
+    "form": "full",
+    "scall": 11873,
+    "dcall": 11940,
+    "retrans": false,
+    "ts": 5783,
+    "oseq": 7,
+    "iseq": 5,
+    "kind": 4,
+    "subclass": 13,
+    "payload_len": 0,
+    "hex": "ae612ea4000016970705040d"
+   }
+  ],
+  "control.STOP_SOUND": [
+   {
+    "frame": 17,
+    "t": 0.205125,
+    "src": "192.0.2.2:4569",
+    "dst": "192.0.2.1:4569",
+    "type": "control.STOP_SOUND",
+    "form": "full",
+    "scall": 11940,
+    "dcall": 11873,
+    "retrans": false,
+    "ts": 23,
+    "oseq": 2,
+    "iseq": 1,
+    "kind": 4,
+    "subclass": -1,
+    "payload_len": 0,
+    "hex": "aea42e6100000017020104ff"
+   }
+  ],
+  "iax.ACCEPT": [
+   {
+    "frame": 13,
+    "t": 0.201269,
+    "src": "192.0.2.2:4569",
+    "dst": "192.0.2.1:4569",
+    "type": "iax.ACCEPT",
+    "form": "full",
+    "scall": 11940,
+    "dcall": 11873,
+    "retrans": false,
+    "ts": 17,
+    "oseq": 0,
+    "iseq": 1,
+    "kind": 6,
+    "subclass": 7,
+    "payload_len": 17,
+    "ies": [
+     {
+      "ie": 9,
+      "name": "FORMAT",
+      "len": 4,
+      "hex": "00000004",
+      "formats": [
+       "ulaw"
+      ]
+     },
+     {
+      "ie": 56,
+      "name": "FORMAT2",
+      "len": 9,
+      "hex": "000000000000000004"
+     }
+    ],
+    "hex": "aea42e6100000011000106070904000000043809000000000000000004"
+   }
+  ],
+  "iax.ACK": [
+   {
+    "frame": 12,
+    "t": 0.201187,
+    "src": "192.0.2.2:4569",
+    "dst": "192.0.2.1:4569",
+    "type": "iax.ACK",
+    "form": "full",
+    "scall": 11940,
+    "dcall": 11873,
+    "retrans": false,
+    "ts": 20,
+    "oseq": 0,
+    "iseq": 1,
+    "kind": 6,
+    "subclass": 4,
+    "payload_len": 0,
+    "ies": [],
+    "hex": "aea42e610000001400010604"
+   },
+   {
+    "frame": 14,
+    "t": 0.201373,
+    "src": "192.0.2.1:4569",
+    "dst": "192.0.2.2:4569",
+    "type": "iax.ACK",
+    "form": "full",
+    "scall": 11873,
+    "dcall": 11940,
+    "retrans": false,
+    "ts": 17,
+    "oseq": 1,
+    "iseq": 1,
+    "kind": 6,
+    "subclass": 4,
+    "payload_len": 0,
+    "ies": [],
+    "hex": "ae612ea40000001101010604"
+   }
+  ],
+  "iax.CALLTOKEN": [
+   {
+    "frame": 10,
+    "t": 0.201013,
+    "src": "192.0.2.2:4569",
+    "dst": "192.0.2.1:4569",
+    "type": "iax.CALLTOKEN",
+    "form": "full",
+    "scall": 1,
+    "dcall": 11873,
+    "retrans": false,
+    "ts": 17,
+    "oseq": 0,
+    "iseq": 1,
+    "kind": 6,
+    "subclass": 40,
+    "payload_len": 53,
+    "ies": [
+     {
+      "ie": 54,
+      "name": "CALLTOKEN",
+      "len": 51,
+      "hex": "313739333637323931303f63346162303137616139303638656638393133303331643562623161636430373039326364626432"
+     }
+    ],
+    "hex": "80012e6100000011000106283633313739333637323931303f63346162303137616139303638656638393133303331643562623161636430373039326364626432"
+   }
+  ],
+  "iax.HANGUP": [
+   {
+    "frame": 238,
+    "t": 7.551397,
+    "src": "192.0.2.2:4569",
+    "dst": "192.0.2.1:4569",
+    "type": "iax.HANGUP",
+    "form": "full",
+    "scall": 11940,
+    "dcall": 11873,
+    "retrans": false,
+    "ts": 7367,
+    "oseq": 5,
+    "iseq": 9,
+    "kind": 6,
+    "subclass": 5,
+    "payload_len": 3,
+    "ies": [
+     {
+      "ie": 42,
+      "name": "CAUSECODE",
+      "len": 1,
+      "hex": "00",
+      "int": 0
+     }
+    ],
+    "hex": "aea42e6100001cc7050906052a0100"
+   }
+  ],
+  "iax.NEW": [
+   {
+    "frame": 9,
+    "t": 0.200795,
+    "src": "192.0.2.1:4569",
+    "dst": "192.0.2.2:4569",
+    "type": "iax.NEW",
+    "form": "full",
+    "scall": 11873,
+    "dcall": 0,
+    "retrans": false,
+    "ts": 17,
+    "oseq": 0,
+    "iseq": 0,
+    "kind": 6,
+    "subclass": 1,
+    "payload_len": 98,
+    "ies": [
+     {
+      "ie": 11,
+      "name": "VERSION",
+      "len": 2,
+      "hex": "0002",
+      "int": 2
+     },
+     {
+      "ie": 1,
+      "name": "CALLED_NUMBER",
+      "len": 6,
+      "hex": "313939393032",
+      "text": "199902"
+     },
+     {
+      "ie": 45,
+      "name": "CODEC_PREFS",
+      "len": 3,
+      "hex": "444743"
+     },
+     {
+      "ie": 2,
+      "name": "CALLING_NUMBER",
+      "len": 6,
+      "hex": "323939393031",
+      "text": "299901"
+     },
+     {
+      "ie": 38,
+      "name": "CALLINGPRES",
+      "len": 1,
+      "hex": "00",
+      "int": 0
+     },
+     {
+      "ie": 39,
+      "name": "CALLINGTON",
+      "len": 1,
+      "hex": "00",
+      "int": 0
+     },
+     {
+      "ie": 40,
+      "name": "CALLINGTNS",
+      "len": 2,
+      "hex": "0000",
+      "int": 0
+     },
+     {
+      "ie": 57,
+      "name": "IE_57",
+      "len": 4,
+      "hex": "00000000",
+      "int": 0
+     },
+     {
+      "ie": 10,
+      "name": "LANGUAGE",
+      "len": 2,
+      "hex": "656e",
+      "text": "en"
+     },
+     {
+      "ie": 6,
+      "name": "USERNAME",
+      "len": 5,
+      "hex": "726164696f",
+      "text": "radio"
+     },
+     {
+      "ie": 9,
+      "name": "FORMAT",
+      "len": 4,
+      "hex": "00000004",
+      "formats": [
+       "ulaw"
+      ]
+     },
+     {
+      "ie": 56,
+      "name": "FORMAT2",
+      "len": 9,
+      "hex": "000000000000000004"
+     },
+     {
+      "ie": 8,
+      "name": "CAPABILITY",
+      "len": 4,
+      "hex": "00000026",
+      "formats": [
+       "gsm",
+       "ulaw",
+       "adpcm"
+      ]
+     },
+     {
+      "ie": 55,
+      "name": "CAPABILITY2",
+      "len": 9,
+      "hex": "000000000000000026"
+     },
+     {
+      "ie": 12,
+      "name": "ADSICPE",
+      "len": 2,
+      "hex": "0002",
+      "int": 2
+     },
+     {
+      "ie": 31,
+      "name": "DATETIME",
+      "len": 4,
+      "hex": "3563138f",
+      "int": 895685519
+     },
+     {
+      "ie": 54,
+      "name": "CALLTOKEN",
+      "len": 0,
+      "hex": ""
+     }
+    ],
+    "hex": "ae61000000000011000006010b02000201063139393930322d034447430206323939393031260100270100280200003904000000000a02656e0605726164696f090400000004380900000000000000000408040000002637090000000000000000260c0200021f043563138f3600"
+   },
+   {
+    "frame": 11,
+    "t": 0.201083,
+    "src": "192.0.2.1:4569",
+    "dst": "192.0.2.2:4569",
+    "type": "iax.NEW",
+    "form": "full",
+    "scall": 11873,
+    "dcall": 0,
+    "retrans": false,
+    "ts": 20,
+    "oseq": 0,
+    "iseq": 0,
+    "kind": 6,
+    "subclass": 1,
+    "payload_len": 149,
+    "ies": [
+     {
+      "ie": 11,
+      "name": "VERSION",
+      "len": 2,
+      "hex": "0002",
+      "int": 2
+     },
+     {
+      "ie": 1,
+      "name": "CALLED_NUMBER",
+      "len": 6,
+      "hex": "313939393032",
+      "text": "199902"
+     },
+     {
+      "ie": 45,
+      "name": "CODEC_PREFS",
+      "len": 3,
+      "hex": "444743"
+     },
+     {
+      "ie": 2,
+      "name": "CALLING_NUMBER",
+      "len": 6,
+      "hex": "323939393031",
+      "text": "299901"
+     },
+     {
+      "ie": 38,
+      "name": "CALLINGPRES",
+      "len": 1,
+      "hex": "00",
+      "int": 0
+     },
+     {
+      "ie": 39,
+      "name": "CALLINGTON",
+      "len": 1,
+      "hex": "00",
+      "int": 0
+     },
+     {
+      "ie": 40,
+      "name": "CALLINGTNS",
+      "len": 2,
+      "hex": "0000",
+      "int": 0
+     },
+     {
+      "ie": 57,
+      "name": "IE_57",
+      "len": 4,
+      "hex": "00000000",
+      "int": 0
+     },
+     {
+      "ie": 10,
+      "name": "LANGUAGE",
+      "len": 2,
+      "hex": "656e",
+      "text": "en"
+     },
+     {
+      "ie": 6,
+      "name": "USERNAME",
+      "len": 5,
+      "hex": "726164696f",
+      "text": "radio"
+     },
+     {
+      "ie": 9,
+      "name": "FORMAT",
+      "len": 4,
+      "hex": "00000004",
+      "formats": [
+       "ulaw"
+      ]
+     },
+     {
+      "ie": 56,
+      "name": "FORMAT2",
+      "len": 9,
+      "hex": "000000000000000004"
+     },
+     {
+      "ie": 8,
+      "name": "CAPABILITY",
+      "len": 4,
+      "hex": "00000026",
+      "formats": [
+       "gsm",
+       "ulaw",
+       "adpcm"
+      ]
+     },
+     {
+      "ie": 55,
+      "name": "CAPABILITY2",
+      "len": 9,
+      "hex": "000000000000000026"
+     },
+     {
+      "ie": 12,
+      "name": "ADSICPE",
+      "len": 2,
+      "hex": "0002",
+      "int": 2
+     },
+     {
+      "ie": 31,
+      "name": "DATETIME",
+      "len": 4,
+      "hex": "3563138f",
+      "int": 895685519
+     },
+     {
+      "ie": 54,
+      "name": "CALLTOKEN",
+      "len": 51,
+      "hex": "313739333637323931303f63346162303137616139303638656638393133303331643562623161636430373039326364626432"
+     }
+    ],
+    "hex": "ae61000000000014000006010b02000201063139393930322d034447430206323939393031260100270100280200003904000000000a02656e0605726164696f090400000004380900000000000000000408040000002637090000000000000000260c0200021f043563138f3633313739333637323931303f63346162303137616139303638656638393133303331643562623161636430373039326364626432"
+   }
+  ],
+  "text": [
+   {
+    "frame": 19,
+    "t": 0.244316,
+    "src": "192.0.2.1:4569",
+    "dst": "192.0.2.2:4569",
+    "type": "text",
+    "form": "full",
+    "scall": 11873,
+    "dcall": 11940,
+    "retrans": false,
+    "ts": 23,
+    "oseq": 1,
+    "iseq": 3,
+    "kind": 7,
+    "subclass": 0,
+    "payload_len": 10,
+    "text": "!NEWKEY1!\u0000",
+    "hex": "ae612ea40000001701030700214e45574b4559312100"
+   },
+   {
+    "frame": 21,
+    "t": 0.247448,
+    "src": "192.0.2.1:4569",
+    "dst": "192.0.2.2:4569",
+    "type": "text",
+    "form": "full",
+    "scall": 11873,
+    "dcall": 11940,
+    "retrans": false,
+    "ts": 26,
+    "oseq": 2,
+    "iseq": 3,
+    "kind": 7,
+    "subclass": 0,
+    "payload_len": 18,
+    "text": "T 299901 COMPLETE\u0000",
+    "hex": "ae612ea40000001a02030700542032393939303120434f4d504c45544500"
+   }
+  ],
+  "voice.full": [
+   {
+    "frame": 33,
+    "t": 1.979556,
+    "src": "192.0.2.1:4569",
+    "dst": "192.0.2.2:4569",
+    "type": "voice.full",
+    "form": "full",
+    "scall": 11873,
+    "dcall": 11940,
+    "retrans": false,
+    "ts": 1800,
+    "oseq": 6,
+    "iseq": 5,
+    "kind": 2,
+    "subclass": 4,
+    "payload_len": 160,
+    "codec": "ulaw",
+    "hex": "ae612ea40000070806050204ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+   }
+  ],
+  "voice.mini": [
+   {
+    "frame": 35,
+    "t": 1.99955,
+    "src": "192.0.2.1:4569",
+    "dst": "192.0.2.2:4569",
+    "type": "voice.mini",
+    "form": "mini",
+    "scall": 11873,
+    "ts16": 1820,
+    "payload_len": 160,
+    "hex": "2e61071cffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+   },
+   {
+    "frame": 36,
+    "t": 2.019566,
+    "src": "192.0.2.1:4569",
+    "dst": "192.0.2.2:4569",
+    "type": "voice.mini",
+    "form": "mini",
+    "scall": 11873,
+    "ts16": 1840,
+    "payload_len": 160,
+    "hex": "2e610730ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+   }
+  ]
+ },
+ "ts16_wraps": [],
+ "dns": [
+  {
+   "id": 21845,
+   "qr": 0,
+   "rcode": 0,
+   "questions": [
+    {
+     "name": "_iax._udp.1999.nodes.asl.test",
+     "type": "SRV"
+    }
+   ],
+   "answers": [],
+   "frame": 1,
+   "t": 0.0,
+   "src": "192.0.2.1:34178",
+   "dst": "192.0.2.3:53",
+   "hex": "555501200001000000000001045f696178045f7564700431393939056e6f6465730361736c0474657374000021000100002904b0000000000000"
+  },
+  {
+   "id": 21845,
+   "qr": 1,
+   "rcode": 3,
+   "questions": [
+    {
+     "name": "_iax._udp.1999.nodes.asl.test",
+     "type": "SRV"
+    }
+   ],
+   "answers": [],
+   "frame": 2,
+   "t": 0.000119,
+   "src": "192.0.2.3:53",
+   "dst": "192.0.2.1:34178",
+   "hex": "555581830001000000000001045f696178045f7564700431393939056e6f6465730361736c0474657374000021000100002904d0000000000000"
+  },
+  {
+   "id": 52021,
+   "qr": 0,
+   "rcode": 0,
+   "questions": [
+    {
+     "name": "_iax._udp.19990.nodes.asl.test",
+     "type": "SRV"
+    }
+   ],
+   "answers": [],
+   "frame": 3,
+   "t": 0.10023,
+   "src": "192.0.2.1:45262",
+   "dst": "192.0.2.3:53",
+   "hex": "cb3501200001000000000001045f696178045f756470053139393930056e6f6465730361736c0474657374000021000100002904b0000000000000"
+  },
+  {
+   "id": 52021,
+   "qr": 1,
+   "rcode": 3,
+   "questions": [
+    {
+     "name": "_iax._udp.19990.nodes.asl.test",
+     "type": "SRV"
+    }
+   ],
+   "answers": [],
+   "frame": 4,
+   "t": 0.100362,
+   "src": "192.0.2.3:53",
+   "dst": "192.0.2.1:45262",
+   "hex": "cb3581830001000000000001045f696178045f756470053139393930056e6f6465730361736c0474657374000021000100002904d0000000000000"
+  },
+  {
+   "id": 41291,
+   "qr": 0,
+   "rcode": 0,
+   "questions": [
+    {
+     "name": "_iax._udp.199902.nodes.asl.test",
+     "type": "SRV"
+    }
+   ],
+   "answers": [],
+   "frame": 5,
+   "t": 0.199897,
+   "src": "192.0.2.1:42717",
+   "dst": "192.0.2.3:53",
+   "hex": "a14b01200001000000000001045f696178045f75647006313939393032056e6f6465730361736c0474657374000021000100002904b0000000000000"
+  },
+  {
+   "id": 41291,
+   "qr": 1,
+   "rcode": 0,
+   "questions": [
+    {
+     "name": "_iax._udp.199902.nodes.asl.test",
+     "type": "SRV"
+    }
+   ],
+   "answers": [
+    {
+     "name": "_iax._udp.199902.nodes.asl.test",
+     "type": "SRV",
+     "ttl": 30,
+     "rdata": "0000000011d906313939393032056e6f6465730361736c047465737400",
+     "text": "0 0 4569 199902.nodes.asl.test"
+    }
+   ],
+   "frame": 6,
+   "t": 0.200013,
+   "src": "192.0.2.3:53",
+   "dst": "192.0.2.1:42717",
+   "hex": "a14b85800001000100000002045f696178045f75647006313939393032056e6f6465730361736c04746573740000210001c00c002100010000001e001d0000000011d906313939393032056e6f6465730361736c047465737400c043000100010000001e0004ac1e002b00002904d0000000000000"
+  },
+  {
+   "id": 45762,
+   "qr": 0,
+   "rcode": 0,
+   "questions": [
+    {
+     "name": "199902.nodes.asl.test",
+     "type": "A"
+    }
+   ],
+   "answers": [],
+   "frame": 7,
+   "t": 0.200311,
+   "src": "192.0.2.1:36612",
+   "dst": "192.0.2.3:53",
+   "hex": "b2c20120000100000000000106313939393032056e6f6465730361736c0474657374000001000100002904b0000000000000"
+  },
+  {
+   "id": 45762,
+   "qr": 1,
+   "rcode": 0,
+   "questions": [
+    {
+     "name": "199902.nodes.asl.test",
+     "type": "A"
+    }
+   ],
+   "answers": [
+    {
+     "name": "199902.nodes.asl.test",
+     "type": "A",
+     "ttl": 30,
+     "rdata": "ac1e002b",
+     "text": "172.30.0.43"
+    }
+   ],
+   "frame": 8,
+   "t": 0.200343,
+   "src": "192.0.2.3:53",
+   "dst": "192.0.2.1:36612",
+   "hex": "b2c28580000100010000000106313939393032056e6f6465730361736c04746573740000010001c00c000100010000001e0004ac1e002b00002904d0000000000000"
+  }
+ ]
+}

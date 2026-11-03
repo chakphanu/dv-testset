@@ -42,6 +42,7 @@ internet, and every address is fixed.
 | transcoder-sut | 172.30.0.21 | core | `TRANSCODER_SUT_IMAGE` or `TRANSCODER_IMAGE`, peers .11 and .30 |
 | tester | 172.30.0.30 | core | runs pytest; repository mounted at `/dvt` |
 | allstar | 172.30.0.40 | allstar | AllStarLink 3 node, chan_usrp to xlxd-sut A/B, IAX2 4569 |
+| asl-reg / asl-a / asl-b / asl-e | 172.30.0.41 / .42 / .43 / .44 | asl-lab | AllStarLink test lab: registrar + DNS zone, private app_rpt nodes 199901, 199902, 299901 (e = stand-in for dv-edge-allstar), agent on :8099; see [asl-lab.md](asl-lab.md) |
 | nxdn-ref / nxdn-sut | 172.30.0.50 / .51 | nxdn | NXDNReflector peered with xlxd-ref / xlxd-sut (module `DVT_NXDN_MODULE`, TG `DVT_NXDN_TG`) |
 | p25-ref / p25-sut | 172.30.0.60 / .61 | p25 | P25Reflector peered with xlxd-ref / xlxd-sut (module `DVT_P25_MODULE`) |
 | xlxd-peer-sut / xlxd-peer-ref | 172.30.0.12 / .13 | interlink | XLX998, interlinked with xlxd-sut / xlxd-ref on `DVT_INTERLINK_MODULES` |
@@ -65,7 +66,9 @@ internet, and every address is fixed.
 | UDP 17000 | M17 | xlxd |
 | UDP 34001-34003 | USRP, xlxd-sut side | xlxd-sut |
 | UDP 32001-32002 / 32003 | USRP, peer side | allstar / tester |
-| UDP 4569 | IAX2 | allstar |
+| UDP 4569 | IAX2 | allstar, asl-reg, asl-a, asl-b, asl-e |
+| UDP 53 | DNS (lab zone) | asl-reg |
+| TCP 8099 | lab agent (JSON, tester only) | asl-reg, asl-a, asl-b, asl-e |
 | UDP 41400 | NXDNReflector network (xlxd connects out) | nxdn-ref, nxdn-sut |
 | UDP 41000 | P25Reflector network (xlxd connects out) | p25-ref, p25-sut |
 | UDP 10002 | XLX interlink | xlxd-*, xlxd-peer-* |
@@ -340,6 +343,13 @@ a `dv_room_data_total` or `dv_pkt_items_total` family (the `[data]` table is on)
 It reads the setting from `DVT_REQUIRE_IDENT` in the tester environment
 (`rig/compose.yml`, default `true`) and writes what it observed to
 `out/<run>/data-ident.txt`.
+
+## AllStarLink test lab (profile asl-lab)
+
+`scripts/run.sh --profile asl-lab -m asl_lab` starts only the tester and four lab hosts (a
+registrar with the lab DNS zone and three private app_rpt nodes), or joins them to any other
+profile. No `TRANSCODER_IMAGE` is needed on its own. Scenarios, pcaps, recordings, versions and
+the frame extractor are described in [asl-lab.md](asl-lab.md).
 
 ## Web profile
 

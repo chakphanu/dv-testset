@@ -33,6 +33,7 @@ rig (`rig/`; the service names `xlxd-ref` / `xlxd-sut` are historical).
 | Rig, DV-Router soak: 60 minutes, 100 WebRTC listeners with churn + protocol clients on 6 to 8 modules (native launch) | `DVT_SOAK=1 DVT_USRP_DYNAMIC=1 ... DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/soak-edges.toml scripts/run.sh -m rig --profile web,webload[,interlink] -- cases/test_web_soak.py` (about 70 minutes, hard cap 75; `DVT_SOAK_SHORT=1` is the 10 minute validation; `docs/web-soak-cases.md`) | as the W8 row; reads every child of the launcher (each edge is its own binary) through `proc-stat` every 30 s; raw samples `out/<run>/web/soak-samples.jsonl`, verdict table `out/<run>/web/soak.json`; stop early with `touch out/<run>/web/soak.stop`; one rig, nothing else at the same time |
 | Rig, DV-Router RSS isolation: ONE activity per run (A idle, B webrtc-churn, C voice, D proto-churn, E webrtc-voice, F voice-x3 = C with 3x the overs), 5 + 10 minutes (native launch) | `... scripts/run.sh -m rig --profile web,webload -- -p dvtest.isolation_plugin --isolation=A cases/test_web_rss_isolation.py` (about 20 minutes a mode; `--isolation-short` is the 2 + 3 minute smoke; `docs/web-isolation-cases.md`) | as the soak row (`soak-edges.toml` for modes C and D); data not verdicts: `out/<run>/web/isolation-<letter>.json` (also `hub_events` / `streams`: events per minute against the dv-svc-status slope, KiB per stream; SOAK1 records them too), tables with `python3 -m dvtest.isolation out/2*` |
 | Rig + AllStarLink | `scripts/run.sh -m "rig or allstar" --profile allstar` | as above, `scripts/gen-local.sh` once |
+| AllStarLink test lab (private app_rpt nodes, registrar, DNS zone, IAX2 pcaps) | `scripts/run.sh --profile asl-lab -m asl_lab` (`DVT_ASL_LONG=1` adds the 75 s call; `docs/asl-lab.md`) | only the tester and the four lab hosts start (no reflector, no `TRANSCODER_IMAGE`); the image is built FROM the allstar image |
 
 First time: `scripts/pre-fetch-xlxd.sh`, `scripts/pre-fetch-codec2.sh`,
 `scripts/gen-local.sh`. A skipped case prints what is missing; fix that rather
@@ -65,7 +66,7 @@ limits"):
   log or copy secret values; `Target.iax_secret` is hidden from repr.
 - `dvtest/target.py` documents every `DVT_*` variable. Rig addresses default
   to 172.30.0.0/24: xlxd-ref .10, xlxd-sut .11, transcoder-ref .20,
-  transcoder-sut .21, tester .30, allstar .40, web-proxy .90, browser .91 (profile nat: router .92 / alias .93, coturn .94, reflectors .95 / .96), webload .97.
+  transcoder-sut .21, tester .30, allstar .40, asl-lab asl-reg .41 / asl-a .42 / asl-b .43 / asl-e .44, web-proxy .90, browser .91 (profile nat: router .92 / alias .93, coturn .94, reflectors .95 / .96), webload .97.
 
 ## Results
 

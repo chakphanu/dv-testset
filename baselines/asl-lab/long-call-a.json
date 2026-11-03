@@ -1,0 +1,1074 @@
+{
+ "version": 1,
+ "source": "a.pcap",
+ "ports": [
+  4569
+ ],
+ "frames": 3674,
+ "skipped": {
+  "non_iax_port": 10,
+  "bad": 0
+ },
+ "capture_stats": {
+  "packets": 3692,
+  "udp": 3692
+ },
+ "summary": {
+  "cng": 1,
+  "control.ANSWER": 1,
+  "control.RADIO_UNKEY": 1,
+  "control.STOP_SOUND": 1,
+  "iax.ACCEPT": 1,
+  "iax.ACK": 51,
+  "iax.CALLTOKEN": 1,
+  "iax.HANGUP": 1,
+  "iax.LAGRP": 14,
+  "iax.LAGRQ": 14,
+  "iax.NEW": 2,
+  "iax.PING": 6,
+  "iax.PONG": 6,
+  "text": 23,
+  "voice.full": 1,
+  "voice.mini": 3550
+ },
+ "types": {
+  "cng": [
+   {
+    "frame": 3684,
+    "t": 72.479873,
+    "src": "192.0.2.1:4569",
+    "dst": "192.0.2.2:4569",
+    "type": "cng",
+    "form": "full",
+    "scall": 5943,
+    "dcall": 6203,
+    "retrans": false,
+    "ts": 72266,
+    "oseq": 35,
+    "iseq": 32,
+    "kind": 10,
+    "subclass": 0,
+    "payload_len": 0,
+    "hex": "9737183b00011a4a23200a00"
+   }
+  ],
+  "control.ANSWER": [
+   {
+    "frame": 15,
+    "t": 0.201996,
+    "src": "192.0.2.2:4569",
+    "dst": "192.0.2.1:4569",
+    "type": "control.ANSWER",
+    "form": "full",
+    "scall": 6203,
+    "dcall": 5943,
+    "retrans": false,
+    "ts": 4,
+    "oseq": 1,
+    "iseq": 1,
+    "kind": 4,
+    "subclass": 4,
+    "payload_len": 0,
+    "hex": "983b17370000000401010404"
+   }
+  ],
+  "control.RADIO_UNKEY": [
+   {
+    "frame": 3683,
+    "t": 72.479776,
+    "src": "192.0.2.1:4569",
+    "dst": "192.0.2.2:4569",
+    "type": "control.RADIO_UNKEY",
+    "form": "full",
+    "scall": 5943,
+    "dcall": 6203,
+    "retrans": false,
+    "ts": 72263,
+    "oseq": 34,
+    "iseq": 32,
+    "kind": 4,
+    "subclass": 13,
+    "payload_len": 0,
+    "hex": "9737183b00011a472220040d"
+   }
+  ],
+  "control.STOP_SOUND": [
+   {
+    "frame": 16,
+    "t": 0.202011,
+    "src": "192.0.2.2:4569",
+    "dst": "192.0.2.1:4569",
+    "type": "control.STOP_SOUND",
+    "form": "full",
+    "scall": 6203,
+    "dcall": 5943,
+    "retrans": false,
+    "ts": 7,
+    "oseq": 2,
+    "iseq": 1,
+    "kind": 4,
+    "subclass": -1,
+    "payload_len": 0,
+    "hex": "983b173700000007020104ff"
+   }
+  ],
+  "iax.ACCEPT": [
+   {
+    "frame": 13,
+    "t": 0.200787,
+    "src": "192.0.2.2:4569",
+    "dst": "192.0.2.1:4569",
+    "type": "iax.ACCEPT",
+    "form": "full",
+    "scall": 6203,
+    "dcall": 5943,
+    "retrans": false,
+    "ts": 1,
+    "oseq": 0,
+    "iseq": 1,
+    "kind": 6,
+    "subclass": 7,
+    "payload_len": 17,
+    "ies": [
+     {
+      "ie": 9,
+      "name": "FORMAT",
+      "len": 4,
+      "hex": "00000004",
+      "formats": [
+       "ulaw"
+      ]
+     },
+     {
+      "ie": 56,
+      "name": "FORMAT2",
+      "len": 9,
+      "hex": "000000000000000004"
+     }
+    ],
+    "hex": "983b173700000001000106070904000000043809000000000000000004"
+   }
+  ],
+  "iax.ACK": [
+   {
+    "frame": 12,
+    "t": 0.200681,
+    "src": "192.0.2.2:4569",
+    "dst": "192.0.2.1:4569",
+    "type": "iax.ACK",
+    "form": "full",
+    "scall": 6203,
+    "dcall": 5943,
+    "retrans": false,
+    "ts": 4,
+    "oseq": 0,
+    "iseq": 1,
+    "kind": 6,
+    "subclass": 4,
+    "payload_len": 0,
+    "ies": [],
+    "hex": "983b17370000000400010604"
+   },
+   {
+    "frame": 14,
+    "t": 0.200838,
+    "src": "192.0.2.1:4569",
+    "dst": "192.0.2.2:4569",
+    "type": "iax.ACK",
+    "form": "full",
+    "scall": 5943,
+    "dcall": 6203,
+    "retrans": false,
+    "ts": 1,
+    "oseq": 1,
+    "iseq": 1,
+    "kind": 6,
+    "subclass": 4,
+    "payload_len": 0,
+    "ies": [],
+    "hex": "9737183b0000000101010604"
+   }
+  ],
+  "iax.CALLTOKEN": [
+   {
+    "frame": 10,
+    "t": 0.200522,
+    "src": "192.0.2.2:4569",
+    "dst": "192.0.2.1:4569",
+    "type": "iax.CALLTOKEN",
+    "form": "full",
+    "scall": 1,
+    "dcall": 5943,
+    "retrans": false,
+    "ts": 1,
+    "oseq": 0,
+    "iseq": 1,
+    "kind": 6,
+    "subclass": 40,
+    "payload_len": 53,
+    "ies": [
+     {
+      "ie": 54,
+      "name": "CALLTOKEN",
+      "len": 51,
+      "hex": "313739333637323933313f35616438323332623435346435636233643932636266623564333766343362663035343064653930"
+     }
+    ],
+    "hex": "8001173700000001000106283633313739333637323933313f35616438323332623435346435636233643932636266623564333766343362663035343064653930"
+   }
+  ],
+  "iax.HANGUP": [
+   {
+    "frame": 3691,
+    "t": 75.662258,
+    "src": "192.0.2.1:4569",
+    "dst": "192.0.2.2:4569",
+    "type": "iax.HANGUP",
+    "form": "full",
+    "scall": 5943,
+    "dcall": 6203,
+    "retrans": false,
+    "ts": 75462,
+    "oseq": 38,
+    "iseq": 32,
+    "kind": 6,
+    "subclass": 5,
+    "payload_len": 3,
+    "ies": [
+     {
+      "ie": 42,
+      "name": "CAUSECODE",
+      "len": 1,
+      "hex": "00",
+      "int": 0
+     }
+    ],
+    "hex": "9737183b000126c6262006052a0100"
+   }
+  ],
+  "iax.LAGRP": [
+   {
+    "frame": 476,
+    "t": 10.200101,
+    "src": "192.0.2.2:4569",
+    "dst": "192.0.2.1:4569",
+    "type": "iax.LAGRP",
+    "form": "full",
+    "scall": 6203,
+    "dcall": 5943,
+    "retrans": false,
+    "ts": 10003,
+    "oseq": 5,
+    "iseq": 8,
+    "kind": 6,
+    "subclass": 12,
+    "payload_len": 0,
+    "ies": [],
+    "hex": "983b1737000027130508060c"
+   },
+   {
+    "frame": 479,
+    "t": 10.200159,
+    "src": "192.0.2.1:4569",
+    "dst": "192.0.2.2:4569",
+    "type": "iax.LAGRP",
+    "form": "full",
+    "scall": 5943,
+    "dcall": 6203,
+    "retrans": false,
+    "ts": 10000,
+    "oseq": 8,
+    "iseq": 7,
+    "kind": 6,
+    "subclass": 12,
+    "payload_len": 0,
+    "ies": [],
+    "hex": "9737183b000027100807060c"
+   }
+  ],
+  "iax.LAGRQ": [
+   {
+    "frame": 475,
+    "t": 10.200031,
+    "src": "192.0.2.1:4569",
+    "dst": "192.0.2.2:4569",
+    "type": "iax.LAGRQ",
+    "form": "full",
+    "scall": 5943,
+    "dcall": 6203,
+    "retrans": false,
+    "ts": 10003,
+    "oseq": 7,
+    "iseq": 5,
+    "kind": 6,
+    "subclass": 11,
+    "payload_len": 0,
+    "ies": [],
+    "hex": "9737183b000027130705060b"
+   },
+   {
+    "frame": 477,
+    "t": 10.200133,
+    "src": "192.0.2.2:4569",
+    "dst": "192.0.2.1:4569",
+    "type": "iax.LAGRQ",
+    "form": "full",
+    "scall": 6203,
+    "dcall": 5943,
+    "retrans": false,
+    "ts": 10000,
+    "oseq": 6,
+    "iseq": 8,
+    "kind": 6,
+    "subclass": 11,
+    "payload_len": 0,
+    "ies": [],
+    "hex": "983b1737000027100608060b"
+   }
+  ],
+  "iax.NEW": [
+   {
+    "frame": 9,
+    "t": 0.20046,
+    "src": "192.0.2.1:4569",
+    "dst": "192.0.2.2:4569",
+    "type": "iax.NEW",
+    "form": "full",
+    "scall": 5943,
+    "dcall": 0,
+    "retrans": false,
+    "ts": 1,
+    "oseq": 0,
+    "iseq": 0,
+    "kind": 6,
+    "subclass": 1,
+    "payload_len": 98,
+    "ies": [
+     {
+      "ie": 11,
+      "name": "VERSION",
+      "len": 2,
+      "hex": "0002",
+      "int": 2
+     },
+     {
+      "ie": 1,
+      "name": "CALLED_NUMBER",
+      "len": 6,
+      "hex": "323939393031",
+      "text": "299901"
+     },
+     {
+      "ie": 45,
+      "name": "CODEC_PREFS",
+      "len": 3,
+      "hex": "444743"
+     },
+     {
+      "ie": 2,
+      "name": "CALLING_NUMBER",
+      "len": 6,
+      "hex": "313939393031",
+      "text": "199901"
+     },
+     {
+      "ie": 38,
+      "name": "CALLINGPRES",
+      "len": 1,
+      "hex": "00",
+      "int": 0
+     },
+     {
+      "ie": 39,
+      "name": "CALLINGTON",
+      "len": 1,
+      "hex": "00",
+      "int": 0
+     },
+     {
+      "ie": 40,
+      "name": "CALLINGTNS",
+      "len": 2,
+      "hex": "0000",
+      "int": 0
+     },
+     {
+      "ie": 57,
+      "name": "IE_57",
+      "len": 4,
+      "hex": "00000000",
+      "int": 0
+     },
+     {
+      "ie": 10,
+      "name": "LANGUAGE",
+      "len": 2,
+      "hex": "656e",
+      "text": "en"
+     },
+     {
+      "ie": 6,
+      "name": "USERNAME",
+      "len": 5,
+      "hex": "726164696f",
+      "text": "radio"
+     },
+     {
+      "ie": 9,
+      "name": "FORMAT",
+      "len": 4,
+      "hex": "00000004",
+      "formats": [
+       "ulaw"
+      ]
+     },
+     {
+      "ie": 56,
+      "name": "FORMAT2",
+      "len": 9,
+      "hex": "000000000000000004"
+     },
+     {
+      "ie": 8,
+      "name": "CAPABILITY",
+      "len": 4,
+      "hex": "00000026",
+      "formats": [
+       "gsm",
+       "ulaw",
+       "adpcm"
+      ]
+     },
+     {
+      "ie": 55,
+      "name": "CAPABILITY2",
+      "len": 9,
+      "hex": "000000000000000026"
+     },
+     {
+      "ie": 12,
+      "name": "ADSICPE",
+      "len": 2,
+      "hex": "0002",
+      "int": 2
+     },
+     {
+      "ie": 31,
+      "name": "DATETIME",
+      "len": 4,
+      "hex": "35631399",
+      "int": 895685529
+     },
+     {
+      "ie": 54,
+      "name": "CALLTOKEN",
+      "len": 0,
+      "hex": ""
+     }
+    ],
+    "hex": "9737000000000001000006010b02000201063239393930312d034447430206313939393031260100270100280200003904000000000a02656e0605726164696f090400000004380900000000000000000408040000002637090000000000000000260c0200021f04356313993600"
+   },
+   {
+    "frame": 11,
+    "t": 0.20058,
+    "src": "192.0.2.1:4569",
+    "dst": "192.0.2.2:4569",
+    "type": "iax.NEW",
+    "form": "full",
+    "scall": 5943,
+    "dcall": 0,
+    "retrans": false,
+    "ts": 4,
+    "oseq": 0,
+    "iseq": 0,
+    "kind": 6,
+    "subclass": 1,
+    "payload_len": 149,
+    "ies": [
+     {
+      "ie": 11,
+      "name": "VERSION",
+      "len": 2,
+      "hex": "0002",
+      "int": 2
+     },
+     {
+      "ie": 1,
+      "name": "CALLED_NUMBER",
+      "len": 6,
+      "hex": "323939393031",
+      "text": "299901"
+     },
+     {
+      "ie": 45,
+      "name": "CODEC_PREFS",
+      "len": 3,
+      "hex": "444743"
+     },
+     {
+      "ie": 2,
+      "name": "CALLING_NUMBER",
+      "len": 6,
+      "hex": "313939393031",
+      "text": "199901"
+     },
+     {
+      "ie": 38,
+      "name": "CALLINGPRES",
+      "len": 1,
+      "hex": "00",
+      "int": 0
+     },
+     {
+      "ie": 39,
+      "name": "CALLINGTON",
+      "len": 1,
+      "hex": "00",
+      "int": 0
+     },
+     {
+      "ie": 40,
+      "name": "CALLINGTNS",
+      "len": 2,
+      "hex": "0000",
+      "int": 0
+     },
+     {
+      "ie": 57,
+      "name": "IE_57",
+      "len": 4,
+      "hex": "00000000",
+      "int": 0
+     },
+     {
+      "ie": 10,
+      "name": "LANGUAGE",
+      "len": 2,
+      "hex": "656e",
+      "text": "en"
+     },
+     {
+      "ie": 6,
+      "name": "USERNAME",
+      "len": 5,
+      "hex": "726164696f",
+      "text": "radio"
+     },
+     {
+      "ie": 9,
+      "name": "FORMAT",
+      "len": 4,
+      "hex": "00000004",
+      "formats": [
+       "ulaw"
+      ]
+     },
+     {
+      "ie": 56,
+      "name": "FORMAT2",
+      "len": 9,
+      "hex": "000000000000000004"
+     },
+     {
+      "ie": 8,
+      "name": "CAPABILITY",
+      "len": 4,
+      "hex": "00000026",
+      "formats": [
+       "gsm",
+       "ulaw",
+       "adpcm"
+      ]
+     },
+     {
+      "ie": 55,
+      "name": "CAPABILITY2",
+      "len": 9,
+      "hex": "000000000000000026"
+     },
+     {
+      "ie": 12,
+      "name": "ADSICPE",
+      "len": 2,
+      "hex": "0002",
+      "int": 2
+     },
+     {
+      "ie": 31,
+      "name": "DATETIME",
+      "len": 4,
+      "hex": "35631399",
+      "int": 895685529
+     },
+     {
+      "ie": 54,
+      "name": "CALLTOKEN",
+      "len": 51,
+      "hex": "313739333637323933313f35616438323332623435346435636233643932636266623564333766343362663035343064653930"
+     }
+    ],
+    "hex": "9737000000000004000006010b02000201063239393930312d034447430206313939393031260100270100280200003904000000000a02656e0605726164696f090400000004380900000000000000000408040000002637090000000000000000260c0200021f04356313993633313739333637323933313f35616438323332623435346435636233643932636266623564333766343362663035343064653930"
+   }
+  ],
+  "iax.PING": [
+   {
+    "frame": 1045,
+    "t": 21.199777,
+    "src": "192.0.2.1:4569",
+    "dst": "192.0.2.2:4569",
+    "type": "iax.PING",
+    "form": "full",
+    "scall": 5943,
+    "dcall": 6203,
+    "retrans": false,
+    "ts": 21003,
+    "oseq": 13,
+    "iseq": 11,
+    "kind": 6,
+    "subclass": 2,
+    "payload_len": 0,
+    "ies": [],
+    "hex": "9737183b0000520b0d0b0602"
+   },
+   {
+    "frame": 1048,
+    "t": 21.199895,
+    "src": "192.0.2.2:4569",
+    "dst": "192.0.2.1:4569",
+    "type": "iax.PING",
+    "form": "full",
+    "scall": 6203,
+    "dcall": 5943,
+    "retrans": false,
+    "ts": 21000,
+    "oseq": 12,
+    "iseq": 14,
+    "kind": 6,
+    "subclass": 2,
+    "payload_len": 0,
+    "ies": [],
+    "hex": "983b1737000052080c0e0602"
+   }
+  ],
+  "iax.PONG": [
+   {
+    "frame": 1046,
+    "t": 21.199854,
+    "src": "192.0.2.2:4569",
+    "dst": "192.0.2.1:4569",
+    "type": "iax.PONG",
+    "form": "full",
+    "scall": 6203,
+    "dcall": 5943,
+    "retrans": false,
+    "ts": 21003,
+    "oseq": 11,
+    "iseq": 14,
+    "kind": 6,
+    "subclass": 3,
+    "payload_len": 34,
+    "ies": [
+     {
+      "ie": 46,
+      "name": "RR_JITTER",
+      "len": 4,
+      "hex": "00000000",
+      "int": 0
+     },
+     {
+      "ie": 47,
+      "name": "RR_LOSS",
+      "len": 4,
+      "hex": "00000000",
+      "int": 0
+     },
+     {
+      "ie": 48,
+      "name": "RR_PKTS",
+      "len": 4,
+      "hex": "000003e3",
+      "int": 995
+     },
+     {
+      "ie": 49,
+      "name": "RR_DELAY",
+      "len": 2,
+      "hex": "0028",
+      "int": 40
+     },
+     {
+      "ie": 50,
+      "name": "RR_DROPPED",
+      "len": 4,
+      "hex": "00000000",
+      "int": 0
+     },
+     {
+      "ie": 51,
+      "name": "RR_OOO",
+      "len": 4,
+      "hex": "00000000",
+      "int": 0
+     }
+    ],
+    "hex": "983b17370000520b0b0e06032e04000000002f04000000003004000003e331020028320400000000330400000000"
+   },
+   {
+    "frame": 1049,
+    "t": 21.19991,
+    "src": "192.0.2.1:4569",
+    "dst": "192.0.2.2:4569",
+    "type": "iax.PONG",
+    "form": "full",
+    "scall": 5943,
+    "dcall": 6203,
+    "retrans": false,
+    "ts": 21000,
+    "oseq": 14,
+    "iseq": 13,
+    "kind": 6,
+    "subclass": 3,
+    "payload_len": 34,
+    "ies": [
+     {
+      "ie": 46,
+      "name": "RR_JITTER",
+      "len": 4,
+      "hex": "00000000",
+      "int": 0
+     },
+     {
+      "ie": 47,
+      "name": "RR_LOSS",
+      "len": 4,
+      "hex": "00000000",
+      "int": 0
+     },
+     {
+      "ie": 48,
+      "name": "RR_PKTS",
+      "len": 4,
+      "hex": "00000006",
+      "int": 6
+     },
+     {
+      "ie": 49,
+      "name": "RR_DELAY",
+      "len": 2,
+      "hex": "0028",
+      "int": 40
+     },
+     {
+      "ie": 50,
+      "name": "RR_DROPPED",
+      "len": 4,
+      "hex": "00000000",
+      "int": 0
+     },
+     {
+      "ie": 51,
+      "name": "RR_OOO",
+      "len": 4,
+      "hex": "00000000",
+      "int": 0
+     }
+    ],
+    "hex": "9737183b000052080e0d06032e04000000002f040000000030040000000631020028320400000000330400000000"
+   }
+  ],
+  "text": [
+   {
+    "frame": 19,
+    "t": 0.241158,
+    "src": "192.0.2.1:4569",
+    "dst": "192.0.2.2:4569",
+    "type": "text",
+    "form": "full",
+    "scall": 5943,
+    "dcall": 6203,
+    "retrans": false,
+    "ts": 7,
+    "oseq": 1,
+    "iseq": 3,
+    "kind": 7,
+    "subclass": 0,
+    "payload_len": 10,
+    "text": "!NEWKEY1!\u0000",
+    "hex": "9737183b0000000701030700214e45574b4559312100"
+   },
+   {
+    "frame": 21,
+    "t": 0.244259,
+    "src": "192.0.2.1:4569",
+    "dst": "192.0.2.2:4569",
+    "type": "text",
+    "form": "full",
+    "scall": 5943,
+    "dcall": 6203,
+    "retrans": false,
+    "ts": 10,
+    "oseq": 2,
+    "iseq": 3,
+    "kind": 7,
+    "subclass": 0,
+    "payload_len": 18,
+    "text": "T 199901 COMPLETE\u0000",
+    "hex": "9737183b0000000a02030700542031393939303120434f4d504c45544500"
+   }
+  ],
+  "voice.full": [
+   {
+    "frame": 33,
+    "t": 1.459715,
+    "src": "192.0.2.1:4569",
+    "dst": "192.0.2.2:4569",
+    "type": "voice.full",
+    "form": "full",
+    "scall": 5943,
+    "dcall": 6203,
+    "retrans": false,
+    "ts": 1260,
+    "oseq": 6,
+    "iseq": 5,
+    "kind": 2,
+    "subclass": 4,
+    "payload_len": 160,
+    "codec": "ulaw",
+    "hex": "9737183b000004ec06050204ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+   }
+  ],
+  "voice.mini": [
+   {
+    "frame": 35,
+    "t": 1.479674,
+    "src": "192.0.2.1:4569",
+    "dst": "192.0.2.2:4569",
+    "type": "voice.mini",
+    "form": "mini",
+    "scall": 5943,
+    "ts16": 1280,
+    "payload_len": 160,
+    "hex": "17370500ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+   },
+   {
+    "frame": 36,
+    "t": 1.499672,
+    "src": "192.0.2.1:4569",
+    "dst": "192.0.2.2:4569",
+    "type": "voice.mini",
+    "form": "mini",
+    "scall": 5943,
+    "ts16": 1300,
+    "payload_len": 160,
+    "hex": "17370514ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+   },
+   {
+    "frame": 3332,
+    "t": 65.719738,
+    "src": "192.0.2.4:4569",
+    "dst": "192.0.2.5:4569",
+    "type": "voice.mini",
+    "form": "mini",
+    "scall": 5943,
+    "ts16": 65520,
+    "payload_len": 160,
+    "hex": "1737fff0ffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292f"
+   },
+   {
+    "frame": 3333,
+    "t": 65.739722,
+    "src": "192.0.2.4:4569",
+    "dst": "192.0.2.5:4569",
+    "type": "voice.mini",
+    "form": "mini",
+    "scall": 5943,
+    "ts16": 4,
+    "payload_len": 160,
+    "hex": "17370004ffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292f"
+   }
+  ]
+ },
+ "ts16_wraps": [
+  {
+   "call": "192.0.2.4:4569>192.0.2.5:4569 scall=5943",
+   "before": {
+    "frame": 3332,
+    "t": 65.719738,
+    "src": "192.0.2.4:4569",
+    "dst": "192.0.2.5:4569",
+    "type": "voice.mini",
+    "form": "mini",
+    "scall": 5943,
+    "ts16": 65520,
+    "payload_len": 160,
+    "hex": "1737fff0ffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292f"
+   },
+   "after": {
+    "frame": 3333,
+    "t": 65.739722,
+    "src": "192.0.2.4:4569",
+    "dst": "192.0.2.5:4569",
+    "type": "voice.mini",
+    "form": "mini",
+    "scall": 5943,
+    "ts16": 4,
+    "payload_len": 160,
+    "hex": "17370004ffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292fffafa9afff2f292f"
+   }
+  }
+ ],
+ "dns": [
+  {
+   "id": 12773,
+   "qr": 0,
+   "rcode": 0,
+   "questions": [
+    {
+     "name": "_iax._udp.2999.nodes.asl.test",
+     "type": "SRV"
+    }
+   ],
+   "answers": [],
+   "frame": 1,
+   "t": 0.0,
+   "src": "192.0.2.1:59736",
+   "dst": "192.0.2.3:53",
+   "hex": "31e501200001000000000001045f696178045f7564700432393939056e6f6465730361736c0474657374000021000100002904b0000000000000"
+  },
+  {
+   "id": 12773,
+   "qr": 1,
+   "rcode": 3,
+   "questions": [
+    {
+     "name": "_iax._udp.2999.nodes.asl.test",
+     "type": "SRV"
+    }
+   ],
+   "answers": [],
+   "frame": 2,
+   "t": 0.000154,
+   "src": "192.0.2.3:53",
+   "dst": "192.0.2.1:59736",
+   "hex": "31e581830001000000000001045f696178045f7564700432393939056e6f6465730361736c0474657374000021000100002904d0000000000000"
+  },
+  {
+   "id": 60439,
+   "qr": 0,
+   "rcode": 0,
+   "questions": [
+    {
+     "name": "_iax._udp.29990.nodes.asl.test",
+     "type": "SRV"
+    }
+   ],
+   "answers": [],
+   "frame": 3,
+   "t": 0.10022,
+   "src": "192.0.2.1:49166",
+   "dst": "192.0.2.3:53",
+   "hex": "ec1701200001000000000001045f696178045f756470053239393930056e6f6465730361736c0474657374000021000100002904b0000000000000"
+  },
+  {
+   "id": 60439,
+   "qr": 1,
+   "rcode": 3,
+   "questions": [
+    {
+     "name": "_iax._udp.29990.nodes.asl.test",
+     "type": "SRV"
+    }
+   ],
+   "answers": [],
+   "frame": 4,
+   "t": 0.100359,
+   "src": "192.0.2.3:53",
+   "dst": "192.0.2.1:49166",
+   "hex": "ec1781830001000000000001045f696178045f756470053239393930056e6f6465730361736c0474657374000021000100002904d0000000000000"
+  },
+  {
+   "id": 50834,
+   "qr": 0,
+   "rcode": 0,
+   "questions": [
+    {
+     "name": "_iax._udp.299901.nodes.asl.test",
+     "type": "SRV"
+    }
+   ],
+   "answers": [],
+   "frame": 5,
+   "t": 0.199834,
+   "src": "192.0.2.1:33619",
+   "dst": "192.0.2.3:53",
+   "hex": "c69201200001000000000001045f696178045f75647006323939393031056e6f6465730361736c0474657374000021000100002904b0000000000000"
+  },
+  {
+   "id": 50834,
+   "qr": 1,
+   "rcode": 0,
+   "questions": [
+    {
+     "name": "_iax._udp.299901.nodes.asl.test",
+     "type": "SRV"
+    }
+   ],
+   "answers": [
+    {
+     "name": "_iax._udp.299901.nodes.asl.test",
+     "type": "SRV",
+     "ttl": 30,
+     "rdata": "0000000011d906323939393031056e6f6465730361736c047465737400",
+     "text": "0 0 4569 299901.nodes.asl.test"
+    }
+   ],
+   "frame": 6,
+   "t": 0.199953,
+   "src": "192.0.2.3:53",
+   "dst": "192.0.2.1:33619",
+   "hex": "c69285800001000100000002045f696178045f75647006323939393031056e6f6465730361736c04746573740000210001c00c002100010000001e001d0000000011d906323939393031056e6f6465730361736c047465737400c043000100010000001e0004ac1e002c00002904d0000000000000"
+  },
+  {
+   "id": 26606,
+   "qr": 0,
+   "rcode": 0,
+   "questions": [
+    {
+     "name": "299901.nodes.asl.test",
+     "type": "A"
+    }
+   ],
+   "answers": [],
+   "frame": 7,
+   "t": 0.20011,
+   "src": "192.0.2.1:59656",
+   "dst": "192.0.2.3:53",
+   "hex": "67ee0120000100000000000106323939393031056e6f6465730361736c0474657374000001000100002904b0000000000000"
+  },
+  {
+   "id": 26606,
+   "qr": 1,
+   "rcode": 0,
+   "questions": [
+    {
+     "name": "299901.nodes.asl.test",
+     "type": "A"
+    }
+   ],
+   "answers": [
+    {
+     "name": "299901.nodes.asl.test",
+     "type": "A",
+     "ttl": 30,
+     "rdata": "ac1e002c",
+     "text": "172.30.0.44"
+    }
+   ],
+   "frame": 8,
+   "t": 0.200127,
+   "src": "192.0.2.3:53",
+   "dst": "192.0.2.1:59656",
+   "hex": "67ee8580000100010000000106323939393031056e6f6465730361736c04746573740000010001c00c000100010000001e0004ac1e002c00002904d0000000000000"
+  }
+ ]
+}

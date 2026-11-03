@@ -4,6 +4,7 @@
 | Document | Contents |
 |----------|----------|
 | [rig.md](rig.md) | docker rig: topology, addresses, ports, settings load order, control channel, capture |
+| [asl-lab.md](asl-lab.md) | AllStarLink test lab (profile `asl-lab`): private app_rpt nodes, registrar and DNS zone, per-scenario pcaps, IAX2 frame extractor, surprises |
 | [web-api-cases.md](web-api-cases.md) | web unit stage 2: API cases for DV-Router's HTTP APIs (role matrix, removed URLs, limits, admin), findings, gaps |
 | [web-browser-cases.md](web-browser-cases.md) | web unit stages 3a and 3b: browser cases (UI, XSS, CSP) and WebRTC Listen/Talk, recorder |
 | [web-nat-cases.md](web-nat-cases.md) | web unit stage 4: NAT behaviour of the browser WebRTC path (NAT router, coturn, direct/TURN/blackhole), findings, gaps |
