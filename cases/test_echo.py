@@ -1,0 +1,611 @@
+# SPDX-License-Identifier: MIT
+"""DV-Router's built-in echo service (ECHO1, ECHO1c; design doc echo.md): a local over on a configured
+module is recorded and replayed once, delay_ms after its end, as an ordinary over of the same source
+profile. Black box: UDP clients on module E, the hub metrics through the control channel and the
+rendered dv-router.toml of the run. Table, snippets, how to run and findings: docs/echo-cases.md.
+
+  E1a..d  per protocol (D-STAR, DMR, M17, YSF): one replay 0.8..2.0 s after the over; talker identity kept;
+          payload byte for byte as sent and as the live relay; about 3 s long; the talker hears it too
+  E2      an over under 50 frames is not replayed (5 s window)
+  E3      an over longer than max_seconds is replayed truncated (live edit to 5 s, or echo-short.toml)
+  E4      no storm: nothing more for 3 x delay_ms after the replay, a replay is not recorded again
+  E5      overs of other origin classes are not replayed: XLX interlink peer, USRP, M17 peer
+          (NXDN, P25: not reachable, docs/echo-cases.md)
+  E6      a human keying during the replay gets nothing through; the floor is free after it
+  E7      toggle by editing the rendered TOML: E = false, back to true, the row removed while playing
+  E8      two XLX-linked nodes: not reachable (one DV-Router node in the rig)
+  telemetry  dv_echo_overs_total moves by the played / short / truncated overs of the run
+
+Needs DVT_SUT_PROFILE=dvrouter, native launch and rig/config/dv-router/echo.toml in DVT_SUT_CONFIG_EXTRA.
+A difference the specification does not settle is a FINDING line in out/<run>/echo.txt, never an assertion.
+"""
+import os
+import time
+from collections import Counter, namedtuple
+
+import pytest
+
+from dvtest import clients, echo, specs
+from dvtest import metrics as metrics_mod
+from dvtest.control import RigControl
+from dvtest.proto import dextra, m17
+from echo_support import (
+    MODULE, Drainer, EchoCfg, Scene, UsrpDyn, count_streams, note, wait_for_over, wait_reload,
+)
+
+pytestmark = pytest.mark.rig
+
+KINDS = ("dstar", "dmr", "m17", "ysf")
+FRAMES_E1 = 150                     # 3 s
+SHORT_FRAMES = 25                   # under a second, under the 50 frame threshold
+PROBE_FRAMES = 60                   # 1.2 s: over the threshold, short to wait for
+START_LOW, START_HIGH = 0.8, 2.0    # allowed delay of the replay after the over (spec: about 1.0 s)
+LEN_LOW, LEN_HIGH = 2.5, 3.6        # allowed length of the replay of a 3 s over
+MAX_FOR_E3 = 5                      # max_seconds the E3 case uses (the smallest DV-Router accepts)
+
+# overs the run made that the hub should have counted (the last test compares)
+TALLY = Counter()
+
+EchoRig = namedtuple("EchoRig", "ip cfg delay max_seconds modules control base")
+
+
+# ---------------------------------------------------------------- the rig and the config
+
+def hub_text(control):
+    if control is None:
+        return None
+    try:
+        return control.metrics("xlxd-sut")
+    except (RuntimeError, TimeoutError, OSError, ValueError):
+        return None
+
+
+def results(text):
+    return {r: echo.echo_overs(text or "", MODULE, r) for r in ("played", "short", "truncated")}
+
+
+def probe(ip, delay, seed):
+    """One 60 frame D-STAR over on E; True when its replay was heard (and has ended)."""
+    scene = Scene(ip, "dstar")
+    try:
+        scene.over(PROBE_FRAMES, seed)
+        replay = wait_for_over(scene, scene.ends[0] + 0.05, timeout=delay + 3.0)
+        if replay is None:
+            return False
+        scene.until(scene.ends[0] + delay + echo.over_seconds(PROBE_FRAMES) + 1.0)
+        return True
+    finally:
+        scene.close()
+
+
+def ensure_replaying(ip, delay, budget=60.0, label="warm"):
+    """Probe until a replay is heard (the echo child may still be starting after a spawn or a reload)."""
+    end = time.monotonic() + budget
+    n = 0
+    while True:
+        n += 1
+        if probe(ip, delay, "%s-%d" % (label, n)):
+            TALLY["played"] += 1
+            return True
+        TALLY["played_maybe"] += 1
+        if time.monotonic() > end:
+            return False
+        time.sleep(2.0)
+
+
+@pytest.fixture(scope="module")
+def echo_rig(rig, target):
+    if target.sut_profile != "dvrouter":
+        pytest.skip("the echo service is DV-Router's: DVT_SUT_PROFILE=dvrouter")
+    if os.environ.get("DVT_SUT_LAUNCH") != "native":
+        pytest.skip("echo is configured in the TOML: DVT_SUT_LAUNCH=native with rig/config/dv-router/echo.toml")
+    cfg = EchoCfg.locate(target)
+    settings = cfg.settings if cfg else {"max_seconds": echo.DEFAULT_MAX_SECONDS, "delay_ms": echo.DEFAULT_DELAY_MS,
+                                         "modules": {MODULE: True}}
+    if settings is None:
+        pytest.skip("no [echo] table in the rendered config: add rig/config/dv-router/echo.toml to DVT_SUT_CONFIG_EXTRA")
+    if not settings["modules"].get(MODULE):
+        pytest.skip("module %s is not switched on in [echo] modules (%s)" % (MODULE, settings["modules"]))
+    control = RigControl(os.path.join(target.out, "control")) if os.environ.get("DVT_RIG_CONTROL") == "1" else None
+    base = results(hub_text(control))
+    if cfg is None:
+        note(target, "setup", "RECORD", "rendered config not found under out/: defaults assumed, no live edit")
+    delay = settings["delay_ms"] / 1000.0
+    if not ensure_replaying(target.xlxd_sut, delay, label="start"):
+        pytest.fail("module %s does not replay a %d frame over within 60 s of the start: is dv-svc-echo running "
+                    "([echo] modules = { E = true } in the rendered config)?" % (MODULE, PROBE_FRAMES))
+    return EchoRig(target.xlxd_sut, cfg, delay, settings["max_seconds"], settings["modules"], control, base)
+
+
+def need_cfg(echo_rig, what):
+    cfg = echo_rig.cfg
+    if cfg is None:
+        pytest.skip("not reachable: the rendered config is not visible in out/ (%s)" % what)
+    if not cfg.writable():
+        pytest.skip("not reachable: %s is not writable by the tester (%s)" % (cfg.path, what))
+    return cfg
+
+
+# ---------------------------------------------------------------- E1 / E4: one over per protocol
+
+Run = namedtuple("Run", "kind ident wire end observed_until listener talker delay")
+
+
+@pytest.fixture(scope="module", params=KINDS)
+def e1_run(request, echo_rig):
+    kind = request.param
+    scene = Scene(echo_rig.ip, kind)
+    try:
+        scene.over(FRAMES_E1, "e1")
+        end = scene.ends[0]
+        until = end + echo_rig.delay + echo.over_seconds(FRAMES_E1) + 3 * echo_rig.delay + 1.0
+        scene.until(until)
+        run = Run(kind, scene.ident(), scene.sent[0], end, until, scene.overs("listener"), scene.overs("talker"),
+                  echo_rig.delay)
+    finally:
+        scene.close()
+    TALLY["played"] += len([o for o in run.listener if o.start > run.end + 0.05])
+    return run
+
+
+def replays_of(run, who="listener"):
+    overs = run.listener if who == "listener" else run.talker
+    return [o for o in overs if o.start > run.end + 0.05]
+
+
+def original_of(run):
+    first = run.listener[0] if run.listener else None
+    assert first is not None and first.n_voice > 0 and first.start < run.end, \
+        "precondition: the listener did not hear the over itself (%d overs)" % len(run.listener)
+    return first
+
+
+def test_e1a_one_replay_after_the_delay(e1_run, target):
+    original_of(e1_run)
+    replays = replays_of(e1_run)
+    assert len(replays) == 1, "%s: %d replays heard (starts after the over: %s)" % (
+        e1_run.kind, len(replays), ["%.2f" % (o.start - e1_run.end) for o in replays])
+    delay = replays[0].start - e1_run.end
+    note(target, "E1a[%s]" % e1_run.kind, "RECORD", "replay starts %.2f s after the last packet of the over" % delay)
+    assert echo.in_window(delay, START_LOW, START_HIGH), "%s: replay starts %.2f s after the over, want %.1f..%.1f" % (
+        e1_run.kind, delay, START_LOW, START_HIGH)
+
+
+def test_e1b_talker_identity_is_kept(e1_run, target):
+    original = original_of(e1_run)
+    replays = replays_of(e1_run)
+    assert len(replays) == 1, "%s: %d replays" % (e1_run.kind, len(replays))
+    replay = replays[0]
+    assert replay.idents == [e1_run.ident], "%s: replay names %s, the talker is %r (the live relay names %s)" % (
+        e1_run.kind, replay.idents, e1_run.ident, original.idents)
+    assert replay.idents == original.idents
+    if e1_run.kind == "dstar":
+        assert replay.header, "dstar: the replay has no header (the design synthesizes one)"
+
+
+def test_e1c_payload_is_byte_identical_and_about_3_s(e1_run, target):
+    original = original_of(e1_run)
+    replays = replays_of(e1_run)
+    assert len(replays) == 1, "%s: %d replays" % (e1_run.kind, len(replays))
+    replay = replays[0]
+    live = echo.compare_payload(e1_run.wire, original.frames)
+    if not live.prefix_ok:
+        note(target, "E1c[%s]" % e1_run.kind, "FINDING", "the live relay itself is not byte exact (first difference at "
+             "frame %s of %d): not an echo defect, the replay is judged against the relay too" % (live.first_diff, len(e1_run.wire)))
+    got = echo.compare_payload(e1_run.wire, replay.frames)
+    if got.prefix_ok and got.extra:
+        note(target, "E1c[%s]" % e1_run.kind, "FINDING", "the replay carries %d frame(s) after the %d sent (the live relay: %d): "
+             "%s" % (len(got.extra), len(e1_run.wire), len(live.extra), "all zero" if not any(any(f) for f in got.extra)
+                     else "not zero"))
+    assert got.prefix_ok, "%s: the replay differs from what was sent at frame %s of %d (heard %d, missing %d)" % (
+        e1_run.kind, got.first_diff, len(e1_run.wire), len(replay.frames), got.missing)
+    assert replay.frames == original.frames, "%s: the replay (%d frames) is not what the live relay carried (%d frames)" % (
+        e1_run.kind, len(replay.frames), len(original.frames))
+    length = echo.duration(replay)
+    note(target, "E1c[%s]" % e1_run.kind, "RECORD", "replay %.2f s, %d voice packets, %d frames" % (
+        length or 0, replay.n_voice, len(replay.frames)))
+    assert echo.in_window(length, LEN_LOW, LEN_HIGH), "%s: replay lasts %s s, want %.1f..%.1f" % (
+        e1_run.kind, length, LEN_LOW, LEN_HIGH)
+    assert replay.ended, "%s: the replay has no end of stream" % e1_run.kind
+
+
+def test_e1d_talker_hears_the_replay_too(e1_run, target):
+    replays = replays_of(e1_run)
+    assert len(replays) == 1, "%s: %d replays at the listener" % (e1_run.kind, len(replays))
+    mine = replays_of(e1_run, "talker")
+    assert len(mine) == 1, "%s: the talker's own client heard %d replays" % (e1_run.kind, len(mine))
+    assert mine[0].frames == replays[0].frames, "%s: the talker heard another payload than the listener" % e1_run.kind
+    assert mine[0].idents == replays[0].idents
+    if e1_run.kind == "dstar":
+        assert mine[0].header, "dstar: the talker's client got no header before the replay"
+
+
+def test_e4_no_storm_after_the_replay(e1_run, target):
+    original_of(e1_run)
+    for who in ("listener", "talker"):
+        overs = e1_run.listener if who == "listener" else e1_run.talker
+        later = [o for o in overs if o.start > e1_run.end + 0.05]
+        assert len(later) == 1, "%s %s: %d overs after the original, want exactly the one replay" % (e1_run.kind, who, len(later))
+        quiet = e1_run.observed_until - later[0].end
+        assert quiet >= 3 * e1_run.delay - 0.1, "%s %s: only %.2f s watched after the replay" % (e1_run.kind, who, quiet)
+
+
+# ---------------------------------------------------------------- E2: short over
+
+@pytest.mark.parametrize("kind", ["dstar", "dmr"])
+def test_e2_short_over_is_not_replayed(echo_rig, target, kind):
+    scene = Scene(echo_rig.ip, kind)
+    try:
+        scene.over(SHORT_FRAMES, "e2")
+        end = scene.ends[0]
+        scene.until(end + 5.5)
+        listener, talker = scene.overs("listener"), scene.overs("talker")
+    finally:
+        scene.close()
+    assert listener and listener[0].n_voice > 0, "precondition: the listener did not hear the short over"
+    TALLY["short"] += 1
+    assert [o for o in listener if o.start > end + 0.05] == [], "%s: a replay of a %d frame over reached the listener" % (kind, SHORT_FRAMES)
+    assert [o for o in talker if o.start > end + 0.05] == [], "%s: a replay of a %d frame over reached the talker" % (kind, SHORT_FRAMES)
+
+
+# ---------------------------------------------------------------- E3: long over
+
+def test_e3_long_over_is_truncated(echo_rig, target):
+    limit = echo_rig.max_seconds
+    cfg = echo_rig.cfg
+    edited = False
+    if limit > MAX_FOR_E3 + 3:
+        cfg = need_cfg(echo_rig, "E3 needs max_seconds <= 8: name echo-short.toml, or let the case edit it")
+        cfg.apply(max_seconds=MAX_FOR_E3)
+        edited = True
+        limit = MAX_FOR_E3
+        wait_reload()
+    problems = []
+    try:
+        for kind in ("dstar", "dmr"):
+            scene = Scene(echo_rig.ip, kind)
+            try:
+                n = int((limit + 3) * 50)
+                scene.over(n, "e3")
+                end = scene.ends[0]
+                scene.until(end + echo_rig.delay + limit + 2.0)
+                overs, wire = scene.overs("listener"), scene.sent[0]
+            finally:
+                scene.close()
+            replays = [o for o in overs if o.start > end + 0.05]
+            TALLY["truncated"] += len(replays)
+            if len(replays) != 1:
+                problems.append("%s: %d replays of the %d s over" % (kind, len(replays), limit + 3))
+                continue
+            replay = replays[0]
+            length = echo.duration(replay)
+            cap = echo.retained_frames(limit)
+            note(target, "E3[%s]" % kind, "RECORD", "over %d frames, max_seconds %d: replay %.2f s, %d frames (cap %d)" % (
+                n, limit, length or 0, len(replay.frames), cap))
+            if not echo.in_window(length, limit - 0.5, limit + 0.5):
+                problems.append("%s: replay lasts %.2f s, want %d s +- 0.5" % (kind, length or 0, limit))
+            if not cap - 3 <= len(replay.frames) <= cap:
+                problems.append("%s: replay has %d frames, want %d..%d (whole bundles, at most max_seconds * 50)" % (
+                    kind, len(replay.frames), cap - 3, cap))
+            cmp = echo.compare_payload(wire[:len(replay.frames)], replay.frames)
+            if not cmp.identical:
+                problems.append("%s: the retained prefix differs from what was sent at frame %s" % (kind, cmp.first_diff))
+    finally:
+        if edited:
+            cfg.restore()
+            wait_reload()
+    assert not problems, "; ".join(problems)
+
+
+# ---------------------------------------------------------------- E5: other origin classes
+
+def stray_replays(scene, ends, window):
+    """Overs the listener heard that start after the end of the over that was sent (and in the window)."""
+    return [o for o in scene.overs("listener") if any(0.05 < o.start - e < window for e in ends)]
+
+
+@pytest.mark.interlink
+def test_e5a_xlx_peer_over_is_not_replayed(echo_rig, target):
+    if os.environ.get("DVT_INTERLINK") != "on" or not target.is_given("xlxd_peer_sut"):
+        pytest.skip("no interlink peer: run.sh --profile interlink with rig/config/dv-router/xlx-peer.toml")
+    if MODULE not in os.environ.get("DVT_INTERLINK_MODULES", "DE"):
+        pytest.skip("module %s is not interlinked (DVT_INTERLINK_MODULES)" % MODULE)
+    if echo_rig.cfg is not None and "edges.xlx.peer" not in echo_rig.cfg.original:
+        pytest.skip("the SUT has no XLX peer row: add rig/config/dv-router/xlx-peer.toml to DVT_SUT_CONFIG_EXTRA")
+    far = clients.make("dstar", MODULE, 0)               # on the peer reflector (xlxd, no echo)
+    near = clients.make("dstar", MODULE, 1)              # on the SUT
+    drain = None
+    try:
+        assert far.link(target.xlxd_peer_sut), "no DExtra link to the peer reflector"
+        assert near.link(echo_rig.ip), "no DExtra link to the SUT"
+        drain = Drainer(near.client)
+        drain.start()
+        window = echo_rig.delay + 3.0 + 2.0
+        carried, ends = False, []
+        deadline = time.monotonic() + 60
+        n = 0
+        while time.monotonic() < deadline:
+            n += 1
+            frames = echo.make_frames("dstar", PROBE_FRAMES, "e5a-probe-%d" % n)
+            near.client.inbox.clear()
+            near.client.inbox_times.clear()
+            clients.talk(far, "dstar", frames, tail=0.0)
+            end = far.last_stamps[-1]
+            ends.append(end)
+            time.sleep(echo_rig.delay + echo.over_seconds(PROBE_FRAMES) + 2.5)
+            overs = echo.split_overs(echo.events("dstar", list(near.client.inbox), list(near.client.inbox_times)))
+            if overs and overs[0].n_voice >= PROBE_FRAMES * 0.8:
+                carried = True
+                stray = [o for o in overs[1:] if o.start > end + 0.05]
+                assert not stray, "a probe over from the peer was replayed (%d extra overs)" % len(stray)
+                break
+        assert carried, "the interlink carried no over from the peer to the SUT in 60 s"
+        near.client.inbox.clear()
+        near.client.inbox_times.clear()
+        frames = echo.make_frames("dstar", FRAMES_E1, "e5a")
+        clients.talk(far, "dstar", frames, tail=0.0)
+        end = far.last_stamps[-1]
+        time.sleep(window + 1.0)
+        overs = echo.split_overs(echo.events("dstar", list(near.client.inbox), list(near.client.inbox_times)))
+        assert overs and overs[0].n_voice > 0, "precondition: the SUT's listener did not hear the peer's over"
+        assert echo.compare_payload(frames, overs[0].frames).prefix_ok, "the over from the peer changed on the way"
+        assert len(overs) == 1, "an over from the XLX peer (origin class 1) was replayed: %d overs at the SUT's listener, " \
+            "the second starts %.2f s after the over" % (len(overs), overs[1].start - end)
+    finally:
+        if drain is not None:
+            drain.stop()
+        clients.close(far, near)
+
+
+def test_e5b_usrp_over_is_not_replayed(echo_rig, target):
+    rules = specs.rule(target, "usrp") or {}
+    if not rules.get("dynamic_server"):
+        pytest.skip("no dynamic USRP hub in the profile (DVT_USRP_DYNAMIC=1, specs usrp dynamic_server)")
+    addr = (echo_rig.ip, int(rules.get("dynamic_port", 34001)))
+    talker, listener = UsrpDyn(addr, "N0CALL"), UsrpDyn(addr, "N0TEST")
+    dstar = clients.make("dstar", MODULE, 1)
+    drain = None
+    try:
+        for c in (talker, listener):
+            end = time.monotonic() + 15
+            while not c.register():
+                if time.monotonic() > end:
+                    pytest.skip("the dynamic USRP hub does not answer REG:DVSWITCH at %s:%d" % addr)
+        talker.join(MODULE)
+        listener.join(MODULE)
+        assert dstar.link(echo_rig.ip)
+        drain = Drainer(dstar.client)
+        drain.start()
+        end = talker.talk(FRAMES_E1, drain_with=(listener,))
+        stop = end + echo_rig.delay + 3.0 + 2.0
+        while time.monotonic() < stop:
+            listener.pump(0.1)
+        times = listener.voice_times()
+        assert len(times) >= FRAMES_E1 * 0.5, "precondition: the USRP listener heard %d of %d frames of the over" % (
+            len(times), FRAMES_E1)
+        runs = count_streams(times)
+        assert runs == 1, "a USRP over (origin class 2) was replayed: the USRP listener heard %d overs" % runs
+        overs = echo.split_overs(echo.events("dstar", list(dstar.client.inbox), list(dstar.client.inbox_times)))
+        note(target, "E5b", "RECORD", "D-STAR listener heard %d over(s) of the USRP over (through the transcoder)" % len(overs))
+        assert len(overs) <= 1, "the D-STAR listener heard %d overs of one USRP over" % len(overs)
+    finally:
+        if drain is not None:
+            drain.stop()
+        talker.close()
+        listener.close()
+        clients.close(dstar)
+
+
+def test_e5c_m17_peer_over_is_not_replayed(echo_rig, target, request):
+    if not echo_rig.modules.get("M"):
+        pytest.skip("echo is not on for module M (the module of the M17 peers): add rig/config/dv-router/echo-peers.toml")
+    m17_peers = request.getfixturevalue("m17_peers")       # binds the peer ports: only when the case can run
+    if "sut" not in m17_peers:
+        pytest.skip("no M17 peering on the sut")
+    peers = m17_peers["sut"]
+    scene = Scene(echo_rig.ip, "m17", module="M")
+    try:
+        # control: a local M17 over on M is replayed (echo is on for M)
+        scene.over(FRAMES_E1, "e5c-local")
+        end = scene.ends[0]
+        scene.until(end + echo_rig.delay + 3.0 + 1.5)
+        local = [o for o in scene.overs("listener") if o.start > end + 0.05]
+        assert len(local) == 1, "control: a local M17 over on M was replayed %d times (echo off for M?)" % len(local)
+        TALLY["played"] += 1
+        # the over from the peer (origin class 2)
+        frames = echo.make_frames("m17", FRAMES_E1, "e5c-peer")
+        packets = m17.voice_packets(frames, 0x5A5A, "N0PEER")
+        scene.listener.client.inbox.clear()
+        scene.listener.client.inbox_times.clear()
+        peers.dvt.clear()
+        start = time.monotonic() + 0.1
+        for i, p in enumerate(packets):
+            delay = start + i * 0.040 - time.monotonic()
+            if delay > 0:
+                time.sleep(delay)
+            peers.dvt.send(m17.with_trailer(p, "M"))
+        end = time.monotonic()
+        scene.until(end + echo_rig.delay + 3.0 + 2.0)
+        overs = scene.overs("listener")
+    finally:
+        scene.close()
+    assert overs and overs[0].n_voice > 0, "precondition: the local listener did not hear the peer's over"
+    assert len(overs) == 1, "an over from an M17 peer (origin class 2) was replayed: %d overs at the listener" % len(overs)
+
+
+def test_e5d_nxdn_p25_not_reachable():
+    pytest.skip("not reachable: the rig template has no NXDN or P25 peer rows (the native launch ignores DVT_NXDN / DVT_P25), "
+                "and the client ports of soak-edges.toml are not peers; their origin class is not in the design")
+
+
+# ---------------------------------------------------------------- E6: the floor
+
+def test_e6_floor_is_busy_during_the_replay(echo_rig, target):
+    scene = Scene(echo_rig.ip, "dstar")
+    intruder = dextra.DstarClient("0.0.0.0", callsign="N0BUSY", module=MODULE)
+    try:
+        assert intruder.link(echo_rig.ip), "the second talker did not link"
+        scene.over(FRAMES_E1, "e6-a")
+        end_a = scene.ends[0]
+        first = wait_for_over(scene, end_a + 0.05, timeout=echo_rig.delay + 3.0)
+        assert first is not None, "precondition: no replay started"
+        time.sleep(0.7)                                   # well inside the 3 s replay
+        f1 = echo.make_frames("dstar", PROBE_FRAMES, "e6-intruder1")
+        intruder.talk(f1, clients.fresh_stream_id("dstar"), tail=0.0)
+        end_i1 = time.monotonic()
+        scene.until(end_a + echo_rig.delay + 3.0 + 1.0)   # the replay is over
+        time.sleep(1.5)
+        f2 = echo.make_frames("dstar", PROBE_FRAMES, "e6-intruder2")
+        intruder.talk(f2, clients.fresh_stream_id("dstar"), tail=0.0)
+        end_i2 = time.monotonic()
+        scene.until(end_i2 + echo_rig.delay + 1.2 + 1.5)
+        overs = scene.overs("listener")
+    finally:
+        clients.close(intruder)
+        scene.close()
+    note(target, "E6", "RECORD", "overs at the listener: %s" % [(round(o.start - end_a, 2), o.n_voice) for o in overs])
+    heard = {f for o in overs for f in o.frames}
+    leaked = [f for f in f1 if f in heard]
+    replay = next((o for o in overs if o.start > end_a + 0.05), None)
+    TALLY["played"] += 1 if replay is not None else 0
+    TALLY["played_maybe"] += 1                            # the replay of the second human over, not asserted here
+    assert not leaked, "%d of %d frames of the human who keyed during the replay were relayed (the floor is busy: DENY 7)" % (
+        len(leaked), len(f1))
+    assert replay is not None, "no replay"
+    got = echo.compare_payload(scene.sent[0], replay.frames)
+    assert got.prefix_ok, "the replay was disturbed by the second talker (first difference at frame %s)" % got.first_diff
+    assert echo.in_window(echo.duration(replay), LEN_LOW, LEN_HIGH), "replay %.2f s long" % (echo.duration(replay) or 0)
+    after = [o for o in overs if o.start > end_i1 + 0.05]
+    assert any(echo.compare_payload(echo.expected_frames("dstar", f2), o.frames).prefix_ok for o in after), \
+        "the human over after the replay was not relayed: the floor was not free (%d overs after the denied over)" % len(after)
+
+
+# ---------------------------------------------------------------- E7: toggle
+
+def test_e7a_toggle_off_and_on(echo_rig, target):
+    cfg = need_cfg(echo_rig, "E7 edits the rendered TOML")
+    off_replays, on_replays, end_on, off_ok = [], [], None, False
+    try:
+        cfg.apply(modules={MODULE: False})
+        wait_reload()
+        scene = Scene(echo_rig.ip, "dstar")
+        try:
+            scene.over(FRAMES_E1, "e7-off")
+            end = scene.ends[0]
+            scene.until(end + echo_rig.delay + 3.0 + 1.5)
+            overs = scene.overs("listener")
+            off_ok = bool(overs) and overs[0].n_voice > 0
+            off_replays = [o for o in overs if o.start > end + 0.05]
+        finally:
+            scene.close()
+        cfg.apply(modules={MODULE: True})
+        wait_reload(extra=2.0)
+        scene = Scene(echo_rig.ip, "dstar")
+        try:
+            scene.over(FRAMES_E1, "e7-on")
+            end_on = scene.ends[0]
+            scene.until(end_on + echo_rig.delay + 3.0 + 1.5)
+            on_replays = [o for o in scene.overs("listener") if o.start > end_on + 0.05]
+        finally:
+            scene.close()
+    finally:
+        cfg.restore()
+        wait_reload()
+    TALLY["played"] += len(on_replays)
+    assert off_ok, "precondition: the over was not heard while E = false"
+    assert off_replays == [], "E = false: the over was replayed (%d overs after it), %.1f s after the edit" % (
+        len(off_replays), echo.reload_wait())
+    assert len(on_replays) == 1, "E = true again: %d replays of the next over, want 1" % len(on_replays)
+    assert echo.in_window(on_replays[0].start - end_on, START_LOW, START_HIGH)
+    note(target, "E7a", "RECORD", "edit applied within %.1f s (waited that long; the watcher polls every 1 s and wants two "
+         "equal polls); the lower bound of the latency is not measured" % echo.reload_wait())
+
+
+def test_e7b_row_removed_while_playing(echo_rig, target):
+    cfg = need_cfg(echo_rig, "E7 edits the rendered TOML")
+    scene = Scene(echo_rig.ip, "dstar")
+    outcome = {}
+    try:
+        scene.over(200, "e7b")                             # 4 s: the replay takes 4 s
+        end = scene.ends[0]
+        first = wait_for_over(scene, end + 0.05, timeout=echo_rig.delay + 3.0)
+        assert first is not None, "precondition: no replay started"
+        time.sleep(0.5)
+        cfg.apply(modules={})                              # the last row goes: the service stops
+        removed = time.monotonic()
+        replay, deadline = first, time.monotonic() + 12
+        while time.monotonic() < deadline:                 # until the replay has been quiet for 1 s
+            later = [o for o in scene.overs("listener") if o.start > end + 0.05]
+            if not later:
+                break
+            replay = later[0]
+            if time.monotonic() - replay.end > 1.0:
+                break
+            time.sleep(0.1)
+        cmp = echo.compare_payload(scene.sent[0], replay.frames)
+        outcome.update(complete=cmp.prefix_ok and cmp.missing == 0, frames=len(replay.frames), ended=replay.ended,
+                       length=echo.duration(replay) or 0.0, after_removal=replay.end - removed)
+        # the module must be free 2 s after the replay's last packet
+        scene.until(replay.end + 2.0)
+        probe_frames = scene.over(PROBE_FRAMES, "e7b-probe")
+        end_p = scene.ends[1]
+        scene.until(end_p + echo_rig.delay + echo.over_seconds(PROBE_FRAMES) + 2.5)
+        overs = scene.overs("listener")
+    finally:
+        scene.close()
+        cfg.restore()
+        wait_reload(extra=3.0)
+    note(target, "E7b", "RECORD", "replay %s: %d of 200 frames, %.2f s, ended=%s, last packet %.2f s after the edit" % (
+        "completed" if outcome["complete"] else "cut", outcome["frames"], outcome["length"], outcome["ended"],
+        outcome["after_removal"]))
+    TALLY["played_maybe"] += 1
+    ensure_replaying(echo_rig.ip, echo_rig.delay, label="after-e7b")
+    probe_over = [o for o in overs if o.start > replay.end + 0.5]
+    assert probe_over, "the module was not free 2 s after the replay: the human over of %d frames was not relayed" % PROBE_FRAMES
+    assert echo.compare_payload(echo.expected_frames("dstar", probe_frames), probe_over[0].frames).prefix_ok, \
+        "the human over after the replay arrived changed"
+    assert len(probe_over) == 1, "with no [echo] row the human over was replayed (%d overs after the replay)" % len(probe_over)
+    assert outcome["complete"] or outcome["ended"], \
+        "the replay was cut after %d frames and not closed with an end of stream" % outcome["frames"]
+
+
+# ---------------------------------------------------------------- E8
+
+def test_e8_two_nodes_not_reachable():
+    pytest.skip("not reachable: the rig has one DV-Router node; xlxd-peer-sut is an xlxd (no echo), so two echo nodes "
+                "on one XLX link cannot be built from what the rig has")
+
+
+# ---------------------------------------------------------------- telemetry (keep last)
+
+def test_zz_telemetry_counts_the_overs(echo_rig, target):
+    if echo_rig.control is None:
+        pytest.skip("no rig control channel (DVT_RIG_CONTROL=1): metrics xlxd-sut is not readable")
+    if not TALLY:
+        pytest.skip("no echo over was made in this run")
+    deadline = time.monotonic() + 40
+    while True:
+        text = hub_text(echo_rig.control)
+        got = {k: v - echo_rig.base[k] for k, v in results(text).items()}
+        if got["played"] >= TALLY["played"] and got["short"] >= TALLY["short"] and got["truncated"] >= TALLY["truncated"]:
+            break
+        if time.monotonic() > deadline:
+            break
+        time.sleep(3.0)
+    time.sleep(11.0)                                       # one more telemetry period: a late extra count shows
+    text = hub_text(echo_rig.control)
+    got = {k: v - echo_rig.base[k] for k, v in results(text).items()}
+    note(target, "telemetry", "RECORD", "dv_echo_overs_total{room=%s} delta %s, made by the cases %s; label spelling %s" % (
+        MODULE.lower(), got, dict(TALLY), sorted(echo.room_label_cases(text or ""))))
+    if "upper" in echo.room_label_cases(text or ""):
+        note(target, "telemetry", "FINDING", "the room label is upper case; the design writes the lower case module letter")
+    certain, maybe = TALLY["played"], TALLY["played_maybe"]
+    assert certain <= got["played"] <= certain + maybe, "result=played moved by %d, the cases made %d (+ up to %d unsure)" % (
+        got["played"], certain, maybe)
+    assert got["truncated"] == TALLY["truncated"], "result=truncated moved by %d, the cases made %d" % (
+        got["truncated"], TALLY["truncated"])
+    assert got["short"] >= TALLY["short"], "result=short moved by %d, the cases made %d" % (got["short"], TALLY["short"])
+    if got["short"] > TALLY["short"]:
+        note(target, "telemetry", "FINDING", "result=short moved by %d, the cases made %d short overs (DMR / YSF link joins "
+             "are empty streams; not asserted)" % (got["short"], TALLY["short"]))
+    assert metrics_mod.families(text or "") >= {"dv_echo_overs_total"}

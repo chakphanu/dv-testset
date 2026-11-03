@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: MIT
+# Variant of echo.toml (name it after echo.toml): echo on module M too, the module the rig's
+# M17 reflector peers M17-DVT and M17-DVU share with the SUT (rig/rig-dv-router.toml of the
+# template, DVT_M17_PEER_*_MODULES), so the E5 case can send an over from an M17 peer
+# (origin class 2). Module E stays on.
+[echo]
+modules = { E = true, M = true }

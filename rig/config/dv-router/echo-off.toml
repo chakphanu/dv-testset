@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Variant of echo.toml (name it after echo.toml): module E is listed but switched off. The
+# service runs (a nonempty modules table starts it) and accepts no over; used to start a run
+# in the state the E7 toggle case reaches by editing the rendered file.
+[echo]
+modules = { E = false }

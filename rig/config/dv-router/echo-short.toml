@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: MIT
+# Variant of echo.toml (name it after echo.toml in DVT_SUT_CONFIG_EXTRA): the longest replay is
+# 5 s (the smallest value DV-Router accepts; the default is 30 s), so a 8 s over is truncated
+# in seconds. The echo cases change the value live in the rendered file when they can
+# (docs/echo-cases.md, E3); this snippet is for a run that cannot.
+[echo]
+max_seconds = 5

@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/rig.md): DV-Router's built-in echo
+# (dv-svc-echo, design doc echo.md) on module E: a local over of 50 frames or more is replayed
+# once, delay_ms after its end, as an ordinary over of the same source profile. Appended after
+# the template, so the template must not define [echo] itself. The module must be served by
+# [node] rooms (the rig template serves A-Z).
+#
+# max_seconds and delay_ms are left out on purpose: the cases (cases/test_echo.py,
+# docs/echo-cases.md) test the defaults, 30 s and 1000 ms. The variants below are named after
+# this file to change one key (a plain [echo] table of a later snippet is merged key by key,
+# dvtest/sut_config.py): echo-short.toml, echo-off.toml, echo-peers.toml.
+[echo]
+modules = { E = true }
