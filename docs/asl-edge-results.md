@@ -29,9 +29,9 @@ config; `-out`, `-lookup` and `-reg` snippets are added by `run.sh` from the fla
 port, 1993 HTTP 500, 1994 200 without the success text, 1995 reply after 20 s, 1996 reply over 4 KiB) and logs every
 request in full to `out/<run>/asl-lab/register/requests.jsonl`. Fixture secrets only (`test-secret-not-real`).
 
-Images (all local, none pulled): **c199** = `dv-router:asl-c199` (the tag was removed afterwards), **c199b** =
+Images (all local, none pulled; the DVSwitch Mobile app run is described in [asl-dvswitch.md](asl-dvswitch.md)): **c199** = `dv-router:asl-c199` (the tag was removed afterwards), **c199b** =
 `dv-router:asl-c199b` (the fix image: listener egress clock, `[edges.allstar.lookup]`, register server/insecure keys,
-monitor listen-only, loop hold-down). A column for `dv-router:wip-7efdd33` is added when its run is done.
+monitor listen-only, loop hold-down). `wip-7efdd33` = the ASL1f fix image (its column is partial: that run was aborted when `wip-71ab207` arrived, everything before restart x5 had passed, `20261103T183151Z`); `wip-71ab207` = the overnight image (ACL0a/b, TOTP1, I18N1/b, IDS1, ECHO1c, ASL tests).
 
 ## Results
 
@@ -40,32 +40,39 @@ on that image). "probes" is the attempt count of the working-over probe (`hear_t
 at most 6 times, because of finding 1); 1 means the first over was heard. Host load average (1 min) at the start
 of each case is in `out/<run>/asl-lab/loadavg.jsonl`; cases run under load above 6 are flagged `L`.
 
-| Case | What it checks | c199 | c199b | Out dir (c199b) / pcap | Notes |
-|------|----------------|------|-------|------------------------|-------|
-| T1 | node A dials the edge, 10 min hold, audio edge to client at start and end, PING/PONG through the hold | pass (probes 2, 1) | pass (probes 1, 1) | `20261103T071151Z/asl-lab/t1-hold/edge.pcap` (480 KB) | load 6.8 at start, 2.2 at end |
-| T1b | the other direction: client keys, edge relays to A | FAIL (6 probes, over cut) | pass (rerun in its own run after a test fix) | `20261103T115747Z/asl-lab/t1b-client-to-node/` | the first c199b try failed in the test (it looked at RPT_RXKEYED), not in the edge: now read from the capture |
-| T2 | one 190 s over; TOT at 180 s | FAIL (probes 4, then 0 s of audio) | pass: 179.0 s of audio, over 193 s, probes 1 | `20261103T071151Z/asl-lab/t2-tot/edge.pcap` (6.2 MB) | TOT cut at about 180 s as designed |
-| T3 | hub of A, B and E: per-destination L lists | pass | pass | `.../t3-hub/` | `L T199902,R299901` to A, `L R299901,T199901` to B, `L T199902,T199901` to E: split horizon and T/R letters correct |
-| T4 | A, B each dial the edge and A dials B directly | pass | pass | `.../t4-loop/` | app_rpt refuses the third link itself (`T 199901 REMALREADY`) before any packet leaves A: its DNS lookup of B is slower than the edge's L list reaching A. The edge's own guard is not what acts here: see T4b |
-| T4b | loop through the edge: chain A-E-B, then A and B dial the edge together | - | pass | `20261103T120058Z/asl-lab/t4b-loop/edge.pcap` | edge drops the youngest branch: see "Loop guard" below |
-| T5 | wrong source address for a statically known node: ACCEPT then HANGUP, no ANSWER; right address answered | pass (2 cases) | pass (2 cases) | (no capture; checked from the client's side) | identity check as designed |
-| T6 | outbound rows: permanent transceive to B, monitor to E, established after an edge restart | pass | pass | | |
-| T6m | monitor row is listen only: no voice, no RADIO_KEY to E while the room talks | XFAIL (finding 3) | pass | `.../t6-monitor/` | fixed in c199b |
-| T7 | edge restart (SIGUSR1) under A's link: A's link comes back | pass | pass | | launcher backs off 500 ms, 1 s, ... between consecutive restarts of the edge child: a kill-proc in the gap gets "error 3" (the cases keep 3 s apart) |
-| T8 | asl-b container restart: the edge redials B | pass | pass | | |
-| T8b | HANGUP versus DISCONNECT on the permanent row | - | pass | `20261103T115747Z/asl-lab/t8b-disconnect/edge.pcap` | **answer to the DISCONNECT question below** |
-| T9 | edge egress 80 ms +/-20 ms and 5 % loss: link and tone survive | pass (probes 2) | pass (probes 1) `L` | `.../t9-netem/` | netem reset afterwards (always, in `finally`) |
-| T10 | client account `acct`: md5, call token exchange, RADIO_KEY, no REGREQ | pass | pass | `.../t10-client/` | |
-| T11 | 60 NEW and 20 POKE from one address in 1.2 s: same pid, cpu bounded, a real node still links | pass | pass `L` | | no source-address spoofing was attempted (raw sockets are not available to the tester); the per-IP limits are what one address triggers |
-| back-to-back | three overs 1 s apart each reach the client | XFAIL (finding 1) | pass | | |
-| restart x5 | 5 x SIGUSR1, one over after each, no probe retry | - | pass | | |
-| R1 | success: shape, one node per request, refresh at 60 s | - | pass | `20261103T120131Z/asl-lab/register/requests.jsonl` | gap 60.0 s |
-| R2 | success with another port: mismatch counted | - | pass | | refresh 60 s |
-| R3 | HTTP 500 retried with backoff | - | pass | | first retry 24.1 s (30 s -20 %) |
-| R4 | 200 without "successfully registered" is a failure | - | pass | | retry 26.4 s |
-| R5 | reply after 20 s: client times out | - | pass | | next request 47.8 s after the first |
-| R6 | reply over 4 KiB refused | - | pass | | retry 25.2 s |
-| R7 | `dv_edge_allstar_register_total{result}` counts ok, mismatch and the failures | - | pass | `.../register/metrics.txt` | |
+| Case | What it checks | c199 | c199b | wip-7efdd33 (partial) | wip-71ab207 | Out dir (c199b) / pcap | Notes |
+|------|------|------|------|------|------|------|------|
+| T1 | node A dials the edge, 10 min hold, audio edge to client at start and end, PING/PONG through the hold | pass (probes 2, 1) | pass (probes 1, 1) | pass | pass | `20261103T071151Z/asl-lab/t1-hold/edge.pcap` (480 KB) | load 6.8 at start, 2.2 at end |
+| T1b | the other direction: client keys, edge relays to A | FAIL (6 probes, over cut) | pass (rerun in its own run after a test fix) | pass | pass | `20261103T115747Z/asl-lab/t1b-client-to-node/` | the first c199b try failed in the test (it looked at RPT_RXKEYED), not in the edge: now read from the capture |
+| T2 | one 190 s over; TOT at 180 s | FAIL (probes 4, then 0 s of audio) | pass: 179.0 s of audio, over 193 s, probes 1 | pass | pass | `20261103T071151Z/asl-lab/t2-tot/edge.pcap` (6.2 MB) | TOT cut at about 180 s as designed |
+| T3 | hub of A, B and E: per-destination L lists | pass | pass | pass | pass | `.../t3-hub/` | `L T199902,R299901` to A, `L R299901,T199901` to B, `L T199902,T199901` to E: split horizon and T/R letters correct |
+| T4 | A, B each dial the edge and A dials B directly | pass | pass | pass | pass | `.../t4-loop/` | app_rpt refuses the third link itself (`T 199901 REMALREADY`) before any packet leaves A: its DNS lookup of B is slower than the edge's L list reaching A. The edge's own guard is not what acts here: see T4b |
+| T4b | loop through the edge: chain A-E-B, then A and B dial the edge together | - | pass | superseded (aborted for wip-71ab207) | pass | `20261103T120058Z/asl-lab/t4b-loop/edge.pcap` | edge drops the youngest branch: see "Loop guard" below |
+| T5 | wrong source address for a statically known node: ACCEPT then HANGUP, no ANSWER; right address answered | pass (2 cases) | pass (2 cases) | pass | pass | (no capture; checked from the client's side) | identity check as designed |
+| T6 | outbound rows: permanent transceive to B, monitor to E, established after an edge restart | pass | pass | pass | pass | | |
+| T6m | monitor row is listen only: no voice, no RADIO_KEY to E while the room talks | XFAIL (finding 3) | pass | pass | pass | `.../t6-monitor/` | fixed in c199b |
+| T7 | edge restart (SIGUSR1) under A's link: A's link comes back | pass | pass | pass | pass | | launcher backs off 500 ms, 1 s, ... between consecutive restarts of the edge child: a kill-proc in the gap gets "error 3" (the cases keep 3 s apart) |
+| T8 | asl-b container restart: the edge redials B | pass | pass | pass | pass | | |
+| T8b | HANGUP versus DISCONNECT on the permanent row | - | pass | pass | pass | `20261103T115747Z/asl-lab/t8b-disconnect/edge.pcap` | **answer to the DISCONNECT question below** |
+| T9 | edge egress 80 ms +/-20 ms and 5 % loss: link and tone survive | pass (probes 2) | pass (probes 1) `L` | pass | pass | `.../t9-netem/` | netem reset afterwards (always, in `finally`) |
+| T10 | client account `acct`: md5, call token exchange, RADIO_KEY, no REGREQ | pass | pass | pass | pass | `.../t10-client/` |  |
+| T11 | 60 NEW and 20 POKE from one address in 1.2 s: same pid, cpu bounded, a real node still links | pass | pass `L` | pass | pass | | no source-address spoofing was attempted (raw sockets are not available to the tester); the per-IP limits are what one address triggers |
+| back-to-back | three overs 1 s apart each reach the client | XFAIL (finding 1) | pass | pass | pass | | |
+| restart x5 | 5 x SIGUSR1, one over after each, no probe retry | - | pass | superseded (aborted for wip-71ab207) | pass | | |
+| R1 | success: shape, one node per request, refresh at 60 s | - | pass | superseded (aborted for wip-71ab207) | pass | `20261103T120131Z/asl-lab/register/requests.jsonl` | gap 60.0 s |
+| R2 | success with another port: mismatch counted | - | pass | superseded (aborted for wip-71ab207) | pass | | refresh 60 s |
+| R3 | HTTP 500 retried with backoff | - | pass | superseded (aborted for wip-71ab207) | pass | | first retry 24.1 s (30 s -20 %) |
+| R4 | 200 without "successfully registered" is a failure | - | pass | superseded (aborted for wip-71ab207) | pass | | retry 26.4 s |
+| R5 | reply after 20 s: client times out | - | pass | superseded (aborted for wip-71ab207) | pass | | next request 47.8 s after the first |
+| R6 | reply over 4 KiB refused | - | pass | superseded (aborted for wip-71ab207) | pass | | retry 25.2 s |
+| R7 | `dv_edge_allstar_register_total{result}` counts ok, mismatch and the failures | - | pass | superseded (aborted for wip-71ab207) | pass | `.../register/metrics.txt` |  |
+| DVSwitch Mobile 2.0.7, radio mode (`tools/dvswitch_radio_case.py`) | the real Android app connects, keys, hangs up; the edge relays its voice to A | - | - | pass (by hand) | pass | `20261103T192450Z/asl-lab/dvswitch/dvswitch-radio-mode-wip71ab207c/` | `docs/asl-dvswitch.md`: phone mode still needs REGACK; radio mode works |
+
+wip-71ab207 runs: main `20261103T184952Z` (17 passed, 8 skipped by design, 17:55 min: T4b and R1-R7 need other rig
+variants), T4b `20261103T190801Z`, R1-R7 `20261103T190835Z`, all passed; the edge started normally (no ACL0a fabric
+listen refusal, the override was not set). Loadavg per case in `20261103T184952Z/asl-lab/loadavg.jsonl`: the first
+cases ran at 16-17 (merge worker), the timing-sensitive T9 at 5.4, T11 at 5.0 and the 10 minute hold at 4.8, so
+nothing was rerun for load.
 
 Load: the first 12 c199b cases ran at load 6.5 to 7.5 (dv-router's merge worker); all passed, so no case was rerun for load.
 The c199 run's load was not recorded (the recorder was added afterwards).
@@ -127,41 +134,41 @@ DVT_ASL_EXT_GO=400169 scripts/run.sh --profile asl-ext -m asl_ext -- cases/test_
 
 ### How the node is built and fenced
 
-| Point | What was done |
-|-------|---------------|
-| node | ASL3 Asterisk 22.10.1 (`2:22.10.1+asl3-3.10.8-1.deb13`), app_rpt, node 400169 (`rpt.conf`: `node_lookup_method = dns`, the default domain `nodes.allstarlink.org`), `chan_usrp` to a dummy local address (no radio), `idrecording` empty, telemetry 0, no statpost |
-| no transmit path | no tone playback, no MixMonitor, no dialplan beyond hang-up; functions 1 (disconnect), 3 (connect) and 6 (disconnect all) only; no IAX2 user or account at all (an inbound NEW is refused) |
-| registration | the ASL3 way: `res_rpt_http_registrations` (HTTPS to `register.allstarlink.org`, `register => 400169:<password>@register.allstarlink.org`, interval 180 s), not IAX2 `register =>` |
-| password | a host file (`.local/secrets`, dir 0700, file 0600), mounted read-only into the container; `rig/asl-lab-entry.sh` writes the registration line into a root-only (0600) staged file inside the container; the agent moves it into `rpt_http_registrations.conf` (0600, owner asterisk) when the case asks, so the node does not register at start. It was never an argument, an environment variable or a log line; `scripts/run.sh` scans the whole output directory for it after every asl-ext run (`dvtest.secretscan`, paths only, exit 5 on a hit): clean |
-| network | `asl-ext` is on the internal `rig` network (the tester's agent calls) and on `asl-ext-out`, a plain bridge network (docker NAT, nothing published); every other host stays internal; normal runs never create the network. The profile needs `DVT_ASL_EXT_GO=400169`, must be the only profile, and checks the file modes |
-| limits | `limits-medium` (512 MiB, 2 cpus, 512 pids) inside the `dvt-rig.scope` of `scripts/run.sh` |
-| capture | `tcpdump` on the default-route interface, filter `udp or tcp port 443 or tcp port 53`: IAX2 and the TLS flow to the registry (the docker resolver is not on eth0, so DNS is not in the pcap: the agent asks the same resolver itself and the case records SRV, A and TXT of each node in `dns.jsonl`) |
-| limits of the test | at most two attempts per node, 60 s apart (not needed), one rig, no loop; `out/<run>/asl-ext/stop` ends it at the next check |
+| Point | What was done | pass | pass |
+| -------|--------------- | --- | --- |
+| node | ASL3 Asterisk 22.10.1 (`2:22.10.1+asl3-3.10.8-1.deb13`), app_rpt, node 400169 (`rpt.conf`: `node_lookup_method = dns`, the default domain `nodes.allstarlink.org`), `chan_usrp` to a dummy local address (no radio), `idrecording` empty, telemetry 0, no statpost | pass | pass |
+| no transmit path | no tone playback, no MixMonitor, no dialplan beyond hang-up; functions 1 (disconnect), 3 (connect) and 6 (disconnect all) only; no IAX2 user or account at all (an inbound NEW is refused) | pass | pass |
+| registration | the ASL3 way: `res_rpt_http_registrations` (HTTPS to `register.allstarlink.org`, `register => 400169:<password>@register.allstarlink.org`, interval 180 s), not IAX2 `register =>` | pass | pass |
+| password | a host file (`.local/secrets`, dir 0700, file 0600), mounted read-only into the container; `rig/asl-lab-entry.sh` writes the registration line into a root-only (0600) staged file inside the container; the agent moves it into `rpt_http_registrations.conf` (0600, owner asterisk) when the case asks, so the node does not register at start. It was never an argument, an environment variable or a log line; `scripts/run.sh` scans the whole output directory for it after every asl-ext run (`dvtest.secretscan`, paths only, exit 5 on a hit): clean | pass | pass |
+| network | `asl-ext` is on the internal `rig` network (the tester's agent calls) and on `asl-ext-out`, a plain bridge network (docker NAT, nothing published); every other host stays internal; normal runs never create the network. The profile needs `DVT_ASL_EXT_GO=400169`, must be the only profile, and checks the file modes | pass | pass |
+| limits | `limits-medium` (512 MiB, 2 cpus, 512 pids) inside the `dvt-rig.scope` of `scripts/run.sh` | pass | pass |
+| capture | `tcpdump` on the default-route interface, filter `udp or tcp port 443 or tcp port 53`: IAX2 and the TLS flow to the registry (the docker resolver is not on eth0, so DNS is not in the pcap: the agent asks the same resolver itself and the case records SRV, A and TXT of each node in `dns.jsonl`) | pass | pass |
+| limits of the test | at most two attempts per node, 60 s apart (not needed), one rig, no loop; `out/<run>/asl-ext/stop` ends it at the next check | pass | pass |
 
 ### Timeline (UTC, 2026-11-03)
 
-| Time | Event |
-|------|-------|
-| 18:20:31.8 | case starts, capture running; 18:20:31.9 registration switched on (module reload with the real line) |
-| 18:20:33.9 | **registered**: the module's own table (`rpt show registrations`) says `Registered`, 2.0 s after the request, refresh 179 s; the registry reported the node's public address with port 4569 (the node's IAX2 bindport, sent in the request) |
-| 18:20:33 to 18:21:24 | the registry's DNS A / TXT record of 400169 still named the previous holder only |
-| 18:21:34 | two A / TXT records for 400169 (the previous holder and this node) |
-| 18:21:44 | only this node's address: DNS agrees with the registration, 70 s after it |
-| 18:21:44.7 | dial 400161 (`rpt fun 400169 *3400161`) |
-| 18:21:46.3 | link ESTABLISHED (`rpt lstats`) |
-| 18:22:48.9 | after 60 s ESTABLISHED, disconnect (`*1400161`), link gone, channel gone |
-| 18:23:34.5 | dial 400168 |
-| 18:23:35.5 | link ESTABLISHED |
-| 18:24:38.2 | after 60 s ESTABLISHED, disconnect (`*1400168`) |
-| 18:24:39.7 | registration withdrawn (module reloaded with an empty list) |
-| 18:24:45.9 | Asterisk stopped (`core stop gracefully`), containers and `asl-ext-out` removed; node held 18:20:31 to 18:24:46 |
+| Time | Event | pass | pass |
+| ------|------- | --- | --- |
+| 18:20:31.8 | case starts, capture running; 18:20:31.9 registration switched on (module reload with the real line) | pass | pass |
+| 18:20:33.9 | **registered**: the module's own table (`rpt show registrations`) says `Registered`, 2.0 s after the request, refresh 179 s; the registry reported the node's public address with port 4569 (the node's IAX2 bindport, sent in the request) | pass | pass |
+| 18:20:33 to 18:21:24 | the registry's DNS A / TXT record of 400169 still named the previous holder only | pass | pass |
+| 18:21:34 | two A / TXT records for 400169 (the previous holder and this node) | pass | pass |
+| 18:21:44 | only this node's address: DNS agrees with the registration, 70 s after it | pass | pass |
+| 18:21:44.7 | dial 400161 (`rpt fun 400169 *3400161`) | pass | pass |
+| 18:21:46.3 | link ESTABLISHED (`rpt lstats`) | pass | pass |
+| 18:22:48.9 | after 60 s ESTABLISHED, disconnect (`*1400161`), link gone, channel gone | pass | pass |
+| 18:23:34.5 | dial 400168 | pass | pass |
+| 18:23:35.5 | link ESTABLISHED | pass | pass |
+| 18:24:38.2 | after 60 s ESTABLISHED, disconnect (`*1400168`) | pass | pass |
+| 18:24:39.7 | registration withdrawn (module reloaded with an empty list) | pass | pass |
+| 18:24:45.9 | Asterisk stopped (`core stop gracefully`), containers and `asl-ext-out` removed; node held 18:20:31 to 18:24:46 | pass | pass |
 
 ### Result per dial
 
-| Dial | Lookup | IAX2 setup | Link | Result |
-|------|--------|-----------|------|--------|
-| 400161 (module A) | SRV `10 10 4569 <node>.nodes.allstarlink.org`, A one address, TXT `NN=400161 IP=<ip> PT=4569`, all rcode 0 (SRV points at port 4569, UDP; address in `out/` only) | NEW (empty call token), CALLTOKEN 9 ms later, NEW with the token, ACCEPT 9 ms after that (format ulaw), ANSWER 0.2 s after the first NEW | ESTABLISHED for the whole 60 s (6 samples, `rpt lstats` / `iax2 show channels` / `rpt nodes`: peer `T400161`, user `radio`, 1 IAX2 channel) | success, first attempt |
-| 400168 (module H) | same shape, SRV port 4569 | same, ANSWER 0.11 s after the first NEW | ESTABLISHED for the whole 60 s | success, first attempt |
+| Dial | Lookup | IAX2 setup | Link | pass | pass | Result |
+| ------|--------|-----------|------|-------- | --- | --- |
+| 400161 (module A) | SRV `10 10 4569 <node>.nodes.allstarlink.org`, A one address, TXT `NN=400161 IP=<ip> PT=4569`, all rcode 0 (SRV points at port 4569, UDP; address in `out/` only) | NEW (empty call token), CALLTOKEN 9 ms later, NEW with the token, ACCEPT 9 ms after that (format ulaw), ANSWER 0.2 s after the first NEW | ESTABLISHED for the whole 60 s (6 samples, `rpt lstats` / `iax2 show channels` / `rpt nodes`: peer `T400161`, user `radio`, 1 IAX2 channel) | pass | pass | success, first attempt |
+| 400168 (module H) | same shape, SRV port 4569 | same, ANSWER 0.11 s after the first NEW | ESTABLISHED for the whole 60 s | pass | pass | success, first attempt |
 
 NEW carried VERSION 2, CALLED_NUMBER, CALLING_NUMBER `400169`, USERNAME `radio`, FORMAT ulaw, CAPABILITY gsm / ulaw /
 adpcm and the call token, like the lab's nodes. No error text on either call.
@@ -170,13 +177,13 @@ adpcm and the call token, like the lab's nodes. No error text on either call.
 
 Both calls show the same pattern (t in seconds from the NEW, call 1; call 2 is the same within 0.2 s):
 
-| t | From | Text |
-|---|------|------|
-| 0.22 | far node | `!NEWKEY1!` (right after ANSWER) |
-| 0.26 | this node | `!NEWKEY1!`, `T 400169 COMPLETE`, `L ` (empty), `T 400169 CONNECTED,400169,<far>` (one burst) |
-| 0.38 / 0.54 | far / this | `L ` (empty) each |
-| 30.4 / 30.5, 60.4 / 60.5 | far / this | `L ` (empty) every 30 s from both ends (the ASL3 default `linkpost_time`; the lab uses 10 s) |
-| 61.68 | this node | `!!DISCONNECT!!`, `T 400169 COMPLETE`; the far node's HANGUP follows 9 ms later |
+| t | From | Text | pass | pass |
+| ---|------|------ | --- | --- |
+| 0.22 | far node | `!NEWKEY1!` (right after ANSWER) | pass | pass |
+| 0.26 | this node | `!NEWKEY1!`, `T 400169 COMPLETE`, `L ` (empty), `T 400169 CONNECTED,400169,<far>` (one burst) | pass | pass |
+| 0.38 / 0.54 | far / this | `L ` (empty) each | pass | pass |
+| 30.4 / 30.5, 60.4 / 60.5 | far / this | `L ` (empty) every 30 s from both ends (the ASL3 default `linkpost_time`; the lab uses 10 s) | pass | pass |
+| 61.68 | this node | `!!DISCONNECT!!`, `T 400169 COMPLETE`; the far node's HANGUP follows 9 ms later | pass | pass |
 
 The far node's own link list is empty (`L `), so neither module had another link during the hold. LAGRQ / LAGRP every
 10 s and PING / PONG every 21 s from both ends, as in the lab. **No voice, no CNG, no RADIO_KEY or RADIO_UNKEY
