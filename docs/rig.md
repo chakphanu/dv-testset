@@ -318,6 +318,7 @@ another launch mode the variable draws a warning. Snippets in
 | `web.toml` | the web service, a persistent state dir and the WebRTC edge; added by `--profile web` itself (next section) |
 | `recorder.toml` | the recorder (K14b): `[recorder] dir = "/var/lib/dv-recorder"`, `keep_days = 7`, `max_gb = 1`; naming it in `DVT_SUT_CONFIG_EXTRA` is the switch (see "Recorder" in the web profile section) |
 | `guest.toml` | `[web] guest_listen = true`: anonymous guests may Listen (two per IPv4, no Talk); used by the K22 cases (`docs/web-k22-cases.md`); name it after `web.toml` |
+| `totp-required.toml` | `[web] totp_required = true`, `[admin] totp_required = true`: operator and admin accounts must enrol TOTP. DV-Router TOTP1 made TOTP optional by default (first operator login answers totp `off`; the old keys `web.operator_totp` and `admin.totp` no longer force it), and the web fixtures start from "first login = enrol", so every web run on an image with TOTP1 names this file after `web.toml` (and `admin.toml`) |
 | `debug-log.toml` | `[log] level = "debug"`: debug lines of every SUT process in `out/<run>/logs/xlxd-sut.log` (chatty; short reruns only) |
 | `soak-edges.toml` | `[edges.nxdn]` (`enable`, `tg_modules = "31672:F"`) and `[edges.p25]` (`enable`, `server_module = "G"`, `server_tg = 31672`): the SUT's own NXDN (41400) and P25 (41000) client ports for the soak (`docs/web-soak-cases.md`); the template's own tables are merged key by key |
 

@@ -146,6 +146,14 @@ def test_repo_snippets_render_to_valid_toml(tmp_path):
         assert doc["edges"]["xlx"]["peer"] == [{"callsign": "XLX998", "host": "172.30.0.12", "modules": "DE"}]
 
 
+def test_totp_required_snippet_parses_and_is_documented():
+    import tomllib
+    snippet = ROOT / "rig" / "config" / "dv-router" / "totp-required.toml"
+    doc = tomllib.loads(snippet.read_text())
+    assert doc == {"web": {"totp_required": True}, "admin": {"totp_required": True}}
+    assert "totp-required.toml" in (ROOT / "docs" / "rig.md").read_text()
+
+
 def test_missing_template_and_nothing_written(tmp_path):
     with pytest.raises(sut_config.ConfigError):
         sut_config.render_file(tmp_path / "nope.toml", tmp_path / "o.toml", "172.30.0")

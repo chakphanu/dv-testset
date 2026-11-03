@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/rig.md): TOTP is mandatory
+# for operator and admin accounts. From DV-Router TOTP1 on, TOTP is optional by
+# default (the first operator login answers totp "off"), and the old keys
+# web.operator_totp / admin.totp no longer force enrolment (the web service says
+# "DV_WEB_OPERATOR_TOTP is ignored; use DV_WEB_TOTP_REQUIRED"). The web cases and
+# fixtures start from "first login = enrol", so every web run on an image with
+# TOTP1 adds this file after web.toml and admin.toml.
+[web]
+totp_required = true
+
+[admin]
+totp_required = true
