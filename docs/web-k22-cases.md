@@ -46,8 +46,8 @@ and only four pages (four event streams per address).
 |------|---------|
 | `test_revoke_removes_exactly_that_peer` | two logged-in listeners; `POST /rtc/close` of A's circuit answers 204; the listener gauge falls from 2 to 1; B's peer stays connected and keeps hearing audio, B's own `alive` stays 204; `alive` on the closed circuit is 401 or 403 |
 | `test_repeated_revoke_is_a_no_op` | the same close again and once more after a sweep: 204 or 403 (recorded), the other peer untouched |
-| `test_guest_lease_without_a_peer` | a guest with a live peer: every `alive` of 45 s is 204 (longer than the 15 s initial lease and a 30 s lease); the peer is removed at the edge by the documented operator kick (a Disconnect, no revoke of the record); 204 continues, then 401 within 15 + 30 + 10 s, then 403, never going back |
-| `test_silently_closed_peer_leaves_the_edge` (slow, x3) | **EDG1 (K1 fixed, DV-Router wip dbedd14; needs an image with it, an older image fails it)**: `pc.close()` with no revoke (user at once, guest at once, guest after 45 s), the page keeps calling `/rtc/alive`: the listener gauge `dv_edge_webrtc_listeners` falls below its steady value within 40 s (EDG1_GAUGE_S) and the measured seconds are recorded; for a guest the lease stops renewing: 401 within 15 + 15 + 30 + 10 s of the close, statuses never going back |
+| `test_guest_lease_without_a_peer` | a guest with a live peer: every `alive` of 45 s is 204 (longer than the 15 s initial lease and a 30 s lease); the peer is removed at the edge by the documented operator kick (a Disconnect, no revoke of the record); 204 continues, then the lease ends within 15 + 30 + 10 s: 401 and/or 403, never going back and ending in 403 (the 401 is not required, see "Lease end: the 401 window is not promised") |
+| `test_silently_closed_peer_leaves_the_edge` (slow, x3) | **EDG1 (K1 fixed, DV-Router wip dbedd14; needs an image with it, an older image fails it)**: `pc.close()` with no revoke (user at once, guest at once, guest after 45 s), the page keeps calling `/rtc/alive`: the listener gauge `dv_edge_webrtc_listeners` falls below its steady value within 40 s (EDG1_GAUGE_S) and the measured seconds are recorded; for a guest the lease stops renewing: the first non-204 (401 and/or 403) within 15 + 15 + 30 + 10 s of the close, statuses never going back, ending in 403 |
 | `test_closing_only_the_ctl_channel_removes_the_peer` | **EDG1**: two logged-in listeners hear a protocol talker; only A's `ctl` DataChannel is closed (`page.evaluate` on the channel the probe recorded, `window.__dvtTap.channels`; the peer connection stays up, A's own revoke is blocked): the gauge falls by one within 40 s, a later 3 s over reaches A with under 10 packets and B with at least 100, B's peer stays `connected` and its `alive` is 204. Closing the ctl channel removes the whole peer (it used to keep listening) |
 | `test_foreign_and_malformed_circuits` | other guest browser (other User-Agent) alive / close of a guest circuit, a login on a guest circuit, a guest on a login circuit, another login (the tester) on a login circuit, a never-seen id: 403; a bad id: 400; the owners are untouched |
 | `test_guest_b_churn_does_not_stop_guest_a` | K22b: guest A and a login C stay connected while guest B connects and disconnects for 90 s; A's every answer is 204, A and C still hear audio |
@@ -58,6 +58,24 @@ and only four pages (four event streams per address).
 
 Allow-list: `kill-proc xlxd-sut dv-edge-webrtc KILL` and `... dv-svc-status KILL` (`scripts/lib/killproc.sh`, `dvtest/control.py`, agreement
 test in `cases/unit/test_control.py`, now 10 combinations); the launcher `dv-router` is never signalled.
+
+## Lease end: the 401 window is not promised
+
+Every case that waits for a guest lease to end (`test_guest_lease_without_a_peer`, `test_silently_closed_peer_leaves_the_edge`
+for the guest, `test_edge_kill_stops_guest_renewal`, `test_status_hub_outage_ends_guests`, `test_offer_right_after_a_hub_restart`)
+judges the whole series of in-page `alive` answers with `dvtest/k22.py` `judge_lease_end` (unit tests in `cases/unit/test_k22.py`):
+only 204, 401 and 403; nothing goes back (no 204 after a 401 or 403, no 401 after a 403); the series ends in 403 (the lease really
+ended, so a lease renewed without a peer still fails, and so does a record stuck at 401); the first non-204 answer comes within the
+bound that was already there (15 + 30 + 10 s and the per-case variants). A 401 is NOT required.
+
+Why (dv-router ruling 2026-11-04, after an Opus debug of the K22 FAIL of run `20261103T194120Z`, report
+`debug-k22-guest-403.md`): web.md says an owned record is 401 while it is retained past its lease and 403 after cleanup, and
+promises no minimum 401 window. The sweep runs every 5 s (`INTERVAL_NS`) at a phase fixed when the core is created and revokes every
+record past its lease, so the 401 lasts 0 to 5 s after the deadline; a 1 s poll can step over it. In the failing run the proxy log
+shows `alive` 204 at 19:44:10.669 and 403 at 19:44:11.672: the sweep ran between two polls (the earlier case waited for a 401 and
+saw none). Passing runs had a sweep phase that left about 4.6 s of 401. The rtc code is byte-identical in be207d3, 71ab207 and the
+later wip HEAD: no product change, the case had a race (expected miss rate about 10% for a random phase). The case records
+"401 window observed: yes/no, length" as a note (`k22-results.jsonl`, a FINDING line); it is information, never a condition.
 
 ## EDG1 bounds (what the two cases assert)
 

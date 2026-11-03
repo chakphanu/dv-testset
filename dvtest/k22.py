@@ -69,6 +69,69 @@ def alive_summary(series, t_ref):
             "only": sorted({s for _t, s in rel if s is not None}, key=str)}
 
 
+LEASE_RANK = {204: 0, 401: 1, 403: 2}
+# a lease that ended is seen as 403 within the sweep (every SWEEP_S) plus its revoke after the deadline: the wait for
+# the 403 gets this much on top of the bound of the first non-204 answer
+END_WAIT_EXTRA_S = 30.0
+
+
+def judge_lease_end(series, t_ref, bound_s=None):
+    """Verdict on the answers of POST /rtc/alive of a guest circuit whose lease must end ([(epoch seconds, HTTP status or
+    None)]; answers before `t_ref` are ignored, an answer of None is a transport blip and is counted, not judged).
+
+    Contract (DV-Router web.md; ruling 2026-11-04, debug-k22-guest-403): 204 while the lease runs, then 401 while an owned
+    record is retained past its lease, 403 once cleanup removed it. NO minimum 401 window is promised: the sweep runs every
+    SWEEP_S = 5 s at a fixed phase, so the 401 lasts 0 to 5 s and a 1 s poll can miss it (204 straight to 403). The series
+    is judged as: only 204 / 401 / 403; never back (no 204 after a 401 or 403, no 401 after a 403); it ends in 403 (the lease
+    really ended: a lease without a peer that is renewed stays a failure); and, with `bound_s`, the first non-204 answer
+    comes at most `bound_s` after `t_ref`.
+
+    Returns {"ok", "why" (the first problem, "" when ok), "ended_s" (first non-204, seconds after t_ref, None when the
+    lease never ended), "t403_s", "window401" (a 401 was seen), "window401_s" (first 401 to first 403 as seen by the
+    poll, 0.0 when none), "n", "gaps"}; the window is information, never a condition."""
+    rel = sorted((round(t - t_ref, 3), st) for t, st in series if t >= t_ref)
+    seen = [(t, st) for t, st in rel if st is not None]
+    out = {"ok": False, "why": "", "ended_s": None, "t403_s": None, "window401": False, "window401_s": 0.0,
+           "n": len(rel), "gaps": len(rel) - len(seen)}
+    t401 = None
+    for t, st in seen:
+        if st == 401 and t401 is None:
+            t401 = t
+        if st == 403 and out["t403_s"] is None:
+            out["t403_s"] = t
+        if st != 204 and out["ended_s"] is None:
+            out["ended_s"] = round(t, 1)
+    out["window401"] = t401 is not None
+    if t401 is not None and out["t403_s"] is not None:
+        out["window401_s"] = round(out["t403_s"] - t401, 1)
+    top = -1
+    for t, st in seen:
+        if st not in LEASE_RANK:
+            out["why"] = "status %s at %.1f s: only 204, 401 and 403 are documented" % (st, t)
+            return out
+        if LEASE_RANK[st] < top:
+            out["why"] = "%s at %.1f s after a %s: the order is 204, 401, 403 and nothing goes back" % (
+                st, t, {v: k for k, v in LEASE_RANK.items()}[top])
+            return out
+        top = LEASE_RANK[st]
+    if out["ended_s"] is None:
+        out["why"] = "the lease never ended: %s answers, all 204 (renewed without a peer)" % len(seen)
+    elif top != 2:
+        out["why"] = "the series ends at 401, never 403: the record was retained and not cleaned up"
+    elif bound_s is not None and out["ended_s"] > bound_s:
+        out["why"] = "the first non-204 answer came %.1f s after the start, bound %.1f s" % (out["ended_s"], bound_s)
+    else:
+        out["ok"] = True
+    return out
+
+
+def window_note(verdict):
+    """Informational text of the 401 window of a judge_lease_end verdict (a NOTE, never an assertion)."""
+    if verdict["window401"]:
+        return "401 window observed: yes, %.1f s until the first 403" % verdict["window401_s"]
+    return "401 window observed: no (204 straight to 403 between two polls; the sweep phase allows 0 to %.0f s)" % SWEEP_S
+
+
 def renewed_past(series, t_gone, lease_s, margin_s):
     """True when an answer 204 is still seen later than lease_s + margin_s after t_gone: the lease of a circuit
     whose proof stopped at t_gone cannot outlive that."""

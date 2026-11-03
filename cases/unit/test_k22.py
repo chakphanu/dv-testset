@@ -81,3 +81,67 @@ def test_idle_stream_verdict_quiet_and_noisy():
 def test_idle_stream_verdict_warmup_is_not_judged():
     v = k22.idle_stream_verdict([float(i) for i in range(1, 30)], 600)         # 29 events in the first minute only
     assert v["ok"] and v["after_warmup"] == 0
+
+
+def series(*pairs):
+    """[(t, status)] from (t, status) pairs, epoch 1000 + t."""
+    return [(1000.0 + t, st) for t, st in pairs]
+
+
+LEASE_204 = [(t, 204) for t in range(0, 30)]
+
+
+def test_lease_end_204_401_403_is_ok_and_reports_the_window():
+    v = k22.judge_lease_end(series(*LEASE_204, (30, 401), (31, 401), (32, 401), (33, 403), (34, 403)), 1000.0, 60.0)
+    assert v["ok"], v["why"]
+    assert v["ended_s"] == 30.0 and v["t403_s"] == 33.0 and v["window401"] and v["window401_s"] == 3.0
+    assert "yes, 3.0 s" in k22.window_note(v)
+
+
+def test_lease_end_204_straight_to_403_is_ok_the_401_window_may_be_missed():
+    # the K22 failure of 20261103T194120Z: the 5 s sweep fired between two 1 s polls
+    v = k22.judge_lease_end(series(*LEASE_204, (30, 403), (31, 403)), 1000.0, 60.0)
+    assert v["ok"], v["why"]
+    assert not v["window401"] and v["window401_s"] == 0.0 and v["ended_s"] == 30.0
+    assert "observed: no" in k22.window_note(v)
+
+
+def test_lease_end_403_then_401_fails():
+    v = k22.judge_lease_end(series(*LEASE_204, (30, 403), (31, 401), (32, 403)), 1000.0)
+    assert not v["ok"] and "401" in v["why"] and "nothing goes back" in v["why"]
+
+
+def test_lease_end_401_then_204_fails():
+    v = k22.judge_lease_end(series(*LEASE_204, (30, 401), (31, 204), (32, 403)), 1000.0)
+    assert not v["ok"] and "204" in v["why"]
+
+
+def test_lease_end_403_then_204_fails():
+    assert not k22.judge_lease_end(series((0, 204), (1, 403), (2, 204)), 1000.0)["ok"]
+
+
+def test_lease_end_never_ending_in_403_fails():
+    stuck_401 = k22.judge_lease_end(series(*LEASE_204, (30, 401), (31, 401)), 1000.0)
+    assert not stuck_401["ok"] and "never 403" in stuck_401["why"] and stuck_401["window401"]
+    renewed = k22.judge_lease_end(series(*LEASE_204), 1000.0)
+    assert not renewed["ok"] and "never ended" in renewed["why"] and renewed["ended_s"] is None
+
+
+@pytest.mark.parametrize("bad", [200, 500, 429, 404])
+def test_lease_end_any_other_status_fails(bad):
+    v = k22.judge_lease_end(series(*LEASE_204, (30, bad), (31, 403)), 1000.0)
+    assert not v["ok"] and str(bad) in v["why"]
+
+
+def test_lease_end_bound_applies_to_the_first_non_204_answer():
+    s = series(*LEASE_204, (30, 403))
+    assert k22.judge_lease_end(s, 1000.0, 30.0)["ok"]
+    late = k22.judge_lease_end(s, 1000.0, 29.0)
+    assert not late["ok"] and "bound" in late["why"]
+
+
+def test_lease_end_ignores_answers_before_the_start_and_counts_blips():
+    s = series((-5, 403), (-4, 401)) + series(*LEASE_204, (30, None), (31, 403))
+    v = k22.judge_lease_end(s, 1000.0, 60.0)
+    assert v["ok"], v["why"]
+    assert v["gaps"] == 1 and v["n"] == len(LEASE_204) + 2

@@ -329,6 +329,23 @@ def poll_until(kp, want, timeout_s, since=0.0):
     return wait_until(seen, timeout_s, every=1.0)
 
 
+def await_lease_end(kp, t_ref, timeout_s, bound_s, key):
+    """The end of a guest lease as the in-page poll saw it, judged by k22.judge_lease_end. Waits for the 403 (cleanup) for
+    `timeout_s` (the old wait for the first non-204 answer) plus END_WAIT_EXTRA_S, then judges the whole series after
+    `t_ref`: 204 first, then 401 and/or 403 (never back, ending in 403), the first non-204 within `bound_s`. The 401 is
+    NOT required: web.md promises no minimum 401 window (the sweep runs every 5 s at a fixed phase, so the record is
+    retained 0 to 5 s past its lease and a 1 s poll can step over it; dv-router ruling 2026-11-04, debug-k22-guest-403;
+    run 20261103T194120Z). Whether a 401 window was seen and how long is recorded as a note. Returns (verdict, series)."""
+    poll_until(kp, 403, timeout_s + k22.END_WAIT_EXTRA_S, since=t_ref)
+    series = [(t, st) for t, st in kp.series() if t >= t_ref]
+    verdict = k22.judge_lease_end(series, t_ref, bound_s)
+    summary = k22.alive_summary(series, t_ref)
+    note(key + ": answers after the start", {"first": summary["first"], "runs": summary["runs"][:6]})
+    note(key + ": " + k22.window_note(verdict), {"ended_s": verdict["ended_s"], "t403_s": verdict["t403_s"]})
+    assert verdict["ok"], "%s: %s; runs %s" % (key, verdict["why"], summary["runs"][:6])
+    return verdict, series
+
+
 # ---------------------------------------------------------------------------------------- a, b
 
 def test_revoke_removes_exactly_that_peer(make_page, proto_peer, rig_control):
@@ -427,25 +444,13 @@ def test_guest_lease_without_a_peer(make_page, web_operator):
     t_gone = time.time()
     row = kick_newest_peer(web_operator)
     note("guest lease: operator kick of the guest's peer", row)
-    t401 = poll_until(g, 401, 120.0, since=t_gone)
-    series = g.series()
-    after = [(t, s) for t, s in series if t >= t_gone]
-    summary = k22.alive_summary(after, t_gone)
-    note("guest lease: answers after the peer went away", {"first": summary["first"], "runs": summary["runs"][:6],
-                                                          "browser peer": g.peer_state()})
-    assert t401 is not None, "no 401 within 120 s of the peer going away: the guest lease was renewed without a peer: %s" % summary["runs"][:4]
-    ended_after = round(t401 - t_gone, 1)
-    note("guest lease: 401 after the peer went away (s)", ended_after)
-    assert ended_after <= k22.FRESH_S + LEASE_S + 10.0, \
-        "401 came %.1f s after the peer went away (stale proof 15 s + lease 30 s + margin)" % ended_after
-    if summary["first"].get(204) is None or summary["first"][204] > ended_after:
-        web.finding("K22: guest lease: no 204 after the peer went away before the 401 (first 204 at %s s)" % summary["first"].get(204))
-    t403 = poll_until(g, 403, 90.0, since=t401)
-    series = [(t, s) for t, s in g.series() if t >= t_gone]
-    summary = k22.alive_summary(series, t_gone)
-    note("guest lease: 403 after cleanup (s)", round(t403 - t_gone, 1) if t403 else None)
-    assert summary["monotonic"], "statuses went back: %s" % summary["runs"]
-    assert t403 is not None, "the expired guest id never turned 403 (cleanup) within 90 s: %s" % summary["runs"][-3:]
+    note("guest lease: browser peer after the kick", g.peer_state())
+    # 204 while the lease runs, then 401 and/or 403 (the 401 window is 0 to 5 s: no minimum is promised), never back,
+    # ending in 403 = no renewal without a peer; the first non-204 within stale proof 15 s + lease 30 s + margin
+    verdict, series = await_lease_end(g, t_gone, 120.0, k22.FRESH_S + LEASE_S + 10.0, "guest lease")
+    first = k22.alive_summary(series, t_gone)["first"]
+    if first.get(204) is None or first[204] > verdict["ended_s"]:
+        web.finding("K22: guest lease: no 204 after the peer went away before the end (first 204 at %s s)" % first.get(204))
 
 
 def stable_listeners(rig_control, at_least=1, budget_s=70.0):
@@ -497,16 +502,11 @@ def test_silently_closed_peer_leaves_the_edge(make_page, rig_control, who, after
         "the edge still counted the peer %s s after its browser closed the connection silently (gauge %s before): EDG1 says it " \
         "leaves at once (close_notify) or after 15 s without STUN, seen within %d s" % (gone_s or ">%d" % (EDG1_GAUGE_S + 20), before, EDG1_GAUGE_S)
     if kp.user is None:
-        t401 = poll_until(kp, 401, 75.0, since=t_close)
-        series = [(t, st) for t, st in kp.series() if t >= t_close]
-        summary = k22.alive_summary(series, t_close)
-        note(key + ": guest lease answers after pc.close()", {"first": summary["first"], "runs": summary["runs"][:6]})
-        assert t401 is not None, "the guest lease was still renewed 75 s after its peer closed silently: %s" % summary["runs"][:4]
-        ended = round(t401 - t_close, 1)
-        note(key + ": 401 after pc.close() (s)", ended)
+        # the lease ends within STUN timeout 15 + stale proof 15 + lease 30 + margin 10 s: first non-204 (401 and/or 403, the
+        # 401 window is 0 to 5 s and not promised), never back, ending in 403
         bound = EDG1_STUN_S + k22.FRESH_S + LEASE_S + 10.0
-        assert ended <= bound, "401 came %.1f s after the silent close (STUN timeout 15 + stale proof 15 + lease 30 + margin = %.0f s)" % (ended, bound)
-        assert summary["monotonic"], "statuses went back: %s" % summary["runs"]
+        verdict, _series = await_lease_end(kp, t_close, 75.0, bound, key + ": guest lease after pc.close()")
+        note(key + ": lease ended after pc.close() (s)", verdict["ended_s"])
 
 
 def test_closing_only_the_ctl_channel_removes_the_peer(make_page, proto_peer, rig_control):
@@ -711,14 +711,9 @@ def test_edge_kill_stops_guest_renewal(make_page, rig_control):
     if new is not None and new.peer_state() != "connected":
         new = None
     note("edge kill: a fresh guest offer connected after (s)", back if new is not None else None)
-    t401 = poll_until(g, 401, 120.0, since=t_kill)
-    series = [(t, s) for t, s in g.series() if t >= t_kill]
-    summary = k22.alive_summary(series, t_kill)
-    note("edge kill: answers of the old guest after the kill", {"first": summary["first"], "runs": summary["runs"][:6]})
-    assert t401 is not None, "the old guest was still renewed 120 s after its edge was killed: %s" % summary["runs"][:4]
-    ended = round(t401 - t_kill, 1)
-    note("edge kill: old guest 401 after the kill (s)", ended)
-    assert ended <= k22.FRESH_S + LEASE_S + 10.0, "401 only %.1f s after the kill (stale proof 15 s + lease 30 s)" % ended
+    verdict, series = await_lease_end(g, t_kill, 120.0, k22.FRESH_S + LEASE_S + 10.0, "edge kill: old guest")
+    ended = verdict["ended_s"]
+    note("edge kill: old guest lease ended after the kill (s)", ended)
     assert not k22.renewed_past(series, t_kill, k22.FRESH_S + LEASE_S, 10.0)
     if new is not None:
         in_time = back < ended
@@ -760,14 +755,8 @@ def test_status_hub_outage_ends_guests(make_page, rig_control):
     kills, t_start, t_end = kill_hub_for(rig_control, 40.0)
     note("hub outage: kills in 40 s", kills)
     assert kills >= 2, "the status hub was killed only %d times" % kills
-    t401 = poll_until(g, 401, 90.0, since=t_start)
-    series = [(t, s) for t, s in g.series() if t >= t_start]
-    summary = k22.alive_summary(series, t_start)
-    note("hub outage: old guest answers", {"first": summary["first"], "runs": summary["runs"][:6]})
-    assert t401 is not None, "the guest was still renewed after 90 s of a dead status hub: %s" % summary["runs"][:4]
-    ended = round(t401 - t_start, 1)
-    note("hub outage: old guest 401 after the start of the outage (s)", ended)
-    assert ended <= 40.0 + k22.FRESH_S + LEASE_S, "401 only %.1f s after the start of the hub outage" % ended
+    verdict, _series = await_lease_end(g, t_start, 90.0, 40.0 + k22.FRESH_S + LEASE_S, "hub outage: old guest")
+    note("hub outage: old guest lease ended after the start of the outage (s)", verdict["ended_s"])
     dropped = wait_until(lambda: g.peer_state() != "connected", 60.0, every=1.0)
     note("hub outage: the guest's peer left 'connected' (s after the start)", round(time.time() - t_start, 1) if dropped else None)
     assert dropped, "the guest's peer was still connected 60 s after its lease ended"
@@ -809,15 +798,15 @@ def test_offer_right_after_a_hub_restart(make_page, rig_control):
                     "path; the window with an edge but without the mapping capability was not reached)")
     delay, t_offer, t_kill = made
     g.start_poll(g.sess)
-    t401 = poll_until(g, 401, 60.0, since=t_offer)
+    t_end = poll_until(g, 403, 60.0 + k22.END_WAIT_EXTRA_S, since=t_offer)
     series = g.series()
     summary = k22.alive_summary(series, t_offer)
     note("offer after hub restart: answers", {"first": summary["first"], "runs": summary["runs"][:6], "offer_after_kill_s": round(t_offer - t_kill, 1)})
-    if t401 is None:
+    if t_end is None and not any(s in (401, 403) for t, s in series if t >= t_offer):
         web.finding("K22: the guest that offered %.1f s after the hub kill was still renewed after 60 s: rtc_id was present "
                     "(the capability lookup had already recovered), the race of web.md was not hit" % (t_offer - t_kill))
         assert {s for _t, s in series} == {204}, k22.runs(series)[:4]
     else:
-        ended = round(t401 - t_offer, 1)
-        note("offer after hub restart: 401 after the offer (s)", ended)
-        assert ended <= INITIAL_LEASE_S + 10.0, "the lease of a guest without rtc_id ended %.1f s after the offer (documented 15 s)" % ended
+        verdict = k22.judge_lease_end([(t, s) for t, s in series if t >= t_offer], t_offer, INITIAL_LEASE_S + 10.0)
+        note("offer after hub restart: " + k22.window_note(verdict), {"ended_s": verdict["ended_s"], "t403_s": verdict["t403_s"]})
+        assert verdict["ok"], "the lease of a guest without rtc_id (documented 15 s): %s; runs %s" % (verdict["why"], summary["runs"][:6])
