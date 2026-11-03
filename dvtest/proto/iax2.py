@@ -15,6 +15,8 @@ from dataclasses import dataclass
 IAX, VOICE, CONTROL = 6, 2, 4
 NEW, PING, PONG, ACK, HANGUP, REJECT, ACCEPT, AUTHREQ, AUTHREP = range(1, 10)
 VNAK, CALLTOKEN, SLIN = 18, 40, 64
+ULAW = 4
+LAGRQ, LAGRP = 11, 12
 
 
 @dataclass(frozen=True)
@@ -84,7 +86,12 @@ def swap_pcm(data):
 
 
 class Client:
-    def __init__(self, host, secret, username="rig", port=4569, bind="0.0.0.0"):
+    def __init__(self, host, secret, username="rig", port=4569, bind="0.0.0.0", codec=SLIN):
+        # codec: SLIN (default, 320 byte frames, byte-swapped here) or ULAW (160 byte frames sent as given)
+        if codec not in (SLIN, ULAW):
+            raise ValueError("codec must be SLIN or ULAW")
+        self.codec = codec
+        self.frame_bytes = 320 if codec == SLIN else 160
         self.peer = (socket.gethostbyname(host), port)
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.bind((bind, 0))
@@ -144,8 +151,8 @@ class Client:
             return
         call = struct.unpack("!H", data[:2])[0]
         if not call & 0x8000:
-            if self.accepted and call == self.remote and len(data) == 324:
-                self.media.append(swap_pcm(data[4:]))
+            if self.accepted and call == self.remote and len(data) == 4 + self.frame_bytes:
+                self.media.append(swap_pcm(data[4:]) if self.codec == SLIN else data[4:])
             return
         frame = parse_full(data)
         if frame.destination != self.local or (self.remote and frame.source != self.remote):
@@ -185,8 +192,8 @@ class Client:
                 self.send(IAX, AUTHREP, information(6, self.username) + information(16, result))
             elif frame.subclass == ACCEPT:
                 elements = parse_information(frame.payload)
-                if elements.get(9) != struct.pack("!I", SLIN):
-                    raise ValueError("Peer did not accept SLIN")
+                if elements.get(9) != struct.pack("!I", self.codec):
+                    raise ValueError("Peer did not accept the requested codec")
                 self.accepted = True
             elif frame.subclass in (REJECT, HANGUP):
                 self.closed = True
@@ -210,9 +217,9 @@ class Client:
                 self.link_ready = True
                 self.radio_due = time.monotonic() + 2
         elif frame.kind == VOICE:
-            if frame.subclass != SLIN:
+            if frame.subclass != self.codec:
                 raise ValueError("Unexpected IAX voice codec")
-            self.media.append(swap_pcm(frame.payload))
+            self.media.append(swap_pcm(frame.payload) if self.codec == SLIN else frame.payload)
 
     def pump(self, seconds):
         deadline = time.monotonic() + seconds
@@ -229,7 +236,7 @@ class Client:
         self.new_elements = b"".join([
             information(1, str(node).encode()), information(2, caller.encode()),
             information(4, name.encode()), information(6, self.username),
-            information(8, struct.pack("!I", SLIN)), information(9, struct.pack("!I", SLIN)),
+            information(8, struct.pack("!I", self.codec)), information(9, struct.pack("!I", self.codec)),
             information(11, struct.pack("!H", 2))])
         self.send(IAX, NEW, self.new_elements, stamp=0)
         deadline = time.monotonic() + timeout
@@ -256,14 +263,22 @@ class Client:
         self.radio_due = time.monotonic() + 2
 
     def voice(self, pcm):
-        network = swap_pcm(pcm)
+        network = swap_pcm(pcm) if self.codec == SLIN else pcm
         if not self.voice_started:
             self.voice_timestamp = self.stamp()
-            self.send(VOICE, SLIN, network, stamp=self.voice_timestamp)
+            self.send(VOICE, self.codec, network, stamp=self.voice_timestamp)
             self.voice_started = True
         else:
             self.voice_timestamp = (self.voice_timestamp + 20) & 0xffffffff
             self.socket.sendto(struct.pack("!HH", self.local, self.voice_timestamp & 0xffff) + network, self.peer)
+
+    def ping(self):
+        """IAX PING (the peer answers PONG)."""
+        self.send(IAX, PING)
+
+    def lagrq(self):
+        """IAX LAGRQ (the peer answers LAGRP)."""
+        self.send(IAX, LAGRQ)
 
     def close(self):
         try:
