@@ -18,6 +18,10 @@ Scenarios (all private nodes: A 199901, B 199902, E 299901; E stands in for the 
   loop            A-B, E-A, then B-E: a loop through three nodes
   legacy_key      an IAX2 client (tester) calls E as account, legacy !NEWKEY!: RADIO_KEY / RADIO_UNKEY
                   both ways, PING / LAGRQ answered
+  minimal_new     the tester plays the edge's address (node 299902 in the lab zone): the smallest NEW
+                  the ASL1 design sends (radio, empty call token, no CALLING_NAME) is accepted and answered,
+                  voice without RADIO_KEY is heard; the same NEW claiming node 199901 from the wrong
+                  address is refused
   registration    A registers at the lab registrar (REGREQ, REGAUTH, REGACK), then with a wrong secret (REGREJ)
   dns_zone        the tester asks the lab zone for SRV, A, TXT and an unknown node
   long_call       (DVT_ASL_LONG=1) one call that lasts 75 s: mini-frame ts16 wraps at 65.536 s, natural
@@ -94,8 +98,7 @@ def finish(lab, sc, hosts, limit=3):
 
 
 def quiet(lab, keys=("a", "b", "e")):
-    for key in keys:
-        lab.node(key).hangup_all()
+    lab.quiet(keys)
 
 
 def assert_tone(pcm, label, min_ms=1500):
@@ -214,6 +217,62 @@ def legacy_key(lab):
     ran = finish(lab, sc, ["e"])
     ran.client_media = b"".join(client.media)
     ran.client_controls = list(client.controls)
+    return ran
+
+
+def minimal_new_elements(called, calling, codec=iax2.ULAW):
+    """The smallest NEW the ASL1 design note sends: VERSION, CALLED_NUMBER, CALLING_NUMBER, USERNAME radio,
+    FORMAT, FORMAT2, CAPABILITY, CAPABILITY2 (the call token IE is added by Client.call)."""
+    mask = struct.pack("!I", codec)
+    mask2 = b"\0" + struct.pack("!Q", codec)
+    return b"".join(iax2.information(code, value) for code, value in (
+        (11, struct.pack("!H", 2)), (1, called.encode()), (2, calling.encode()), (6, b"radio"),
+        (9, mask), (56, mask2), (8, mask), (55, mask2)))
+
+
+@pytest.fixture(scope="module")
+def minimal_new(lab):
+    e = lab.node("e")
+    quiet(lab)
+    tone = asl_lab.tone_ulaw(1500)
+    out = {}
+    with lab.scenario("minimal-new", capture=["e"]) as sc:
+        sc.note("tone_sha256", hashlib.sha256(tone).hexdigest())
+        good = iax2.Client(e.ip, "", username="radio", port=lab.port, codec=iax2.ULAW)
+        try:
+            good.call(e.node, timeout=10, elements=minimal_new_elements(e.node, lab.tester_node),
+                      newkey=b"!NEWKEY1!", empty_token=True)
+            good.pump(0.5)
+            # voice only, no RADIO_KEY: voice implies key. Silence frames before and after the tone, as an
+            # Asterisk node sends them: E's forced jitter buffer holds back (and at hangup drops) a stream
+            # that starts with the tone, so a bare 1.5 s tone is not recorded at all
+            frames = [b"\xff" * 160] * 50 + [tone[i:i + 160] for i in range(0, len(tone) - 159, 160)] + [b"\xff" * 160] * 40
+            for n, frame in enumerate(frames):
+                good.voice(frame)
+                good.pump(0.02)
+                if n == 100:
+                    sc.note("variables_during_voice", e.cli("rpt show variables %s" % e.node))
+            good.pump(0.3)
+            out["good_controls"] = list(good.controls)
+        finally:
+            good.close()
+        time.sleep(1.0)
+        bad = iax2.Client(e.ip, "", username="radio", port=lab.port, codec=iax2.ULAW)
+        try:
+            try:
+                bad.call(e.node, timeout=4, elements=minimal_new_elements(e.node, lab.node("a").node),
+                         newkey=b"!NEWKEY1!", empty_token=True)
+                out["bad"] = "answered"
+            except (TimeoutError, ConnectionError) as err:
+                out["bad"] = "refused: %s" % err
+            out["bad_controls"] = list(bad.controls)
+            out["bad_closed"] = bad.closed
+        finally:
+            bad.close()
+        time.sleep(1.0)
+        sc.note("bad_claim", out["bad"])
+    ran = finish(lab, sc, ["e"])
+    ran.out = out
     return ran
 
 
@@ -415,6 +474,33 @@ def test_ping_pong_lagrq_lagrp_answered(legacy_key):
     types = legacy_key.types("e")
     assert types["iax.PING"] >= 1 and types["iax.PONG"] >= 1
     assert types["iax.LAGRQ"] >= 1 and types["iax.LAGRP"] >= 1
+
+
+def test_minimal_new_is_accepted_and_answered(minimal_new, lab):
+    news = minimal_new.frames("e", "iax.NEW")
+    first = [{i["name"]: i for i in f["ies"]} for f in news][0]
+    assert list(first) == ["VERSION", "CALLED_NUMBER", "CALLING_NUMBER", "USERNAME", "FORMAT", "FORMAT2",
+                           "CAPABILITY", "CAPABILITY2", "CALLTOKEN"]
+    assert first["CALLTOKEN"]["len"] == 0
+    assert 4 in minimal_new.out["good_controls"], "ANSWER"
+    assert "!NEWKEY1!" in minimal_new.texts("e")
+    assert any(t.startswith("L") for t in minimal_new.texts("e"))
+    assert minimal_new.frames("e", "voice.full")[0]["codec"] == "ulaw"
+
+
+def test_minimal_new_voice_without_key_is_heard(minimal_new):
+    variables = minimal_new.sc.notes["variables_during_voice"]
+    assert "299902TK" in variables and "RPT_TXKEYED=1" in variables, variables
+    assert not [f for f in minimal_new.frames("e", "control.RADIO_KEY")], "no RADIO_KEY on a new-mode link"
+    assert_tone(minimal_new.rx("e", "from-299902"), "tone at E from the tester", min_ms=1000)
+
+
+def test_minimal_new_wrong_address_is_refused(minimal_new):
+    assert minimal_new.out["bad"].startswith("refused"), minimal_new.out
+    assert 4 not in minimal_new.out["bad_controls"], "no ANSWER"
+    assert minimal_new.types("e")["iax.HANGUP"] >= 2
+    rx = minimal_new.rx("e", "from-199901")
+    assert len(asl_lab.loud_part(rx)) == 0
 
 
 def test_registration_ok_and_rejected(registration):

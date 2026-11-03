@@ -110,6 +110,7 @@ class Client:
         self.radio_keyed = False
         self.radio_due = float("inf")
         self.new_elements = b""
+        self.newkey = b"!NEWKEY!"          # the text that ends call(): legacy by default, b"!NEWKEY1!" for a new-mode link
         self.retransmissions = 0
 
     def stamp(self):
@@ -130,7 +131,7 @@ class Client:
 
     def retry(self):
         now = time.monotonic()
-        if self.link_ready and now >= self.radio_due:
+        if self.link_ready and self.newkey == b"!NEWKEY!" and now >= self.radio_due:
             self.send(CONTROL, 12 if self.radio_keyed else 13)
             self.radio_due = now + 2
         for seq, entry in list(self.pending.items()):
@@ -213,7 +214,7 @@ class Client:
             elif frame.subclass == 1:
                 self.closed = True
         elif frame.kind == 7:
-            if frame.payload.rstrip(b"\0") == b"!NEWKEY!":
+            if frame.payload.rstrip(b"\0") == self.newkey:
                 self.link_ready = True
                 self.radio_due = time.monotonic() + 2
         elif frame.kind == VOICE:
@@ -232,20 +233,24 @@ class Client:
                 continue
             self.handle(data, peer)
 
-    def call(self, node, caller="1999", name="N0IAX", timeout=5):
-        self.new_elements = b"".join([
+    def call(self, node, caller="1999", name="N0IAX", timeout=5, elements=None, newkey=b"!NEWKEY!", empty_token=False):
+        # elements: the information elements of NEW instead of the default set; newkey: !NEWKEY! (legacy,
+        # key/unkey refreshed every 2 s) or !NEWKEY1! (voice implies key, as between ASL3 nodes);
+        # empty_token: open with an empty CALLTOKEN IE like Asterisk's own client does
+        self.newkey = newkey
+        self.new_elements = elements if elements is not None else b"".join([
             information(1, str(node).encode()), information(2, caller.encode()),
             information(4, name.encode()), information(6, self.username),
             information(8, struct.pack("!I", self.codec)), information(9, struct.pack("!I", self.codec)),
             information(11, struct.pack("!H", 2))])
-        self.send(IAX, NEW, self.new_elements, stamp=0)
+        self.send(IAX, NEW, self.new_elements + (information(54, b"") if empty_token else b""), stamp=0)
         deadline = time.monotonic() + timeout
         requested_link = False
         while time.monotonic() < deadline and not self.closed:
             self.pump(0.05)
             if self.accepted and self.answered:
                 if not requested_link:
-                    self.send(7, 0, b"!NEWKEY!\0")
+                    self.send(7, 0, self.newkey + b"\0")
                     requested_link = True
                 if self.link_ready:
                     return

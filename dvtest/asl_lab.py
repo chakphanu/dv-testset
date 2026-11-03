@@ -162,10 +162,14 @@ class Host:
     def versions_text(self):
         return self._req("GET", "/versions").decode()
 
-    def hangup_all(self, settle=5.0):
-        """Drop every IAX2 channel and every link of this host (a scenario starts from a quiet host)."""
+    def disconnect_links(self):
+        """`rpt fun <node> *6` (disconnect all links). app_rpt runs the function a few hundred ms later, so a call
+        placed right after it can be torn down by it: wait (Lab.quiet does) before the next call."""
         if self.node:
             self.cli("rpt fun %s *6" % self.node)
+
+    def hangup_all(self, settle=5.0):
+        """Drop every IAX2 channel of this host (after disconnect_links; a scenario starts from a quiet host)."""
         deadline = time.monotonic() + settle
         while True:
             names = [ln.split("!")[0] for ln in self.cli("core show channels concise").splitlines()
@@ -221,6 +225,7 @@ class Lab:
     out: Path
     port: int
     domain: str
+    tester_node: str = "299902"      # the tester as a node of the lab zone (its own address)
 
     def node(self, key):
         return self.hosts[key]
@@ -242,6 +247,14 @@ class Lab:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("\n".join(lines) + "\n")
         return path
+
+    def quiet(self, keys=("a", "b", "e")):
+        """Disconnect every link of the hosts, let app_rpt run it, drop what is left."""
+        for key in keys:
+            self.hosts[key].disconnect_links()
+        time.sleep(1.2)
+        for key in keys:
+            self.hosts[key].hangup_all()
 
     def put_tone(self, ms=3000, hosts=("a", "b", "e")):
         """Upload the 1 kHz tone to the hosts; returns (sha256, bytes). The asterisk path is /var/lib/asterisk/sounds/dvt/tone1k."""
@@ -305,4 +318,4 @@ def from_env(env=None):
         "e": Host("asl-e", env["DVT_ASL_E"], env["DVT_ASL_NODE_E"]),
     }
     return Lab(hosts, Path(env.get("DVT_OUT", "out")), int(env.get("DVT_ASL_IAX_PORT", "4569")),
-               env.get("DVT_ASL_DOMAIN", "nodes.asl.test"))
+               env.get("DVT_ASL_DOMAIN", "nodes.asl.test"), env.get("DVT_ASL_NODE_T", "299902"))

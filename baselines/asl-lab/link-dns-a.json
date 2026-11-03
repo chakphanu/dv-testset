@@ -6,12 +6,12 @@
  ],
  "frames": 235,
  "skipped": {
-  "non_iax_port": 26,
+  "non_iax_port": 25,
   "bad": 0
  },
  "capture_stats": {
-  "packets": 269,
-  "udp": 269
+  "packets": 268,
+  "udp": 268
  },
  "summary": {
   "cng": 1,
@@ -30,96 +30,96 @@
  "types": {
   "cng": [
    {
-    "frame": 261,
-    "t": 5.479581,
+    "frame": 252,
+    "t": 5.47957,
     "src": "192.0.2.1:4569",
     "dst": "192.0.2.2:4569",
     "type": "cng",
     "form": "full",
-    "scall": 3596,
-    "dcall": 9965,
+    "scall": 3267,
+    "dcall": 1204,
     "retrans": false,
-    "ts": 5266,
+    "ts": 5286,
     "oseq": 8,
     "iseq": 5,
     "kind": 10,
     "subclass": 0,
     "payload_len": 0,
-    "hex": "8e0c26ed0000149208050a00"
+    "hex": "8cc304b4000014a608050a00"
    }
   ],
   "control.ANSWER": [
    {
-    "frame": 18,
-    "t": 0.201862,
+    "frame": 19,
+    "t": 0.202331,
     "src": "192.0.2.2:4569",
     "dst": "192.0.2.1:4569",
     "type": "control.ANSWER",
     "form": "full",
-    "scall": 9965,
-    "dcall": 3596,
+    "scall": 1204,
+    "dcall": 3267,
     "retrans": false,
-    "ts": 4,
+    "ts": 14,
     "oseq": 1,
     "iseq": 1,
     "kind": 4,
     "subclass": 4,
     "payload_len": 0,
-    "hex": "a6ed0e0c0000000401010404"
+    "hex": "84b40cc30000000e01010404"
    }
   ],
   "control.RADIO_UNKEY": [
    {
-    "frame": 260,
+    "frame": 251,
     "t": 5.479538,
     "src": "192.0.2.1:4569",
     "dst": "192.0.2.2:4569",
     "type": "control.RADIO_UNKEY",
     "form": "full",
-    "scall": 3596,
-    "dcall": 9965,
+    "scall": 3267,
+    "dcall": 1204,
     "retrans": false,
-    "ts": 5263,
+    "ts": 5283,
     "oseq": 7,
     "iseq": 5,
     "kind": 4,
     "subclass": 13,
     "payload_len": 0,
-    "hex": "8e0c26ed0000148f0705040d"
+    "hex": "8cc304b4000014a30705040d"
    }
   ],
   "control.STOP_SOUND": [
    {
-    "frame": 19,
-    "t": 0.20188,
+    "frame": 20,
+    "t": 0.202343,
     "src": "192.0.2.2:4569",
     "dst": "192.0.2.1:4569",
     "type": "control.STOP_SOUND",
     "form": "full",
-    "scall": 9965,
-    "dcall": 3596,
+    "scall": 1204,
+    "dcall": 3267,
     "retrans": false,
-    "ts": 7,
+    "ts": 17,
     "oseq": 2,
     "iseq": 1,
     "kind": 4,
     "subclass": -1,
     "payload_len": 0,
-    "hex": "a6ed0e0c00000007020104ff"
+    "hex": "84b40cc300000011020104ff"
    }
   ],
   "iax.ACCEPT": [
    {
-    "frame": 16,
-    "t": 0.200764,
+    "frame": 17,
+    "t": 0.201015,
     "src": "192.0.2.2:4569",
     "dst": "192.0.2.1:4569",
     "type": "iax.ACCEPT",
     "form": "full",
-    "scall": 9965,
-    "dcall": 3596,
+    "scall": 1204,
+    "dcall": 3267,
     "retrans": false,
-    "ts": 1,
+    "ts": 11,
     "oseq": 0,
     "iseq": 1,
     "kind": 6,
@@ -142,61 +142,61 @@
       "hex": "000000000000000004"
      }
     ],
-    "hex": "a6ed0e0c00000001000106070904000000043809000000000000000004"
+    "hex": "84b40cc30000000b000106070904000000043809000000000000000004"
    }
   ],
   "iax.ACK": [
    {
-    "frame": 15,
-    "t": 0.200714,
+    "frame": 16,
+    "t": 0.200953,
     "src": "192.0.2.2:4569",
     "dst": "192.0.2.1:4569",
     "type": "iax.ACK",
     "form": "full",
-    "scall": 9965,
-    "dcall": 3596,
+    "scall": 1204,
+    "dcall": 3267,
     "retrans": false,
-    "ts": 4,
+    "ts": 13,
     "oseq": 0,
     "iseq": 1,
     "kind": 6,
     "subclass": 4,
     "payload_len": 0,
     "ies": [],
-    "hex": "a6ed0e0c0000000400010604"
+    "hex": "84b40cc30000000d00010604"
    },
    {
-    "frame": 17,
-    "t": 0.200815,
+    "frame": 18,
+    "t": 0.201062,
     "src": "192.0.2.1:4569",
     "dst": "192.0.2.2:4569",
     "type": "iax.ACK",
     "form": "full",
-    "scall": 3596,
-    "dcall": 9965,
+    "scall": 3267,
+    "dcall": 1204,
     "retrans": false,
-    "ts": 1,
+    "ts": 11,
     "oseq": 1,
     "iseq": 1,
     "kind": 6,
     "subclass": 4,
     "payload_len": 0,
     "ies": [],
-    "hex": "8e0c26ed0000000101010604"
+    "hex": "8cc304b40000000b01010604"
    }
   ],
   "iax.CALLTOKEN": [
    {
-    "frame": 13,
-    "t": 0.200576,
+    "frame": 14,
+    "t": 0.200824,
     "src": "192.0.2.2:4569",
     "dst": "192.0.2.1:4569",
     "type": "iax.CALLTOKEN",
     "form": "full",
     "scall": 1,
-    "dcall": 3596,
+    "dcall": 3267,
     "retrans": false,
-    "ts": 1,
+    "ts": 10,
     "oseq": 0,
     "iseq": 1,
     "kind": 6,
@@ -207,24 +207,24 @@
       "ie": 54,
       "name": "CALLTOKEN",
       "len": 51,
-      "hex": "313739333637323837343f64313865616163376264613831353932666632376634376538306139306162303034386136613564"
+      "hex": "313739333637343130303f37633865376135313934323736623334353835613434363835386338613530323261626131306261"
      }
     ],
-    "hex": "80010e0c00000001000106283633313739333637323837343f64313865616163376264613831353932666632376634376538306139306162303034386136613564"
+    "hex": "80010cc30000000a000106283633313739333637343130303f37633865376135313934323736623334353835613434363835386338613530323261626131306261"
    }
   ],
   "iax.HANGUP": [
    {
-    "frame": 268,
-    "t": 7.162029,
+    "frame": 265,
+    "t": 7.162262,
     "src": "192.0.2.1:4569",
     "dst": "192.0.2.2:4569",
     "type": "iax.HANGUP",
     "form": "full",
-    "scall": 3596,
-    "dcall": 9965,
+    "scall": 3267,
+    "dcall": 1204,
     "retrans": false,
-    "ts": 6962,
+    "ts": 6982,
     "oseq": 11,
     "iseq": 5,
     "kind": 6,
@@ -239,21 +239,21 @@
       "int": 0
      }
     ],
-    "hex": "8e0c26ed00001b320b0506052a0100"
+    "hex": "8cc304b400001b460b0506052a0100"
    }
   ],
   "iax.NEW": [
    {
-    "frame": 12,
-    "t": 0.200445,
+    "frame": 13,
+    "t": 0.200737,
     "src": "192.0.2.1:4569",
     "dst": "192.0.2.2:4569",
     "type": "iax.NEW",
     "form": "full",
-    "scall": 3596,
+    "scall": 3267,
     "dcall": 0,
     "retrans": false,
-    "ts": 1,
+    "ts": 10,
     "oseq": 0,
     "iseq": 0,
     "kind": 6,
@@ -372,8 +372,8 @@
       "ie": 31,
       "name": "DATETIME",
       "len": 4,
-      "hex": "3563137b",
-      "int": 895685499
+      "hex": "3563160a",
+      "int": 895686154
      },
      {
       "ie": 54,
@@ -382,19 +382,19 @@
       "hex": ""
      }
     ],
-    "hex": "8e0c000000000001000006010b02000201063239393930312d034447430206313939393031260100270100280200003904000000000a02656e0605726164696f090400000004380900000000000000000408040000002637090000000000000000260c0200021f043563137b3600"
+    "hex": "8cc300000000000a000006010b02000201063239393930312d034447430206313939393031260100270100280200003904000000000a02656e0605726164696f090400000004380900000000000000000408040000002637090000000000000000260c0200021f043563160a3600"
    },
    {
-    "frame": 14,
-    "t": 0.200642,
+    "frame": 15,
+    "t": 0.20087,
     "src": "192.0.2.1:4569",
     "dst": "192.0.2.2:4569",
     "type": "iax.NEW",
     "form": "full",
-    "scall": 3596,
+    "scall": 3267,
     "dcall": 0,
     "retrans": false,
-    "ts": 4,
+    "ts": 13,
     "oseq": 0,
     "iseq": 0,
     "kind": 6,
@@ -513,111 +513,111 @@
       "ie": 31,
       "name": "DATETIME",
       "len": 4,
-      "hex": "3563137b",
-      "int": 895685499
+      "hex": "3563160a",
+      "int": 895686154
      },
      {
       "ie": 54,
       "name": "CALLTOKEN",
       "len": 51,
-      "hex": "313739333637323837343f64313865616163376264613831353932666632376634376538306139306162303034386136613564"
+      "hex": "313739333637343130303f37633865376135313934323736623334353835613434363835386338613530323261626131306261"
      }
     ],
-    "hex": "8e0c000000000004000006010b02000201063239393930312d034447430206313939393031260100270100280200003904000000000a02656e0605726164696f090400000004380900000000000000000408040000002637090000000000000000260c0200021f043563137b3633313739333637323837343f64313865616163376264613831353932666632376634376538306139306162303034386136613564"
+    "hex": "8cc300000000000d000006010b02000201063239393930312d034447430206313939393031260100270100280200003904000000000a02656e0605726164696f090400000004380900000000000000000408040000002637090000000000000000260c0200021f043563160a3633313739333637343130303f37633865376135313934323736623334353835613434363835386338613530323261626131306261"
    }
   ],
   "text": [
    {
-    "frame": 22,
-    "t": 0.241035,
+    "frame": 23,
+    "t": 0.241451,
     "src": "192.0.2.1:4569",
     "dst": "192.0.2.2:4569",
     "type": "text",
     "form": "full",
-    "scall": 3596,
-    "dcall": 9965,
+    "scall": 3267,
+    "dcall": 1204,
     "retrans": false,
-    "ts": 7,
+    "ts": 16,
     "oseq": 1,
     "iseq": 3,
     "kind": 7,
     "subclass": 0,
     "payload_len": 10,
     "text": "!NEWKEY1!\u0000",
-    "hex": "8e0c26ed0000000701030700214e45574b4559312100"
+    "hex": "8cc304b40000001001030700214e45574b4559312100"
    },
    {
-    "frame": 24,
-    "t": 0.244173,
+    "frame": 25,
+    "t": 0.244555,
     "src": "192.0.2.1:4569",
     "dst": "192.0.2.2:4569",
     "type": "text",
     "form": "full",
-    "scall": 3596,
-    "dcall": 9965,
+    "scall": 3267,
+    "dcall": 1204,
     "retrans": false,
-    "ts": 10,
+    "ts": 19,
     "oseq": 2,
     "iseq": 3,
     "kind": 7,
     "subclass": 0,
     "payload_len": 18,
     "text": "T 199901 COMPLETE\u0000",
-    "hex": "8e0c26ed0000000a02030700542031393939303120434f4d504c45544500"
+    "hex": "8cc304b40000001302030700542031393939303120434f4d504c45544500"
    }
   ],
   "voice.full": [
    {
-    "frame": 41,
-    "t": 1.479565,
+    "frame": 43,
+    "t": 1.479554,
     "src": "192.0.2.1:4569",
     "dst": "192.0.2.2:4569",
     "type": "voice.full",
     "form": "full",
-    "scall": 3596,
-    "dcall": 9965,
+    "scall": 3267,
+    "dcall": 1204,
     "retrans": false,
-    "ts": 1280,
+    "ts": 1300,
     "oseq": 6,
     "iseq": 5,
     "kind": 2,
     "subclass": 4,
     "payload_len": 160,
     "codec": "ulaw",
-    "hex": "8e0c26ed0000050006050204ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    "hex": "8cc304b40000051406050204ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
    }
   ],
   "voice.mini": [
    {
-    "frame": 43,
-    "t": 1.499509,
+    "frame": 45,
+    "t": 1.499507,
     "src": "192.0.2.1:4569",
     "dst": "192.0.2.2:4569",
     "type": "voice.mini",
     "form": "mini",
-    "scall": 3596,
-    "ts16": 1300,
-    "payload_len": 160,
-    "hex": "0e0c0514ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
-   },
-   {
-    "frame": 44,
-    "t": 1.519507,
-    "src": "192.0.2.1:4569",
-    "dst": "192.0.2.2:4569",
-    "type": "voice.mini",
-    "form": "mini",
-    "scall": 3596,
+    "scall": 3267,
     "ts16": 1320,
     "payload_len": 160,
-    "hex": "0e0c0528ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    "hex": "0cc30528ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+   },
+   {
+    "frame": 46,
+    "t": 1.519522,
+    "src": "192.0.2.1:4569",
+    "dst": "192.0.2.2:4569",
+    "type": "voice.mini",
+    "form": "mini",
+    "scall": 3267,
+    "ts16": 1340,
+    "payload_len": 160,
+    "hex": "0cc3053cffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
    }
   ]
  },
  "ts16_wraps": [],
  "dns": [
   {
-   "id": 25266,
+   "id": 27223,
    "qr": 0,
    "rcode": 0,
    "questions": [
@@ -629,12 +629,12 @@
    "answers": [],
    "frame": 4,
    "t": 0.0,
-   "src": "192.0.2.1:54287",
+   "src": "192.0.2.1:34115",
    "dst": "192.0.2.3:53",
-   "hex": "62b201200001000000000001045f696178045f7564700432393939056e6f6465730361736c0474657374000021000100002904b0000000000000"
+   "hex": "6a5701200001000000000001045f696178045f7564700432393939056e6f6465730361736c0474657374000021000100002904b0000000000000"
   },
   {
-   "id": 25266,
+   "id": 27223,
    "qr": 1,
    "rcode": 3,
    "questions": [
@@ -645,13 +645,13 @@
    ],
    "answers": [],
    "frame": 5,
-   "t": 0.000149,
+   "t": 0.000122,
    "src": "192.0.2.3:53",
-   "dst": "192.0.2.1:54287",
-   "hex": "62b281830001000000000001045f696178045f7564700432393939056e6f6465730361736c0474657374000021000100002904d0000000000000"
+   "dst": "192.0.2.1:34115",
+   "hex": "6a5781830001000000000001045f696178045f7564700432393939056e6f6465730361736c0474657374000021000100002904d0000000000000"
   },
   {
-   "id": 64094,
+   "id": 24266,
    "qr": 0,
    "rcode": 0,
    "questions": [
@@ -661,14 +661,14 @@
     }
    ],
    "answers": [],
-   "frame": 6,
-   "t": 0.099714,
-   "src": "192.0.2.1:37485",
+   "frame": 7,
+   "t": 0.099864,
+   "src": "192.0.2.1:58504",
    "dst": "192.0.2.3:53",
-   "hex": "fa5e01200001000000000001045f696178045f756470053239393930056e6f6465730361736c0474657374000021000100002904b0000000000000"
+   "hex": "5eca01200001000000000001045f696178045f756470053239393930056e6f6465730361736c0474657374000021000100002904b0000000000000"
   },
   {
-   "id": 64094,
+   "id": 24266,
    "qr": 1,
    "rcode": 3,
    "questions": [
@@ -678,14 +678,14 @@
     }
    ],
    "answers": [],
-   "frame": 7,
-   "t": 0.099809,
+   "frame": 8,
+   "t": 0.10001,
    "src": "192.0.2.3:53",
-   "dst": "192.0.2.1:37485",
-   "hex": "fa5e81830001000000000001045f696178045f756470053239393930056e6f6465730361736c0474657374000021000100002904d0000000000000"
+   "dst": "192.0.2.1:58504",
+   "hex": "5eca81830001000000000001045f696178045f756470053239393930056e6f6465730361736c0474657374000021000100002904d0000000000000"
   },
   {
-   "id": 10068,
+   "id": 29988,
    "qr": 0,
    "rcode": 0,
    "questions": [
@@ -695,14 +695,14 @@
     }
    ],
    "answers": [],
-   "frame": 8,
-   "t": 0.199619,
-   "src": "192.0.2.1:60264",
+   "frame": 9,
+   "t": 0.199858,
+   "src": "192.0.2.1:36079",
    "dst": "192.0.2.3:53",
-   "hex": "275401200001000000000001045f696178045f75647006323939393031056e6f6465730361736c0474657374000021000100002904b0000000000000"
+   "hex": "752401200001000000000001045f696178045f75647006323939393031056e6f6465730361736c0474657374000021000100002904b0000000000000"
   },
   {
-   "id": 10068,
+   "id": 29988,
    "qr": 1,
    "rcode": 0,
    "questions": [
@@ -720,14 +720,14 @@
      "text": "0 0 4569 299901.nodes.asl.test"
     }
    ],
-   "frame": 9,
-   "t": 0.199684,
+   "frame": 10,
+   "t": 0.199985,
    "src": "192.0.2.3:53",
-   "dst": "192.0.2.1:60264",
-   "hex": "275485800001000100000002045f696178045f75647006323939393031056e6f6465730361736c04746573740000210001c00c002100010000001e001d0000000011d906323939393031056e6f6465730361736c047465737400c043000100010000001e0004ac1e002c00002904d0000000000000"
+   "dst": "192.0.2.1:36079",
+   "hex": "752485800001000100000002045f696178045f75647006323939393031056e6f6465730361736c04746573740000210001c00c002100010000001e001d0000000011d906323939393031056e6f6465730361736c047465737400c043000100010000001e0004ac1e002c00002904d0000000000000"
   },
   {
-   "id": 48256,
+   "id": 49494,
    "qr": 0,
    "rcode": 0,
    "questions": [
@@ -737,14 +737,14 @@
     }
    ],
    "answers": [],
-   "frame": 10,
-   "t": 0.200092,
-   "src": "192.0.2.1:58502",
+   "frame": 11,
+   "t": 0.200366,
+   "src": "192.0.2.1:51804",
    "dst": "192.0.2.3:53",
-   "hex": "bc800120000100000000000106323939393031056e6f6465730361736c0474657374000001000100002904b0000000000000"
+   "hex": "c1560120000100000000000106323939393031056e6f6465730361736c0474657374000001000100002904b0000000000000"
   },
   {
-   "id": 48256,
+   "id": 49494,
    "qr": 1,
    "rcode": 0,
    "questions": [
@@ -762,11 +762,11 @@
      "text": "172.30.0.44"
     }
    ],
-   "frame": 11,
-   "t": 0.200122,
+   "frame": 12,
+   "t": 0.200404,
    "src": "192.0.2.3:53",
-   "dst": "192.0.2.1:58502",
-   "hex": "bc808580000100010000000106323939393031056e6f6465730361736c04746573740000010001c00c000100010000001e0004ac1e002c00002904d0000000000000"
+   "dst": "192.0.2.1:51804",
+   "hex": "c1568580000100010000000106323939393031056e6f6465730361736c04746573740000010001c00c000100010000001e0004ac1e002c00002904d0000000000000"
   }
  ]
 }

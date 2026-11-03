@@ -46,12 +46,12 @@ this note was written from:
 
 | Service | Address | Role |
 |---------|---------|------|
-| asl-reg | 172.30.0.41 | registrar (IAX2 REGREQ, Asterisk users per node) and the lab DNS zone (dnsmasq) |
-| asl-a | 172.30.0.42 | node 199901: the caller |
-| asl-b | 172.30.0.43 | node 199902: the callee with its own link list |
-| asl-e | 172.30.0.44 | node 299901: stand-in for the edge under test (anonymous `radio`, accounts `acct`, `acct-ct`) |
+| asl-reg | <net>.41 | registrar (IAX2 REGREQ, Asterisk users per node) and the lab DNS zone (dnsmasq) |
+| asl-a | <net>.42 | node 199901: the caller |
+| asl-b | <net>.43 | node 199902: the callee with its own link list |
+| asl-e | <net>.44 | node 299901: stand-in for the edge under test (anonymous `radio`, accounts `acct`, `acct-ct`) |
 
-Addresses are `<DVT_NET>.41` to `.44`. In documents and vectors the placeholders
+Addresses are `<DVT_NET>.41` to `.44`. The tester is also a node of the lab zone, 299902 at its own address (`DVT_ASL_NODE_T`): it plays the address of the future edge when it calls E as `radio`. In documents and vectors the placeholders
 are 192.0.2.x. Node numbers 199901, 199902 and 299901 are private test numbers
 (`DVT_ASL_NODE_A/B/E`); they are not assigned on the real network and no node
 registers anywhere real (`res_rpt_http_registrations` is `noload`, the portal
@@ -120,6 +120,7 @@ scenario.json          pcap sizes, recording names, notes (tone sha256, registry
 | `callee` (A, B, E) | B links A (its own link list), then E originates to B (mode C); tone from E reaches B and, through B, A | the above plus `L T199901` sent to the edge, a three-node chain |
 | `loop` (A, B, E) | three dials issued together close A to B to E to A before any L message has been exchanged | NEW x3, L lists with a node listed twice |
 | `legacy-key` (E) | the tester's IAX2 client (`dvtest.proto.iax2.Client`, ulaw) calls E as account `acct` without call token, legacy `!NEWKEY!`, keys, sends the tone, unkeys; E plays the tone to it; the client sends PING and LAGRQ | RADIO_KEY, RADIO_UNKEY both ways, `!NEWKEY!`, PING/PONG, LAGRQ/LAGRP |
+| `minimal-new` (E) | the tester, as node 299902, sends the smallest NEW of the ASL1 design (no CALLING_NAME, empty call token) as `radio`, answers with `!NEWKEY1!`, sends voice with no RADIO_KEY; then the same NEW claiming node 199901 from the wrong address | NEW with 8 IEs + CALLTOKEN, ACCEPT, ANSWER, `!NEWKEY1!`, voice without key, HANGUP right after ACCEPT for the wrong address |
 | `registration` (A, reg) | A registers at the registrar with `register => 199901:<secret>@<reg>`, then with a wrong secret | REGREQ x3, REGAUTH, REGACK (refresh 180), REGREJ |
 | `dns-zone` (reg) | the tester asks SRV, A, TXT of node 299901, an unknown node, and the registrar name | DNS only |
 | `long-call` (A, E; `DVT_ASL_LONG=1`) | A links E and plays a 70 s tone: one call of 75 s | mini frame `ts16` wrap, natural PING/PONG every 21 s and LAGRQ/LAGRP every 10 s |
@@ -209,6 +210,25 @@ in the A records of the DNS answers, and the call-token strings are Asterisk's
 Selected small vector files are committed in `baselines/asl-lab/` (see the README
 there); the pcaps stay in `out/` (ignored).
 
+## Answers to the ASL1 design note's UNVERIFIED items
+
+Run `20261103T024811Z`, Asterisk `2:22.10.1+asl3-3.10.8-1.deb13`. "Frame" is the Wireshark frame
+number in `out/<run>/asl-lab/<scenario>/<host>.pcap`; `t` is seconds from the first frame of that
+capture. The same frames are in `baselines/asl-lab/<scenario>-<host>.json` (hex) except where
+noted. Nodes: A 199901, B 199902, E 299901, the tester 299902.
+
+| # | Question | Observed | pcap (scenario/host), frames |
+|---|----------|----------|------------------------------|
+| 1 | codec and frame size between ASL3 node pairs; first voice full, then mini? | ulaw only (ACCEPT FORMAT 4, `codec` ulaw), 160 B per 20 ms (mini ts16 steps of 20, 20.0 ms apart). The first voice frame of a stream is a full frame (type 2, subclass 4, payload 160 B), every later one a mini frame. No full frame at a 16-bit ts wrap. | `link-dns/a`: ACCEPT 17, full voice 43 (t 1.479), first mini 45. `long-call/a`: full 33, wrap 3331 (ts16 65520) to 3332 (ts16 4) at t 65.70 |
+| 2 | TEXT frames: `!NEWKEY1!` timing, `L` text, first minute | Both sides send `!NEWKEY1!\0` (10 B) after ANSWER: the caller 40 ms after it (t 0.241, frame 23), the callee 40 ms later (t 0.281, frame 31). The caller (app_rpt as caller) then sends `T <own> COMPLETE\0`, `L \0` and `T <own> CONNECTED,<own>,<peer>\0` in one burst (25-27); the callee sends `L \0` (32); the caller `L \0` again at t 0.52 (36). A node with ONE link sends the empty list: `L ` plus NUL, 3 bytes. A node whose peer has another link sends `L T<node>\0` (B to E, frame 28 of `callee/e`, the list excludes the destination). Then `L \0` from each side every `linkpost_time` (10 s in the lab, default 30), offset by 0.1 s and 0.28 s. At the end `!!DISCONNECT!!\0` (15 B) and `T <own> COMPLETE\0`, then HANGUP 0.4 s later. No other text in the first 75 s. | `link-dns/a` 23-36, 257-265; `long-call/a` 19-31, 482, 494, 992, 1004, ..., 3683-3684; `callee/e` 19-31 |
+| 3 | CALLTOKEN both directions; what Asterisk needs in an outbound NEW | NEW with empty CALLTOKEN IE (type 54, len 0), CALLTOKEN frame (IE 54, ASCII `<unix time>?<40 hex>`, 51 B), NEW again with the token; the CALLTOKEN frame comes from source call number 1 (a placeholder) to the caller's call number (oseq 0, iseq 1); the second NEW keeps the caller's call number and IEs, has a later timestamp (14 then 17 ms) and oseq/iseq 0/0. Asterisk accepted, without any other IE, the smallest NEW of the design: VERSION, CALLED_NUMBER, CALLING_NUMBER, USERNAME `radio`, FORMAT, FORMAT2, CAPABILITY, CAPABILITY2 (+ CALLTOKEN): ACCEPT, ANSWER and STOP_SOUND followed within 2 ms. It then looked the claimed CALLING_NUMBER up in DNS: from the wrong address it sent ACCEPT and then HANGUP (frames 195, 201, 1.5 ms apart, no ANSWER; log: "Node 199901 IP ... does not match link IP"). The reverse direction (Asterisk as the answerer of a NEW without token IE): accepted, no CALLTOKEN frame (tester client, `legacy-key`). | `minimal-new/e` 1-5, 11, 191-201; `link-dns/a` 13-15; `legacy-key/e` 1 |
+| 4 | RADIO_KEY vs voice-only on new-mode links; RADIO_UNKEY plus CNG | No RADIO_KEY in any new-mode call (A to E, E to B, tester `minimal-new`): the first voice frame is the key; E's `rpt show variables` during the voice shows the link keyed (`RPT_ALINKS=1,299902TK`, `RPT_TXKEYED=1`, in `scenario.json`) and E records the audio. At the end of an over the sender sends RADIO_UNKEY (control 13) and, in the same millisecond, a CNG frame (type 10, 0 B): frames 251-252 of `link-dns/a` (t 5.4795), 3679-3680 of `long-call/a`. The tester ends its over with RADIO_UNKEY only (no CNG, frame 187). With a legacy `!NEWKEY!` peer: RADIO_KEY from the client before its voice (74), RADIO_UNKEY from E every 2 s while idle (175, 375), RADIO_KEY refreshed every 2 s while E sends (418, 488, 592), UNKEY then CNG at its end (628-629). | `link-dns/a`, `long-call/a`, `minimal-new/e` 21-187, `legacy-key/e` 74-629 |
+| 5 | PING / LAGRQ cadence (timestamps) | LAGRQ every 10.0 s from each end, both ends at the same time (ts 10013/10023, 20013/20023, 30013/30020, ..., 70011/70018; 200 us apart in the capture); LAGRP in the same ms. PING every 21.0 s from each end (ts 21013/21023 at t 21.2 s, 42012/42019, 63011/63018); PONG immediately, PONG carries RR_JITTER/LOSS/PKTS/DELAY/DROPPED/OOO. | `long-call/a` 472-476, 981-986, 1042-1046, 1497-1502, 2117-2121, 3040-3043, 3200-3204, 3556-3560 |
+| 6 | an IAX2 phone client without a registrar | The tester's client (`dvtest.proto.iax2.Client`, stdlib, user `acct` md5, no `register`, CALLING_NAME `N0TEST`, CALLING_NUMBER `1999`): no REGREQ is needed, Asterisk accepts the NEW (AUTHREQ 3, AUTHREP 5, ACCEPT 7, ANSWER 9). It keys with RADIO_KEY (74) and unkeys with RADIO_UNKEY (390); no DTMF is sent or needed. CALLING_NAME is carried and ignored (the recording and the link list use the number: `L T1999`). The `acct` NEW has no CALLTOKEN IE; Asterisk's own client opens with the empty one. The REGREQ sequence of a registering client (with and without secret) is in `registration/reg`: REGREQ (USERNAME, REFRESH 60, empty CALLTOKEN), REGREQ with token, REGAUTH, REGREQ with MD5_RESULT, REGACK (refresh 180) or REGREJ. | `legacy-key/e` 1-9, 74, 390; `registration/reg` |
+
+Not answered by the lab (no edge exists): the 10 minute hold (T1), TOT (T2), `check_ip` with a
+rewritten source (T5, only the wrong-address refusal above), redial and restart cases, netem, flood.
+
 ## Surprises
 
 Things the capture showed that the specs and the app_rpt reading did not make obvious:
@@ -268,11 +288,18 @@ Things the capture showed that the specs and the app_rpt reading did not make ob
 11. **Inbound `acct` user via `channel originate`** arrives with an empty calling
     number (the originate has no caller id), and the account link shows in the
     peer's list as an empty node name (`RPT_LINKS=1,T`).
-12. **tcpdump**: packets of the last milliseconds are lost without
+12. **A call placed right after `rpt fun <node> *6` can be torn down by it**: app_rpt runs the
+    function a few hundred ms later and disconnects the new inbound link too (`!!DISCONNECT!!`,
+    `T <node> COMPLETE`, HANGUP at 0.5 s). `Lab.quiet()` waits 1.2 s.
+13. **E's forced jitter buffer eats a short stream**: a bare 1.5 s tone sent by the tester as the
+    whole call was recorded as 0 bytes; with 1 s of silence frames in front and 0.8 s behind
+    it is recorded. A node in new mode streams continuously while keyed, so the lab cases
+    send silence around the tone.
+14. **tcpdump**: packets of the last milliseconds are lost without
     `--immediate-mode`, and the pcap header is written before the socket is
     attached; the agent waits for tcpdump's "listening" line.
 
 ## Run record
 
-The scenarios and counts above come from the run `20261103T022746Z` (profile `asl-lab`,
-`DVT_ASL_LONG=1`): 17 cases passed.
+The scenarios and counts above come from the run `20261103T024811Z` (profile `asl-lab`,
+`DVT_ASL_LONG=1`): 20 cases passed in 156 s.
