@@ -162,7 +162,7 @@ queue in front of the tone; `T` text messages are sent regardless.
 
 | Setting | Lab value | Why it matters |
 |---------|-----------|----------------|
-| `bindport` | `DVT_ASL_IAX_PORT` (4569) | one port for all hosts, each its own address |
+| `bindport` | `DVT_ASL_IAX_PORT` (4569) | one port for all hosts, each its own address; it must precede `bindaddr` in the file or the socket still binds 4569 |
 | `disallow=all`, `allow=ulaw,adpcm,gsm` | ASL3 default | only ulaw is ever negotiated between lab nodes; the client in `legacy-key` offers ulaw |
 | `jitterbuffer=yes`, `forcejitterbuffer=yes`, `maxjitterbuffer=1000`, `resyncthreshold=500`, ... | ASL3 default | the receiver delays text and voice; the app_rpt comment on text held back by a jitter buffer applies |
 | `delayreject=yes`, `autokill=yes`, `maxcallnumbers_nonvalidated=10` | ASL3 default | |
@@ -234,13 +234,17 @@ Things the capture showed that the specs and the app_rpt reading did not make ob
    `telemdefault = 0`; `L ` (empty) is exchanged three times within 0.5 s of a link coming up (two from
    the caller, one from the callee), then every `linkpost_time`. A legacy account shows up in the peer's list as
    `T1999` (its caller id number).
-4. **NEW has information elements that are not in RFC 5456**: IE 57 (4 bytes, zero)
-   in every NEW from Asterisk 22, plus FORMAT2 / CAPABILITY2 (56 / 55: a version
-   byte and an 8 byte mask) next to FORMAT / CAPABILITY, CODEC_PREFS (ASCII `DGC`), DATETIME, ADSICPE, CALLINGPRES/TON/TNS and LANGUAGE.
-   ACCEPT carries FORMAT and FORMAT2 only. AUTHREQ carries USERNAME,
-   AUTHMETHODS (2 = md5) and a CHALLENGE that is a decimal string of nine digits.
-   PONG carries the six RR_* elements (jitter, loss, packets, delay, dropped,
-   out of order).
+4. **NEW has information elements that are not in RFC 5456**: IE 57 (CALLINGANI2, 4
+   bytes, zero; named so by the ASL1 design note, Asterisk's own constant) in every NEW from
+   Asterisk 22, plus FORMAT2 / CAPABILITY2 (56 / 55: a version byte and an 8 byte mask) next to
+   FORMAT / CAPABILITY. Order in the NEW of app_rpt as caller: VERSION, CALLED_NUMBER,
+   CODEC_PREFS (ASCII `DGC`), CALLING_NUMBER, CALLINGPRES, CALLINGTON, CALLINGTNS, CALLINGANI2,
+   LANGUAGE, USERNAME, FORMAT, FORMAT2, CAPABILITY, CAPABILITY2, ADSICPE, DATETIME, CALLTOKEN
+   (empty, then the token). No CALLING_NAME, no DNID. ACCEPT carries FORMAT and FORMAT2 only.
+   AUTHREQ carries USERNAME, AUTHMETHODS (2 = md5) and a CHALLENGE that is a decimal string of
+   nine digits. PONG carries the six RR_* elements (jitter, loss, packets, delay, dropped, out of
+   order). REGACK's APPARENT_ADDR is 16 bytes, a `sockaddr_in`: family `02 00` (host order,
+   little endian here), port and address in network order, 8 zero bytes.
 5. **Codec: only ulaw.** ASL's list is ulaw, adpcm, gsm and Asterisk picks the first
    one it shares; every call and every voice frame in all scenarios is ulaw, 160
    bytes per 20 ms. The existing rig node (`allstar`, slin) and this lab differ:

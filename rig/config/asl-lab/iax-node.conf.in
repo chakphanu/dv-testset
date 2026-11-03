@@ -1,11 +1,12 @@
 ; SPDX-License-Identifier: MIT
 ; IAX2 side of one asl-lab node. Modelled on the ASL3 default iax.conf
 ; (asl3-asterisk-config 3.10.8): same codecs, jitterbuffer and [radio] user.
-; Tokens are filled by dvt-asl-lab-entry: @PORT@ (DVT_ASL_IAX_PORT, default
-; 4569), @ACCT_SECRET@ (fixture, not a real credential).
+; Tokens filled by dvt-asl-lab-entry: the IAX2 port (DVT_ASL_IAX_PORT, default
+; 4569) and the account secret (a fixture, not a real credential).
 [general]
-bindaddr = 0.0.0.0
+; bindport must come before bindaddr: the socket takes the port set so far
 bindport = @PORT@
+bindaddr = 0.0.0.0
 disallow = all
 allow = ulaw
 allow = adpcm

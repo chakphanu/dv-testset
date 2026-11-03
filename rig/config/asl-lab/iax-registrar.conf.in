@@ -5,8 +5,9 @@
 ; dvt-asl-lab-entry from DVT_ASL_ZONE. Refresh is pinned to 180 s like the
 ; real service answers in the ASL manual's example. Fixture secrets only.
 [general]
-bindaddr = 0.0.0.0
+; bindport must come before bindaddr: the socket takes the port set so far
 bindport = @PORT@
+bindaddr = 0.0.0.0
 disallow = all
 allow = ulaw
 allow = adpcm
