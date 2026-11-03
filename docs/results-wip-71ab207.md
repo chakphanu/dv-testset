@@ -13,9 +13,13 @@ is the 1 / 5 / 15 minute average at start and end.
 | 1a | Web stage 1+2, rig config as before (`web.toml:admin.toml`) | `20261103T193125Z` | 130 / 31 / 0 (+213 errors) | 1 min 12 s | 2.55 -> 3.13 | FAIL: TOTP1 default (finding F1) |
 | 1b | Web stage 1+2 with `totp-required.toml` | `20261103T193312Z` | 373 / 1 / 0 | 5 min 06 s | 2.87 -> 3.05 | 1 failure: finding F2 |
 | 1c | Optional default, login/TOTP cases only (evidence run) | `20261103T193838Z` | 0 / 2 / 0 (+6 errors) | 16 s | 2.68 -> 2.73 | evidence, no verdict (F1) |
+| 1d | Optional default (no `totp-required.toml`), `cases/test_web_totp_optional.py` | `20261103T203002Z` | 14 / 0 / 0 | 2 min 30 s | 4.17 -> 3.21 | pass (TOTP1 FINDING lines are open answers, `web/web-findings.txt`) |
+| 1e | F2 rerun, `test_web_api.py -k totp` with `totp-required.toml` | `20261103T203247Z` | 19 / 1 / 0 | 35 s | 3.59 -> 3.16 | F2 case now passes; 1 failure: finding F4 |
 | 2a | EDG1 / K1 (`test_web_k22.py -k "silently_closed or closing_only_the_ctl"`), first try | `20261103T194114Z` | not run | 6 s | 4.15 -> 4.29 | infra error, rerun (docker build `failed to prepare extraction snapshot ... parent snapshot ... does not exist` on the web-proxy image; nothing of ours tested) |
 | 2b | EDG1 / K1 rerun | `20261103T202532Z` | 4 / 0 / 0 | 4 min 15 s | 2.09 -> 4.71 | pass |
 | 2c | K22 / K22b, full file | `20261103T194120Z` | 12 / 1 / 0 | 24 min 47 s | 4.29 -> 3.69 | 1 failure: finding F3 (needs ruling) |
+| 3a | Web stage 3a browser UI (`test_web_browser.py`, `web.toml:admin.toml:totp-required.toml`) | `20261103T203332Z` | 45 / 9 / 3 | 11 min 04 s | 3.46 -> 6.14 | FAIL: 3 cases x 3 engines, findings F5, F6, F7 (deterministic, not load) |
+| 3b | Web stage 3b WebRTC + recorder (`test_web_webrtc.py`, `test_web_recorder.py`, `recorder.toml`) | `20261103T204447Z` | 52 / 3 / 0 | 13 min 02 s | 5.43 -> 2.86 | FAIL: 1 case x 3 engines, finding F8; no WebKit tone glitch and no Playwright setup error this time |
 
 ## Per-step notes
 
@@ -35,6 +39,28 @@ K22 run seconds later, worked). EDG1 rerun: 4 / 0 / 0, same cases as `docs/resul
 `test_guest_lease_without_a_peer`: after the peer is kicked `/rtc/alive` answers 204 for 29.4 s (30 answers) and then 403 (90 answers up to 119.8 s);
 the case asserts 401 (be207d3: 204 for about 29 s, then 401). Assertion not edited; forwarded to dv-router (F3).
 
+### 1d / 1e: TOTP1 cases (added by the main session's ruling)
+
+1d ran WITHOUT `totp-required.toml` (default policy) and alone: 14 / 0 / 0. 1e: with F2 settled by ruling (user TOTP offer is 403 `step_up_required` without a
+password step-up) `test_prefix_minimum_role[POST auth/session/totp | user]` and `test_user_totp_offer_needs_step_up`'s first four assertions pass; the last
+assertion (a malformed body after the step-up must answer 400) fails: the route answers 200 (F4).
+
+### 3a: browser UI
+
+45 passed, 3 skipped (the same 3 as before), 9 failed: `test_admin_spa_loads`, `test_ops_pages_render` and `test_operator_login_with_totp_step`, each on
+chromium, firefox and Playwright WebKit. Screenshots under `out/20261103T203332Z/web/browser/<engine>-<case>-<engine>/page.png` (local to `out/`).
+
+### 3b: WebRTC + recorder
+
+52 passed, 3 failed: `test_recordings_page_lists_and_plays` on all three engines (F8). Every Listen / Talk case passed on all three engines, including
+the four WebKit talk cases and `test_listen_receives_the_tone[webkit]` (the known tone glitch did not appear), and there was no Playwright setup error.
+
+### Echo (ECHO1c)
+
+No case for ECHO1c exists: `grep -ri echo cases docs/testlist.md` finds only the protocol "no echo to the talker" / "poll echoed" cases (P-DPL-28, P-NXD-17,
+`test_allstar::test_usrp_no_echo`, ...) and `test_m17::test_m17_parrot` (P-M17-42, record only). They are members of the S3 and M17 runs below; nothing was
+added.
+
 ## Findings
 
 | ID | Area | Observed on wip-71ab207 | Before | Status |
@@ -42,6 +68,11 @@ the case asserts 401 (be207d3: 204 for about 29 s, then 401). Assertion not edit
 | F1 | TOTP1 default | With `operator_totp = true` / `admin.totp = true` only: first operator login `totp: off` (no enrolment step), admin password-only login 200, admin session `totp: off` | enrol-first, password-only login 401 `totp_required` | EXPECTED (TOTP1), ruled by dv-router: the old keys only warn `is ignored; use ..._totp_required`; `totp-required.toml` is the right setting for the mandatory-enrolment cases; the optional default is covered by `cases/test_web_totp_optional.py` (step 1d) |
 | F2 | TOTP1 step-up | `POST auth/session/totp` as a `user` account answers 403 `step_up_required` (case `test_prefix_minimum_role[POST auth/session/totp \| user]`, `out/20261103T193312Z`) | 400 (API4 documented) | ruled 2026-11-04 (dv-router): TOTP1 supersedes API4's 400; the matrix assertion is now 403 `step_up_required` and `test_user_totp_offer_needs_step_up` covers the step-up path (200 offer, 400 for a malformed body after it) |
 | F3 | K22 guest lease after the peer is gone | `/rtc/alive` 204 for 29.4 s then 403 `forbidden` (`out/20261103T194120Z`, `test_guest_lease_without_a_peer`) | 204 then 401 (be207d3) | needs ruling (forwarded to dv-router); assertion unchanged |
+| F4 | TOTP1 user offer | after the password step-up a malformed offer body (raw `{`) answers 200, `test_user_totp_offer_needs_step_up` (`cases/test_web_api.py:695`) expects 400 `bad_request` | n/a (new case) | needs ruling (asl1-lab / dv-router); route seems to ignore its body; `out/20261103T203247Z` |
+| F5 | I18N1 admin sign-in text | admin page shows "Admin sign in" / "Manage node configuration and operation." with an EN\|TH switch; `test_admin_spa_loads` waits for "Sign in to the admin interface" (3 engines) | the old text | needs ruling (text change expected under I18N1); assertion unchanged; `out/20261103T203332Z` |
+| F6 | I18N1 ops events table | header cell 2 is "Time (local)"; `test_ops_pages_render` expects "Time (UTC)" (3 engines) | "Time (UTC)" | needs ruling; assertion unchanged; `out/20261103T203332Z` |
+| F7 | login TOTP step | after a wrong code, refilling the password field drops the TOTP code field, `test_operator_login_with_totp_step` times out on `login-totp` (3 engines); the dedicated wrong-code text itself shows | refill kept the challenge or the case did not refill | needs ruling; assertion unchanged; `out/20261103T203332Z` |
+| F8 | recordings page text | the Recordings page row says "Transmission ended" where `test_recordings_page_lists_and_plays` expects the end reason text "terminator" (3 engines) | "terminator" | needs ruling (I18N1 text change?); assertion unchanged; `out/20261103T204447Z` |
 
 ## Load flakes
 
