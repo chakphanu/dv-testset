@@ -240,7 +240,7 @@ Four runs of `cases/test_asl_edge.py` on `dv-router:wip-c165c93` (OUT = `DVT_ASL
 So 30 cases: 29 pass in their variant, R1 fails (below), nothing is skipped in the variant that runs it. The R8-R12 rows are the new phone-mode cases
 (next section); DVSwitch Mobile radio and phone mode both pass (`docs/asl-dvswitch.md`).
 
-**F-R1 (SUT behaviour change, open question for dv-router).** `test_r1_success_registers_and_refreshes` asserts a first refresh gap of 50..90 s
+**F-R1 (resolved: lab artifact, dv-router ruling 2026-11-04; `debug-asl-r1-cadence`).** The 13-case selection ran `test_restart_then_over_five_times` first: five quiet SIGUSR1 restarts at 2.4 / 18.5 / 34.6 / 50.7 / 66.9 s inside the recording, each new edge process starting a fresh spread (S = 60 / 7 = 8.57 s, slot k at start + k * S; schedule state does not survive a restart); the registration code is byte-identical in 71ab207 and c165c93. The fixture now trims to the last edge process and asserts the slots (`docs/asl-lab.md`, "Registration cases R1-R7: one edge process only"); a clean run of R1-R7 on a fresh rig is pending. Original observation, kept for the record: `test_r1_success_registers_and_refreshes` asserts a first refresh gap of 50..90 s
 (`max(60, min(interval, refresh))` with `interval = "60s"` and the stand-in's `refresh` 180); on c165c93 node 1991 registered at 11.0, 27.1, 43.2,
 59.3 and 75.4 s (gaps 16.1 s x4) and then at 135.4 s (60.0 s). The registrations are serialised across all registering nodes at about one request
 every 8.5 s (the edge's own node 1999 registers too: 0.0, 2.4, 18.5, 34.6, 50.7, 66.9 s, ...; nodes 1992..1996 start at 84 to 110 s), and the log

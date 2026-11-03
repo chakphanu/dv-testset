@@ -215,6 +215,26 @@ The control channel (kill-proc, proc-stat, netem, restart) only exists while `ru
 watcher stops with that run even under `--keep`. Cases that need it run inside one `run.sh -- cases/...` call;
 a kept rig can still be driven by `docker compose exec tester` for everything else.
 
+### Registration cases R1-R7: one edge process only
+
+The edge's registration schedule belongs to its PROCESS (dv-router ruling 2026-11-04, `debug-asl-r1-cadence`): every new dv-edge-allstar
+process, also after a quiet SIGUSR1 restart, starts a fresh initial spread. With N public nodes and interval I (60 s here) the slot spacing is
+S = max(I, 60) / N (seven nodes: 8.57 s) and node k (config order, 0-based: 1999 is slot 0, 1991 slot 1, ... 1996 slot 6) first registers at
+start + k * S; after that a successful refresh is max(60, min(I, refresh)) = 60 s, a failure backs off 24..36 s, the slow reply (20 s
+core timeout) 44..56 s after the first request. A recording that spans a restart mixes schedules (a run of `test_restart_then_over_five_times`
+before R1 gave 16.1 s gaps and looked like a regression; it was not).
+
+So the `registrations` fixture (`cases/test_asl_edge.py`, helpers in `dvtest/asl_register.py`): reads the node list and interval from the
+rendered config (`out/<run>/xlxd-config/xlxd-sut/dv-router.toml`), finds the start of the LAST edge process from the requests (the slot-0
+node registers at every start; two requests of it closer than 50 s are two processes), keeps only the rows from that start and waits until
+every node has two requests after it; it reads the edge's (pid, starttime) with `proc-stat` before and after and FAILS ("the edge
+restarted during the registration window") if it changed. Restarts BEFORE the window are fine (trimmed away), but the cheapest and clearest
+way is a fresh rig: `DVT_ASL_EDGE_REG=1 scripts/run.sh --profile asl-edge -m asl_lab -- cases/test_asl_edge.py -k "test_r1 or test_r2 or
+test_r3 or test_r4 or test_r5 or test_r6 or test_r7"`. R1 asserts the slot of every node (+/- 1 s) and a 50..90 s refresh; R2 a 50..90 s
+refresh after a mismatch; R3, R4, R6 a 24..36 s retry; R5 44..56 s; R7 the counters of the last process (ok, mismatch, http + parse >= 4,
+timeout >= 1, unattributed 0). The recording and the schedule are written to `out/<run>/asl-lab/register/` (`requests.jsonl`,
+`metrics.txt`, `schedule.json`).
+
 ## Profile asl-ext: the real node 400169 (external, outbound only)
 
 `DVT_ASL_EXT_GO=400169 scripts/run.sh --profile asl-ext -m asl_ext -- cases/test_asl_ext.py` leaves the lab on purpose:
