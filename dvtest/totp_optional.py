@@ -22,6 +22,18 @@ from dvtest import web
 ANY_STATUS = (200, 400, 401, 403, 404, 409, 422, 429, 500, 503)
 REFUSED = (401, 403)                    # what the specs list for "not allowed without ..." (Forbidden, Unauthorized)
 
+# Exact answers (status, problem code) ruled by dv-router for TOTP1 (the findings of run 20261103T203002Z, turned into
+# assertions): a wrong or missing second factor is 403 totp_invalid, a missing reauthentication window is 403
+# step_up_required.
+TOTP_INVALID = (403, "totp_invalid")
+STEP_UP_REQUIRED = (403, "step_up_required")
+# A wrong PASSWORD at the step-up and at disable: admin answers TOTP_INVALID (admin.md: the password step-up keeps the
+# existing totp_invalid code), the WEB side answers 401 unauthorized today. TOTP1b PENDING: the web side is to be changed to
+# TOTP_INVALID; when that lands, change WEB_WRONG_PASSWORD to TOTP_INVALID here, the one place (cases that use it fail
+# until then, by design).
+ADMIN_WRONG_PASSWORD = TOTP_INVALID
+WEB_WRONG_PASSWORD = (401, "unauthorized")
+
 # throw-away callsigns of the cases: one account per (case letter, role), never a shared one
 ACCOUNTS = {
     ("a", "user"): "N0TOA", ("b", "user"): "N0TOB", ("c", "user"): "N0TOC", ("d", "user"): "N0TOD",
@@ -82,6 +94,16 @@ def body_json(resp):
     except (ValueError, UnicodeDecodeError, AttributeError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def is_answer(resp, want):
+    """True when the answer is exactly (status, problem code) `want`."""
+    return (resp.status, problem_code(resp)) == tuple(want)
+
+
+def want_text(want):
+    """`403 totp_invalid` for a (status, code) pair."""
+    return "%d %s" % tuple(want)
 
 
 def unspecified(what, resp, listed):

@@ -152,3 +152,20 @@ def test_session_alive():
     assert to.session_alive(client, sf) == (True, {"callsign": "N0TOA"})
     alive, resp = to.session_alive(client, sf)
     assert not alive and resp.status == 401
+
+
+def test_ruled_answers_are_named_constants():
+    assert to.TOTP_INVALID == (403, "totp_invalid") and to.STEP_UP_REQUIRED == (403, "step_up_required")
+    assert to.ADMIN_WRONG_PASSWORD == to.TOTP_INVALID
+    assert to.want_text(to.TOTP_INVALID) == "403 totp_invalid"
+    assert to.is_answer(Resp(403, {"code": "totp_invalid"}), to.TOTP_INVALID)
+    assert not to.is_answer(Resp(403, {"code": "step_up_required"}), to.TOTP_INVALID)
+    assert not to.is_answer(Resp(401, {"code": "totp_invalid"}), to.TOTP_INVALID)
+
+
+def test_web_wrong_password_is_totp1b_pending():
+    """TOTP1b pending (dv-router): the web side answers a wrong password at the step-up and at disable with 401
+    unauthorized, admin with 403 totp_invalid. When the web fix lands, set WEB_WRONG_PASSWORD to TOTP_INVALID in
+    dvtest/totp_optional.py and change this test with it (it is meant to fail then)."""
+    assert to.WEB_WRONG_PASSWORD == (401, "unauthorized")
+    assert to.WEB_WRONG_PASSWORD != to.ADMIN_WRONG_PASSWORD

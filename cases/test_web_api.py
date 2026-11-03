@@ -294,8 +294,8 @@ WEB_MATRIX = [(op, role) for op in api_web.WEB_OPS + api_web.WEB_ROOT_OPS for ro
 DOCUMENTED_PROBE_ANSWERS = {
     # TOTP1 superseded API4's unconditional 400 for a user (dv-router ruling 2026-11-04, F2): the first optional
     # enrolment from a full session needs a password step-up before any offer, and that check runs before the body
-    # is read, so a user without a window gets 403 step_up_required (the 400 is the invalid body AFTER a step-up:
-    # test_user_totp_offer_needs_step_up). An enrolled operator without X-DV-TOTP still gets 403 totp_invalid
+    # is read, so a user without a window gets 403 step_up_required (after a step-up the offer is 200 and the
+    # body is ignored: test_user_totp_offer_needs_step_up). An enrolled operator without X-DV-TOTP still gets 403 totp_invalid
     # (API4, web.md Account API; the mandatory and the optional policy agree: the current code, not a window).
     ("POST", "/api/v1/auth/session/totp"): {"user": (403, "step_up_required"), "operator": (403, "totp_invalid")},
     # web.md "Guard order": Origin/JSON (403 csrf) before the audience floor and the handler; README UI1:
@@ -666,8 +666,9 @@ def test_user_totp_offer_needs_step_up(one_user):
     POST /api/v1/auth/session/totp used to be an unconditional 400 (API4); it is now the first optional
     enrolment from a full session. Without a reauthentication window of the last five minutes the answer is
     403 `step_up_required`, and the check runs BEFORE the body is read (even a malformed body gets it). After
-    the password step-up the offer is 200 (secret, uri, 6 digits, 30 s) and only then is the body read: a
-    malformed one is 400 (BadRequest). Nothing is confirmed, so the account stays without a secret. The mandatory policy
+    the password step-up the offer is 200 (secret, uri, 6 digits, 30 s). The route takes no body: after a step-up
+    a malformed (or any) body is ignored and gets a 200 offer too (dv-router ruling 2026-11-04: its earlier "400
+    for an invalid body" was wrong, not a SUT bug). Nothing is confirmed, so the account stays without a secret. The mandatory policy
     (totp-required.toml) changes operators only; the answers here are the same with it. The optional-default
     flows are in cases/test_web_totp_optional.py."""
     path = "/api/v1/auth/session/totp"
@@ -690,12 +691,14 @@ def test_user_totp_offer_needs_step_up(one_user):
     secret, _uri, digits, period = to.parse_offer(offer)
     client.hide(secret)
     assert (digits, period) == (6, 30) and to.no_store(offer)
-    bad = client.request("POST", path, **junk)
-    res = api_probe.Result(bad.status, bad.headers, bad.body)
-    assert res.status == 400, "malformed offer body after the step-up: %s, documented 400 (BadRequest)" % res.brief()
-    if res.code() != "bad_request":
-        web.finding("malformed offer body after the step-up: 400 code %r (admin.md names bad_request for 400)"
-                    % res.code())
+    # the offer route takes no body: after a step-up any body, a malformed one too, is ignored and gets a (new) 200 offer
+    # (dv-router ruling 2026-11-04; the earlier "400" for an invalid body was wrong, not a SUT bug)
+    ignored = client.request("POST", path, **junk)
+    assert ignored.status == 200, "malformed offer body after the step-up: %s, ruled 200 (the route takes no body: " \
+        "the body is ignored)" % to.brief(ignored)
+    secret2, _uri2, digits2, period2 = to.parse_offer(ignored)
+    client.hide(secret2)
+    assert (digits2, period2) == (6, 30) and to.no_store(ignored)
     assert client.session()["totp"] == "off", "an unconfirmed offer must leave the account without a secret"
 
 

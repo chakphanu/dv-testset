@@ -46,11 +46,11 @@ adminTotpOffer/Confirm/Disable, adminStepUp, adminClients), the TOTP1 review not
 |------|-----------------|---------|
 | `test_first_operator_login_is_optional` | the run's first operator logs in with the password only: totp `off`, `totp_required` false, `step_up` false, `GET /operator/invites` 200 (a full session) | web, N0CALL (read only) |
 | (a) `test_a_password_only_login` | an account without a secret: totp `off`, `totp_required` false, `step_up` false, cookie and CSRF token set, `GET /user/me` 200 (operator also `/operator/invites`); a wrong password and an unknown name both get the same 401 `unauthorized` | user, operator |
-| (b) `test_b_enable_needs_password_step_up` | the offer without a window: 403 `step_up_required`; password `step-up` 200 (`totp` off, `step_up_s` 1..300, identity `step_up` true); offer 200 (secret, `otpauth://totp/` uri, 6 digits, 30 s, `Cache-Control: no-store`); a wrong first code does not confirm; the right first code does (`totp` ok) | user, operator |
-| (c) `test_c_enrolled_login_needs_code` | after enabling: password only gets 401 `totp_required`, no cookie; a wrong code 401 `unauthorized`; password and the current code 200, totp `ok`; the password cannot open a step-up window for an enrolled account | user, operator |
-| (d) `test_d_disable_needs_password_and_code` | with the window open, the right password and a wrong code is refused and the account stays enrolled; password and the current code 200 (`totp` off); then a password-only login works again | user, operator |
-| (e) `test_e_operator_sensitive_action_needs_password_step_up` | `POST /operator/ids/cmd` (list) with nothing is refused (401 or 403); a made-up `X-DV-TOTP` is refused for an account without a secret; an empty step-up request opens nothing; the password step-up opens the window and the command passes the guard | operator |
-| (f) `test_f_wrong_password_keeps_session` | a wrong password at the step-up (enable) and at disable (with a valid code) is refused with a problem code and the session still answers 200 with the same identity and state; the right password still works afterwards | user, operator |
+| (b) `test_b_enable_needs_password_step_up` | the offer without a window: 403 `step_up_required`; password `step-up` 200 (`totp` off, `step_up_s` 1..300, identity `step_up` true); offer 200 (secret, `otpauth://totp/` uri, 6 digits, 30 s, `Cache-Control: no-store`); a wrong first code is 403 `totp_invalid`; the right first code does (`totp` ok) | user, operator |
+| (c) `test_c_enrolled_login_needs_code` | after enabling: password only gets 401 `totp_required`, no cookie; a wrong code 401 `unauthorized`; password and the current code 200, totp `ok`; the password cannot open a step-up window for an enrolled account (403 `totp_invalid`) | user, operator |
+| (d) `test_d_disable_needs_password_and_code` | with the window open, the right password and a wrong code is refused (403 `totp_invalid`) and the account stays enrolled; password and the current code 200 (`totp` off); then a password-only login works again | user, operator |
+| (e) `test_e_operator_sensitive_action_needs_password_step_up` | `POST /operator/ids/cmd` (list) with nothing is refused with 403 `step_up_required`; a made-up `X-DV-TOTP` is refused for an account without a secret; an empty step-up request opens nothing; the password step-up opens the window and the command passes the guard | operator |
+| (f) `test_f_wrong_password_keeps_session` | a wrong password at the step-up (enable) and at disable (with a valid code) is refused (web: 401 `unauthorized`, TOTP1b pending; admin: 403 `totp_invalid`) and the session still answers 200 with the same identity and state; the right password still works afterwards | user, operator |
 | `test_admin_default_is_optional`, `test_admin_lifecycle` | the same a to f on the admin `viewer`: password-only session, `GET /clients` (step-up guarded) and the offer refused without a window, wrong password refused without ending the session, password step-up (`ttl_s` 1..300), offer, first code, login needs the code, wrong password / wrong code on disable refused, password and code disable, password-only login again | admin viewer |
 
 TOTP1 superseded API4's unconditional 400 for `POST /auth/session/totp` as a `user` (dv-router ruling 2026-11-04, F2):
@@ -58,19 +58,34 @@ without a password step-up window it is 403 `step_up_required`, before the body 
 (`test_prefix_minimum_role[POST auth/session/totp | user]`, `test_user_totp_offer_needs_step_up`) asserts it with
 and without `totp-required.toml`.
 
-Not asserted because the specs do not state it: the exact status (401, 403 or 400) and problem code of a wrong
-password, a wrong code or a missing window on these routes. The cases assert "refused, not 200" (and the
-documented 403 `step_up_required` of the web offer) and record the answer as a FINDING.
+Exact answers ruled by dv-router on 2026-11-04 (the first run, `out/20261103T203002Z`, 14 passed, had recorded them as
+FINDINGs; they are now assertions on (status, problem code), constants in `dvtest/totp_optional.py`):
 
-## Findings (open answers for DV-Router)
+| Situation | Answer |
+|-----------|--------|
+| wrong first code at confirm (web user and operator, admin) | 403 `totp_invalid` |
+| an enrolled account steps up with its password only (it must give a code) | 403 `totp_invalid` |
+| disable with the right password and a wrong code (web, admin) | 403 `totp_invalid` |
+| any sensitive action without a window: web ids command, admin `GET /clients`, admin TOTP offer | 403 `step_up_required` |
+| ADMIN wrong password at step-up and at disable (admin.md: the password step-up keeps `totp_invalid`) | 403 `totp_invalid` |
+| WEB wrong password at step-up and at disable | **401 `unauthorized` today, TOTP1b pending** (below) |
 
-Every FINDING line begins with `TOTP1:` and goes to `out/<run>/web-findings.txt` and as a pytest warning. They are
-not failures: each says what the rig answered where the spec lists several statuses or none. Expected lines
-(one per case and role): offer confirm with a wrong first code, step-up with a wrong password, an enrolled
-account's step-up with the password only, disable with a wrong code and with a wrong password, the admin
-counterparts, and the ids command / admin `/clients` without a window. Two lines are real deviations when they
-appear: "password login after an unconfirmed offer ... says totp ..." (an offer alone must not enable 2FA) and
-"admin enrolled login without a code ... documented totp_required".
+**TOTP1b pending.** The web side answers a wrong password at the step-up and at disable with 401 `unauthorized` where admin
+answers 403 `totp_invalid`; dv-router calls this an inconsistency and will fix it. `test_f_wrong_password_keeps_session`
+asserts the CURRENT 401 through `dvtest.totp_optional.WEB_WRONG_PASSWORD` and writes a "TOTP1b pending" note line (a
+FINDING line in `web-findings.txt`). When the fix lands the case fails with 403 `totp_invalid` until that one constant is set to
+`TOTP_INVALID` (`cases/unit/test_totp_optional.py::test_web_wrong_password_is_totp1b_pending` documents the current value and
+must be changed with it). In every case the session survives a wrong password.
+
+Not ruled, so only "refused, not 200": a made-up `X-DV-TOTP` code on an account without a secret, and an empty step-up request.
+The 401 vs 403 answer for the same cases is also not asserted for `POST /auth/session/totp` after a step-up: the route takes no body,
+see `docs/web-api-cases.md`.
+
+## Findings
+
+Only the "TOTP1b pending" note lines (two web call sites, user and operator: four lines) and the real deviations below are recorded:
+"password login after an unconfirmed offer ... says totp ..." (an offer alone must not enable 2FA) and "admin enrolled login
+without a code ... documented totp_required".
 
 ## Unit tests
 

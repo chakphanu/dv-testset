@@ -10,10 +10,18 @@ ones are the opposite of. With it, the first test fails ("the first operator log
 rest skip with the reason. Run it in a rig of its own (a run.sh invocation: a fresh state, so the first
 operator and the admin accounts have no secret yet). docs/web-totp-optional-cases.md.
 
-Documented behaviour only (docs/api/openapi-web.yaml, openapi-admin.yaml of DV-Router; the TOTP1 review
-note for the "off" session). Where the specs leave the exact answer open (which of 401 / 403 / 400, which
-problem code) the case asserts only what they do state (refused, not 200; the session still alive) and
-records the answer as a FINDING (dvtest.web.finding): DV-Router rules on those.
+Documented behaviour only (docs/api/openapi-web.yaml, openapi-admin.yaml of DV-Router; the TOTP1 review note) plus
+the exact answers dv-router ruled on 2026-11-04 (the first run, 20261103T203002Z, recorded them as FINDINGs): a wrong or
+missing second factor is 403 totp_invalid (wrong first code at confirm, an enrolled account stepping up with its password
+only, disable with a wrong code, and the ADMIN wrong password at step-up and at disable); a missing reauthentication window
+is 403 step_up_required (web ids command, admin GET /clients, admin offer). Asserted as (status, problem code), constants in
+dvtest/totp_optional.py.
+
+TOTP1b PENDING: the WEB side answers a wrong password at the step-up and at disable with 401 unauthorized, admin with 403
+totp_invalid (an inconsistency dv-router will fix). The web cases assert the CURRENT 401 through
+dvtest.totp_optional.WEB_WRONG_PASSWORD and write a "TOTP1b pending" note line; when the fix lands they fail with 403
+totp_invalid until that one constant is changed. What dv-router did not rule on (the answer to a made-up code on an account
+without a secret, an empty step-up request) is asserted as "refused, not 200" only.
 
 Accounts: every flow runs on a throw-away account (N0TOA..N0TOK, dvtest.totp_optional.ACCOUNTS), invited
 by the run's bootstrap operator (N0CALL, which is only logged in with its password, never enrolled here).
@@ -100,6 +108,14 @@ def account(operator, web_base_url, web_ca):
     return make
 
 
+def note_totp1b_pending(role, step):
+    """The web side answers a wrong password at the step-up and at disable with 401 unauthorized where admin answers 403
+    totp_invalid; dv-router calls it an inconsistency (TOTP1b, fix pending). The cases assert the CURRENT 401 through
+    dvtest.totp_optional.WEB_WRONG_PASSWORD, which is the one value to change when the fix lands."""
+    web.finding("TOTP1b pending: web %s wrong password at %s asserted as %s (to.WEB_WRONG_PASSWORD); the fix makes it %s"
+                % (role, step, to.want_text(to.WEB_WRONG_PASSWORD), to.want_text(to.TOTP_INVALID)))
+
+
 def _login(web_client, callsign, password):
     """A client logged in with the password only; the identity must be a full session."""
     client = web_client()
@@ -173,8 +189,8 @@ def test_b_enable_needs_password_step_up(account, web_client, role):
     auth = web.Authenticator(secret, digits=digits, period=period)
     # a wrong first code does not enable; the right one does
     bad = to.confirm(client, to.WEB, auth.wrong_code())
-    assert bad.status != 200, "a wrong first code confirmed the offer"
-    web.finding(to.unspecified("%s confirm with a wrong first code" % role, bad, "400, 401 and 403"))
+    assert to.is_answer(bad, to.TOTP_INVALID), "%s confirm with a wrong first code: %s, ruled %s" % (
+        role, to.brief(bad), to.want_text(to.TOTP_INVALID))
     other, other_ident = _login(web_client, callsign, password)
     if other_ident["totp"] != "off":
         web.finding("TOTP1: %s password login after an unconfirmed offer and a wrong first code says totp %r "
@@ -212,8 +228,8 @@ def test_c_enrolled_login_needs_code(account, web_client, role):
     assert ok.get("/api/v1/user/me").status == 200
     # an enrolled account cannot open a window with its password: the code is the factor
     up = to.step_up_password(ok, to.WEB, password)
-    assert up.status != 200, "an enrolled account opened the step-up window with its password"
-    web.finding(to.unspecified("%s enrolled account step-up with the password only" % role, up, "400, 401 and 403"))
+    assert to.is_answer(up, to.TOTP_INVALID), "%s enrolled account step-up with the password only: %s, ruled %s " \
+        "(an enrolled account must give a code)" % (role, to.brief(up), to.want_text(to.TOTP_INVALID))
 
 
 # ---------------------------------------------------------------- (d) disable needs password and code
@@ -224,9 +240,8 @@ def test_d_disable_needs_password_and_code(account, web_client, role):
     client, _ = _login(web_client, callsign, password)
     auth = to.enable_totp(client, to.WEB, password)          # the window is open here: it must not matter
     wrong_code = to.disable(client, to.WEB, password, auth.wrong_code())
-    assert wrong_code.status != 200, "disable with the right password and a wrong code succeeded (an open " \
-        "step-up window does not replace the code)"
-    web.finding(to.unspecified("%s disable with a wrong code" % role, wrong_code, "400, 401 and 403"))
+    assert to.is_answer(wrong_code, to.TOTP_INVALID), "%s disable with the right password and a wrong code: %s, ruled %s " \
+        "(an open step-up window does not replace the code)" % (role, to.brief(wrong_code), to.want_text(to.TOTP_INVALID))
     alive, ident = to.session_alive(client, to.WEB)
     assert alive and ident["totp"] == "ok", "after a refused disable: %s" % (ident if alive else to.brief(ident))
     done = to.disable(client, to.WEB, password, auth.next_code())
@@ -248,8 +263,8 @@ def test_e_operator_sensitive_action_needs_password_step_up(account, web_client)
     assert ident["totp"] == "off" and ident["step_up"] is False
     path = "/api/v1/operator/ids/cmd"                          # step_up guard, openapi-web webIdCommand
     nothing = client.post(path, IDS_LIST)
-    assert nothing.status in to.REFUSED, "ids command with nothing: %s, never allowed" % to.brief(nothing)
-    web.finding(to.unspecified("operator ids command without a step-up window", nothing, "401 and 403"))
+    assert to.is_answer(nothing, to.STEP_UP_REQUIRED), "ids command with nothing: %s, ruled %s" % (
+        to.brief(nothing), to.want_text(to.STEP_UP_REQUIRED))
     # a code means nothing to an account without a secret
     guess = client.post(path, IDS_LIST, headers={"X-DV-TOTP": "000000"})
     assert guess.status in to.REFUSED, "ids command with a made-up code on an account without a secret: %s" \
@@ -276,9 +291,10 @@ def test_f_wrong_password_keeps_session(account, web_client, role):
     client, _ = _login(web_client, callsign, password)
     # enable step: a wrong password at the step-up
     wrong = to.step_up_password(client, to.WEB, web.new_password())
-    assert wrong.status != 200, "a wrong password opened the step-up window"
-    web.finding(to.unspecified("%s step-up with a wrong password" % role, wrong, "401 and 403"))
-    assert to.problem_code(wrong) not in (None, ""), "the refusal is a problem document with a code"
+    assert to.is_answer(wrong, to.WEB_WRONG_PASSWORD), "%s step-up with a wrong password: %s, expected %s (TOTP1b " \
+        "pending: ruled %s once the fix lands)" % (role, to.brief(wrong), to.want_text(to.WEB_WRONG_PASSWORD),
+                                                   to.want_text(to.TOTP_INVALID))
+    note_totp1b_pending(role, "step-up")
     alive, ident = to.session_alive(client, to.WEB)
     assert alive and ident["callsign"] == callsign, "a wrong password ended the session: %s" % (
         "" if alive else to.brief(ident))
@@ -290,8 +306,10 @@ def test_f_wrong_password_keeps_session(account, web_client, role):
     # disable step: wrong password, valid code
     auth = to.enable_totp(client, to.WEB, password)
     bad = to.disable(client, to.WEB, web.new_password(), auth.next_code())
-    assert bad.status != 200, "disable with a wrong password succeeded"
-    web.finding(to.unspecified("%s disable with a wrong password and a valid code" % role, bad, "401 and 403"))
+    assert to.is_answer(bad, to.WEB_WRONG_PASSWORD), "%s disable with a wrong password and a valid code: %s, expected " \
+        "%s (TOTP1b pending: ruled %s once the fix lands)" % (role, to.brief(bad), to.want_text(to.WEB_WRONG_PASSWORD),
+                                                              to.want_text(to.TOTP_INVALID))
+    note_totp1b_pending(role, "disable")
     alive, ident = to.session_alive(client, to.WEB)
     assert alive and ident["totp"] == "ok", "a wrong password on disable ended the session or changed the " \
         "state: %s" % (ident if alive else to.brief(ident))
@@ -346,16 +364,15 @@ def test_admin_lifecycle(admin_viewer):
         # (e) a step-up guarded read, and (b) the offer: refused without a window
         guarded = client.path("/clients")
         nothing = client.get(guarded)
-        assert nothing.status in to.REFUSED, "admin clients without a window: %s, never allowed" % to.brief(nothing)
-        web.finding(to.unspecified("admin GET /clients without a step-up window", nothing, "401 (reauth_required) "
-                                   "and 403 (step_up_required)"))
+        assert to.is_answer(nothing, to.STEP_UP_REQUIRED), "admin clients without a window: %s, ruled %s" % (
+            to.brief(nothing), to.want_text(to.STEP_UP_REQUIRED))
         early = to.offer(client, sf)
-        assert early.status in to.REFUSED, "admin offer without a window: %s" % to.brief(early)
-        web.finding(to.unspecified("admin TOTP offer without a step-up window", early, "401 and 403"))
+        assert to.is_answer(early, to.STEP_UP_REQUIRED), "admin offer without a window: %s, ruled %s" % (
+            to.brief(early), to.want_text(to.STEP_UP_REQUIRED))
         # (f) wrong password at the step-up: refused, the session lives
         wrong = to.step_up_password(client, sf, web.new_password())
-        assert wrong.status != 200, "a wrong password opened the admin step-up window"
-        web.finding(to.unspecified("admin step-up with a wrong password", wrong, "401 and 403"))
+        assert to.is_answer(wrong, to.ADMIN_WRONG_PASSWORD), "admin step-up with a wrong password: %s, ruled %s " \
+            "(admin.md: the password step-up keeps totp_invalid)" % (to.brief(wrong), to.want_text(to.ADMIN_WRONG_PASSWORD))
         alive, ident = to.session_alive(client, sf)
         assert alive and ident["user"] == user and ident["step_up"] is False, \
             "a wrong password ended the admin session: %s" % ("" if alive else to.brief(ident))
@@ -369,8 +386,8 @@ def test_admin_lifecycle(admin_viewer):
         assert (digits, period) == (6, 30) and to.no_store(offer)
         auth = web.Authenticator(secret, digits=digits, period=period)
         bad = to.confirm(client, sf, auth.wrong_code())
-        assert bad.status != 200, "a wrong first code confirmed the admin offer"
-        web.finding(to.unspecified("admin confirm with a wrong first code", bad, "400, 401 and 403"))
+        assert to.is_answer(bad, to.TOTP_INVALID), "admin confirm with a wrong first code: %s, ruled %s" % (
+            to.brief(bad), to.want_text(to.TOTP_INVALID))
         ok = to.confirm(client, sf, auth.next_code())
         assert ok.status == 200 and ok.json()["totp"] == "ok", "admin first code: %s" % to.brief(ok)
         enrolled = auth
@@ -389,15 +406,15 @@ def test_admin_lifecycle(admin_viewer):
         assert isinstance(ident, dict) and ident["totp"] == "ok", "admin login with the code"
         # (f) wrong password at disable, a valid code: refused, the session and the secret stay
         refused = to.disable(client, sf, web.new_password(), auth.next_code())
-        assert refused.status != 200, "admin disable with a wrong password succeeded"
-        web.finding(to.unspecified("admin disable with a wrong password and a valid code", refused, "401 and 403"))
+        assert to.is_answer(refused, to.ADMIN_WRONG_PASSWORD), "admin disable with a wrong password and a valid code: " \
+            "%s, ruled %s" % (to.brief(refused), to.want_text(to.ADMIN_WRONG_PASSWORD))
         alive, ident = to.session_alive(client, sf)
         assert alive and ident["totp"] == "ok", "a wrong password on admin disable ended the session or changed " \
             "the state"
         # (d) right password and a wrong code: refused even with the window open
         no_code = to.disable(client, sf, password, auth.wrong_code())
-        assert no_code.status != 200, "admin disable with a wrong code succeeded"
-        web.finding(to.unspecified("admin disable with the password and a wrong code", no_code, "400, 401 and 403"))
+        assert to.is_answer(no_code, to.TOTP_INVALID), "admin disable with the password and a wrong code: %s, ruled %s" % (
+            to.brief(no_code), to.want_text(to.TOTP_INVALID))
         # (d) password and the current code
         done = to.disable(client, sf, password, auth.next_code())
         assert done.status == 200 and done.json()["totp"] == "off", "admin disable: %s" % to.brief(done)
