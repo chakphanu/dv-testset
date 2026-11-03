@@ -1,0 +1,47 @@
+; SPDX-License-Identifier: MIT
+; Private app_rpt node of the asl-lab. @NODE@ is a private test node number
+; (199901, 199902, 299901: not assigned on the real network), @PORT@ the IAX2
+; port, @DOMAIN@ the lab zone served by asl-reg. Remote nodes are found by
+; DNS exactly like ASL3 does (SRV _iax._udp.<node>.<domain>, then A); only the
+; node itself is in [nodes]. No registration, no statpost, no real domain.
+
+[general]
+node_lookup_method = dns
+dns_node_domain = @DOMAIN@
+
+[nodes]
+@NODE@ = radio@127.0.0.1:@PORT@/@NODE@,NONE
+
+[@NODE@]
+rxchannel = USRP/127.0.0.1:@USRP_TX@:@USRP_RX@
+duplex = 1
+hangtime = 0
+althangtime = 0
+totime = 180000
+context = radio-local
+telemdefault = 0
+holdofftelem = 0
+idrecording =
+linktolink = no
+linkpost_time = 10
+functions = functions
+link_functions = functions
+phone_functions = functions
+telemetry = telemetry
+morse = morse
+wait_times = wait-times
+
+[functions]
+1 = ilink,1
+2 = ilink,2
+3 = ilink,3
+6 = ilink,6
+8 = ilink,8
+12 = ilink,12
+13 = ilink,13
+
+[telemetry]
+
+[morse]
+
+[wait-times]

@@ -71,7 +71,7 @@
 # TRANSCODER_SUT_IMAGE; transcoder-ref stays the real image.
 #
 # Fixed addresses: xlxd-ref .10, xlxd-sut .11, transcoder-ref .20,
-# transcoder-sut .21, tester .30, allstar .40, web-proxy .90, browser .91 (profile nat: nat-router .92,
+# transcoder-sut .21, tester .30, allstar .40, asl-reg .41 / asl-a .42 / asl-b .43 / asl-e .44 (profile asl-lab), web-proxy .90, browser .91 (profile nat: nat-router .92,
 # alias .93, coturn .94, nat-ref-a .95, nat-ref-b .96; the browser is then at <DVT_NAT_NET>.91 behind the router),
 # webload .97 (profile webload).
 
@@ -173,6 +173,22 @@ x-nat-helper: &nat-helper
 
 # One sniffer per watched service: shares its network namespace and writes
 # out/<run>/capture/<service>.pcapng (dumpcap stops at CAPTURE_FILESIZE_KB).
+# asl-lab hosts (profile asl-lab): the allstar image plus agent, tcpdump and dnsmasq
+# (Dockerfile.asl-lab); tcpdump needs NET_RAW, which docker grants by default
+x-asl-lab: &asl-lab
+  profiles: [asl-lab]
+  init: true
+  image: dvt-asl-lab:local
+  build:
+    context: .
+    dockerfile: Dockerfile.asl-lab
+    args:
+      ASL_LAB_BASE_IMAGE: ${ASL_LAB_BASE_IMAGE:-dvt-allstar:local}
+x-asl-lab-env: &asl-lab-env
+  DVT_NET: ${DVT_NET:-172.30.0}
+  DVT_ASL_IAX_PORT: ${DVT_ASL_IAX_PORT:-4569}
+  DVT_ASL_DOMAIN: ${DVT_ASL_DOMAIN:-nodes.asl.test}
+
 x-capture: &capture
   <<: *limits-small
   profiles: [capture]
@@ -408,6 +424,18 @@ services:
       DVT_AMBED_REF: ${DVT_NET:-172.30.0}.20
       DVT_AMBED_SUT: ${DVT_NET:-172.30.0}.21
       DVT_ALLSTAR: ${DVT_NET:-172.30.0}.40
+      # profile asl-lab (cases/test_asl_lab.py, docs/asl-lab.md): on when the lab services run
+      DVT_ASL_LAB: ${DVT_ASL_LAB:-off}
+      DVT_ASL_REG: ${DVT_NET:-172.30.0}.41
+      DVT_ASL_A: ${DVT_NET:-172.30.0}.42
+      DVT_ASL_B: ${DVT_NET:-172.30.0}.43
+      DVT_ASL_E: ${DVT_NET:-172.30.0}.44
+      DVT_ASL_NODE_A: ${DVT_ASL_NODE_A:-199901}
+      DVT_ASL_NODE_B: ${DVT_ASL_NODE_B:-199902}
+      DVT_ASL_NODE_E: ${DVT_ASL_NODE_E:-299901}
+      DVT_ASL_IAX_PORT: ${DVT_ASL_IAX_PORT:-4569}
+      DVT_ASL_DOMAIN: ${DVT_ASL_DOMAIN:-nodes.asl.test}
+      DVT_ASL_LONG: ${DVT_ASL_LONG:-}
       DVT_SUBNET: ${DVT_NET:-172.30.0}.0/24
       DVT_NXDN: ${DVT_NXDN:-off}
       DVT_NXDN_REF: ${DVT_NET:-172.30.0}.50
@@ -485,6 +513,59 @@ services:
         required: false
     networks:
       rig: {ipv4_address: "${DVT_NET:-172.30.0}.40"}
+
+  # ---- AllStarLink test lab (profile asl-lab, docs/asl-lab.md) ----
+  # asl-reg: lab registrar (IAX2 REGREQ) + DNS zone; asl-a / asl-b / asl-e: app_rpt nodes
+  # 199901 / 199902 / 299901 (e = stand-in for the future dv-edge-allstar). All from the
+  # allstar image plus the lab agent (rig/asl-lab-agent.py, port 8099).
+  asl-reg:
+    <<: [*asl-lab, *limits-small]
+    environment:
+      <<: *asl-lab-env
+      DVT_ASL_ROLE: registrar
+      DVT_ASL_OWN_IP: ${DVT_NET:-172.30.0}.41
+      DVT_ASL_ZONE: "${DVT_ASL_NODE_A:-199901}:${DVT_NET:-172.30.0}.42:${DVT_ASL_IAX_PORT:-4569} ${DVT_ASL_NODE_B:-199902}:${DVT_NET:-172.30.0}.43:${DVT_ASL_IAX_PORT:-4569} ${DVT_ASL_NODE_E:-299901}:${DVT_NET:-172.30.0}.44:${DVT_ASL_IAX_PORT:-4569}"
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.41"}
+
+  asl-a:
+    <<: [*asl-lab, *limits-medium]
+    dns: ["${DVT_NET:-172.30.0}.41"]
+    dns_search: ["."]
+    environment:
+      <<: *asl-lab-env
+      DVT_ASL_ROLE: node
+      DVT_ASL_NODE: ${DVT_ASL_NODE_A:-199901}
+      DVT_ASL_USRP_TX: "34101"
+      DVT_ASL_USRP_RX: "32101"
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.42"}
+
+  asl-b:
+    <<: [*asl-lab, *limits-medium]
+    dns: ["${DVT_NET:-172.30.0}.41"]
+    dns_search: ["."]
+    environment:
+      <<: *asl-lab-env
+      DVT_ASL_ROLE: node
+      DVT_ASL_NODE: ${DVT_ASL_NODE_B:-199902}
+      DVT_ASL_USRP_TX: "34102"
+      DVT_ASL_USRP_RX: "32102"
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.43"}
+
+  asl-e:
+    <<: [*asl-lab, *limits-medium]
+    dns: ["${DVT_NET:-172.30.0}.41"]
+    dns_search: ["."]
+    environment:
+      <<: *asl-lab-env
+      DVT_ASL_ROLE: node
+      DVT_ASL_NODE: ${DVT_ASL_NODE_E:-299901}
+      DVT_ASL_USRP_TX: "34103"
+      DVT_ASL_USRP_RX: "32103"
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.44"}
 
   # ---- sniffers (profile capture; capture-allstar also needs allstar) ----
   capture-xlxd-ref:

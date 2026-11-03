@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Bring the rig up, run pytest inside the tester, collect logs, bring it down.
 #
-#   scripts/run.sh [-m MARKERS] [--profile core|allstar|nxdn|p25|interlink|load|<comma list>] [--capture] [--keep] [-- PYTEST_ARGS...]
+#   scripts/run.sh [-m MARKERS] [--profile core|allstar|asl-lab|nxdn|p25|interlink|load|<comma list>] [--capture] [--keep] [-- PYTEST_ARGS...]
 #   scripts/run.sh --down
 #
 #   -m MARKERS         pytest marker expression (default: rig)
@@ -24,6 +24,13 @@
 #                      first round at DVT_LOAD_START_AT (now + 30 s);
 #                      DVT_SUT_USRP=on; host samples docker stats every ~1-2 s
 #                      into out/<utc>/stats.jsonl while pytest runs
+#   --profile asl-lab  the AllStarLink test lab (docs/asl-lab.md): asl-reg (.41, IAX2 registrar + DNS zone),
+#                      asl-a (.42, node 199901), asl-b (.43, node 199902), asl-e (.44, node 299901, stand-in for
+#                      dv-edge-allstar), the image built FROM dvt-allstar:local (built first when missing).
+#                      Alone (--profile asl-lab) only the tester and these four start (no reflector, no
+#                      transcoder, TRANSCODER_IMAGE not needed); combined with other profiles they join the rig.
+#                      The tester gets DVT_ASL_LAB=on; pcaps and recordings are fetched by the cases from the
+#                      lab agents into out/<utc>/asl-lab/<scenario>/ (no --capture needed). Select with -m asl_lab
 #   --profile g3       a second Icom G3 terminal: relay g3-term2 at .31 (DVT_G3=on)
 #   --profile browser  the Playwright browser service (browser, .91, ws://<net>.91:3000/:
 #                      chromium, firefox, WebKit of the pinned official Playwright image),
@@ -355,7 +362,7 @@ compose_all=(docker compose -p "${COMPOSE_PROJECT_NAME:-dvt}" "${compose_files[@
   --profile capture-nxdn --profile p25 --profile capture-p25 --profile interlink
   --profile capture-interlink --profile load --profile netem --profile g3
   --profile urfd --profile capture-urfd --profile mrefd --profile capture-mrefd --profile web --profile browser
-  --profile webload --profile nat)
+  --profile webload --profile nat --profile asl-lab)
 
 if [ "$down_only" = 1 ]; then
   take_lock
@@ -371,6 +378,7 @@ has_interlink=0
 has_urfd=0
 has_mrefd=0
 has_load=0
+has_asl_lab=0
 IFS=, read -r -a wanted <<< "$profile"
 for p in "${wanted[@]}"; do
   case "$p" in
@@ -416,6 +424,11 @@ for p in "${wanted[@]}"; do
       # every node starts its first round at the same time, after the rig is up
       export DVT_LOAD_START_AT="${DVT_LOAD_START_AT:-$(( $(date +%s) + ${DVT_LOAD_LEAD_S:-30} ))}"
       ;;
+    asl-lab)
+      has_asl_lab=1
+      profiles+=(--profile asl-lab)
+      export DVT_ASL_LAB=on
+      ;;
     g3)
       profiles+=(--profile g3)
       export DVT_G3=on
@@ -448,7 +461,7 @@ for p in "${wanted[@]}"; do
     mrefd)
       has_mrefd=1
       ;;
-    *) echo "run.sh: --profile takes core, allstar, nxdn, p25, interlink, load, g3, urfd, mrefd, web, browser, webload, nat or a comma list" >&2; exit 2 ;;
+    *) echo "run.sh: --profile takes core, allstar, asl-lab, nxdn, p25, interlink, load, g3, urfd, mrefd, web, browser, webload, nat or a comma list" >&2; exit 2 ;;
   esac
 done
 # native launch reads no xlxd.* file: these settings only change the reference side
@@ -538,20 +551,26 @@ if [ "$capture" = 1 ]; then
   fi
 fi
 
-if [ -z "${TRANSCODER_IMAGE:-}" ]; then
+# --profile asl-lab alone: only the tester and the four lab hosts start; the reflector sources, the
+# transcoder image and the prebuilt-image checks below do not apply
+lab_only=0
+[ "$profile" != asl-lab ] || lab_only=1
+if [ "$lab_only" = 0 ] && [ -z "${TRANSCODER_IMAGE:-}" ]; then
   echo "run.sh: TRANSCODER_IMAGE is not set; set it in .env (TRANSCODER_IMAGE=<your-ambed-image>)" >&2
   exit 2
 fi
 
 xlxd_dirs=()
-[ -n "${XLXD_REF_IMAGE:-}" ] || xlxd_dirs+=("${XLXD_REF_DIR:-ref}")
-[ -n "${XLXD_SUT_IMAGE:-}" ] || xlxd_dirs+=("${XLXD_SUT_DIR:-sut}")
+if [ "$lab_only" = 0 ]; then
+  [ -n "${XLXD_REF_IMAGE:-}" ] || xlxd_dirs+=("${XLXD_REF_DIR:-ref}")
+  [ -n "${XLXD_SUT_IMAGE:-}" ] || xlxd_dirs+=("${XLXD_SUT_DIR:-sut}")
+fi
 for name in "${xlxd_dirs[@]}"; do
   [ -f ".cache/xlxd/$name/src/main.h" ] || { echo "run.sh: .cache/xlxd/$name missing; run scripts/pre-fetch-xlxd.sh" >&2; exit 2; }
 done
 [ -f .cache/codec2/CMakeLists.txt ] || { echo "run.sh: .cache/codec2 missing; run scripts/pre-fetch-codec2.sh" >&2; exit 2; }
 # A prebuilt reflector image must exist locally: run.sh never builds or pulls it
-for img in "${XLXD_REF_IMAGE:-}" "${XLXD_SUT_IMAGE:-}"; do
+for img in $([ "$lab_only" = 1 ] || printf '%s %s' "${XLXD_REF_IMAGE:-}" "${XLXD_SUT_IMAGE:-}"); do
   [ -z "$img" ] || docker image inspect "$img" > /dev/null 2>&1 || {
     echo "run.sh: image '$img' (XLXD_REF_IMAGE/XLXD_SUT_IMAGE) not found locally; build or load it first" >&2
     exit 2
@@ -718,7 +737,7 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
   } >> "$override"
   prebuilt+=("$svc")
 }
-if [ -n "${XLXD_REF_IMAGE:-}${XLXD_SUT_IMAGE:-}" ]; then
+if [ "$lab_only" = 0 ] && [ -n "${XLXD_REF_IMAGE:-}${XLXD_SUT_IMAGE:-}" ]; then
   echo "services:" > "$override"
   [ -z "${XLXD_REF_IMAGE:-}" ] || render_xlxd xlxd-ref "$XLXD_REF_IMAGE" 10 20 off 50 60 13 15
   [ -z "${XLXD_SUT_IMAGE:-}" ] || render_xlxd xlxd-sut "$XLXD_SUT_IMAGE" 11 21 "${DVT_SUT_USRP:-off}" 51 61 12 14
@@ -933,6 +952,11 @@ cat ".cache/xlxd/${XLXD_REF_DIR:-ref}.fetched" ".cache/xlxd/${XLXD_SUT_DIR:-sut}
   flock 8
   # prebuilt reflector images are used as they are, never built over
   mapfile -t to_build < <("${compose[@]}" config --services | grep -vxF -f <(printf '%s\n' "${prebuilt[@]}" "-"))
+  [ "$lab_only" = 0 ] || to_build=(tester asl-reg asl-a asl-b asl-e)
+  # the lab image is built FROM the allstar image (Dockerfile.allstar, the ASL3 package pins): build that first
+  if [ "$has_asl_lab" = 1 ] && ! docker image inspect "${ASL_LAB_BASE_IMAGE:-dvt-allstar:local}" > /dev/null 2>&1; then
+    "${compose[@]}" --profile allstar build allstar
+  fi
   "${compose[@]}" build "${to_build[@]}"
   # DVT_TRANSCODER_FAKE=1: build-only service, built on request and never started
   if [ "${DVT_TRANSCODER_FAKE:-}" = 1 ]; then
@@ -940,7 +964,11 @@ cat ".cache/xlxd/${XLXD_REF_DIR:-ref}.fetched" ".cache/xlxd/${XLXD_SUT_DIR:-sut}
   fi
 )
 # everything was built above; up never builds (a prebuilt image is never replaced)
-"${compose[@]}" up -d --no-build
+if [ "$lab_only" = 1 ]; then
+  "${compose[@]}" up -d --no-build tester asl-reg asl-a asl-b asl-e
+else
+  "${compose[@]}" up -d --no-build
+fi
 
 for svc in "${capture_svcs[@]}"; do
   f="$out/capture/${svc#capture-}.pcapng"

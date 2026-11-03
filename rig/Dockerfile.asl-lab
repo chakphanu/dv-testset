@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# AllStarLink test lab node (profile asl-lab, docs/asl-lab.md): the allstar image
+# (Asterisk + app_rpt, version pinned there) plus a small control agent, tcpdump
+# for per-scenario captures and dnsmasq for the local node-name zone. Only the
+# normal distro mirror is used, at build time. Nothing here talks to the real
+# AllStarLink network: node numbers are private test numbers, secrets are
+# fixtures, DNS answers come from the lab zone.
+# Build arg ASL_LAB_BASE_IMAGE (.env.example): the image Dockerfile.allstar builds.
+ARG ASL_LAB_BASE_IMAGE=dvt-allstar:local
+FROM ${ASL_LAB_BASE_IMAGE}
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+         python3 tcpdump dnsmasq-base \
+    && rm -rf /var/lib/apt/lists/* \
+    && dpkg-query -W python3 tcpdump dnsmasq-base > /etc/asterisk/dvt-lab-versions.txt
+COPY config/asl-lab/ /etc/asterisk/dvt-lab/
+COPY asl-lab-entry.sh /usr/local/sbin/dvt-asl-lab-entry
+COPY asl-lab-agent.py /usr/local/sbin/dvt-asl-lab-agent
+RUN chmod 755 /usr/local/sbin/dvt-asl-lab-entry /usr/local/sbin/dvt-asl-lab-agent
+ENTRYPOINT ["/usr/local/sbin/dvt-asl-lab-entry"]
