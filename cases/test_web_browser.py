@@ -322,7 +322,12 @@ def login_operator(engine, web_operator, web_base_url, web_ca):
 def test_operator_login_with_totp_step(browser_page, login_operator):
     """LOGIN1b (web.md; auth-page.js): a wrong password of an operator gives the generic text and no code field;
     the right password alone asks for the code (totp_required, no cookie); a wrong code for that same pair gives
-    the dedicated wrong-code text; the right code signs in. Three denied attempts, under the lockout of 5."""
+    the dedicated wrong-code text; retyping ONLY the code signs in. TOTP1 (f1e2f09d; dv-router ruling 2026-11-04):
+    clearLoginChallenge also clears the auth controller's challenge, so any input event on the password field (even
+    refilling the same value) abandons the challenge: path 2 signs out, asks again, refills the password (the code field
+    disappears), presses Sign in (a new challenge, the code field is back) and signs in with the code. The stale
+    wrong-code banner after a password edit is not asserted (known small UX defect, TOTP1b). Two denied attempts
+    (wrong password, wrong code), under the lockout of 5; the challenges are not failures."""
     bp = browser_page
     op = login_operator
     bp.goto(pages.LOGIN)
@@ -353,11 +358,36 @@ def test_operator_login_with_totp_step(browser_page, login_operator):
     op.client.hide(code)
     web.PACER.wait("login")
     expect(pages.sign_in_button(bp.page)).to_be_enabled()
-    pages.password_field(bp.page).fill(op.password)           # the form keeps the password for the retry; make sure
+    # path 1: ONLY the code is retyped; the password field is not touched (TOTP1 f1e2f09d: any input event on the password
+    # field, even refilling the same value, abandons the challenge)
     pages.totp_field(bp.page).fill(code)
     pages.sign_in_button(bp.page).click()
     expect(pages.signed_in_as(bp.page)).to_have_text("Signed in as %s." % op.callsign)
     expect(pages.operator_pages_link(bp.page)).to_be_visible()
+    # path 2: refilling the password abandons the challenge: the code field disappears, Sign in starts a NEW challenge
+    # (the code field is back), the right code signs in. The wrong-code banner of the first challenge may still be shown
+    # after the password edit (a known small UX defect, TOTP1b): it is not asserted either way.
+    pages.sign_out_button(bp.page).click()
+    expect(pages.auth_notice(bp.page)).to_have_text(pages.SIGNED_OUT_TEXT)
+    assert bp.session_cookie() is None
+    bp.goto(pages.LOGIN)
+    ui_sign_in(bp, op.callsign, op.password)
+    expect(pages.totp_field(bp.page)).to_be_visible()
+    pages.password_field(bp.page).fill(op.password)
+    expect(pages.totp_field(bp.page)).to_have_count(0)
+    expect(pages.signed_in_as(bp.page)).to_have_count(0)
+    assert bp.session_cookie() is None, "a session after the challenge was abandoned"
+    web.PACER.wait("login")
+    expect(pages.sign_in_button(bp.page)).to_be_enabled()
+    pages.sign_in_button(bp.page).click()
+    expect(pages.totp_field(bp.page)).to_be_visible()                  # a new challenge
+    assert bp.session_cookie() is None, "an operator session before the TOTP step (second challenge)"
+    code = op.client.authenticator.next_code()
+    op.client.hide(code)
+    web.PACER.wait("login")
+    pages.totp_field(bp.page).fill(code)
+    pages.sign_in_button(bp.page).click()
+    expect(pages.signed_in_as(bp.page)).to_have_text("Signed in as %s." % op.callsign)
     cookie_checks(bp)
     assert "dv_web" not in bp.page.evaluate("document.cookie")
     ident = bp.page.evaluate("fetch('/api/v1/auth/session').then(r => r.json())")
@@ -394,12 +424,35 @@ def open_ops(bp, page, fresh=True):
     return title
 
 
-def test_ops_pages_render(operator_page, ops_data):
+def check_events_times(bp, web_operator, title):
+    """I18N1 (web.md "English and Thai", dv-router ruling 2026-11-04): the events header is "Time (local)" and its cells are the
+    browser's local time as Gregorian "YYYY-MM-DD HH:MM:SS" (24-hour, Latin digits). The rig's contexts use timezone_id UTC
+    (cases/browser_fixtures.py), so a row's text is exactly its API ts_ms in UTC, whole second floored, when the events API
+    exposes ts_ms (the schema leaves the item fields open: otherwise a FINDING and only the format is asserted)."""
+    # id and time of every row in ONE read (the live feed may add rows between two reads)
+    rows = pages.ops_rows(bp.page, title).evaluate_all(
+        "rows => rows.map(r => [r.children[0].innerText, r.children[%d].innerText])" % pages.EVENTS_TIME_COLUMN)
+    assert rows, "the events table has no rows"
+    odd = [c for _i, c in rows if not brlib.is_ops_time(c)]
+    assert not odd, "events time cells not in YYYY-MM-DD HH:MM:SS: %s" % odd[:3]
+    shown = {int(i.strip()): c for i, c in rows if i.strip().isdigit()}
+    resp = op_request(web_operator, "GET", "/api/v1/operator/events?limit=200")
+    items = resp.json().get("items", []) if resp.status == 200 else []
+    compared, bad = brlib.compare_event_times(shown, items)
+    assert not bad, "events page time differs from the API ts_ms in UTC: %s" % bad[:3]
+    if not compared:
+        finding(bp.engine, "events page: no row of the page (%d) has a ts_ms in GET /operator/events (HTTP %d, %d items): "
+                           "only the time format was asserted" % (len(shown), resp.status, len(items)))
+
+
+def test_ops_pages_render(operator_page, web_operator, ops_data):
     bp = operator_page
     for i, page in enumerate(pages.OPS_PAGES):
         title = open_ops(bp, page, fresh=(i == 0))
         headings = [t.strip() for t in pages.ops_headings(bp.page, title).all_inner_texts()]
         assert headings == pages.OPS_HEADINGS[page], "%s: %s" % (page, headings)
+        if page == "events":
+            check_events_times(bp, web_operator, title)
         expect(pages.ops_nav_links(pages.ops_header_nav(bp.page))).to_have_count(len(pages.OPS_PAGES))
         expect(pages.ops_identity(bp.page)).to_have_text("N0BRO")
         expect(pages.ops_denied(bp.page)).to_have_count(0)
@@ -896,7 +949,13 @@ def test_admin_spa_loads(browser_page, web_url_admin):
     if resp.status != 200:
         finding(bp.engine, "GET / on the admin host from the browser address: HTTP %d (allow_from lists the tester and the browser)" % resp.status)
         pytest.skip("admin host answered HTTP %d" % resp.status)
+    # UIR1 / I18N1 (dv-router ruling 2026-11-04, was "Sign in to the admin interface"): the card says "Admin sign in", the
+    # lead line, and the EN | TH switch with English (the default language) pressed
     expect(pages.admin_sign_in_heading(bp.page)).to_be_visible(timeout=LIVE_MS)
+    expect(pages.admin_sign_in_lead(bp.page)).to_be_visible()
+    expect(pages.language_switch(bp.page)).to_be_visible()
+    expect(pages.language_button(bp.page, "EN", pressed=True)).to_be_visible()
+    expect(pages.language_button(bp.page, "TH", pressed=False)).to_be_visible()
     weak = brlib.csp_problems(resp.headers.get("content-security-policy"))
     assert not weak, "admin host CSP: %s" % "; ".join(weak)
     bp.page.wait_for_timeout(500)

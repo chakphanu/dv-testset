@@ -204,3 +204,23 @@ def test_page_hooks_follow_the_web2_naming_scheme():
         "dashboard-nav-heard", "dashboard-nav-modules", "dashboard-nav-nodes", "dashboard-nav-peers", "dashboard-nav-about"]
     assert [wp.ops_nav_testid(p) for p in wp.OPS_PAGES] == [
         "ops-nav-clients", "ops-nav-events", "ops-nav-accounts", "ops-nav-invites", "ops-nav-audit", "ops-nav-ids"]
+
+
+def test_ops_time_text_is_the_page_format():
+    assert b.is_ops_time("2026-11-03 20:33:38") and b.is_ops_time(" 2026-11-03 20:33:38 ")
+    for bad in ("2026-11-03T20:33:38Z", "2026-11-03 20:33", "03/11/2026 20:33:38", "2026-11-03 8:33:38 PM", ""):
+        assert not b.is_ops_time(bad), bad
+    assert b.ops_time_text(1793738018999) == "2026-11-03 20:33:38"          # the whole second is floored
+    assert b.ops_time_text(1793738018000, utc_offset_s=7 * 3600) == "2026-11-04 03:33:38"
+    assert b.is_ops_time(b.ops_time_text(0))
+
+
+def test_compare_event_times():
+    items = [{"id": 92, "ts_ms": 1793738018500}, {"id": 91, "ts_ms": 1793738017100}, {"id": 5},
+             {"id": 90, "ts_ms": 1793738017100}, {"id": "x", "ts_ms": 1}]
+    shown = {92: "2026-11-03 20:33:38", 91: "2026-11-03 20:33:37", 5: "2026-11-03 20:00:00"}
+    assert b.compare_event_times(shown, items) == (2, [])                   # 90 is not on the page, 5 has no ts_ms
+    shown[91] = "2026-11-03 20:33:36"
+    assert b.compare_event_times(shown, items) == (2, [(91, "2026-11-03 20:33:36", "2026-11-03 20:33:37")])
+    assert b.compare_event_times({}, items) == (0, [])
+    assert b.compare_event_times(shown, [{"id": 92}]) == (0, [])           # the API exposes no ts_ms

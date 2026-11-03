@@ -41,12 +41,16 @@ OPS_PAGES = {"clients": "Clients", "events": "Events", "accounts": "Accounts", "
              "audit": "Audit", "ids": "Radio IDs"}       # ids: UI1, on dv-router:wip-5aa7cfd and later
 OPS_HEADINGS = {
     "clients": ["Callsign", "Kind", "Protocol", "Edge", "Circuit", "Room", "Address", "Connected", "Actions"],
-    "events": ["ID", "Time (UTC)", "Type", "Event", "Callsign", "Room", "Edge", "Details"],
+    "events": ["ID", "Time (local)", "Type", "Event", "Callsign", "Room", "Edge", "Details"],
     "accounts": ["Callsign", "Name", "Role", "Status", "TX", "Limits", "TOTP enrolled", "Actions"],
-    "invites": ["Callsign", "Kind", "Role", "TX", "Expires (UTC)", "Actions"],
-    "audit": ["Time (UTC)", "Operator", "Role", "Remote", "Action", "Target", "Result"],
-    "ids": ["ID", "Kind", "Callsign", "Source", "Status", "Seen (UTC)", "Actions"],
+    "invites": ["Callsign", "Kind", "Role", "TX", "Expires (local)", "Actions"],
+    "audit": ["Time (local)", "Operator", "Role", "Remote", "Action", "Target", "Result"],
+    "ids": ["ID", "Kind", "Callsign", "Source", "Status", "Seen (local)", "Actions"],
 }
+# I18N1 (web.md "English and Thai"): the time columns say "(local)" and show the browser's time zone (the rig's contexts
+# use timezone_id UTC, locale en-US) as Gregorian "YYYY-MM-DD HH:MM:SS", 24-hour, Latin digits, in both languages.
+# Was "(UTC)" before; verified in DV-Router web/site/ops/ops.js (read only).
+EVENTS_TIME_COLUMN = 1                                  # index of the Time (local) column of the events table (dvtest.browser.is_ops_time)
 
 # ---- WEB2 hooks (web/README.md "Stable browser rig hooks"); the names as the page sources write them
 CONNECTION_STATES = ("idle", "connecting", "connected", "failed", "closed")
@@ -263,9 +267,27 @@ def ops_busy(page):
 
 
 # ---- admin SPA
+ADMIN_SIGN_IN_HEADING = "Admin sign in"                                    # UIR1 / I18N1: English is the default language
+ADMIN_SIGN_IN_LEAD = "Manage node configuration and operation."
+
+
 def admin_sign_in_heading(page):
-    """fallback: the admin SPA (not part of WEB2's hook list)."""
-    return page.get_by_text("Sign in to the admin interface")
+    """fallback: the admin SPA (not part of WEB2's hook list): the h1 of the sign-in card."""
+    return page.get_by_role("heading", name=ADMIN_SIGN_IN_HEADING, level=1, exact=True)
+
+
+def admin_sign_in_lead(page):
+    return page.get_by_text(ADMIN_SIGN_IN_LEAD, exact=True)
+
+
+def language_switch(page):
+    """fallback: the EN | TH switch (group "Language", two toggle buttons with aria-pressed; shared/i18n-ui.js)."""
+    return page.get_by_role("group", name="Language")
+
+
+def language_button(page, code, pressed):
+    """The EN or TH button of the switch in the given pressed state."""
+    return language_switch(page).get_by_role("button", name=code.upper(), exact=True, pressed=pressed)
 
 
 # ---- Listen / Talk panel of the dashboard (public.js ListenPanel; shown on route #/ to a signed-in user)

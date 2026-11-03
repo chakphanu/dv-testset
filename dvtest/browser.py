@@ -203,6 +203,37 @@ def cookie_problems(cookie, name=SESSION_COOKIE):
 
 # ---------------------------------------------------------------- artifacts
 
+OPS_TIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+
+
+def is_ops_time(text):
+    """True for the operator pages' time text (web.md I18N1): Gregorian "YYYY-MM-DD HH:MM:SS", 24-hour, Latin digits."""
+    return bool(OPS_TIME_RE.match(text.strip()))
+
+
+def ops_time_text(ts_ms, utc_offset_s=0):
+    """The text of a ts_ms (epoch milliseconds) in a browser whose time zone is fixed at `utc_offset_s` seconds east of UTC
+    (the rig's contexts use timezone_id UTC, so 0): "YYYY-MM-DD HH:MM:SS", the whole second floored."""
+    import time
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(ts_ms // 1000 + utc_offset_s))
+
+
+def compare_event_times(shown, items, utc_offset_s=0):
+    """Compare the time column of the Events page with the events API. `shown` maps an event id (int) to the cell text,
+    `items` are the API items (dicts with `id` and, when exposed, `ts_ms`). Returns (compared, mismatches): how many ids were
+    on both sides with a ts_ms, and [(id, shown text, expected text)] for those that differ."""
+    compared, bad = 0, []
+    for item in items:
+        eid, ts = item.get("id"), item.get("ts_ms")
+        if not isinstance(eid, int) or isinstance(ts, bool) or not isinstance(ts, int) or eid not in shown:
+            continue
+        compared += 1
+        want = ops_time_text(ts, utc_offset_s)
+        if shown[eid].strip() != want:
+            bad.append((eid, shown[eid].strip(), want))
+    return compared, bad
+
+
 def safe_name(text):
     """A file name part: letters, digits, dot, dash, underscore."""
     return re.sub(r"[^A-Za-z0-9._-]+", "_", text).strip("_")[:120] or "case"
