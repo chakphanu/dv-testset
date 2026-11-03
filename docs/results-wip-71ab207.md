@@ -20,6 +20,11 @@ is the 1 / 5 / 15 minute average at start and end.
 | 2c | K22 / K22b, full file | `20261103T194120Z` | 12 / 1 / 0 | 24 min 47 s | 4.29 -> 3.69 | 1 failure: finding F3 (needs ruling) |
 | 3a | Web stage 3a browser UI (`test_web_browser.py`, `web.toml:admin.toml:totp-required.toml`) | `20261103T203332Z` | 45 / 9 / 3 | 11 min 04 s | 3.46 -> 6.14 | FAIL: 3 cases x 3 engines, findings F5, F6, F7 (deterministic, not load) |
 | 3b | Web stage 3b WebRTC + recorder (`test_web_webrtc.py`, `test_web_recorder.py`, `recorder.toml`) | `20261103T204447Z` | 52 / 3 / 0 | 13 min 02 s | 5.43 -> 2.86 | FAIL: 1 case x 3 engines, finding F8; no WebKit tone glitch and no Playwright setup error this time |
+| 5a | M17 (`test_m17_peer_link.py`, `test_m17_relay.py`, `test_m17_packet.py`, native, `--capture`) | `20261103T205833Z` | 97 / 0 / 0 | 10 min 27 s | 2.26 -> 1.56 | pass (same count as Gate B) |
+| 5b | Data ident `DVT_REQUIRE_IDENT=true` (`--profile interlink`, `--capture`) | `20261103T210903Z` | 8 / 0 / 0 | 5 min 11 s | 1.56 -> 1.76 | pass |
+| 5c | Data ident `DVT_REQUIRE_IDENT=false` | `20261103T211418Z` | 8 / 0 / 0 | 4 min 52 s | 1.94 -> 1.97 | pass |
+| 5d | T14 cross-mode (fake transcoder, import launch, `--capture`) | `20261103T211918Z` | 53 / 0 / 0 | 13 min 05 s | 1.90 -> 1.52 | pass (same as the adaptation pass) |
+| 5e | S3 superset, first try | `20261103T205803Z` | not run | 15 s | 5.4 -> 2.3 | infra error: pytest collection error, `cases/unit/test_echo.py` and uncommitted `cases/test_echo.py` share a basename (another session's echo work in the shared tree); to be rerun |
 
 ## Per-step notes
 
