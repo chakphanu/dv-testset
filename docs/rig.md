@@ -345,6 +345,36 @@ It reads the setting from `DVT_REQUIRE_IDENT` in the tester environment
 (`rig/compose.yml`, default `true`) and writes what it observed to
 `out/<run>/data-ident.txt`.
 
+### Image generations (`dv-router:wip-c165c93` is the default; knobs for `wip-71ab207` and older)
+
+Which DV-Router image is under test changes a few expectations. The defaults are those of `dv-router:wip-c165c93` and later; an older
+image (`wip-71ab207`) needs the knobs set to the old value. run.sh passes `DVT_SUT_GEN` to the host-side render (it must be exported),
+the tester gets the other two through `rig/compose.yml` (empty = the default).
+
+| Knob | Values | What it selects |
+|------|--------|-----------------|
+| `DVT_SUT_GEN` | `c165c93` (default), `71ab207` | the config dialect of the rendered `dv-router.toml` (`dvtest/sut_config.py`, `apply_gen`). `c165c93` (ACL0c-f) removes the `[fabric]` table of the template: it is an unknown table of that validator (its only key `acl` was ignored with a warning before), so the file is refused without this. `71ab207` renders the template as it was. Both images accept the `c165c93` rendering (checked), so the default is safe for either |
+| `DVT_TOTP1B` | unset / `1` (default), `0` | the TOTP1b behaviour of the web side (`dvtest/totp_optional.py`, `web_wrong_password()`): a wrong password at the step-up and at disable is 403 `totp_invalid` (as on admin), and the login page clears a stale wrong-code banner (`test_operator_login_with_totp_step`). `0` = `wip-71ab207`: 401 `unauthorized`, banner not asserted |
+| `DVT_ASL_PHONE_REG` | unset / `1` (default), `0` | the phone-mode IAX2 registration cases R8-R12 of `cases/test_asl_edge.py` (REGREQ / REGAUTH / REGACK, REGREJ for a wrong secret; ASL1g). `0` skips them for an image before ASL1g (it answers a REGREQ with REGREJ) |
+
+Keys that became validator ERRORS in `wip-c165c93` and are not in the rig's snippets or in the template apart from `[fabric]`:
+`fabric.acl` / `[fabric]` (ACL0c-f; the ACL matrix gate is gone), `access.allow_file` / `access.deny_file` (CFG2: lists go inline in
+`access.allow` / `access.deny`), `[callhome] interlink_file` (NOX1; the interlink list comes from the `[[edges.xlx.peer]]` rows,
+`DV_CALLHOME_INTERLINK_FILE` only warns). `web.operator_totp` / `admin.totp` are only warnings (ignored since TOTP1); `web.toml` and
+`admin.toml` keep them for 71ab207.
+
+**Checking a rendered config without the rig.** The image has no separate validate command: `dv-router --config FILE ...` validates
+first and exits 2 with `N error(s), not started`. `python3 -m dvtest.tools.config_check --image dv-router:wip-c165c93 --template
+<template> [--extra rig/config/dv-router/web.toml ...] [--gen 71ab207|c165c93]` renders as run.sh does and runs exactly that in a throw-away
+container (`--network none`, the `dvtest.limits` caps, read-only root, `--cap-drop ALL`, `no-new-privileges`, the TOML mounted read-only, empty 0600 stand-ins for the
+`*_file` secrets, no ports), prints the errors and warnings and kills the container once the router is past validation. Exit 0 valid,
+1 invalid, 2 the check itself failed. Checked on `wip-c165c93` with the default render (`c165c93`; `wip-71ab207` accepts it too): the template with `web.toml` + `admin.toml`
+(+ `totp-required.toml`, `guest.toml`, `recorder.toml`, `soak-edges.toml`, `turn.toml`), `data-ident.toml`, `debug-log.toml`,
+`xlx-peer.toml`, `allstar-lab.toml` (+ `-lookup`, `-out`, `-reg`) are valid; rendered with `--gen 71ab207` the template is refused by c165c93
+(`fabric.acl was removed with the broker ACL`). Warnings only: `admin.totp` / `web.operator_totp` ignored, the `ids.dmrid` / `ids.nxdn`
+seed files not found (no mount in the check), `node.state_dir` unset. The ASL1h registration log lines are checked after a run:
+`python3 -m dvtest.tools.asl_reg_log out/<run>/logs/xlxd-sut.log --expect-registrations 1` (run.sh writes the log at the end).
+
 ## AllStarLink test lab (profile asl-lab)
 
 `scripts/run.sh --profile asl-lab -m asl_lab` starts only the tester and four lab hosts (a

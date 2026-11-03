@@ -33,6 +33,7 @@ from playwright.sync_api import expect  # noqa: E402
 import web_pages as pages  # noqa: E402
 from dvtest import api_web, web  # noqa: E402
 from dvtest import browser as brlib  # noqa: E402
+from dvtest import totp_optional  # noqa: E402
 
 pytestmark = [pytest.mark.rig, pytest.mark.web, pytest.mark.browser]
 
@@ -326,7 +327,8 @@ def test_operator_login_with_totp_step(browser_page, login_operator):
     clearLoginChallenge also clears the auth controller's challenge, so any input event on the password field (even
     refilling the same value) abandons the challenge: path 2 signs out, asks again, refills the password (the code field
     disappears), presses Sign in (a new challenge, the code field is back) and signs in with the code. The stale
-    wrong-code banner after a password edit is not asserted (known small UX defect, TOTP1b). Two denied attempts
+    wrong-code banner after a password edit is asserted cleared by default (TOTP1b, wip-c165c93 and later; DVT_TOTP1B=0 skips it for
+    wip-71ab207, where it is a known small UX defect). Two denied attempts
     (wrong password, wrong code), under the lockout of 5; the challenges are not failures."""
     bp = browser_page
     op = login_operator
@@ -373,8 +375,18 @@ def test_operator_login_with_totp_step(browser_page, login_operator):
     bp.goto(pages.LOGIN)
     ui_sign_in(bp, op.callsign, op.password)
     expect(pages.totp_field(bp.page)).to_be_visible()
+    if totp_optional.totp1b():
+        # TOTP1b (the default, wip-c165c93 and later; DVT_TOTP1B=0 skips it): the stale wrong-code banner is cleared when the challenge
+        # is dropped. One more wrong code (3 failures in all, under the lockout of 5); on 71ab207 the banner stays.
+        web.PACER.wait("login")
+        pages.totp_field(bp.page).fill("000000")
+        pages.sign_in_button(bp.page).click()
+        expect(pages.auth_error(bp.page)).to_contain_text(pages.TOTP_WRONG_TEXT)
+        expect(pages.totp_field(bp.page)).to_be_visible()
     pages.password_field(bp.page).fill(op.password)
     expect(pages.totp_field(bp.page)).to_have_count(0)
+    if totp_optional.totp1b():
+        expect(pages.auth_error(bp.page)).not_to_contain_text(pages.TOTP_WRONG_TEXT)
     expect(pages.signed_in_as(bp.page)).to_have_count(0)
     assert bp.session_cookie() is None, "a session after the challenge was abandoned"
     web.PACER.wait("login")

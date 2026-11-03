@@ -3,7 +3,8 @@
 capture on the edge's side (asl-tap) into out/<run>/asl-lab/<scenario>/ until the file
 $DVT_OUT/dvswitch-stop-<scenario> appears (or 300 s), optionally with lab node A linked to the edge so the
 edge's relayed voice can be read; then print a one-line JSON verdict input (frame summary, bytes of ulaw the
-edge sent to A). Used by tools/dvswitch_radio_case.py (docs/asl-dvswitch.md)."""
+edge sent to A). The verdict also carries `registration`: the REGREQ / CALLTOKEN / REGAUTH / REGACK steps in order
+(iax2_frames.registration_steps_from_doc). Used by tools/dvswitch_radio_case.py and tools/dvswitch_phone_case.py (docs/asl-dvswitch.md)."""
 import json
 import os
 import sys
@@ -40,7 +41,8 @@ def main(argv):
             a.disconnect_links()
     doc = iax2_frames.extract(sc.dir / "edge.pcap", ports=(lab.port,))
     raw = asl_lab.ulaw_from_pcap(sc.dir / "edge.pcap", edge.ip, a.ip, lab.port) if link_a else b""
-    print(json.dumps({"scenario": name, "summary": doc["summary"], "edge_to_a_ulaw_bytes": len(raw), "dir": str(sc.dir)}))
+    print(json.dumps({"scenario": name, "summary": doc["summary"], "edge_to_a_ulaw_bytes": len(raw), "dir": str(sc.dir),
+                      "registration": iax2_frames.registration_steps_from_doc(doc)}))
     return 0
 
 

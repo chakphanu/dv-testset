@@ -27,7 +27,7 @@ import pytest
 
 from dvtest import asl_lab, iax2_frames
 from dvtest.control import RigControl
-from dvtest.proto import iax2
+from dvtest.proto import iax2, iax2_reg
 
 pytestmark = [pytest.mark.rig, pytest.mark.asl_lab]
 
@@ -818,3 +818,105 @@ def test_r7_metrics_count_every_outcome(registrations):
     m = registrations["metrics"]
     assert _counter(m, "ok") >= 1 and _counter(m, "mismatch") >= 1
     assert _counter(m, "http") + _counter(m, "parse") + _counter(m, "tls") >= 4, m[:600]
+
+
+# ------------------------------------------------------------------ R8-R12: phone-mode IAX2 registration (ASL1g, wip-c165c93)
+# DVSwitch Mobile in "Phone mode IAX2 connection" registers to the edge before it calls. wip-7efdd33 / wip-71ab207 answer a REGREQ
+# with REGREJ; wip-c165c93 and later are a registrar for the kind=client accounts ("acct": md5, REFRESH clamped to
+# refresh_min_s / refresh_max_s = 60 / 300). On by default (wip-c165c93); DVT_ASL_PHONE_REG=0 skips them for an older image (docs/rig.md "Image generations").
+# Contract (dv-router review-118 / ASL1g): an empty CALLTOKEN on a REGREQ is answered with the 41 byte CALLTOKEN; a REGREQ with no
+# CALLTOKEN IE is dropped silently; the REGAUTH has the same fields for a known and an unknown user; a wrong proof is REGREJ with
+# CAUSE "authentication failed" and CAUSECODE 29; a registration grants no call privilege (a call still goes NEW/AUTHREQ/AUTHREP).
+
+PHONE_REG_STEPS = list(iax2_frames.PHONE_REGISTRATION)
+
+
+@pytest.fixture(scope="module")
+def phone_reg(lab):
+    if os.environ.get("DVT_ASL_PHONE_REG") == "0":
+        pytest.skip("phone-mode registration cases switched off (DVT_ASL_PHONE_REG=0: an image before ASL1g, wip-71ab207 and older)")
+    return lab
+
+
+def _client_reg_counters(lab):
+    """(sum of dv_edge_allstar_client_reg_total, dv_edge_allstar_client_registrations) from the hub metrics, or None without a
+    control channel."""
+    if os.environ.get("DVT_RIG_CONTROL") != "1":
+        return None
+    text = RigControl(Path(lab.out) / "control").metrics("xlxd-sut")
+    total = gauge = 0.0
+    for line in text.splitlines():
+        if line.startswith("dv_edge_allstar_client_reg_total"):
+            total += float(line.rsplit(" ", 1)[1])
+        elif line.startswith("dv_edge_allstar_client_registrations"):
+            gauge = float(line.rsplit(" ", 1)[1])
+    return total, gauge
+
+
+def _register(lab, scenario, username, secret, **kw):
+    """One registration attempt against the edge inside a capture; (result, capture doc)."""
+    quiet(lab)
+    edge = lab.node("edge")
+    with lab.scenario(scenario, capture=["edge"]) as sc:
+        result = iax2_reg.register(edge.ip, username, secret, port=lab.port, **kw)
+        time.sleep(0.5)
+    return result, iax2_frames.extract(sc.dir / "edge.pcap", ports=(lab.port,))
+
+
+def test_r8_phone_registration_md5_regack(lab, phone_reg):
+    """REGREQ -> CALLTOKEN -> REGREQ with the token -> REGAUTH (md5) -> REGREQ with MD5_RESULT -> REGACK, REFRESH inside the
+    edge's clamp 60..300, one registered account afterwards."""
+    before = _client_reg_counters(lab)
+    result, doc = _register(lab, "r8-phone-reg", "acct", asl_lab.ACCT_SECRET, refresh=60)
+    assert result.outcome == "REGACK", "registration of the client account: %s" % result.steps
+    assert result.steps == PHONE_REG_STEPS, result.steps
+    assert 60 <= result.refresh <= 300, "REGACK REFRESH %s (clamped to refresh_min_s..refresh_max_s = 60..300)" % result.refresh
+    steps = iax2_frames.registration_steps_from_doc(doc)
+    ok, why = iax2_frames.judge_phone_registration(steps)
+    assert ok, "on the wire: %s" % why
+    authreq = doc["summary"].get("iax.REGAUTH", 0)
+    assert authreq >= 1 and doc["summary"].get("iax.REGACK", 0) >= 1 and "iax.REGREJ" not in doc["summary"], doc["summary"]
+    ies = {i["name"]: i for i in doc["types"]["iax.REGAUTH"][0]["ies"]}
+    assert ies["AUTHMETHODS"]["int"] & 2, "md5 offered by the REGAUTH"
+    after = _client_reg_counters(lab)
+    if before is not None and after is not None:
+        assert after[0] > before[0], "dv_edge_allstar_client_reg_total did not count the registration (%s -> %s)" % (before, after)
+        assert after[1] >= 1, "dv_edge_allstar_client_registrations is %s after a REGACK" % after[1]
+
+
+def test_r9_wrong_secret_is_regrej(lab, phone_reg):
+    """A wrong MD5 proof: REGREJ (CAUSE authentication failed, CAUSECODE 29), no REGACK, quickly (the edge refuses within 100 ms)."""
+    result, doc = _register(lab, "r9-phone-wrong-secret", "acct", "wrong-secret-not-real")
+    assert result.outcome == "REGREJ", "a wrong secret: %s" % result.steps
+    assert result.steps == ["REGREQ", "CALLTOKEN", "REGREQ:token", "REGAUTH", "REGREQ:md5", "REGREJ"], result.steps
+    assert result.cause == "authentication failed" and result.causecode == 29, (result.cause, result.causecode)
+    assert "iax.REGACK" not in doc["summary"]
+    assert result.seconds < 3.0, "REGREJ took %.2f s (deadline 100 ms after the proof)" % result.seconds
+
+
+def test_r10_unknown_user_is_indistinguishable_from_a_wrong_secret(lab, phone_reg):
+    """REGAUTH has the same fields for a known and an unknown user and the REGREJ is the same (no account enumeration)."""
+    known, doc_known = _register(lab, "r10-known", "acct", "wrong-secret-not-real")
+    unknown, doc_unknown = _register(lab, "r10-unknown", "nobody-here", "wrong-secret-not-real")
+    assert unknown.outcome == "REGREJ" and unknown.steps == known.steps, (known.steps, unknown.steps)
+    assert (unknown.cause, unknown.causecode) == (known.cause, known.causecode)
+
+    def shape(doc):
+        # the USERNAME echo differs in length with the name typed; every other IE must have the same name and length
+        return sorted((i["name"], i["len"]) for i in doc["types"]["iax.REGAUTH"][0]["ies"] if i["name"] != "USERNAME")
+    assert shape(doc_known) == shape(doc_unknown), "REGAUTH fields differ between a known and an unknown user"
+
+
+def test_r11_regreq_without_calltoken_is_dropped(lab, phone_reg):
+    """A REGREQ with no CALLTOKEN IE at all gets no reply (amplification rule: nothing is sent to an unvalidated address)."""
+    result, doc = _register(lab, "r11-no-token", "acct", asl_lab.ACCT_SECRET, calltoken=False, timeout=2.0)
+    assert result.outcome == "timeout" and result.steps == ["REGREQ"], result.steps
+    answers = [t for t in ("iax.CALLTOKEN", "iax.REGAUTH", "iax.REGACK", "iax.REGREJ") if t in doc["summary"]]
+    assert not answers, "the edge answered a REGREQ without CALLTOKEN: %s" % answers
+
+
+def test_r12_node_account_cannot_register_as_a_phone(lab, phone_reg):
+    """Registration is for kind=client accounts: the node account number 1999 (public node, password) is refused like any
+    wrong proof (dv-router review-118: node accounts are refused)."""
+    result, _doc = _register(lab, "r12-node-account", "1999", asl_lab.ACCT_SECRET)
+    assert result.outcome == "REGREJ", "a node account registered as a phone: %s" % result.steps

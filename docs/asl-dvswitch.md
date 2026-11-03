@@ -94,3 +94,19 @@ account).
   crosses it); the edge handled the duplicates quietly (one ACCEPT).
 - HANGUP carries a CALLTOKEN IE and CAUSECODE 0x10 (Q.850 cause 16, normal clearing).
 - After every hangup the app fires bare NEW probes again.
+
+## Phone mode against wip-c165c93 (ASL1g, prepared, not run)
+
+`tools/dvswitch_phone_case.py` is the phone-mode counterpart of `tools/dvswitch_radio_case.py` for an image with the ASL1g registrar
+(`dv-router:wip-c165c93` and later; on 7efdd33 / 71ab207 it ends in REGREJ and fails by design). Same environment and emulator as the radio
+case, but the account in the app has "Phone mode IAX2 connection" ON. The capture on the edge starts BEFORE the app is restarted (it
+registers by itself). It checks, one PASS / FAIL line each:
+
+1. the registration on the wire: REGREQ, CALLTOKEN, REGREQ with the token, REGAUTH, REGREQ with MD5_RESULT, REGACK, no REGREJ
+   (`dvtest.iax2_frames.registration_steps_from_doc` / `judge_phone_registration`; the capture tool prints the steps as `registration`);
+2. the app shows "Registered" (Status or Accounts tab) and the Dialer's Connect (`send_button`) is enabled;
+3. then a call like radio mode: "Node: 1999", ANSWER, AUTHREP (md5), RADIO_KEY from the app, more than 20000 bytes of ulaw relayed to node A.
+
+Not run here (no rig, no emulator): the tab coordinates and the "Registered" text are the ones to confirm on the first run. The tester-side
+twin without the app is R8-R12 of `cases/test_asl_edge.py` (on by default, `DVT_ASL_PHONE_REG=0` skips them, `docs/asl-edge-results.md`).
+

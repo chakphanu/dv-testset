@@ -310,6 +310,57 @@ def _anonymise(frames, wraps, dns=()):
         w["call"] = "%s>%s scall=%d" % (w["before"]["src"], w["before"]["dst"], w["before"]["scall"])
 
 
+# ---------------------------------------------------------------- phone-mode registration (ASL1g)
+
+REG_TYPES = ("iax.REGREQ", "iax.REGAUTH", "iax.REGACK", "iax.REGREJ", "iax.CALLTOKEN")
+# DVSwitch Mobile 2.0.7 in phone mode registers like an Asterisk peer; the edge of wip-c165c93 answers it as a registrar (ASL1g)
+PHONE_REGISTRATION = ("REGREQ", "CALLTOKEN", "REGREQ:token", "REGAUTH", "REGREQ:md5", "REGACK")
+
+
+def registration_steps(frames):
+    """The registration exchange of a frame list (extract()["frames"] or the frames of a case) as short step names, in capture
+    order: `REGREQ` (no token), `REGREQ:token` (a non-empty CALLTOKEN IE), `REGREQ:md5` (an MD5_RESULT IE, with or without a token), `CALLTOKEN`, `REGAUTH`, `REGACK`, `REGREJ`. Frames of other types are skipped; a retransmitted frame (R bit) is skipped
+    too, so a retransmission is not a step."""
+    out = []
+    for f in frames:
+        if f.get("type") not in REG_TYPES or f.get("retrans"):
+            continue
+        name = f["type"].split(".", 1)[1]
+        if name == "REGREQ":
+            ies = {e["name"]: e for e in f.get("ies", [])}
+            if "MD5_RESULT" in ies:
+                name += ":md5"                  # the answer to a REGAUTH, whatever else it carries
+            elif ies.get("CALLTOKEN", {}).get("len", 0) > 0:
+                name += ":token"
+        out.append(name)
+    return out
+
+
+def registration_steps_from_doc(doc):
+    """registration_steps() of an extract() document: its frames sit in doc["types"] by type, so the registration types are
+    merged and put back in capture order by their frame number (a document written with --limit may have dropped later
+    frames of a type: the case reads the whole capture, without a limit)."""
+    frames = [f for name in REG_TYPES for f in doc.get("types", {}).get(name, [])]
+    return registration_steps(sorted(frames, key=lambda f: f.get("frame", 0)))
+
+
+def judge_phone_registration(steps, expected=PHONE_REGISTRATION):
+    """(ok, why): `expected` must appear in `steps` as an ordered subsequence (anything may be between: the app also probes with
+    bare NEWs, the edge acknowledges), no REGREJ may be there, and the last registration step must be REGACK (a refresh
+    repeats the exchange: the check looks at the first full exchange and at the end)."""
+    if "REGREJ" in steps:
+        return False, "REGREJ in the exchange: %s" % steps
+    at = 0
+    for step in expected:
+        try:
+            at = steps.index(step, at) + 1
+        except ValueError:
+            return False, "step %s missing (in order) after %d steps of %s" % (step, at, steps)
+    if not steps or steps[-1] != "REGACK":
+        return False, "the last step is %s, not REGACK: %s" % (steps[-1] if steps else None, steps)
+    return True, ""
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="IAX2 frames of a pcap as hex per frame type (JSON)")
     ap.add_argument("pcap")

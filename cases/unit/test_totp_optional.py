@@ -163,9 +163,21 @@ def test_ruled_answers_are_named_constants():
     assert not to.is_answer(Resp(401, {"code": "totp_invalid"}), to.TOTP_INVALID)
 
 
-def test_web_wrong_password_is_totp1b_pending():
-    """TOTP1b pending (dv-router): the web side answers a wrong password at the step-up and at disable with 401
-    unauthorized, admin with 403 totp_invalid. When the web fix lands, set WEB_WRONG_PASSWORD to TOTP_INVALID in
-    dvtest/totp_optional.py and change this test with it (it is meant to fail then)."""
-    assert to.WEB_WRONG_PASSWORD == (401, "unauthorized")
-    assert to.WEB_WRONG_PASSWORD != to.ADMIN_WRONG_PASSWORD
+def test_web_wrong_password_follows_the_totp1b_knob():
+    """DVT_TOTP1B: the default (unset, empty) is TOTP1b, wip-c165c93 and later: 403 totp_invalid on web and admin. 0 / false / no /
+    off select wip-71ab207: web 401 unauthorized, where admin answers 403 totp_invalid."""
+    for off in ("0", "false", "No", " off "):
+        assert to.web_wrong_password({"DVT_TOTP1B": off}) == (401, "unauthorized")
+        assert not to.totp1b({"DVT_TOTP1B": off})
+    for on in (None, "", "1", "true", "yes", "on"):
+        env = {} if on is None else {"DVT_TOTP1B": on}
+        assert to.web_wrong_password(env) == to.TOTP_INVALID == to.ADMIN_WRONG_PASSWORD
+        assert to.totp1b(env)
+    assert to.WEB_WRONG_PASSWORD_71AB207 != to.ADMIN_WRONG_PASSWORD
+
+
+def test_web_wrong_password_reads_the_environment(monkeypatch):
+    monkeypatch.delenv("DVT_TOTP1B", raising=False)
+    assert to.web_wrong_password() == to.TOTP_INVALID
+    monkeypatch.setenv("DVT_TOTP1B", "0")
+    assert to.web_wrong_password() == (401, "unauthorized")

@@ -381,6 +381,7 @@ services:
       DVT_WEB: ${DVT_WEB:-off}
       DVT_WEB_URL: https://${DVT_WEB_HOST:-dvt-web}
       DVT_WEB_PROXY: ${DVT_NET:-172.30.0}.90
+      DVT_TOTP1B: ${DVT_TOTP1B:-}
       DVT_ADMIN_URL: https://${DVT_ADMIN_HOST:-dvt-admin}:${DVT_ADMIN_PORT:-8443}
       # profile browser (cases/browser_fixtures.py): on when the browser service runs
       DVT_BROWSER: ${DVT_BROWSER:-off}
@@ -444,6 +445,8 @@ services:
       DVT_ASL_EDGE_OUT: ${DVT_ASL_EDGE_OUT:-}
       DVT_ASL_EDGE_REG: ${DVT_ASL_EDGE_REG:-}
       DVT_ASL_EDGE_LOOKUP: ${DVT_ASL_EDGE_LOOKUP:-}
+      # image-generation knobs (docs/rig.md "Image generations"); empty = the default, the behaviour of dv-router:wip-c165c93; 0 = wip-71ab207
+      DVT_ASL_PHONE_REG: ${DVT_ASL_PHONE_REG:-}
       DVT_ASL_REG_HTTP_PORT: ${DVT_ASL_HTTP_REG_PORT:-8082}
       # profile asl-ext (cases/test_asl_ext.py): the real node 400169, outbound only
       DVT_ASL_EXT: ${DVT_ASL_EXT:-off}

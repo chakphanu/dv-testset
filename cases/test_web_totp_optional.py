@@ -17,11 +17,11 @@ only, disable with a wrong code, and the ADMIN wrong password at step-up and at 
 is 403 step_up_required (web ids command, admin GET /clients, admin offer). Asserted as (status, problem code), constants in
 dvtest/totp_optional.py.
 
-TOTP1b PENDING: the WEB side answers a wrong password at the step-up and at disable with 401 unauthorized, admin with 403
-totp_invalid (an inconsistency dv-router will fix). The web cases assert the CURRENT 401 through
-dvtest.totp_optional.WEB_WRONG_PASSWORD and write a "TOTP1b pending" note line; when the fix lands they fail with 403
-totp_invalid until that one constant is changed. What dv-router did not rule on (the answer to a made-up code on an account
-without a secret, an empty step-up request) is asserted as "refused, not 200" only.
+TOTP1b (knob DVT_TOTP1B): the WEB side answered a wrong password at the step-up and at disable with 401 unauthorized up to
+wip-71ab207, admin with 403 totp_invalid; since TOTP1b (wip-c165c93 and later, the default) it is 403 totp_invalid on both. The
+expected answer is dvtest.totp_optional.web_wrong_password(); DVT_TOTP1B=0 selects the 71ab207 one (401 unauthorized, with a
+"TOTP1b pending" note line). What dv-router did not rule on (the answer to a made-up code on an account without a secret, an empty
+step-up request) is asserted as "refused, not 200" only.
 
 Accounts: every flow runs on a throw-away account (N0TOA..N0TOK, dvtest.totp_optional.ACCOUNTS), invited
 by the run's bootstrap operator (N0CALL, which is only logged in with its password, never enrolled here).
@@ -109,11 +109,12 @@ def account(operator, web_base_url, web_ca):
 
 
 def note_totp1b_pending(role, step):
-    """The web side answers a wrong password at the step-up and at disable with 401 unauthorized where admin answers 403
-    totp_invalid; dv-router calls it an inconsistency (TOTP1b, fix pending). The cases assert the CURRENT 401 through
-    dvtest.totp_optional.WEB_WRONG_PASSWORD, which is the one value to change when the fix lands."""
-    web.finding("TOTP1b pending: web %s wrong password at %s asserted as %s (to.WEB_WRONG_PASSWORD); the fix makes it %s"
-                % (role, step, to.want_text(to.WEB_WRONG_PASSWORD), to.want_text(to.TOTP_INVALID)))
+    """With DVT_TOTP1B=0 the web side is asserted at the 71ab207 answer (401 unauthorized) where admin answers 403 totp_invalid;
+    the note says so (dv-router fixed it as TOTP1b in wip-c165c93, the default here)."""
+    if to.totp1b():
+        return
+    web.finding("TOTP1b pending: web %s wrong password at %s asserted as %s (DVT_TOTP1B=0, wip-71ab207; wip-c165c93 and later "
+                "expects %s)" % (role, step, to.want_text(to.web_wrong_password()), to.want_text(to.TOTP_INVALID)))
 
 
 def _login(web_client, callsign, password):
@@ -291,8 +292,8 @@ def test_f_wrong_password_keeps_session(account, web_client, role):
     client, _ = _login(web_client, callsign, password)
     # enable step: a wrong password at the step-up
     wrong = to.step_up_password(client, to.WEB, web.new_password())
-    assert to.is_answer(wrong, to.WEB_WRONG_PASSWORD), "%s step-up with a wrong password: %s, expected %s (TOTP1b " \
-        "pending: ruled %s once the fix lands)" % (role, to.brief(wrong), to.want_text(to.WEB_WRONG_PASSWORD),
+    assert to.is_answer(wrong, to.web_wrong_password()), "%s step-up with a wrong password: %s, expected %s (TOTP1b " \
+        "knob DVT_TOTP1B=0 selects 401; 403 totp_invalid is %s)" % (role, to.brief(wrong), to.want_text(to.web_wrong_password()),
                                                    to.want_text(to.TOTP_INVALID))
     note_totp1b_pending(role, "step-up")
     alive, ident = to.session_alive(client, to.WEB)
@@ -306,8 +307,8 @@ def test_f_wrong_password_keeps_session(account, web_client, role):
     # disable step: wrong password, valid code
     auth = to.enable_totp(client, to.WEB, password)
     bad = to.disable(client, to.WEB, web.new_password(), auth.next_code())
-    assert to.is_answer(bad, to.WEB_WRONG_PASSWORD), "%s disable with a wrong password and a valid code: %s, expected " \
-        "%s (TOTP1b pending: ruled %s once the fix lands)" % (role, to.brief(bad), to.want_text(to.WEB_WRONG_PASSWORD),
+    assert to.is_answer(bad, to.web_wrong_password()), "%s disable with a wrong password and a valid code: %s, expected " \
+        "%s (DVT_TOTP1B=0 selects 401; 403 totp_invalid is %s)" % (role, to.brief(bad), to.want_text(to.web_wrong_password()),
                                                               to.want_text(to.TOTP_INVALID))
     note_totp1b_pending(role, "disable")
     alive, ident = to.session_alive(client, to.WEB)

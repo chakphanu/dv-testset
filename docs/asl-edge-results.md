@@ -218,3 +218,23 @@ The password file was removed by its owner right after the node was released, so
 by heuristic (no `.local` or `out` path staged, no added line giving a 12 character alphanumeric value to a
 password-like key); the author never read the value. A dry run of the same rig against a registry name that does not resolve
 (`DVT_ASL_EXT_REGISTRY=register.invalid`, no dial) came first and is `out/20261103T181938Z`.
+
+## Phone-mode registration, R8-R12 (ASL1g, prepared for wip-c165c93, not run)
+
+Tester-side cases without the app (`cases/test_asl_edge.py`, on by default, `DVT_ASL_PHONE_REG=0` skips them for an older image; client `dvtest/proto/iax2_reg.py`, unit
+tested against a fake registrar). Contract from dv-router's ASL1g review: an empty CALLTOKEN on a REGREQ gets the CALLTOKEN reply, a REGREQ
+with no CALLTOKEN IE is dropped silently, REGAUTH has the same fields for a known and an unknown user, a wrong proof is REGREJ (CAUSE
+"authentication failed", CAUSECODE 29), the account must be `kind = client`, REFRESH is clamped to `refresh_min_s` / `refresh_max_s` (60 / 300).
+
+| Case | Asserts |
+|------|---------|
+| R8 `test_r8_phone_registration_md5_regack` | REGREQ, CALLTOKEN, REGREQ with token, REGAUTH (md5), REGREQ with MD5_RESULT, REGACK for `acct`; the same order on the wire; REFRESH 60..300; `dv_edge_allstar_client_reg_total` counts it, `dv_edge_allstar_client_registrations` >= 1 |
+| R9 `test_r9_wrong_secret_is_regrej` | REGREJ with CAUSE "authentication failed" and CAUSECODE 29 within a few seconds, no REGACK |
+| R10 `test_r10_unknown_user_is_indistinguishable_from_a_wrong_secret` | the same steps, cause and REGAUTH IEs (but the USERNAME echo) for a known and an unknown user |
+| R11 `test_r11_regreq_without_calltoken_is_dropped` | no reply of any kind to a REGREQ without a CALLTOKEN IE |
+| R12 `test_r12_node_account_cannot_register_as_a_phone` | the node account 1999 is refused (REGREJ) |
+
+The ASL1h log lines (one INFO line per call setup, hangup and client registration, no secrets) cannot be read during a run (run.sh writes
+`out/<run>/logs/xlxd-sut.log` at the end): `python3 -m dvtest.tools.asl_reg_log out/<run>/logs/xlxd-sut.log --expect-registrations 1`
+counts them by class and fails when the fixture secret or a typed wrong secret appears in any line.
+

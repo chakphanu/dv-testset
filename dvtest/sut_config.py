@@ -77,6 +77,34 @@ def require_ident_value(value=None):
     return value
 
 
+# DV-Router generations the rig knows. DVT_SUT_GEN selects the config dialect of the image under test. The default is the newest,
+# wip-c165c93 (ACL0c-f, NOX1, CFG2, TOTP1b), which turns keys that were warnings into errors: the `[fabric]` table (the broker ACL
+# is gone), access.allow_file / deny_file, callhome interlink_file. DVT_SUT_GEN=71ab207 keeps the old dialect (the rendered file is
+# the template as it was); wip-71ab207 accepts the c165c93 dialect too (checked with dvtest/tools/config_check.py).
+GENS = ("71ab207", "c165c93")
+DEFAULT_GEN = "c165c93"
+
+
+def gen_value(value=None):
+    """The generation from `value`, else env DVT_SUT_GEN, else DEFAULT_GEN; ConfigError for an unknown one."""
+    if value is None:
+        value = os.environ.get("DVT_SUT_GEN") or DEFAULT_GEN
+    if value not in GENS:
+        raise ConfigError("DVT_SUT_GEN must be one of %s (got %r)" % ("|".join(GENS), value))
+    return value
+
+
+def apply_gen(text, gen):
+    """The rendered text in the dialect of generation `gen`. 71ab207: unchanged. c165c93: the `[fabric]` table is removed (the
+    broker ACL is gone: its only key `acl` was ignored with a warning before, and the table itself is an unknown field now, so
+    the validator refuses the file); sub-tables `[fabric.x]` go with it. Other removed keys (access.allow_file / deny_file,
+    callhome interlink_file) are not rewritten: dvtest/tools/config_check.py reports them."""
+    if gen != "c165c93":
+        return text
+    parts = [p for p in _split_tables(text) if not (p[0] == "fabric" or (p[0] or "").startswith("fabric."))]
+    return _join_tables(parts)
+
+
 def split_extras(value):
     """The files of a DVT_SUT_CONFIG_EXTRA value ("a:b", empty items skipped)."""
     return [item for item in (value or "").split(":") if item]
@@ -167,14 +195,16 @@ def merge_extra(base, extra):
     return out
 
 
-def render(text, net, own=11, transcoder=21, tester=30, require_ident=None, extras=(), web_proxy=90, browser=91, coturn=94):
+def render(text, net, own=11, transcoder=21, tester=30, require_ident=None, extras=(), web_proxy=90, browser=91, coturn=94,
+           gen=None):
     """The template text with the tokens replaced; `extras` are texts appended
     after it (each after a newline, in order) before the substitution.
     ConfigError for a bad /24 prefix, a host octet outside 1..254, a bad
-    require_ident or an unknown token."""
+    require_ident, an unknown generation (`gen`, else env DVT_SUT_GEN) or an unknown token."""
     if not _NET.match(net):
         raise ConfigError("net must be a /24 prefix like 172.30.0 (got %r)" % net)
     values = {"NET": net, "REQUIRE_IDENT": require_ident_value(require_ident)}
+    gen = gen_value(gen)
     for extra in extras:
         text = merge_extra(text.rstrip("\n") + "\n", extra)
     for name, octet in (("OWN_IP", own), ("TRANSCODER_IP", transcoder), ("TESTER_IP", tester),
@@ -187,7 +217,7 @@ def render(text, net, own=11, transcoder=21, tester=30, require_ident=None, extr
         raise ConfigError("unknown token%s %s (known: %s)" % (
             "s" if len(unknown) > 1 else "", ", ".join("<%s>" % n for n in unknown),
             ", ".join("<%s>" % n for n in KNOWN)))
-    return TOKEN.sub(lambda m: values[m.group(1)], text)
+    return apply_gen(TOKEN.sub(lambda m: values[m.group(1)], text), gen)
 
 
 def _read(path, what):
@@ -198,13 +228,13 @@ def _read(path, what):
 
 
 def render_file(template, output, net, own=11, transcoder=21, tester=30, require_ident=None, extras=(),
-                web_proxy=90):
+                web_proxy=90, gen=None):
     """Read TEMPLATE (and the files of `extras`), write OUTPUT (mode 0644; the
     container reads it as any user). Returns the output path; ConfigError when
     a file is missing, unreadable, not UTF-8 or the text has an unknown token."""
     text = _read(template, "template")
     texts = [_read(path, "extra") for path in extras]
-    rendered = render(text, net, own, transcoder, tester, require_ident, texts, web_proxy)
+    rendered = render(text, net, own, transcoder, tester, require_ident, texts, web_proxy, gen=gen)
     out = Path(output)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(rendered, encoding="utf-8")

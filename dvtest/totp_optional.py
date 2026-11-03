@@ -14,6 +14,7 @@ code; the clients scrub them (WebClient.hide).
 """
 import binascii
 import json
+import os
 from dataclasses import dataclass
 
 from dvtest import web
@@ -27,12 +28,25 @@ REFUSED = (401, 403)                    # what the specs list for "not allowed w
 # step_up_required.
 TOTP_INVALID = (403, "totp_invalid")
 STEP_UP_REQUIRED = (403, "step_up_required")
-# A wrong PASSWORD at the step-up and at disable: admin answers TOTP_INVALID (admin.md: the password step-up keeps the
-# existing totp_invalid code), the WEB side answers 401 unauthorized today. TOTP1b PENDING: the web side is to be changed to
-# TOTP_INVALID; when that lands, change WEB_WRONG_PASSWORD to TOTP_INVALID here, the one place (cases that use it fail
-# until then, by design).
+# A wrong PASSWORD at the step-up and at disable: admin answers TOTP_INVALID (admin.md: the password step-up keeps the existing
+# totp_invalid code), and since TOTP1b (dv-router:wip-c165c93 and later, the default here) so does the web side, and the login page
+# clears a stale wrong-code banner when the challenge is dropped. The web side answered 401 unauthorized up to wip-71ab207: the
+# knob DVT_TOTP1B=0 selects that image's expectation. `web_wrong_password()` is the one place.
 ADMIN_WRONG_PASSWORD = TOTP_INVALID
-WEB_WRONG_PASSWORD = (401, "unauthorized")
+WEB_WRONG_PASSWORD_71AB207 = (401, "unauthorized")
+
+
+def totp1b(env=None):
+    """True for the TOTP1b behaviour (wip-c165c93 and later): the default. DVT_TOTP1B=0 (or false / no / off) selects the
+    wip-71ab207 behaviour; unset, empty and anything else are TOTP1b."""
+    value = (os.environ if env is None else env).get("DVT_TOTP1B", "")
+    return value.strip().lower() not in ("0", "false", "no", "off")
+
+
+def web_wrong_password(env=None):
+    """The (status, code) a wrong password at the web step-up / disable must answer on the image under test."""
+    return TOTP_INVALID if totp1b(env) else WEB_WRONG_PASSWORD_71AB207
+
 
 # throw-away callsigns of the cases: one account per (case letter, role), never a shared one
 ACCOUNTS = {

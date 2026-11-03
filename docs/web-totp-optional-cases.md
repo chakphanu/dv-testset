@@ -68,14 +68,15 @@ FINDINGs; they are now assertions on (status, problem code), constants in `dvtes
 | disable with the right password and a wrong code (web, admin) | 403 `totp_invalid` |
 | any sensitive action without a window: web ids command, admin `GET /clients`, admin TOTP offer | 403 `step_up_required` |
 | ADMIN wrong password at step-up and at disable (admin.md: the password step-up keeps `totp_invalid`) | 403 `totp_invalid` |
-| WEB wrong password at step-up and at disable | **401 `unauthorized` today, TOTP1b pending** (below) |
+| WEB wrong password at step-up and at disable | 403 `totp_invalid` since TOTP1b (wip-c165c93, the default); 401 `unauthorized` on wip-71ab207 (`DVT_TOTP1B=0`) |
 
-**TOTP1b pending.** The web side answers a wrong password at the step-up and at disable with 401 `unauthorized` where admin
-answers 403 `totp_invalid`; dv-router calls this an inconsistency and will fix it. `test_f_wrong_password_keeps_session`
-asserts the CURRENT 401 through `dvtest.totp_optional.WEB_WRONG_PASSWORD` and writes a "TOTP1b pending" note line (a
-FINDING line in `web-findings.txt`). When the fix lands the case fails with 403 `totp_invalid` until that one constant is set to
-`TOTP_INVALID` (`cases/unit/test_totp_optional.py::test_web_wrong_password_is_totp1b_pending` documents the current value and
-must be changed with it). In every case the session survives a wrong password.
+**TOTP1b (knob `DVT_TOTP1B`).** Up to `wip-71ab207` the web side answered a wrong password at the step-up and at disable with 401
+`unauthorized` where admin answers 403 `totp_invalid`; dv-router fixed it in `wip-c165c93` (TOTP1b). `test_f_wrong_password_keeps_session`
+asserts `dvtest.totp_optional.web_wrong_password()`: 403 `totp_invalid` by default (TOTP1b, wip-c165c93 and later); `DVT_TOTP1B=0`
+selects wip-71ab207 (401 `unauthorized`, a "TOTP1b pending" FINDING note line is written; docs/rig.md "Image generations"). The
+browser case `test_operator_login_with_totp_step` asserts by default that the stale wrong-code banner is cleared when the challenge is
+dropped (`docs/web-browser-cases.md`). The unit test `test_web_wrong_password_follows_the_totp1b_knob` pins both values. In every case the
+session survives a wrong password.
 
 Not ruled, so only "refused, not 200": a made-up `X-DV-TOTP` code on an account without a secret, and an empty step-up request.
 The 401 vs 403 answer for the same cases is also not asserted for `POST /auth/session/totp` after a step-up: the route takes no body,

@@ -178,3 +178,49 @@ def test_tone_is_deterministic_ulaw():
     assert hashlib.sha256(asl_lab.tone_ulaw(100)).hexdigest() == hashlib.sha256(data).hexdigest()
     assert asl_lab.lin2ulaw(0) == 0xff and asl_lab.lin2ulaw(-1) == 0x7f
     assert asl_lab.lin2ulaw(32767) == 0x80 and asl_lab.lin2ulaw(-32768) == 0x00
+
+
+def reg(name, token=False, md5=False, retrans=False):
+    ies = []
+    if token:
+        ies.append({"name": "CALLTOKEN", "len": 41})
+    elif name == "REGREQ":
+        ies.append({"name": "CALLTOKEN", "len": 0})
+    if md5:
+        ies.append({"name": "MD5_RESULT", "len": 32})
+    return {"type": "iax." + name, "ies": ies, "retrans": retrans}
+
+
+def test_registration_steps_name_token_and_md5():
+    frames = [reg("REGREQ"), {"type": "iax.NEW"}, reg("CALLTOKEN"), reg("REGREQ", token=True), reg("REGAUTH"),
+              reg("REGREQ", token=True, md5=True), reg("REGREQ", token=True, md5=True, retrans=True), reg("REGACK")]
+    assert fr.registration_steps(frames) == list(fr.PHONE_REGISTRATION)
+    assert fr.registration_steps([reg("REGREQ", md5=True)]) == ["REGREQ:md5"]
+    assert fr.registration_steps([reg("REGREQ", token=True, md5=True)]) == ["REGREQ:md5"]
+    assert fr.registration_steps([reg("REGREQ", token=True)]) == ["REGREQ:token"]
+    assert fr.registration_steps([{"type": "voice.mini"}]) == []
+
+
+def test_judge_phone_registration():
+    ok, why = fr.judge_phone_registration(list(fr.PHONE_REGISTRATION))
+    assert ok, why
+    # a refresh repeats the exchange; the app's extra probes in between are fine
+    assert fr.judge_phone_registration(["CALLTOKEN"] + list(fr.PHONE_REGISTRATION) + ["REGREQ:token", "REGACK"])[0]
+    bad = fr.judge_phone_registration(["REGREQ", "CALLTOKEN", "REGREQ:token", "REGREJ"])
+    assert not bad[0] and "REGREJ" in bad[1]                       # what wip-7efdd33 answered
+    assert not fr.judge_phone_registration(["REGREQ", "CALLTOKEN", "REGREQ:token", "REGAUTH"])[0]    # no md5 REGREQ, no REGACK
+    assert "REGAUTH" in fr.judge_phone_registration(["REGREQ", "CALLTOKEN", "REGREQ:token"])[1]
+    assert not fr.judge_phone_registration([])[0]
+    out_of_order = ["REGREQ", "REGAUTH", "CALLTOKEN", "REGREQ:token", "REGREQ:md5", "REGACK"]
+    assert not fr.judge_phone_registration(out_of_order)[0]
+    assert not fr.judge_phone_registration(list(fr.PHONE_REGISTRATION) + ["REGREQ:token"])[0]       # ends in a REGREQ
+
+
+def test_registration_steps_from_doc_merges_types_in_frame_order():
+    doc = {"types": {"iax.REGREQ": [dict(reg("REGREQ"), frame=1), dict(reg("REGREQ", token=True), frame=3),
+                                    dict(reg("REGREQ", token=True, md5=True), frame=5)],
+                     "iax.CALLTOKEN": [dict(reg("CALLTOKEN"), frame=2)],
+                     "iax.REGAUTH": [dict(reg("REGAUTH"), frame=4)], "iax.REGACK": [dict(reg("REGACK"), frame=6)],
+                     "iax.NEW": [{"type": "iax.NEW", "frame": 0}]}}
+    assert fr.registration_steps_from_doc(doc) == list(fr.PHONE_REGISTRATION)
+    assert fr.registration_steps_from_doc({}) == []

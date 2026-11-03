@@ -4,6 +4,7 @@ and the early refusals of scripts/run.sh for that launch mode."""
 import os
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -416,3 +417,47 @@ def test_coturn_token_is_the_nat_profile_turn_server():
     out = sut_config.render('turn = "turn:<COTURN_IP>:3478"\n', "172.30.0")
     assert out == 'turn = "turn:172.30.0.94:3478"\n'
     assert "COTURN_IP" in sut_config.KNOWN
+
+
+FABRIC_TEMPLATE = """\
+schema = 1
+[node]
+callsign = "XLX999"
+[fabric]
+# the broker ACL
+acl = true
+[log]
+level = "info"
+"""
+
+
+def test_gen_default_is_c165c93_and_drops_the_fabric_table(monkeypatch):
+    """The default dialect is wip-c165c93 (ACL0c-f): [fabric] is an unknown table of its validator, so it goes; everything else stays."""
+    monkeypatch.delenv("DVT_SUT_GEN", raising=False)
+    assert sut_config.gen_value() == "c165c93"
+    out = sut_config.render(FABRIC_TEMPLATE, "172.30.0")
+    assert "fabric" not in out and "acl" not in out
+    assert '[log]\nlevel = "info"' in out and 'callsign = "XLX999"' in out
+    tomllib.loads(out)
+
+
+def test_gen_71ab207_keeps_the_template_as_it_was(monkeypatch):
+    monkeypatch.setenv("DVT_SUT_GEN", "71ab207")
+    out = sut_config.render(FABRIC_TEMPLATE, "172.30.0")
+    assert "[fabric]" in out and "acl = true" in out
+    assert out == FABRIC_TEMPLATE
+    monkeypatch.setenv("DVT_SUT_GEN", "c165c93")
+    assert sut_config.render(FABRIC_TEMPLATE, "172.30.0", gen="71ab207") == FABRIC_TEMPLATE      # the argument wins over the env
+
+
+def test_gen_unknown_is_refused(monkeypatch):
+    monkeypatch.setenv("DVT_SUT_GEN", "nope")
+    with pytest.raises(sut_config.ConfigError, match="DVT_SUT_GEN"):
+        sut_config.render(FABRIC_TEMPLATE, "172.30.0")
+    assert sut_config.apply_gen("x = 1\n", "71ab207") == "x = 1\n"
+
+
+def test_gen_c165c93_removes_fabric_subtables_too():
+    text = "[node]\na = 1\n[fabric.sub]\nb = 2\n[log]\nlevel = \"info\"\n"
+    out = sut_config.apply_gen(text, "c165c93")
+    assert "fabric" not in out and "[node]" in out and "[log]" in out
