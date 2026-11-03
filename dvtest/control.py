@@ -194,6 +194,17 @@ class RigControl:
             raise ValueError("bad mark %r %r" % (phase, tag))
         self._request("mark %s %s" % (phase, tag), timeout)
 
+    def netem(self, target, args, timeout=30.0):
+        """"netem <target> <args>": a preset name, "off", or netem arguments ("delay 80ms loss 5%") on the
+        sidecar(s) the host maps `target` to (run.sh header: tester, xlxd, and, with --profile asl-edge,
+        edge / asl). ValueError before sending for an empty or oddly-charactered target/args; the host
+        refuses a target it does not run sidecars for."""
+        if not target or not all(c.isalnum() or c in "._-" for c in target) or not target.isascii():
+            raise ValueError("bad netem target %r" % (target,))
+        if not args or not all(c.isalnum() or c in " .%_-" for c in args) or not args.isascii():
+            raise ValueError("bad netem args %r" % (args,))
+        self._request("netem %s %s" % (target, args), timeout)
+
     def kill_proc(self, service, process, signal, timeout=30.0):
         """Signal the process called `process` (exact comm) inside `service`
         (allow-list: KILL_PROC_ALLOWED). Returns a KillResult; raises

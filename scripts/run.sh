@@ -34,7 +34,8 @@
 #   --profile asl-edge the asl-lab hosts plus DV-Router's AllStar edge (dv-edge-allstar) in xlxd-sut: needs
 #                      DVT_SUT_LAUNCH=native, XLXD_SUT_IMAGE and DVT_SUT_CONFIG like the web profile; the fake
 #                      transcoder is forced (DVT_TRANSCODER_FAKE=1), rig/config/dv-router/allstar-lab.toml is added to
-#                      DVT_SUT_CONFIG_EXTRA (and allstar-lab-out.toml with DVT_ASL_EDGE_OUT=1), fixture secret files
+#                      DVT_SUT_CONFIG_EXTRA (and allstar-lab-out.toml with DVT_ASL_EDGE_OUT=1, allstar-lab-lookup.toml with
+#                      DVT_ASL_EDGE_LOOKUP=1, allstar-lab-reg.toml with DVT_ASL_EDGE_REG=1), fixture secret files
 #                      are written to out/<utc>/asl-secrets (mode 600) and mounted read-only at
 #                      /etc/dv-router/asl-secrets. Alone it starts tester, xlxd-sut, transcoder-sut, the four lab
 #                      hosts and netem sidecars for the edge and the lab nodes (control: netem edge|asl <args>).
@@ -268,7 +269,15 @@ if [ "$has_asl_edge" = 1 ]; then
   if [ "${DVT_ASL_EDGE_OUT:-}" = 1 ]; then
     DVT_SUT_CONFIG_EXTRA="$DVT_SUT_CONFIG_EXTRA:rig/config/dv-router/allstar-lab-out.toml"
   fi
-  export DVT_SUT_CONFIG_EXTRA DVT_ASL_EDGE_OUT
+  # DVT_ASL_EDGE_LOOKUP=1: the lab DNS zone as the edge's lookup domain; DVT_ASL_EDGE_REG=1: six public nodes
+  # registering over plain HTTP at the stand-in registrar (images that have those keys only)
+  if [ "${DVT_ASL_EDGE_LOOKUP:-}" = 1 ]; then
+    DVT_SUT_CONFIG_EXTRA="$DVT_SUT_CONFIG_EXTRA:rig/config/dv-router/allstar-lab-lookup.toml"
+  fi
+  if [ "${DVT_ASL_EDGE_REG:-}" = 1 ]; then
+    DVT_SUT_CONFIG_EXTRA="$DVT_SUT_CONFIG_EXTRA:rig/config/dv-router/allstar-lab-reg.toml"
+  fi
+  export DVT_SUT_CONFIG_EXTRA DVT_ASL_EDGE_OUT DVT_ASL_EDGE_LOOKUP DVT_ASL_EDGE_REG
 fi
 # DVT_TRANSCODER_FAKE=1: transcoder-sut runs the fake extended AMBEd (header)
 case "${DVT_TRANSCODER_FAKE:-}" in
@@ -686,7 +695,7 @@ fi
 if [ "$has_asl_edge" = 1 ]; then
   mkdir -p "$out/asl-secrets"
   chmod 700 "$out/asl-secrets"
-  for f in node-1999.pw acct.secret; do
+  for f in node-1999.pw acct.secret node-1991.pw node-1992.pw node-1993.pw node-1994.pw node-1995.pw node-1996.pw; do
     (umask 077; printf 'test-secret-not-real\n' > "$out/asl-secrets/$f")
     chmod 600 "$out/asl-secrets/$f"
   done

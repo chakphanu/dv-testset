@@ -16,5 +16,6 @@ RUN apt-get update \
 COPY config/asl-lab/ /etc/asterisk/dvt-lab/
 COPY asl-lab-entry.sh /usr/local/sbin/dvt-asl-lab-entry
 COPY asl-lab-agent.py /usr/local/sbin/dvt-asl-lab-agent
-RUN chmod 755 /usr/local/sbin/dvt-asl-lab-entry /usr/local/sbin/dvt-asl-lab-agent
+COPY asl-lab-registrar.py /usr/local/sbin/dvt-asl-lab-registrar
+RUN chmod 755 /usr/local/sbin/dvt-asl-lab-entry /usr/local/sbin/dvt-asl-lab-agent /usr/local/sbin/dvt-asl-lab-registrar
 ENTRYPOINT ["/usr/local/sbin/dvt-asl-lab-entry"]

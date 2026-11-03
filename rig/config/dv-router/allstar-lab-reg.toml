@@ -1,0 +1,47 @@
+# HTTP registration of the AllStar edge against the lab's stand-in registrar (DVT_ASL_EDGE_REG=1, images with
+# register.server/insecure, dv-router:asl-c199b and later; rig/asl-lab-registrar.py on asl-reg, port 8082).
+# Six public nodes, one answer variant each (selected by node number in the stand-in):
+#   1991 ok (ipaddr = the sender)   1992 success with another port (mismatch)   1993 HTTP 500
+#   1994 200 without the success text   1995 reply after 20 s (past the 15 s client timeout)   1996 reply over 4 KiB
+# "insecure = true" sends the node password in clear text to a rig-internal address: fixture password only.
+[edges.allstar.register]
+enable = true
+interval = "60s"
+server = "http://<NET>.41:8082/"
+insecure = true
+
+[[edges.allstar.node]]
+number = 1991
+module = "S"
+public = true
+password_file = "/etc/dv-router/asl-secrets/node-1991.pw"
+
+[[edges.allstar.node]]
+number = 1992
+module = "T"
+public = true
+password_file = "/etc/dv-router/asl-secrets/node-1992.pw"
+
+[[edges.allstar.node]]
+number = 1993
+module = "U"
+public = true
+password_file = "/etc/dv-router/asl-secrets/node-1993.pw"
+
+[[edges.allstar.node]]
+number = 1994
+module = "V"
+public = true
+password_file = "/etc/dv-router/asl-secrets/node-1994.pw"
+
+[[edges.allstar.node]]
+number = 1995
+module = "W"
+public = true
+password_file = "/etc/dv-router/asl-secrets/node-1995.pw"
+
+[[edges.allstar.node]]
+number = 1996
+module = "X"
+public = true
+password_file = "/etc/dv-router/asl-secrets/node-1996.pw"

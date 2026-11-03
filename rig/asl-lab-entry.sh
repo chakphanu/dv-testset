@@ -111,5 +111,8 @@ chown asterisk:asterisk /var/run/asterisk "$rec" /var/lib/asterisk/sounds/dvt
 
 echo "dvt-asl-lab: role=$role $(tr '\n' ' ' < "$etc/dvt-versions.txt")"
 [ "$role" != registrar ] || dnsmasq --conf-file=/etc/dnsmasq-lab.conf --keep-in-foreground &
+# plain-HTTP stand-in for the ASL registrar (DV-Router's HTTPS/JSON registration with insecure = true)
+[ "$role" != registrar ] || mkdir -p /var/lib/dvt-lab/register
+[ "$role" != registrar ] || python3 /usr/local/sbin/dvt-asl-lab-registrar &
 python3 /usr/local/sbin/dvt-asl-lab-agent &
 exec asterisk -f -n -U asterisk -G asterisk -vvv

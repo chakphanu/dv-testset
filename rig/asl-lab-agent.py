@@ -17,6 +17,7 @@ pcap and recording files back. JSON in, JSON out; files are raw bytes.
   POST /register       {"lines": ["register => ..."]}       writes dvt-register.conf, reloads chan_iax2
   GET  /files/pcap     list;  GET /files/pcap/<name>        bytes
   GET  /files/rec      list (recursive); GET /files/rec/<scenario>/<file>
+  GET  /files/reg      the HTTP registrar stand-in's log (requests.jsonl), asl-reg only
   POST /rec/clear      {"scenario": "x"}                    removes that scenario's recordings
 """
 import json
@@ -31,6 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 PORT = int(os.environ.get("DVT_ASL_AGENT_PORT", "8099"))
 PCAP = "/var/lib/dvt-lab/pcap"
 REC = "/var/spool/asterisk/dvt-rec"
+REG = "/var/lib/dvt-lab/register"          # requests.jsonl of the HTTP registrar stand-in (rig/asl-lab-registrar.py)
 MEDIA = "/var/lib/asterisk/sounds/dvt"
 REGISTER = "/etc/asterisk/dvt-register.conf"
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
@@ -148,10 +150,10 @@ class Handler(BaseHTTPRequestHandler):
                 with open(name) as fh:
                     text += fh.read()
             return self.reply(200, text.encode(), "text/plain")
-        m = re.fullmatch(r"/files/(pcap|rec)(?:/(.+))?", self.path)
+        m = re.fullmatch(r"/files/(pcap|rec|reg)(?:/(.+))?", self.path)
         if not m:
             return self.reply(404, {"error": "not found"})
-        root = PCAP if m.group(1) == "pcap" else REC
+        root = {"pcap": PCAP, "rec": REC, "reg": REG}[m.group(1)]
         if m.group(2) is None:
             return self.reply(200, list_files(root))
         full = safe_join(root, m.group(2))

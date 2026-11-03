@@ -192,6 +192,29 @@ Dialplan (`extensions.conf`): inbound calls of `radio` land in `[radio-secure]`
 accounts in `[radio-acct]` (`Rpt(<node>,X)`). The global `DVT_SCEN` names the
 recording directory.
 
+## Profile asl-edge: DV-Router's edge in the lab
+
+`scripts/run.sh --profile asl-edge` adds DV-Router's `dv-edge-allstar` (xlxd-sut, native launch, the
+fake transcoder) to the lab; results and cases are in `docs/asl-edge-results.md` and
+`cases/test_asl_edge.py`. What it adds to the lab above:
+
+| Piece | Where | Notes |
+|-------|-------|-------|
+| edge node 1999, room L | `rig/config/dv-router/allstar-lab.toml` (appended to the SUT template by `run.sh`) | public node, may_tx, account `acct`, static rows for the four lab/tester nodes; `allstar-lab-out.toml` (`DVT_ASL_EDGE_OUT=1`) adds two outbound rows |
+| `asl-tap` | compose service sharing xlxd-sut's network namespace, agent on `<net>.11:8099` | tcpdump on the edge's side (the DV-Router image is scratch: no shell, no tcpdump); host key `edge` in `dvtest.asl_lab` |
+| netem sidecars | `netem-xlxd-sut`, `netem-asl-a/b/e` | control actions `netem edge <args\|off>` (the edge's egress) and `netem asl <args\|off>` (the three lab nodes'); `RigControl.netem()` |
+| control allow-lists | `kill-proc xlxd-sut dv-edge-allstar KILL\|USR1`, `proc-stat xlxd-sut dv-edge-allstar`, `restart\|stop\|start\|kill asl-reg\|asl-a\|asl-b\|asl-e` | `scripts/lib/killproc.sh`, `scripts/lib/procstat.sh`, `dvtest/control.py`, unit tests agree |
+| lab zone | node 1999 -> `<net>.11` | `DVT_ASL_ZONE`, so app_rpt nodes find the edge by number |
+
+Secret files of the edge (fixture content `test-secret-not-real`): `run.sh` writes them to
+`out/<run>/asl-secrets/` (directory mode 700, files mode 600, regular, no symlink, as the edge demands) and mounts
+the directory read-only at `/etc/dv-router/asl-secrets` with the SUT running as the host uid:
+`node-1999.pw` (node password, `password_file`) and `acct.secret` (account `acct`).
+
+The control channel (kill-proc, proc-stat, netem, restart) only exists while `run.sh` runs its pytest: the host
+watcher stops with that run even under `--keep`. Cases that need it run inside one `run.sh -- cases/...` call;
+a kept rig can still be driven by `docker compose exec tester` for everything else.
+
 ## Byte vectors for the parser tests
 
 `python3 -m dvtest.iax2_frames <pcap> -o <json> [--limit N] [--anon] [--port 4569]`

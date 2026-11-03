@@ -1,0 +1,6 @@
+# DNS sandbox of the AllStar edge (DVT_ASL_EDGE_LOOKUP=1, images with [edges.allstar.lookup], dv-router:asl-c199b
+# and later): the edge's node lookup asks the lab zone (rig/asl-lab-entry.sh, asl-reg) instead of the real
+# nodes.allstarlink.org. The SRV name is the plain _iax._udp.<node>.<domain>, like app_rpt's. Name this file
+# after allstar-lab.toml. Earlier images reject the table (unknown field "lookup"): leave the flag unset there.
+[edges.allstar.lookup]
+domain = "nodes.asl.test"

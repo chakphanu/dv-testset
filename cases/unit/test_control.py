@@ -317,6 +317,19 @@ def test_mark_request_line(tmp_path):
             rc.mark(phase, tag)
 
 
+def test_netem_request_line(tmp_path):
+    """RigControl.netem sends "netem <target> <args>" and refuses odd targets/args before sending."""
+    rc = control.RigControl(tmp_path)
+    seen, thread = watcher(tmp_path, "ok")
+    rc.netem("edge", "delay 80ms loss 5%", timeout=5)
+    thread.join(5)
+    assert seen == ["netem edge delay 80ms loss 5%"]
+    for target, args in (("", "off"), ("edge;x", "off"), ("edge", ""), ("edge", "delay;80ms"), ("edge", "x\ny")):
+        with pytest.raises(ValueError):
+            rc.netem(target, args)
+    assert not list(tmp_path.glob("*.req"))  # the refused calls sent nothing
+
+
 def test_request_names_are_unique_across_instances(tmp_path):
     """Two RigControl objects in one process (a fixture and a helper) must never
     issue the same request name: a clash makes one request overwrite the .ack or

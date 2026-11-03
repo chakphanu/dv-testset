@@ -11,6 +11,11 @@
 [edges.allstar]
 enable = true
 
+# NOTE: docs/design/config.md (dv-router) documents edges.allstar.lookup.domain for sandboxing DNS lookup
+# to the lab zone, but this image's schema rejects the "lookup" table (not yet built here; checked
+# 2026-11-03 against dv-router:asl-c199, reported as a finding, not patched). Static rows below cover
+# every lab node a case dials by number, so DNS lookup is never exercised and this is not a blocker.
+
 [[edges.allstar.node]]
 number = 1999
 module = "L"
