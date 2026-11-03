@@ -101,6 +101,7 @@ class Host:
     name: str
     ip: str
     node: str = ""
+    tap: bool = False       # only the agent (tcpdump in the SUT's namespace, profile asl-edge): no Asterisk behind it
 
     def _req(self, method, path, data=None, ctype="application/json", timeout=40):
         req = urllib.request.Request("http://%s:%d%s" % (self.ip, AGENT_PORT, path), data=data, method=method,
@@ -123,6 +124,8 @@ class Host:
         while time.monotonic() < deadline:
             try:
                 if json.loads(self._req("GET", "/health", timeout=3)).get("ok"):
+                    if self.tap:
+                        return
                     reply = self.post("/cli", {"cmd": "core show uptime"})
                     if reply["rc"] == 0 and "System uptime" in reply["out"]:
                         return
@@ -239,6 +242,8 @@ class Lab:
         every lab host, for the run note."""
         lines = []
         for key, host in self.hosts.items():
+            if host.tap:
+                continue
             lines.append("== %s (%s)" % (host.name, host.ip))
             lines.append(host.versions_text().strip())
             lines.append(host.cli("core show version").strip())
@@ -270,7 +275,7 @@ class Lab:
         sdir = self.out / "asl-lab" / name
         (sdir / "rec").mkdir(parents=True, exist_ok=True)
         sc = Scenario(name, sdir)
-        keys = list(hosts or self.hosts)
+        keys = list(hosts or [k for k, h in self.hosts.items() if not h.tap])
         for key in keys:
             self.hosts[key].post("/rec/clear", {"scenario": name})         # a rerun starts empty
             self.hosts[key].set_scenario(name)
@@ -317,5 +322,27 @@ def from_env(env=None):
         "b": Host("asl-b", env["DVT_ASL_B"], env["DVT_ASL_NODE_B"]),
         "e": Host("asl-e", env["DVT_ASL_E"], env["DVT_ASL_NODE_E"]),
     }
+    if env.get("DVT_ASL_EDGE") == "on":
+        hosts["edge"] = Host("edge", env["DVT_ASL_EDGE_IP"], env.get("DVT_ASL_EDGE_NODE", "1999"), tap=True)
     return Lab(hosts, Path(env.get("DVT_OUT", "out")), int(env.get("DVT_ASL_IAX_PORT", "4569")),
                env.get("DVT_ASL_DOMAIN", "nodes.asl.test"), env.get("DVT_ASL_NODE_T", "299902"))
+
+
+def ulaw_from_pcap(path, src, dst, port=4569):
+    """The mu-law payload bytes that `src` sent to `dst` on the IAX2 port in a capture: full voice frames of codec ulaw
+    and mini frames, in capture order (no timing: a gap is just absent). Used to hear what the edge sent to a node
+    whose side of the call is not recorded."""
+    import struct
+
+    from . import pcap
+    out = bytearray()
+    for dg in pcap.udp_datagrams(path):
+        if dg.src != src or dg.dst != dst or port not in (dg.sport, dg.dport) or len(dg.payload) < 4:
+            continue
+        w0 = struct.unpack("!H", dg.payload[:2])[0]
+        if w0 & 0x8000:
+            if len(dg.payload) > 12 and dg.payload[10] == 2 and dg.payload[11] == 4:
+                out += dg.payload[12:]
+        elif w0:
+            out += dg.payload[4:]
+    return bytes(out)

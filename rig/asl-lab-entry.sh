@@ -3,7 +3,7 @@
 # asl-lab container entry: render the private config for this host, start the
 # control agent (and dnsmasq on the registrar), run asterisk in the foreground.
 #   env DVT_NET             rig /24 prefix (required)
-#   env DVT_ASL_ROLE        node | registrar (required)
+#   env DVT_ASL_ROLE        node | registrar | tap (required; tap = agent only, in another container's netns)
 #   env DVT_ASL_NODE        private test node number (role node)
 #   env DVT_ASL_USRP_TX/RX  chan_usrp ports (role node; nothing listens there)
 #   env DVT_ASL_IAX_PORT    IAX2 UDP port (default 4569)
@@ -31,6 +31,12 @@ etc=/etc/asterisk
 rec=/var/spool/asterisk/dvt-rec
 
 case "$role" in
+  tap)
+    # shares the network namespace of another container (asl-edge: the SUT): only the agent, for tcpdump there
+    mkdir -p /var/lib/dvt-lab/pcap
+    echo "dvt-asl-lab: role=tap"
+    exec python3 /usr/local/sbin/dvt-asl-lab-agent
+    ;;
   node)
     node="${DVT_ASL_NODE:?DVT_ASL_NODE is required}"
     case "$node" in ''|*[!0-9]*) echo "dvt-asl-lab: DVT_ASL_NODE must be digits" >&2; exit 2 ;; esac

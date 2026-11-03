@@ -233,10 +233,11 @@ class Client:
                 continue
             self.handle(data, peer)
 
-    def call(self, node, caller="1999", name="N0IAX", timeout=5, elements=None, newkey=b"!NEWKEY!", empty_token=False):
+    def call(self, node, caller="1999", name="N0IAX", timeout=5, elements=None, newkey=b"!NEWKEY!", empty_token=False, wait_newkey=True):
         # elements: the information elements of NEW instead of the default set; newkey: !NEWKEY! (legacy,
         # key/unkey refreshed every 2 s) or !NEWKEY1! (voice implies key, as between ASL3 nodes);
-        # empty_token: open with an empty CALLTOKEN IE like Asterisk's own client does
+        # empty_token: open with an empty CALLTOKEN IE like Asterisk's own client does; wait_newkey=False: the call
+        # is up at ANSWER (a phone-style peer that does no !NEWKEY! exchange)
         self.newkey = newkey
         self.new_elements = elements if elements is not None else b"".join([
             information(1, str(node).encode()), information(2, caller.encode()),
@@ -249,6 +250,8 @@ class Client:
         while time.monotonic() < deadline and not self.closed:
             self.pump(0.05)
             if self.accepted and self.answered:
+                if not wait_newkey:
+                    return
                 if not requested_link:
                     self.send(7, 0, self.newkey + b"\0")
                     requested_link = True

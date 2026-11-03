@@ -1,0 +1,43 @@
+# AllStar edge of the asl-lab (--profile asl-edge, docs/asl-edge-results.md): DV-Router's dv-edge-allstar
+# as node 1999 in room L, next to the lab's app_rpt nodes. Appended to the SUT template by
+# DVT_SUT_CONFIG_EXTRA (run.sh adds it itself). <NET> is the rig /24 prefix. All secrets are the lab fixture
+# test-secret-not-real in files that run.sh writes (mode 600) and mounts read-only.
+#
+#   1999     public node (anonymous "radio" callers from the lab nodes, identity checked against the static
+#            rows below; no registration: [edges.allstar.register] stays off), may_tx so a caller may talk
+#   acct     IAX2 client account (T10), md5, callsign N0TEST, listen + talk in room L
+#   static   the lab nodes by address (the edge's own DNS name hierarchy and domain are not the lab zone's);
+#            299902 is the tester playing a node
+[edges.allstar]
+enable = true
+
+[[edges.allstar.node]]
+number = 1999
+module = "L"
+public = true
+password_file = "/etc/dv-router/asl-secrets/node-1999.pw"
+may_tx = true
+
+[[edges.allstar.account]]
+name = "acct"
+kind = "client"
+secret_file = "/etc/dv-router/asl-secrets/acct.secret"
+rooms = ["L"]
+talk = true
+callsign = "N0TEST"
+
+[[edges.allstar.static]]
+node = 199901
+host = "<NET>.42:4569"
+
+[[edges.allstar.static]]
+node = 199902
+host = "<NET>.43:4569"
+
+[[edges.allstar.static]]
+node = 299901
+host = "<NET>.44:4569"
+
+[[edges.allstar.static]]
+node = 299902
+host = "<NET>.30:4569"

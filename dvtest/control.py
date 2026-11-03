@@ -37,6 +37,7 @@ KILL_PROC_ALLOWED = {
     ("xlxd-sut", "dv-edge-xlx"): ("KILL", "USR1"),
     ("xlxd-sut", "dv-edge-nxdn"): ("KILL", "USR1"),
     ("xlxd-sut", "dv-edge-p25"): ("KILL", "USR1"),
+    ("xlxd-sut", "dv-edge-allstar"): ("KILL", "USR1"),   # asl-edge: T7 restarts the edge under a permanent link
     ("xlxd-sut", "dv-codec-ambed"): ("KILL",),
     ("xlxd-sut", "dv-svc-web"): ("KILL",),       # resets the web service's in-memory limits and lockouts
     ("xlxd-sut", "dv-edge-webrtc"): ("KILL",),   # K22: a dropped Disconnect, guests calling /rtc/alive meanwhile
@@ -53,6 +54,7 @@ PROC_STAT_NAMES = (
     "dv-edge-dextra", "dv-edge-dplus", "dv-edge-dcs", "dv-edge-mmdvm", "dv-edge-dmrplus", "dv-edge-ysf",
     "dv-edge-m17", "dv-edge-g3", "dv-edge-imrs", "dv-edge-xlx", "dv-edge-nxdn", "dv-edge-p25", "dv-edge-usrp",
     "dv-edge-webrtc",           # the web load test: edge cpu and peak RSS
+    "dv-edge-allstar",          # asl-edge: T11 reads the edge cpu under a NEW/POKE flood
     "dv-edge-aprsis", "dv-edge-ax25",                      # only when enabled
     "dv-room", "dv-data-worker",
     "dv-codec-ambed",           # only with a codec worker

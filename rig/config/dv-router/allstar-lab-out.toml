@@ -1,0 +1,16 @@
+# Outbound rows of the AllStar edge (DVT_ASL_EDGE_OUT=1, T6 T7 T8): node 1999 dials the lab node 199902
+# (app_rpt B) and keeps the link (permanent, with redial and backoff), and dials 299901 (E) once, monitor
+# only. The targets resolve through the static rows of allstar-lab.toml. Name this file after it.
+[[edges.allstar.outbound]]
+from = 1999
+target = 199902
+host = ""
+mode = "transceive"
+permanent = true
+
+[[edges.allstar.outbound]]
+from = 1999
+target = 299901
+host = ""
+mode = "monitor"
+permanent = false

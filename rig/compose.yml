@@ -437,6 +437,11 @@ services:
       DVT_ASL_IAX_PORT: ${DVT_ASL_IAX_PORT:-4569}
       DVT_ASL_DOMAIN: ${DVT_ASL_DOMAIN:-nodes.asl.test}
       DVT_ASL_LONG: ${DVT_ASL_LONG:-}
+      # profile asl-edge (cases/test_asl_edge.py): DV-Router's dv-edge-allstar in xlxd-sut (.11) is part of the lab
+      DVT_ASL_EDGE: ${DVT_ASL_EDGE:-off}
+      DVT_ASL_EDGE_IP: ${DVT_NET:-172.30.0}.11
+      DVT_ASL_EDGE_NODE: ${DVT_ASL_EDGE_NODE:-1999}
+      DVT_ASL_EDGE_OUT: ${DVT_ASL_EDGE_OUT:-}
       DVT_SUBNET: ${DVT_NET:-172.30.0}.0/24
       DVT_NXDN: ${DVT_NXDN:-off}
       DVT_NXDN_REF: ${DVT_NET:-172.30.0}.50
@@ -525,7 +530,7 @@ services:
       <<: *asl-lab-env
       DVT_ASL_ROLE: registrar
       DVT_ASL_OWN_IP: ${DVT_NET:-172.30.0}.41
-      DVT_ASL_ZONE: "${DVT_ASL_NODE_A:-199901}:${DVT_NET:-172.30.0}.42:${DVT_ASL_IAX_PORT:-4569} ${DVT_ASL_NODE_B:-199902}:${DVT_NET:-172.30.0}.43:${DVT_ASL_IAX_PORT:-4569} ${DVT_ASL_NODE_E:-299901}:${DVT_NET:-172.30.0}.44:${DVT_ASL_IAX_PORT:-4569} ${DVT_ASL_NODE_T:-299902}:${DVT_NET:-172.30.0}.30:${DVT_ASL_IAX_PORT:-4569}"
+      DVT_ASL_ZONE: "${DVT_ASL_NODE_A:-199901}:${DVT_NET:-172.30.0}.42:${DVT_ASL_IAX_PORT:-4569} ${DVT_ASL_NODE_B:-199902}:${DVT_NET:-172.30.0}.43:${DVT_ASL_IAX_PORT:-4569} ${DVT_ASL_NODE_E:-299901}:${DVT_NET:-172.30.0}.44:${DVT_ASL_IAX_PORT:-4569} ${DVT_ASL_NODE_T:-299902}:${DVT_NET:-172.30.0}.30:${DVT_ASL_IAX_PORT:-4569} ${DVT_ASL_EDGE_NODE:-1999}:${DVT_NET:-172.30.0}.11:${DVT_ASL_IAX_PORT:-4569}"
     networks:
       rig: {ipv4_address: "${DVT_NET:-172.30.0}.41"}
 
@@ -1096,6 +1101,42 @@ services:
       xlxd-sut: {condition: service_started, restart: false}
     environment:
       DVT_NETEM_ARGS: ${DVT_NETEM_ARGS_XLXD:-}
+
+  # profile asl-edge: tcpdump (the lab agent only) inside the SUT's network namespace, agent at <net>.11:8099
+  asl-tap:
+    <<: [*asl-lab, *limits-small]
+    network_mode: "service:xlxd-sut"
+    depends_on:
+      xlxd-sut: {condition: service_started, restart: false}
+    environment:
+      <<: *asl-lab-env
+      DVT_ASL_ROLE: tap
+      DVT_ASL_AGENT_PORT: "8099"
+
+  # profile asl-edge: egress shaping of the lab nodes (control: "netem asl <args>")
+  netem-asl-a:
+    <<: *netem
+    network_mode: "service:asl-a"
+    depends_on:
+      asl-a: {condition: service_started, restart: false}
+    environment:
+      DVT_NETEM_ARGS: ${DVT_NETEM_ARGS_ASL:-}
+
+  netem-asl-b:
+    <<: *netem
+    network_mode: "service:asl-b"
+    depends_on:
+      asl-b: {condition: service_started, restart: false}
+    environment:
+      DVT_NETEM_ARGS: ${DVT_NETEM_ARGS_ASL:-}
+
+  netem-asl-e:
+    <<: *netem
+    network_mode: "service:asl-e"
+    depends_on:
+      asl-e: {condition: service_started, restart: false}
+    environment:
+      DVT_NETEM_ARGS: ${DVT_NETEM_ARGS_ASL:-}
 
   # ---- load (profile load): one client node per module ----
   # Each replica gets a dynamic address from <net>.128/25; DVT_LOAD_CMD (run

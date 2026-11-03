@@ -31,6 +31,14 @@
 #                      transcoder, TRANSCODER_IMAGE not needed); combined with other profiles they join the rig.
 #                      The tester gets DVT_ASL_LAB=on; pcaps and recordings are fetched by the cases from the
 #                      lab agents into out/<utc>/asl-lab/<scenario>/ (no --capture needed). Select with -m asl_lab
+#   --profile asl-edge the asl-lab hosts plus DV-Router's AllStar edge (dv-edge-allstar) in xlxd-sut: needs
+#                      DVT_SUT_LAUNCH=native, XLXD_SUT_IMAGE and DVT_SUT_CONFIG like the web profile; the fake
+#                      transcoder is forced (DVT_TRANSCODER_FAKE=1), rig/config/dv-router/allstar-lab.toml is added to
+#                      DVT_SUT_CONFIG_EXTRA (and allstar-lab-out.toml with DVT_ASL_EDGE_OUT=1), fixture secret files
+#                      are written to out/<utc>/asl-secrets (mode 600) and mounted read-only at
+#                      /etc/dv-router/asl-secrets. Alone it starts tester, xlxd-sut, transcoder-sut, the four lab
+#                      hosts and netem sidecars for the edge and the lab nodes (control: netem edge|asl <args>).
+#                      The tester gets DVT_ASL_EDGE=on. Select with -m asl_lab; docs/asl-edge-results.md
 #   --profile g3       a second Icom G3 terminal: relay g3-term2 at .31 (DVT_G3=on)
 #   --profile browser  the Playwright browser service (browser, .91, ws://<net>.91:3000/:
 #                      chromium, firefox, WebKit of the pinned official Playwright image),
@@ -135,7 +143,7 @@
 # in the tester, DVT_RIG_CONTROL=1). A request is a file <id>.req (write .tmp,
 # then rename) with one line "<action> <service>":
 #   action  stop | start | restart | kill (SIGKILL)
-#   service transcoder-ref | transcoder-sut | allstar | xlxd-ref | xlxd-sut
+#   service transcoder-ref | transcoder-sut | allstar | xlxd-ref | xlxd-sut | asl-reg | asl-a | asl-b | asl-e
 # or, with netem on: "netem tester|xlxd <preset|off|netem arguments>".
 # or, with the allstar profile: "asl usrp-show" (chan_usrp counters into
 # <id>.out) or "asl play-1901|play-1902" (app_rpt plays a short telemetry
@@ -246,6 +254,22 @@ case "${DVT_SUT_LAUNCH:-direct}" in
             || { echo "run.sh: DVT_SUT_CONFIG '$DVT_SUT_CONFIG' is not a readable file" >&2; exit 2; } ;;
   *) echo "run.sh: DVT_SUT_LAUNCH must be direct, import or native" >&2; exit 2 ;;
 esac
+# --profile asl-edge: DV-Router's AllStar edge runs in xlxd-sut (native launch) with the fake transcoder
+has_asl_edge=0
+case ",$profile," in *,asl-edge,*) has_asl_edge=1 ;; esac
+if [ "$has_asl_edge" = 1 ]; then
+  [ "${DVT_SUT_LAUNCH:-direct}" = native ] \
+    || { echo "run.sh: --profile asl-edge needs DVT_SUT_LAUNCH=native (dv-edge-allstar is DV-Router's)" >&2; exit 2; }
+  export DVT_TRANSCODER_FAKE=1
+  case ":${DVT_SUT_CONFIG_EXTRA:-}:" in
+    *:rig/config/dv-router/allstar-lab.toml:*) ;;
+    *) DVT_SUT_CONFIG_EXTRA="${DVT_SUT_CONFIG_EXTRA:+$DVT_SUT_CONFIG_EXTRA:}rig/config/dv-router/allstar-lab.toml" ;;
+  esac
+  if [ "${DVT_ASL_EDGE_OUT:-}" = 1 ]; then
+    DVT_SUT_CONFIG_EXTRA="$DVT_SUT_CONFIG_EXTRA:rig/config/dv-router/allstar-lab-out.toml"
+  fi
+  export DVT_SUT_CONFIG_EXTRA DVT_ASL_EDGE_OUT
+fi
 # DVT_TRANSCODER_FAKE=1: transcoder-sut runs the fake extended AMBEd (header)
 case "${DVT_TRANSCODER_FAKE:-}" in
   ''|1) ;;
@@ -429,6 +453,12 @@ for p in "${wanted[@]}"; do
       profiles+=(--profile asl-lab)
       export DVT_ASL_LAB=on
       ;;
+    asl-edge)
+      # the lab hosts plus the edge in xlxd-sut; netem sidecars for the edge and the lab nodes
+      has_asl_lab=1
+      profiles+=(--profile asl-lab --profile netem)
+      export DVT_ASL_LAB=on DVT_ASL_EDGE=on
+      ;;
     g3)
       profiles+=(--profile g3)
       export DVT_G3=on
@@ -461,7 +491,7 @@ for p in "${wanted[@]}"; do
     mrefd)
       has_mrefd=1
       ;;
-    *) echo "run.sh: --profile takes core, allstar, asl-lab, nxdn, p25, interlink, load, g3, urfd, mrefd, web, browser, webload, nat or a comma list" >&2; exit 2 ;;
+    *) echo "run.sh: --profile takes core, allstar, asl-lab, asl-edge, nxdn, p25, interlink, load, g3, urfd, mrefd, web, browser, webload, nat or a comma list" >&2; exit 2 ;;
   esac
 done
 # native launch reads no xlxd.* file: these settings only change the reference side
@@ -519,6 +549,12 @@ if [ "$netem_set" = 1 ] || [ -n "${DVT_NETEM_TESTER:-}${DVT_NETEM_XLXD:-}" ]; th
   export DVT_NETEM_ARGS_TESTER DVT_NETEM_ARGS_XLXD
 fi
 
+# --profile asl-edge: sidecars for the edge and the lab nodes only (no xlxd-ref / tester sidecar in the rig)
+if [ "$has_asl_edge" = 1 ]; then
+  netem_svcs=(netem-xlxd-sut netem-asl-a netem-asl-b netem-asl-e)
+  export DVT_NETEM_ARGS_XLXD="${DVT_NETEM_ARGS_XLXD:-}" DVT_NETEM_ARGS_ASL="${DVT_NETEM_ARGS_ASL:-}"
+fi
+
 capture_svcs=()
 if [ "$capture" = 1 ]; then
   profiles+=(--profile capture)
@@ -554,7 +590,7 @@ fi
 # --profile asl-lab alone: only the tester and the four lab hosts start; the reflector sources, the
 # transcoder image and the prebuilt-image checks below do not apply
 lab_only=0
-[ "$profile" != asl-lab ] || lab_only=1
+{ [ "$profile" = asl-lab ] || [ "$profile" = asl-edge ]; } && lab_only=1
 if [ "$lab_only" = 0 ] && [ -z "${TRANSCODER_IMAGE:-}" ]; then
   echo "run.sh: TRANSCODER_IMAGE is not set; set it in .env (TRANSCODER_IMAGE=<your-ambed-image>)" >&2
   exit 2
@@ -570,7 +606,7 @@ for name in "${xlxd_dirs[@]}"; do
 done
 [ -f .cache/codec2/CMakeLists.txt ] || { echo "run.sh: .cache/codec2 missing; run scripts/pre-fetch-codec2.sh" >&2; exit 2; }
 # A prebuilt reflector image must exist locally: run.sh never builds or pulls it
-for img in $([ "$lab_only" = 1 ] || printf '%s %s' "${XLXD_REF_IMAGE:-}" "${XLXD_SUT_IMAGE:-}"); do
+for img in $([ "$lab_only" = 1 ] && [ "$has_asl_edge" = 0 ] || printf '%s %s' "${XLXD_REF_IMAGE:-}" "${XLXD_SUT_IMAGE:-}"); do
   [ -z "$img" ] || docker image inspect "$img" > /dev/null 2>&1 || {
     echo "run.sh: image '$img' (XLXD_REF_IMAGE/XLXD_SUT_IMAGE) not found locally; build or load it first" >&2
     exit 2
@@ -644,6 +680,19 @@ if [ "$has_web" = 1 ]; then
   echo "run.sh: web profile: operator login in $out/web/operator.env, admin logins in $out/web/admin.env (mode 600), CA will be $out/web/ca.pem"
 fi
 
+# --profile asl-edge: fixture secret files of the edge's accounts and node password (the lab's
+# test-secret-not-real: they protect nothing), regular files, mode 0600, no symlink, as the edge demands;
+# mounted read-only at /etc/dv-router/asl-secrets with the SUT running as the host uid
+if [ "$has_asl_edge" = 1 ]; then
+  mkdir -p "$out/asl-secrets"
+  chmod 700 "$out/asl-secrets"
+  for f in node-1999.pw acct.secret; do
+    (umask 077; printf 'test-secret-not-real\n' > "$out/asl-secrets/$f")
+    chmod 600 "$out/asl-secrets/$f"
+  done
+  echo "run.sh: asl-edge profile: fixture secrets in $out/asl-secrets (mode 600)"
+fi
+
 # Prebuilt reflector images (XLXD_REF_IMAGE / XLXD_SUT_IMAGE): another
 # implementation can be the system under test. Its contract: argv
 # "CALLSIGN OWN_IP TRANSCODER_IP"; config files mounted read-only under /xlxd/
@@ -695,7 +744,7 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
     # the image is used as it is: no build section, never pulled
     printf '    build: !reset null\n    pull_policy: never\n'
     # --profile web: the sut writes the persistent state dir of the host user
-    if [ "$svc" = xlxd-sut ] && [ "$has_web" = 1 ]; then
+    if [ "$svc" = xlxd-sut ] && { [ "$has_web" = 1 ] || [ "$has_asl_edge" = 1 ]; }; then
       printf '    user: "%s:%s"\n' "$DVT_UID" "$DVT_GID"
     fi
     printf '    environment:\n      DVT_CONFIG_MOUNTED: "1"\n'
@@ -727,6 +776,9 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
     if [ "$svc" = xlxd-sut ] && [ "$has_web" = 1 ]; then
       printf '      - "%s/%s/sut-state:/var/lib/dv"\n' "$DVT_ROOT" "$out"
     fi
+    if [ "$svc" = xlxd-sut ] && [ "$has_asl_edge" = 1 ]; then
+      printf '      - "%s/%s/asl-secrets:/etc/dv-router/asl-secrets:ro"\n' "$DVT_ROOT" "$out"
+    fi
     if [ "$svc" = xlxd-sut ] && [ "$has_recorder" = 1 ]; then
       printf '      - "%s/%s/recorder:/var/lib/dv-recorder"\n' "$DVT_ROOT" "$out"
     fi
@@ -737,7 +789,7 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
   } >> "$override"
   prebuilt+=("$svc")
 }
-if [ "$lab_only" = 0 ] && [ -n "${XLXD_REF_IMAGE:-}${XLXD_SUT_IMAGE:-}" ]; then
+if { [ "$lab_only" = 0 ] || [ "$has_asl_edge" = 1 ]; } && [ -n "${XLXD_REF_IMAGE:-}${XLXD_SUT_IMAGE:-}" ]; then
   echo "services:" > "$override"
   [ -z "${XLXD_REF_IMAGE:-}" ] || render_xlxd xlxd-ref "$XLXD_REF_IMAGE" 10 20 off 50 60 13 15
   [ -z "${XLXD_SUT_IMAGE:-}" ] || render_xlxd xlxd-sut "$XLXD_SUT_IMAGE" 11 21 "${DVT_SUT_USRP:-off}" 51 61 12 14
@@ -796,7 +848,13 @@ watch_control() {
       rc=refused
       if [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$action" = netem ] && [ "${#netem_svcs[@]}" -gt 0 ]; then
         # "netem tester|xlxd <preset|off|arguments>": xlxd = xlxd-ref and xlxd-sut alike
-        case "$svc" in tester) target=(netem-tester) ;; xlxd) target=(netem-xlxd-ref netem-xlxd-sut) ;; *) target=() ;; esac
+        case "$svc" in
+          tester) target=(netem-tester) ;;
+          xlxd) target=(netem-xlxd-ref netem-xlxd-sut) ;;
+          edge) target=(netem-xlxd-sut) ;;                              # --profile asl-edge: the edge's egress
+          asl) target=(netem-asl-a netem-asl-b netem-asl-e) ;;          # --profile asl-edge: the lab nodes' egress
+          *) target=() ;;
+        esac
         if [ "${#target[@]}" -gt 0 ] && [ -n "$extra" ] && args="$(netem_args "$extra" 2>/dev/null)"; then
           rc=0
           # counters of the setting being replaced
@@ -866,7 +924,7 @@ watch_control() {
           *) rc=refused ;;
         esac
       elif [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] && [ -z "$extra" ]; then
-        case "$svc" in transcoder-ref|transcoder-sut|allstar|xlxd-ref|xlxd-sut) ;; *) action="" ;; esac
+        case "$svc" in transcoder-ref|transcoder-sut|allstar|xlxd-ref|xlxd-sut|asl-reg|asl-a|asl-b|asl-e) ;; *) action="" ;; esac
         rc=0
         sniffer=""
         [[ " ${capture_svcs[*]} " != *" capture-$svc "* ]] || sniffer="capture-$svc"
@@ -953,6 +1011,7 @@ cat ".cache/xlxd/${XLXD_REF_DIR:-ref}.fetched" ".cache/xlxd/${XLXD_SUT_DIR:-sut}
   # prebuilt reflector images are used as they are, never built over
   mapfile -t to_build < <("${compose[@]}" config --services | grep -vxF -f <(printf '%s\n' "${prebuilt[@]}" "-"))
   [ "$lab_only" = 0 ] || to_build=(tester asl-reg asl-a asl-b asl-e)
+  [ "$has_asl_edge" = 0 ] || to_build+=(asl-tap netem-xlxd-sut netem-asl-a netem-asl-b netem-asl-e)
   # the lab image is built FROM the allstar image (Dockerfile.allstar, the ASL3 package pins): build that first
   if [ "$has_asl_lab" = 1 ] && ! docker image inspect "${ASL_LAB_BASE_IMAGE:-dvt-allstar:local}" > /dev/null 2>&1; then
     "${compose[@]}" --profile allstar build allstar
@@ -964,7 +1023,9 @@ cat ".cache/xlxd/${XLXD_REF_DIR:-ref}.fetched" ".cache/xlxd/${XLXD_SUT_DIR:-sut}
   fi
 )
 # everything was built above; up never builds (a prebuilt image is never replaced)
-if [ "$lab_only" = 1 ]; then
+if [ "$has_asl_edge" = 1 ]; then
+  "${compose[@]}" up -d --no-build tester transcoder-sut xlxd-sut asl-reg asl-a asl-b asl-e asl-tap netem-xlxd-sut netem-asl-a netem-asl-b netem-asl-e
+elif [ "$lab_only" = 1 ]; then
   "${compose[@]}" up -d --no-build tester asl-reg asl-a asl-b asl-e
 else
   "${compose[@]}" up -d --no-build

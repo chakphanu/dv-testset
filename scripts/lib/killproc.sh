@@ -35,7 +35,7 @@ dvt_killproc_allowed() {
   [ "$#" -eq 3 ] || return 1
   [ "$1" = xlxd-sut ] || return 1
   case "$2:$3" in
-    dv-edge-xlx:KILL|dv-edge-xlx:USR1|dv-edge-nxdn:KILL|dv-edge-nxdn:USR1|dv-edge-p25:KILL|dv-edge-p25:USR1|dv-codec-ambed:KILL|dv-svc-web:KILL|dv-edge-webrtc:KILL|dv-svc-status:KILL) return 0 ;;
+    dv-edge-xlx:KILL|dv-edge-xlx:USR1|dv-edge-nxdn:KILL|dv-edge-nxdn:USR1|dv-edge-p25:KILL|dv-edge-p25:USR1|dv-edge-allstar:KILL|dv-edge-allstar:USR1|dv-codec-ambed:KILL|dv-svc-web:KILL|dv-edge-webrtc:KILL|dv-svc-status:KILL) return 0 ;;
   esac
   return 1
 }
