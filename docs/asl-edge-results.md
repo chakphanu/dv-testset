@@ -40,33 +40,33 @@ on that image). "probes" is the attempt count of the working-over probe (`hear_t
 at most 6 times, because of finding 1); 1 means the first over was heard. Host load average (1 min) at the start
 of each case is in `out/<run>/asl-lab/loadavg.jsonl`; cases run under load above 6 are flagged `L`.
 
-| Case | What it checks | c199 | c199b | wip-7efdd33 (partial) | wip-71ab207 | Out dir (c199b) / pcap | Notes |
-|------|------|------|------|------|------|------|------|
-| T1 | node A dials the edge, 10 min hold, audio edge to client at start and end, PING/PONG through the hold | pass (probes 2, 1) | pass (probes 1, 1) | pass | pass | `20261103T071151Z/asl-lab/t1-hold/edge.pcap` (480 KB) | load 6.8 at start, 2.2 at end |
-| T1b | the other direction: client keys, edge relays to A | FAIL (6 probes, over cut) | pass (rerun in its own run after a test fix) | pass | pass | `20261103T115747Z/asl-lab/t1b-client-to-node/` | the first c199b try failed in the test (it looked at RPT_RXKEYED), not in the edge: now read from the capture |
-| T2 | one 190 s over; TOT at 180 s | FAIL (probes 4, then 0 s of audio) | pass: 179.0 s of audio, over 193 s, probes 1 | pass | pass | `20261103T071151Z/asl-lab/t2-tot/edge.pcap` (6.2 MB) | TOT cut at about 180 s as designed |
-| T3 | hub of A, B and E: per-destination L lists | pass | pass | pass | pass | `.../t3-hub/` | `L T199902,R299901` to A, `L R299901,T199901` to B, `L T199902,T199901` to E: split horizon and T/R letters correct |
-| T4 | A, B each dial the edge and A dials B directly | pass | pass | pass | pass | `.../t4-loop/` | app_rpt refuses the third link itself (`T 199901 REMALREADY`) before any packet leaves A: its DNS lookup of B is slower than the edge's L list reaching A. The edge's own guard is not what acts here: see T4b |
-| T4b | loop through the edge: chain A-E-B, then A and B dial the edge together | - | pass | superseded (aborted for wip-71ab207) | pass | `20261103T120058Z/asl-lab/t4b-loop/edge.pcap` | edge drops the youngest branch: see "Loop guard" below |
-| T5 | wrong source address for a statically known node: ACCEPT then HANGUP, no ANSWER; right address answered | pass (2 cases) | pass (2 cases) | pass | pass | (no capture; checked from the client's side) | identity check as designed |
-| T6 | outbound rows: permanent transceive to B, monitor to E, established after an edge restart | pass | pass | pass | pass | | |
-| T6m | monitor row is listen only: no voice, no RADIO_KEY to E while the room talks | XFAIL (finding 3) | pass | pass | pass | `.../t6-monitor/` | fixed in c199b |
-| T7 | edge restart (SIGUSR1) under A's link: A's link comes back | pass | pass | pass | pass | | launcher backs off 500 ms, 1 s, ... between consecutive restarts of the edge child: a kill-proc in the gap gets "error 3" (the cases keep 3 s apart) |
-| T8 | asl-b container restart: the edge redials B | pass | pass | pass | pass | | |
-| T8b | HANGUP versus DISCONNECT on the permanent row | - | pass | pass | pass | `20261103T115747Z/asl-lab/t8b-disconnect/edge.pcap` | **answer to the DISCONNECT question below** |
-| T9 | edge egress 80 ms +/-20 ms and 5 % loss: link and tone survive | pass (probes 2) | pass (probes 1) `L` | pass | pass | `.../t9-netem/` | netem reset afterwards (always, in `finally`) |
-| T10 | client account `acct`: md5, call token exchange, RADIO_KEY, no REGREQ | pass | pass | pass | pass | `.../t10-client/` |  |
-| T11 | 60 NEW and 20 POKE from one address in 1.2 s: same pid, cpu bounded, a real node still links | pass | pass `L` | pass | pass | | no source-address spoofing was attempted (raw sockets are not available to the tester); the per-IP limits are what one address triggers |
-| back-to-back | three overs 1 s apart each reach the client | XFAIL (finding 1) | pass | pass | pass | | |
-| restart x5 | 5 x SIGUSR1, one over after each, no probe retry | - | pass | superseded (aborted for wip-71ab207) | pass | | |
-| R1 | success: shape, one node per request, refresh at 60 s | - | pass | superseded (aborted for wip-71ab207) | pass | `20261103T120131Z/asl-lab/register/requests.jsonl` | gap 60.0 s |
-| R2 | success with another port: mismatch counted | - | pass | superseded (aborted for wip-71ab207) | pass | | refresh 60 s |
-| R3 | HTTP 500 retried with backoff | - | pass | superseded (aborted for wip-71ab207) | pass | | first retry 24.1 s (30 s -20 %) |
-| R4 | 200 without "successfully registered" is a failure | - | pass | superseded (aborted for wip-71ab207) | pass | | retry 26.4 s |
-| R5 | reply after 20 s: client times out | - | pass | superseded (aborted for wip-71ab207) | pass | | next request 47.8 s after the first |
-| R6 | reply over 4 KiB refused | - | pass | superseded (aborted for wip-71ab207) | pass | | retry 25.2 s |
-| R7 | `dv_edge_allstar_register_total{result}` counts ok, mismatch and the failures | - | pass | superseded (aborted for wip-71ab207) | pass | `.../register/metrics.txt` |  |
-| DVSwitch Mobile 2.0.7, radio mode (`tools/dvswitch_radio_case.py`) | the real Android app connects, keys, hangs up; the edge relays its voice to A | - | - | pass (by hand) | pass | `20261103T192450Z/asl-lab/dvswitch/dvswitch-radio-mode-wip71ab207c/` | `docs/asl-dvswitch.md`: phone mode still needs REGACK; radio mode works |
+| Case | What it checks | c199 | c199b | wip-7efdd33 (partial) | wip-71ab207 | wip-c165c93 | Out dir (c199b) / pcap | Notes |
+|------|------|------|------|------|------|------|------|------|
+| T1 | node A dials the edge, 10 min hold, audio edge to client at start and end, PING/PONG through the hold | pass (probes 2, 1) | pass (probes 1, 1) | pass | pass | pass (611.9 s, `20261103T232753Z`, DVT_ASL_LONG=1) | `20261103T071151Z/asl-lab/t1-hold/edge.pcap` (480 KB) | load 6.8 at start, 2.2 at end |
+| T1b | the other direction: client keys, edge relays to A | FAIL (6 probes, over cut) | pass (rerun in its own run after a test fix) | pass | pass | pass | `20261103T115747Z/asl-lab/t1b-client-to-node/` | the first c199b try failed in the test (it looked at RPT_RXKEYED), not in the edge: now read from the capture |
+| T2 | one 190 s over; TOT at 180 s | FAIL (probes 4, then 0 s of audio) | pass: 179.0 s of audio, over 193 s, probes 1 | pass | pass | pass (202.1 s, `20261103T232753Z`, DVT_ASL_LONG=1) | `20261103T071151Z/asl-lab/t2-tot/edge.pcap` (6.2 MB) | TOT cut at about 180 s as designed |
+| T3 | hub of A, B and E: per-destination L lists | pass | pass | pass | pass | pass (OUT=1) | `.../t3-hub/` | `L T199902,R299901` to A, `L R299901,T199901` to B, `L T199902,T199901` to E: split horizon and T/R letters correct |
+| T4 | A, B each dial the edge and A dials B directly | pass | pass | pass | pass | pass (OUT unset, `20261103T231326Z`) | `.../t4-loop/` | app_rpt refuses the third link itself (`T 199901 REMALREADY`) before any packet leaves A: its DNS lookup of B is slower than the edge's L list reaching A. The edge's own guard is not what acts here: see T4b |
+| T4b | loop through the edge: chain A-E-B, then A and B dial the edge together | - | pass | superseded (aborted for wip-71ab207) | pass | pass (OUT unset, `20261103T231326Z`; skips with OUT=1 by design) | `20261103T120058Z/asl-lab/t4b-loop/edge.pcap` | edge drops the youngest branch: see "Loop guard" below |
+| T5 | wrong source address for a statically known node: ACCEPT then HANGUP, no ANSWER; right address answered | pass (2 cases) | pass (2 cases) | pass | pass | pass (2 cases) | (no capture; checked from the client's side) | identity check as designed |
+| T6 | outbound rows: permanent transceive to B, monitor to E, established after an edge restart | pass | pass | pass | pass | pass (OUT=1) | | |
+| T6m | monitor row is listen only: no voice, no RADIO_KEY to E while the room talks | XFAIL (finding 3) | pass | pass | pass | pass (OUT=1) | `.../t6-monitor/` | fixed in c199b |
+| T7 | edge restart (SIGUSR1) under A's link: A's link comes back | pass | pass | pass | pass | pass | | launcher backs off 500 ms, 1 s, ... between consecutive restarts of the edge child: a kill-proc in the gap gets "error 3" (the cases keep 3 s apart) |
+| T8 | asl-b container restart: the edge redials B | pass | pass | pass | pass | pass (OUT=1) | | |
+| T8b | HANGUP versus DISCONNECT on the permanent row | - | pass | pass | pass | pass (OUT=1) | `20261103T115747Z/asl-lab/t8b-disconnect/edge.pcap` | **answer to the DISCONNECT question below** |
+| T9 | edge egress 80 ms +/-20 ms and 5 % loss: link and tone survive | pass (probes 2) | pass (probes 1) `L` | pass | pass | pass | `.../t9-netem/` | netem reset afterwards (always, in `finally`) |
+| T10 | client account `acct`: md5, call token exchange, RADIO_KEY, no REGREQ | pass | pass | pass | pass | pass | `.../t10-client/` |  |
+| T11 | 60 NEW and 20 POKE from one address in 1.2 s: same pid, cpu bounded, a real node still links | pass | pass `L` | pass | pass | pass | | no source-address spoofing was attempted (raw sockets are not available to the tester); the per-IP limits are what one address triggers |
+| back-to-back | three overs 1 s apart each reach the client | XFAIL (finding 1) | pass | pass | pass | pass | | |
+| restart x5 | 5 x SIGUSR1, one over after each, no probe retry | - | pass | superseded (aborted for wip-71ab207) | pass | pass | | |
+| R1 | success: shape, one node per request, refresh at 60 s | - | pass | superseded (aborted for wip-71ab207) | pass | **FAIL** (finding F-R1, `20261103T232417Z`) | `20261103T120131Z/asl-lab/register/requests.jsonl` | gap 60.0 s |
+| R2 | success with another port: mismatch counted | - | pass | superseded (aborted for wip-71ab207) | pass | pass | | refresh 60 s |
+| R3 | HTTP 500 retried with backoff | - | pass | superseded (aborted for wip-71ab207) | pass | pass | | first retry 24.1 s (30 s -20 %) |
+| R4 | 200 without "successfully registered" is a failure | - | pass | superseded (aborted for wip-71ab207) | pass | pass | | retry 26.4 s |
+| R5 | reply after 20 s: client times out | - | pass | superseded (aborted for wip-71ab207) | pass | pass | | next request 47.8 s after the first |
+| R6 | reply over 4 KiB refused | - | pass | superseded (aborted for wip-71ab207) | pass | pass | | retry 25.2 s |
+| R7 | `dv_edge_allstar_register_total{result}` counts ok, mismatch and the failures | - | pass | superseded (aborted for wip-71ab207) | pass | pass | `.../register/metrics.txt` |  |
+| DVSwitch Mobile 2.0.7, radio mode (`tools/dvswitch_radio_case.py`) | the real Android app connects, keys, hangs up; the edge relays its voice to A | - | - | pass (by hand) | pass | pass (radio mode, and phone mode via `tools/dvswitch_phone_case.py`, `out/20261103T223757Z`) | `20261103T192450Z/asl-lab/dvswitch/dvswitch-radio-mode-wip71ab207c/` | `docs/asl-dvswitch.md`: phone mode still needs REGACK; radio mode works |
 
 wip-71ab207 runs: main `20261103T184952Z` (17 passed, 8 skipped by design, 17:55 min: T4b and R1-R7 need other rig
 variants), T4b `20261103T190801Z`, R1-R7 `20261103T190835Z`, all passed; the edge started normally (no ACL0a fabric
@@ -225,6 +225,27 @@ password-like key); the author never read the value. A dry run of the same rig a
 run `out/20261103T223757Z` had R8-R12 pass except that the metric counters lag the hub snapshot by about 10 s: R8 now polls for them).
 Skips: T-case without the outbound rows (needs `DVT_ASL_EDGE_OUT` unset), T1 / T2 (`DVT_ASL_LONG=1`) and R1-R7 (`DVT_ASL_EDGE_REG=1`, the
 HTTPS registrar stand-in). Nothing from the c199b / 7efdd33 / 71ab207 columns regressed.
+
+### wip-c165c93: all 30 cases accounted
+
+Four runs of `cases/test_asl_edge.py` on `dv-router:wip-c165c93` (OUT = `DVT_ASL_EDGE_OUT`):
+
+| Run | Variant | Result |
+|-----|---------|--------|
+| `20261103T230702Z` | OUT=1 (the main variant) | 20 passed, 10 skipped by design |
+| `20261103T231326Z` | OUT unset | T4, T4b, T5 x2, T7, T9, T10, T11, T1b, back-to-back, restart x5, R8-R12 pass; T3, T6, T6m, T8, T8b fail only because they need the outbound rows (now `needs_out`: they skip when OUT is unset) |
+| `20261103T232417Z` | `DVT_ASL_EDGE_REG=1`, `-k test_r` | R2-R7 pass, R8-R12 pass, restart x5 pass, **R1 FAIL** |
+| `20261103T232753Z` | `DVT_ASL_LONG=1`, OUT=1, T1 + T2 | T1 pass (611.9 s), T2 pass (202.1 s) |
+
+So 30 cases: 29 pass in their variant, R1 fails (below), nothing is skipped in the variant that runs it. The R8-R12 rows are the new phone-mode cases
+(next section); DVSwitch Mobile radio and phone mode both pass (`docs/asl-dvswitch.md`).
+
+**F-R1 (SUT behaviour change, open question for dv-router).** `test_r1_success_registers_and_refreshes` asserts a first refresh gap of 50..90 s
+(`max(60, min(interval, refresh))` with `interval = "60s"` and the stand-in's `refresh` 180); on c165c93 node 1991 registered at 11.0, 27.1, 43.2,
+59.3 and 75.4 s (gaps 16.1 s x4) and then at 135.4 s (60.0 s). The registrations are serialised across all registering nodes at about one request
+every 8.5 s (the edge's own node 1999 registers too: 0.0, 2.4, 18.5, 34.6, 50.7, 66.9 s, ...; nodes 1992..1996 start at 84 to 110 s), and the log
+line says `refresh_s=180`. Earlier images (c199b, 71ab207) gave 60.0 s at the first gap. The assertion is unchanged; `requests.jsonl` and
+`metrics.txt` are in `out/20261103T232417Z/asl-lab/register/`.
 
 ## Phone-mode registration, R8-R12 (ASL1g, wip-c165c93)
 

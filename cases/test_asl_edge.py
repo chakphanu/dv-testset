@@ -80,6 +80,10 @@ def quiet(lab, keys=("a", "b")):
     lab.quiet(keys)
 
 
+needs_out = pytest.mark.skipif(os.environ.get("DVT_ASL_EDGE_OUT") != "1",
+                               reason="needs the edge's outbound rows (DVT_ASL_EDGE_OUT=1; T4b needs them unset)")
+
+
 def tone_client(lab, username="acct", secret=None, calltoken=True, wait_newkey=False, timeout=10):
     """A tester IAX2 client of the edge's "acct" account (md5, ulaw)."""
     edge = lab.node("edge")
@@ -196,6 +200,7 @@ def test_t10_client_account_no_registration_needed(lab):
 
 # ------------------------------------------------------------------ T3: hub, L list exchange
 
+@needs_out
 def test_t3_hub_l_lists_split_horizon(lab):
     """A and B both link to the edge; the edge's own monitor outbound to E (DVT_ASL_EDGE_OUT=1) is
     already up. The L list the edge sends each peer is built per destination (that peer's own branch
@@ -339,6 +344,7 @@ def _restart_edge(edge_control, settle=3.0):
     time.sleep(settle)
 
 
+@needs_out
 def test_t6_outbound_rows_reach_the_lab_nodes(lab, edge_control):
     """The edge's own configured outbound rows (allstar-lab-out.toml, DVT_ASL_EDGE_OUT=1): a permanent
     transceive row to B (199902) and a monitor row to E (299901). Restart the edge first (quiet reload,
@@ -350,6 +356,7 @@ def test_t6_outbound_rows_reach_the_lab_nodes(lab, edge_control):
     assert line_b and line_e  # monitor mode itself is checked by test_t6_monitor_is_listen_only
 
 
+@needs_out
 def test_t6_monitor_is_listen_only(lab, edge_control):
     """The monitor row to E (299901): a talker in the room (A through its own link, heard by the acct client)
     must produce no voice on the edge's call to E (deployment.md: "Monitor outbound rows are receive-only
@@ -391,6 +398,7 @@ def test_t7_edge_restart_recovers_permanent_link(lab, edge_control):
     assert line, "A's link to the edge did not recover after the edge's quiet restart"
 
 
+@needs_out
 def test_t8_lab_node_restart_recovers_edge_outbound(lab, edge_control):
     """B's own container restarts (a hard loss: no DISCONNECT is sent, unlike A's or B's own `rpt fun
     *6`). The edge's permanent outbound row to B is not told to stop, so its normal redial policy
@@ -413,6 +421,7 @@ def _new_from_edge_to(sc, lab, host_key, since=0.0):
             if f["src"].split(":")[0] == edge_ip and f["dst"].split(":")[0] == dst_ip and f["t"] >= since]
 
 
+@needs_out
 def test_t8b_edge_redials_after_hangup_but_never_after_disconnect(lab, edge_control):
     """Design 3.5: the edge's permanent outbound row to B must redial after a loss WITHOUT !!DISCONNECT!!
     (a plain HANGUP) but must NEVER redial after a received !!DISCONNECT!!, permanent row or not.
