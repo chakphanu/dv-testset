@@ -25,6 +25,9 @@ is the 1 / 5 / 15 minute average at start and end.
 | 5c | Data ident `DVT_REQUIRE_IDENT=false` | `20261103T211418Z` | 8 / 0 / 0 | 4 min 52 s | 1.94 -> 1.97 | pass |
 | 5d | T14 cross-mode (fake transcoder, import launch, `--capture`) | `20261103T211918Z` | 53 / 0 / 0 | 13 min 05 s | 1.90 -> 1.52 | pass (same as the adaptation pass) |
 | 5e | S3 superset, first try | `20261103T205803Z` | not run | 15 s | 5.4 -> 2.3 | infra error: pytest collection error, `cases/unit/test_echo.py` and uncommitted `cases/test_echo.py` share a basename (another session's echo work in the shared tree); to be rerun |
+| 5f | P19 edge relink (import launch, `--profile interlink,nxdn,p25`, `--capture`) | `20261103T213234Z` | 6 / 0 / 0 | 3 min 43 s | 1.43 -> 1.89 | pass (same as the adaptation pass) |
+| 6a | Stage 5 W8 load, first try | `20261103T213619Z` | not run | 6 s | 1.89 -> 2.21 | infra error: the same docker build snapshot error as 2a (`parent snapshot ... does not exist` on `dvt-web-proxy`); rerun queued as 6b |
+| 7 | Short NAT (`DVT_NAT_SHORT=1`, `turn.toml`, `--profile web,browser,nat`) | `20261103T213634Z` | 17 / 0 / 31 | 16 min 20 s | 2.04 -> 0.86 | pass (same as be207d3: 17 / 0 / 31, 16 min 03 s) |
 
 ## Per-step notes
 
