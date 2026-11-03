@@ -17,6 +17,17 @@ def test_registered_text_is_not_unregistered():
     assert not phone.registered_text(["Unregistered", "Dialer"])
     assert not phone.registered_text([])
     assert not phone.registered_text(["Registering..."])
+    assert phone.registered_text(["Registration: Registered", "Not connected"])
+    assert not phone.registered_text(["Registration: Unregistered"])
+
+
+def test_app_registration_order_is_what_the_app_sends():
+    from dvtest import iax2_frames
+    seen = ["CALLTOKEN", "CALLTOKEN", "REGREQ:token", "REGAUTH", "REGREQ:md5", "REGACK", "CALLTOKEN", "REGREQ:token", "REGAUTH",
+            "REGREQ:md5", "REGACK"]
+    assert iax2_frames.judge_phone_registration(seen, phone.APP_REGISTRATION)[0]
+    assert not iax2_frames.judge_phone_registration(["CALLTOKEN", "REGREQ:token", "REGAUTH", "REGREQ:md5", "REGREJ"],
+                                                    phone.APP_REGISTRATION)[0]
 
 
 def test_tabs_are_on_the_tab_row():

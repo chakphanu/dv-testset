@@ -878,8 +878,14 @@ def test_r8_phone_registration_md5_regack(lab, phone_reg):
     assert authreq >= 1 and doc["summary"].get("iax.REGACK", 0) >= 1 and "iax.REGREJ" not in doc["summary"], doc["summary"]
     ies = {i["name"]: i for i in doc["types"]["iax.REGAUTH"][0]["ies"]}
     assert ies["AUTHMETHODS"]["int"] & 2, "md5 offered by the REGAUTH"
-    after = _client_reg_counters(lab)
-    if before is not None and after is not None:
+    if before is not None:
+        # the edge publishes its metrics to the hub about every 10 s (the hub caches the snapshot): wait for the counters
+        end, after = time.monotonic() + 45, before
+        while time.monotonic() < end:
+            after = _client_reg_counters(lab)
+            if after[0] > before[0] and after[1] >= 1:
+                break
+            time.sleep(3)
         assert after[0] > before[0], "dv_edge_allstar_client_reg_total did not count the registration (%s -> %s)" % (before, after)
         assert after[1] >= 1, "dv_edge_allstar_client_registrations is %s after a REGACK" % after[1]
 

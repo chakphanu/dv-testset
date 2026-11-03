@@ -95,18 +95,27 @@ account).
 - HANGUP carries a CALLTOKEN IE and CAUSECODE 0x10 (Q.850 cause 16, normal clearing).
 - After every hangup the app fires bare NEW probes again.
 
-## Phone mode against wip-c165c93 (ASL1g, prepared, not run)
+## Phone mode against wip-c165c93 (ASL1g), run 2026-11-04
 
-`tools/dvswitch_phone_case.py` is the phone-mode counterpart of `tools/dvswitch_radio_case.py` for an image with the ASL1g registrar
-(`dv-router:wip-c165c93` and later; on 7efdd33 / 71ab207 it ends in REGREJ and fails by design). Same environment and emulator as the radio
-case, but the account in the app has "Phone mode IAX2 connection" ON. The capture on the edge starts BEFORE the app is restarted (it
-registers by itself). It checks, one PASS / FAIL line each:
+`tools/dvswitch_phone_case.py` (run on `dv-router:wip-c165c93`, rig `out/20261103T223757Z`, kept) is the phone-mode counterpart of
+`tools/dvswitch_radio_case.py`. Same environment and emulator; the case sets "Phone mode IAX2 connection" ON in the app itself
+(Accounts tab, first row, checkbox `phone_mode`, Save: `set_phone_mode`) and starts the capture on the edge BEFORE it restarts the app
+(it registers by itself). **All 9 checks PASS**, one line each:
 
-1. the registration on the wire: REGREQ, CALLTOKEN, REGREQ with the token, REGAUTH, REGREQ with MD5_RESULT, REGACK, no REGREJ
-   (`dvtest.iax2_frames.registration_steps_from_doc` / `judge_phone_registration`; the capture tool prints the steps as `registration`);
-2. the app shows "Registered" (Status or Accounts tab) and the Dialer's Connect (`send_button`) is enabled;
-3. then a call like radio mode: "Node: 1999", ANSWER, AUTHREP (md5), RADIO_KEY from the app, more than 20000 bytes of ulaw relayed to node A.
+1. the registration on the wire is CALLTOKEN, REGREQ with the token, REGAUTH, REGREQ with MD5_RESULT, REGACK, no REGREJ. DVSwitch
+   Mobile 2.0.7 does NOT open with a REGREQ: its bare NEW probe (14 B, empty CALLTOKEN) is answered with a CALLTOKEN and its first
+   REGREQ already carries that token (so `APP_REGISTRATION`, not the Asterisk-style `PHONE_REGISTRATION` that the tester client of R8
+   sends); the app registers again about every 60 s (REFRESH) and sends REGREL when it is stopped;
+2. the Status tab says `Registration: Registered` (resource id `status_text`; it says "Unregistered" before) and the Dialer's Connect
+   (`send_button`) is enabled;
+3. Connect, PTT 3.5 s, Hangup works like radio mode: the Dialer line shows `ASL-PHONE Node: 1999`, the Status tab `Node: 1999 (Phone)`,
+   ANSWER, AUTHREP (md5; a registration grants no call privilege, the call still goes NEW / AUTHREQ / AUTHREP), RADIO_KEY from the app,
+   more than 20000 bytes of ulaw relayed to node A.
 
-Not run here (no rig, no emulator): the tab coordinates and the "Registered" text are the ones to confirm on the first run. The tester-side
-twin without the app is R8-R12 of `cases/test_asl_edge.py` (on by default, `DVT_ASL_PHONE_REG=0` skips them, `docs/asl-edge-results.md`).
+Radio mode (Phone mode OFF, account `acct`) was run again on the same image: ANSWER, AUTHREP, RADIO_KEY, more than 20000 bytes relayed:
+all PASS. The tester-side twin without the app is R8-R12 of `cases/test_asl_edge.py` (on by default, `DVT_ASL_PHONE_REG=0` skips them,
+`docs/asl-edge-results.md`).
 
+UI notes for the emulator (1080 x 2400): the tab bar is at y 147 (a tap is sometimes swallowed, so `open_tab` verifies the tab by a
+resource id it alone has); the battery notice's OK can land in a system settings page (back out and relaunch, `launch_app`); the
+location notice comes a few seconds after the start.

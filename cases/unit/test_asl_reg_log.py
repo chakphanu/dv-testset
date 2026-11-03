@@ -8,11 +8,11 @@ pytestmark = pytest.mark.unit
 
 
 def test_scan_counts_classes_and_finds_leaks():
-    lines = ["x allstar_client_registration account=acct result=ok", "allstar_call_setup node=1999",
-             "allstar_call_hangup node=1999", "allstar_client_registration account=unknown result=rejected",
+    lines = ["x allstar_client_registration account=acct result=ok", "level=info allstar_call event=setup direction=in kind=node peer=1999",
+             "level=info allstar_call event=hangup direction=in kind=node peer=1999", "allstar_client_registration account=unknown result=rejected",
              "noise", "oops password test-secret-not-real in a line"]
     out = al.scan(lines)
-    assert out["counts"] == {"allstar_client_registration": 2, "allstar_call_setup": 1, "allstar_call_hangup": 1}
+    assert out["counts"] == {"allstar_client_registration": 2, "allstar_call event=setup": 1, "allstar_call event=hangup": 1}
     assert out["leaks"] == [(6, "test-secret-not-real")]
     assert al.scan(["clean"])["leaks"] == []
 

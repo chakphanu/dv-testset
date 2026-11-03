@@ -219,10 +219,17 @@ by heuristic (no `.local` or `out` path staged, no added line giving a 12 charac
 password-like key); the author never read the value. A dry run of the same rig against a registry name that does not resolve
 (`DVT_ASL_EXT_REGISTRY=register.invalid`, no dial) came first and is `out/20261103T181938Z`.
 
-## Phone-mode registration, R8-R12 (ASL1g, prepared for wip-c165c93, not run)
+## wip-c165c93 (ASL1g / ASL1h), run 2026-11-04
 
-Tester-side cases without the app (`cases/test_asl_edge.py`, on by default, `DVT_ASL_PHONE_REG=0` skips them for an older image; client `dvtest/proto/iax2_reg.py`, unit
-tested against a fake registrar). Contract from dv-router's ASL1g review: an empty CALLTOKEN on a REGREQ gets the CALLTOKEN reply, a REGREQ
+`cases/test_asl_edge.py` on `dv-router:wip-c165c93` with `DVT_ASL_EDGE_OUT=1`: **20 passed, 10 skipped** (`out/20261103T230702Z`; the first
+run `out/20261103T223757Z` had R8-R12 pass except that the metric counters lag the hub snapshot by about 10 s: R8 now polls for them).
+Skips: T-case without the outbound rows (needs `DVT_ASL_EDGE_OUT` unset), T1 / T2 (`DVT_ASL_LONG=1`) and R1-R7 (`DVT_ASL_EDGE_REG=1`, the
+HTTPS registrar stand-in). Nothing from the c199b / 7efdd33 / 71ab207 columns regressed.
+
+## Phone-mode registration, R8-R12 (ASL1g, wip-c165c93)
+
+Tester-side cases without the app (`cases/test_asl_edge.py`, on by default, `DVT_ASL_PHONE_REG=0` skips them for an older image; client
+`dvtest/proto/iax2_reg.py`, unit tested against a fake registrar). All five PASS on `wip-c165c93`. Contract from dv-router's ASL1g review: an empty CALLTOKEN on a REGREQ gets the CALLTOKEN reply, a REGREQ
 with no CALLTOKEN IE is dropped silently, REGAUTH has the same fields for a known and an unknown user, a wrong proof is REGREJ (CAUSE
 "authentication failed", CAUSECODE 29), the account must be `kind = client`, REFRESH is clamped to `refresh_min_s` / `refresh_max_s` (60 / 300).
 
@@ -234,7 +241,8 @@ with no CALLTOKEN IE is dropped silently, REGAUTH has the same fields for a know
 | R11 `test_r11_regreq_without_calltoken_is_dropped` | no reply of any kind to a REGREQ without a CALLTOKEN IE |
 | R12 `test_r12_node_account_cannot_register_as_a_phone` | the node account 1999 is refused (REGREJ) |
 
-The ASL1h log lines (one INFO line per call setup, hangup and client registration, no secrets) cannot be read during a run (run.sh writes
+The ASL1h log lines are `level=info allstar_call event=setup|hangup direction=in|out kind=node|client peer=... module=L result=ok|rejected:ip|
+rejected:refused ... cause_code=... duration_ms=...` and `allstar_client_registration ...`. They cannot be read during a run (run.sh writes
 `out/<run>/logs/xlxd-sut.log` at the end): `python3 -m dvtest.tools.asl_reg_log out/<run>/logs/xlxd-sut.log --expect-registrations 1`
-counts them by class and fails when the fixture secret or a typed wrong secret appears in any line.
-
+counts them by class and fails when the fixture secret or a typed wrong secret appears in any line. On `out/20261103T230702Z`: 5 registration
+lines, no secret in the log.

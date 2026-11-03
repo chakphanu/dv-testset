@@ -12,7 +12,7 @@ with --expect-registrations N when fewer than N `allstar_client_registration` li
 import argparse
 import sys
 
-CLASSES = ("allstar_client_registration", "allstar_call_setup", "allstar_call_hangup")
+CLASSES = ("allstar_client_registration", "allstar_call event=setup", "allstar_call event=hangup")   # as written by wip-c165c93
 FORBIDDEN = ("test-secret-not-real", "wrong-secret-not-real")     # the lab fixture secret and the wrong proof of cases R9 / R10
 
 
