@@ -31,7 +31,7 @@ Duration is the pytest time of the run. Repo head is the dv-testset commit the r
 | 11 | Short NAT (`DVT_NAT_SHORT=1`, `web.toml:turn.toml:totp-required.toml`, `--profile web,browser,nat`) | `2721dec` | `20261104T023207Z` | 17 / 0 / 31 | 16 min 03 s | 1.35 -> 3.21 | pass (same as be207d3 and 71ab207: 17 / 0 / 31) |
 | A | AllStar edge (30 cases of `cases/test_asl_edge.py` plus DVSwitch Mobile, phone and radio) | see the document | see the document | 30 of 30 accounted: pass, the long and stand-in variants included; R1-R7 clean run 10 passed in 104 s on a fresh rig (`20261104T001310Z`) | n/a | n/a | pass, `docs/asl-edge-results.md` (c165c93 column; the first R1 failure was a lab artifact, F-R1) |
 | S1 | SOAK1 GA (`DVT_SOAK=1 DVT_SOAK_GA=1`, `web.toml:totp-required.toml:soak-edges.toml`, `--profile web,webload`, `cases/test_web_soak.py`) | `2721dec` | `20261104T031836Z` | 0 / 1 / 0 | 59 min 20 s | 1.23 -> 3.53 | judge verdict FAIL (`rss:dv-svc-status`) recorded as is; ruled a known bounded LEAK1 item, see the notes. Everything else passes |
-| S2 | S3 superset, 2 hours | | | | | | pending |
+| S2 | S3 superset (`-m "(rig or allstar) and not web and not load" --profile allstar,interlink,nxdn,p25`, `DVT_SUT_LAUNCH=import`, no extras; 2077 deselected) | `78c8bd4` | `20261104T054440Z` | 672 / 3 / 262 | 2 h 09 min 23 s | 2.8 -> 1.1 | pass for the SUT: the 3 failures are the known REFERENCE-side `test_g3` cases (xlxd-ref), see the notes |
 | E | ECHO1 / ECHO1c (`cases/test_echo.py`; `echo.toml:echo-usrp-peer.toml:echo-peers.toml:xlx-peer.toml`, `--profile interlink`) | `8b8afea` + case fixes | `20261104T051933Z` (full, in the echo worktree's `out/`), targeted `20261104T052813Z`, `20261104T053017Z`, `20261104T053126Z` | full 28 / 2 / 2, then E1e + E5b rewritten and E1c YSF on the b2 steps, final revalidation 7 / 0 / 0 (`20261104T054135Z`) | 6 min 00 s (full) | 3.3 at the end | all reachable cases pass; FE1 (dynamic USRP echoed) intended and closed, FE2 (YSF b2 steps) ruled not a bug and closed; 2 skips: NXDN / P25 and two-node (not reachable) |
 
 ## Per-step notes
@@ -86,6 +86,17 @@ Everything else passes: no restart of any process, threads and fds flat (dv-rout
 legitimate, 400 of 400 overs, the idle check is clean after a 171 s settle. dv-router RSS passes with 97.6 KiB/min x 2400 s = 3904 KiB (95 percent of
 the limit; 145.8 KiB/min on be207d3), Anon 10340 -> 14200 KiB and still growing, not a plateau. dv-room x26 19.4 to 20.7 KiB/min, dv-edge-webrtc
 30.6 KiB/min. Raw samples and the verdict table stay local (`out/20261104T031836Z/web/soak-samples.jsonl`, `soak.json`).
+
+### S2: S3 superset
+
+672 passed, 3 failed, 262 skipped, 2077 deselected in 2 h 09 min 23 s (`out/20261104T054440Z`, import launch). The d449742 run (same selection and profile on
+that image, `docs/results-d449742.md`) had 670 / 3 / 177 (850 selected, 2 h 08 min). The three failures are the same kind as there and are on the REFERENCE side
+(xlxd-ref; the assertion text starts with `ref:`), the DV-Router side passes: `test_g3_presence_replaces`, `test_g3_module_follows_talk` (both also failed in the
+accepted Gate B) and `test_g3_listen`. Known, not a SUT bug. Passed 2 more than d449742 and skipped 85 more: the selection now contains cases that
+were added since (echo, more cross-mode, ...) and whose prerequisite this selection does not provide, for example `test_crossmode_exact.py` /
+`test_crossmode_failure.py` ("transcoder-sut is not the fake extended AMBEd"; they run in step 8), the M17 peer cases ("the legacy xlxd importer has no M17
+interlink input", they run in step 7) and `test_echo.py` ("echo is configured in the TOML", it runs natively in row E). The skip list was not compared case by
+case with d449742.
 
 ## Findings
 
@@ -150,6 +161,8 @@ DVT_SUT_LAUNCH=import scripts/run.sh -m rig --profile interlink,nxdn,p25 -- case
 DVT_SUT_CONFIG_EXTRA=$W:$T scripts/run.sh -m rig --profile web,webload -- cases/test_web_load.py
 # S1
 DVT_SOAK=1 DVT_SOAK_GA=1 DVT_SUT_CONFIG_EXTRA=$W:$T:$C/soak-edges.toml scripts/run.sh -m rig --profile web,webload -- cases/test_web_soak.py
+# S2 (S3 superset)
+DVT_SUT_LAUNCH=import DVT_USRP_DYNAMIC=1 scripts/run.sh -m "(rig or allstar) and not web and not load" --profile allstar,interlink,nxdn,p25
 # 11
 DVT_NAT_SHORT=1 DVT_SUT_CONFIG_EXTRA=$W:$C/turn.toml:$T scripts/run.sh -m rig --profile web,browser,nat -- cases/test_web_nat.py
 # E
