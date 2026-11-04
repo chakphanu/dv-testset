@@ -35,7 +35,6 @@ were not run (or not finished) on this image.
 | 8a | SOAK1 GA, run 1 | `20261103T215304Z` | no verdict | stopped at 2287 s elapsed (about 26.5 min of the 40 min measured part sampled) | 0.72 -> 2.09 | ABORTED ON PURPOSE by the main session at 22:34:19 UTC (SIGTERM of `run.sh`; superseded by c165c93); partial numbers only |
 | 8b | SOAK1 GA, run 2 (started by this chain by mistake after the abort order, its message had not been read) | `20261104T001943Z` | no verdict | stopped at 483 s elapsed | n/a | SIGTERM at about 00:30:40 UTC, not by this chain; superseded, not to be repeated |
 | 6b | Stage 5 W8 load, rerun (`load2`) | `20261103T223432Z` | no verdict | stopped after about 80 s | 1.44 -> n/a | ABORTED ON PURPOSE by the main session at 22:35:51 UTC (superseded) |
-| 5e | S3 superset | n/a | not run | n/a | n/a | not rerun: the echo basename collision was fixed in the tree (`cases/unit/test_echo_lib.py`), but the rig was never free for the 2 h run; superseded by the c165c93 chain |
 
 ## Per-step notes
 
