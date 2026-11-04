@@ -13,7 +13,7 @@ A timing-sensitive failure at load above 6 is rerun once at load below 6 and rep
 | # | Run | Repo head | Out dir | Passed / failed / skipped | Duration | Load start -> end | Verdict |
 |---|-----|-----------|---------|---------------------------|----------|-------------------|---------|
 | 1 | Web stage 1+2 (`test_web_smoke.py`, `test_web_api.py`; `web.toml:admin.toml:totp-required.toml`) | `f2287e1` | `20261103T234245Z` | 375 / 0 / 0 | 5 min 26 s | 0.30 -> 0.79 | pass |
-| 2 | EDG1 / K22 full file (`test_web_k22.py`, `guest.toml`) | | | | | | pending |
+| 2 | EDG1 / K22 / K22b, full file (`test_web_k22.py`; `web.toml:guest.toml:totp-required.toml`; includes the 4 EDG1 cases) | `f2287e1` | `20261103T234827Z` | 13 / 0 / 0 | 23 min 31 s | 0.83 -> 1.33 | pass (`test_guest_lease_without_a_peer` passes with the F3 ruling) |
 | 3 | Web stage 3a browser UI (`test_web_browser.py`) | | | | | | pending |
 | 4 | Web stage 3b WebRTC + recorder (`test_web_webrtc.py`, `test_web_recorder.py`) | | | | | | pending |
 | 5a | TOTP optional default (`test_web_totp_optional.py`, without `totp-required.toml`) | | | | | | pending |
