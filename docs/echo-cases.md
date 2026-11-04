@@ -139,3 +139,24 @@ Failures that are the SUT's (assertion unchanged, reported to dv-router):
 |----|------|----------|
 | FE1 | E5b (closed) | a USRP over of a dynamic-hub client is replayed: INTENDED (dynamic-hub clients are `SessionKind::Client`, class 0; static `[[edges.usrp.endpoint]]` rows are peers, class 2). E5b now uses a static peer row; the dynamic client is the positive case E1e. |
 | FE2 | E1c YSF (open) | the replay of a YSF over does not carry the sent audio frames (155 frames for 150, none equal); bytes above. |
+
+## Related: real-transcoder cross-mode audio into YSF (`cases/test_crossmode_real_ysf.py`)
+
+T14 (`test_crossmode_exact.py`) uses the fake AMBEd and cannot tell whether real cross-mode audio into YSF is garbled. This case keys a 3 s,
+700 Hz tone (encoded by transcoder-ref into the talker's codec) as a DMR, D-STAR or M17 talker on module H, with a YSF listener linked, and
+judges the YSF listener's frames: bytes against the expected frames (DMR -> YSF is the same codec: the sent frames through the VCH coder once;
+the others: transcoder-ref's output for the same input) and the decoded audio (dominant frequency +- 80 Hz, tone share of the spectrum, level
+against the expected frames). Skips when `DVT_TRANSCODER_FAKE=1` or transcoder-ref is not given. Helpers and unit tests: `dvtest/crossaudio.py`,
+`cases/unit/test_crossaudio.py`. Command: `... scripts/run.sh -m rig -- cases/test_crossmode_real_ysf.py` (about 80 s).
+
+Result on wip-c165c93 (`20261104T053737Z`, `crossmode-real-ysf.txt`): the audio is NOT garbled, a steady tone encodes to one repeated frame by itself
+(that is not a fault: the expected frames repeat the same way).
+
+| Source | Dominant | Level (rms heard / expected) | Frames |
+|--------|----------|------------------------------|--------|
+| DMR | 690 Hz (as expected) | 5145 / 6058 (-1.4 dB) | frame 0 `954be6500310b00777` unchanged, frames 1..149 `9eb9e8ce38f1a2c488` where the sent (and expected) frame is `fcd98eea5eb962c404`: the same codec, but the YSF egress replaces the frames; assertion "heard == sent" fails |
+| D-STAR | 690 Hz (as expected) | 4740 / 5584 (-1.4 dB) | `57cc8353bc7c6966c1`, then `9a9fccc81819a78804` x149; transcoder-ref gives `53ea845598942d6e4d`, `9eb9e8ce38f1a3c488`: audio equal, bytes not (informational); PASS |
+| M17 | 700 Hz | 73 / 441 (15.6 dB down) | 155 frames heard (pad packet); `dba0603598fe41cd83` vs expected `dba0613598fe41cd83`, then `7f404507705419a347` vs `3d02234572389de7cb`; level check fails |
+
+FE2 (echo YSF replay) is the same behaviour: the replay frames after frame 0 are the re-encoded steady-state codeword; the live YSF -> YSF relay is the
+raw fast path and byte exact.

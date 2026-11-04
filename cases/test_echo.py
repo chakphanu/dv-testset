@@ -175,8 +175,8 @@ def ysf_packets(packets, end, replay, limit=4):
 def encoded_frames(target, n):
     """n AMBE+2 (DMR form) frames of a tone, encoded by transcoder-ref, passed through the YSF VCH coder once."""
     from dvtest.proto import ambed, ysf
-    pcm = signals.frames(signals.bursts(700, 8, on_ms=300, off_ms=100))[:n]
-    got = ambed.transcode(target.ambed_ref, ambed.PCM, [ambed.AMBEPLUS], pcm, port=target.ambed_port)[ambed.AMBEPLUS]
+    pcm = signals.frames(signals.tone(700, FRAMES_E1 * 20))[:n]
+    got = ambed.transcode(target.ambed_ref, ambed.PCM, [ambed.AMBE2PLUS], pcm, port=target.ambed_port)[ambed.AMBE2PLUS]
     return [ysf.vch_decode(ysf.vch_encode(f)) for f in got][:n]
 
 
