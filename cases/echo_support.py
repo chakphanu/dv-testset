@@ -82,13 +82,13 @@ class Scene:
         self.talk_drain = None
         self.t0 = time.monotonic()
 
-    def over(self, n, seed):
+    def over(self, n, seed, frames=None):
         """Send one talk of n frames; returns the frames. The monotonic time of the last packet sent is
         appended to .ends, the stream id to .sids, the frames put on the wire to .sent."""
         if self.talk_drain is not None:
             self.talk_drain.stop()
             self.talk_drain = None
-        frames = echo.make_frames(self.kind, n, "%s-%s" % (seed, self.kind))
+        frames = list(frames) if frames is not None else echo.make_frames(self.kind, n, "%s-%s" % (seed, self.kind))
         sid = clients.talk(self.talker, self.kind, frames, tail=0.0)
         # time of the last packet sent (the YSF client does not keep its send times: now is that time)
         self.ends.append(time.monotonic() if self.kind == "ysf" else self.talker.last_stamps[-1])
@@ -261,6 +261,11 @@ class UsrpDyn:
         self.send(usrp.unkey)
         return time.monotonic()
 
+    def voice_packets(self):
+        """[(time, 352 byte voice packet)] heard with the keyup flag set."""
+        return [(t, d) for t, d in self.inbox
+                if len(d) == usrp.VOICE_SIZE and usrp.type_le(d) == 0 and usrp.parse(d).keyup == 1]
+
     def voice_times(self):
         return [t for t, d in self.inbox
                 if len(d) == usrp.VOICE_SIZE and usrp.type_le(d) == 0 and usrp.parse(d).keyup == 1]
@@ -279,5 +284,16 @@ def count_streams(times, gap=0.4):
     for t in sorted(times):
         if last is None or t - last > gap:
             runs += 1
+        last = t
+    return runs
+
+
+def split_runs(items, gap=0.4):
+    """[[(t, x), ...], ...]: consecutive items with no hole longer than `gap` seconds."""
+    runs, last = [], None
+    for t, x in sorted(items, key=lambda i: i[0]):
+        if last is None or t - last > gap:
+            runs.append([])
+        runs[-1].append((t, x))
         last = t
     return runs

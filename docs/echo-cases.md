@@ -13,7 +13,7 @@ channel (`metrics xlxd-sut`) and the rendered `dv-router.toml` of the run. File:
 ```sh
 XLXD_SUT_IMAGE=dv-router:wip-c165c93 DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-router DVT_SUT_LAUNCH=native \
   DVT_USRP_DYNAMIC=1 DVT_SUT_CONFIG=<template path> \
-  DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/echo.toml:rig/config/dv-router/echo-peers.toml:rig/config/dv-router/xlx-peer.toml \
+  DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/echo.toml:rig/config/dv-router/echo-usrp-peer.toml:rig/config/dv-router/echo-peers.toml:rig/config/dv-router/xlx-peer.toml \
   scripts/run.sh -m rig --profile interlink -- cases/test_echo.py
 ```
 
@@ -32,6 +32,7 @@ Snippets (`rig/config/dv-router/`, merged key by key after the template; unit-te
 | `echo-short.toml` | `[echo] max_seconds = 5` (after `echo.toml`): E3 then needs no live edit |
 | `echo-off.toml` | `[echo] modules = { E = false }` (after `echo.toml`): the service runs, module E accepts nothing |
 | `echo-peers.toml` | `[echo] modules = { E = true, M = true }` (after `echo.toml`): echo on module M for the M17 peer part of E5 |
+| `echo-usrp-peer.toml` | `[[edges.usrp.endpoint]]` module E, peer `<TESTER_IP>:32003`, bind `<OWN_IP>:34003`: a STATIC USRP peer (origin class 2) for the negative case of E5b |
 
 ## Editing the live config (E3, E7)
 
@@ -61,7 +62,8 @@ talker and a second client of the same kind on module E (both timed by a drain t
 | E3 | `test_e3_long_over_is_truncated` | with `max_seconds` = 5 (live edit, or `echo-short.toml`) an 8 s over (D-STAR and DMR) is replayed once, 5 s long (+- 0.5), at most `max_seconds * 50` frames and at least 3 fewer than that (whole bundles), the retained prefix identical to what was sent |
 | E4 | `test_e4_no_storm_after_the_replay` | after the replay nothing more reaches the listener or the talker for 3 x `delay_ms`: the replay is not recorded again |
 | E5a | `test_e5a_xlx_peer_over_is_not_replayed` | an over keyed on the XLX peer reflector (origin class 1) reaches the SUT's listener once, byte for byte, and is not replayed (needs `--profile interlink` and `xlx-peer.toml`) |
-| E5b | `test_e5b_usrp_over_is_not_replayed` | a USRP over through the dynamic hub (class 2) is heard once by a USRP listener and is not replayed |
+| E1e | `test_e1e_dynamic_usrp_client_over_is_replayed` | clients of the dynamic USRP hub are local (class 0, dv-router ruling 2026-11-04): a 150 packet over is heard, then replayed once 0.8 to 2.0 s later, 150 packets, PCM identical |
+| E5b | `test_e5b_static_usrp_peer_over_is_not_replayed` | an over from a STATIC USRP peer row (class 2, `echo-usrp-peer.toml`) is heard once by a dynamic USRP listener, is not replayed, and nothing comes back to the peer |
 | E5c | `test_e5c_m17_peer_over_is_not_replayed` | control: a local M17 over on M is replayed; an over from the M17 peer M17-DVT on M (class 2) reaches a local listener once and is not replayed (needs `echo-peers.toml`) |
 | E5d | `test_e5d_nxdn_p25_not_reachable` | skip with the reason below |
 | E6 | `test_e6_floor_is_busy_during_the_replay` | a second talker keying 0.7 s into the replay gets nothing relayed (not one of its 60 frames), the replay itself is undisturbed (payload, length), and a human over 1.5 s after the replay is relayed in full |
@@ -86,26 +88,37 @@ talker and a second client of the same kind on module E (both timed by a drain t
 - Validation of out-of-range values (`max_seconds` 5..120, `delay_ms` 200..10000) and of an unknown module row is not covered.
 - The bridge ping-pong of the design (a bridge to an external parrot) needs a bridge; not built.
 
-## Results (dv-router:wip-c165c93, out/20261104T051933Z): 28 passed, 2 failed, 2 skipped
+## Results (dv-router:wip-c165c93): 29 passed, 1 failed (full run `20261104T051933Z` plus targeted runs `20261104T052813Z`, `20261104T053017Z`, `20261104T053126Z`)
 
 | Case | Result | Measured |
 |------|--------|----------|
 | E1a | PASS x4 | replay starts 1.00 to 1.01 s after the last packet (D-STAR, DMR, M17, YSF) |
 | E1b | PASS x4 | talker callsign / DMR id kept; D-STAR header present at the listener and the talker |
-| E1c | PASS D-STAR, DMR, M17; **FAIL YSF** | D-STAR 150/150 frames identical, 2.98 s; DMR 150/150, 2.94 s; M17 the 150 audio frames identical + 2 EOT frames (N2). YSF: replay of 155 frames, none of the 150 sent frames found at any offset (frame 0 sent `8e38664559c199e31f`, replay `ce5a01431b895da393`), while the live relay to the YSF listener is byte-identical to what was sent |
+| E1c | PASS D-STAR, DMR, M17; **FAIL YSF** (FE2, open) | D-STAR 150/150 frames identical, 2.98 s; DMR 150/150, 2.94 s; M17 the 150 audio frames identical + 2 EOT frames (N2, accepted by dv-router: foreign-origin stream). YSF: see below |
 | E1d | PASS x4 | the talker's own client hears the same replay |
+| E1e | PASS | dynamic-hub USRP client: runs of 150 + 150 voice packets, replay 1.01 s after the over, PCM identical |
 | E2 | PASS (D-STAR, DMR) | 25 frames: no replay in 5.5 s |
 | E3 | PASS (D-STAR, DMR) | max_seconds 5 (live edit): D-STAR 4.98 s / 250 frames, DMR 4.92 s / 249 frames (83 bundles, as the design says); `truncated` +2 |
 | E4 | PASS x4 | exactly one replay, nothing for 3 x delay_ms after it |
 | E5a | PASS | over from the XLX peer XLX998 heard once, not replayed |
-| E5b | **FAIL** | a USRP over from a dynamic-hub client is replayed: the second USRP client heard 150 voice packets, a hole of 1.0 s, 150 more (last packet 3.99 s after the over ended) |
+| E5b | PASS | static USRP peer over heard once by the dynamic listener (150 packets), not replayed, nothing sent back to the peer (the first version used a dynamic client, which is class 0: FE1 closed, intended) |
 | E5c | PASS | M17 peer over heard once, not replayed; control: the local M17 over on M is replayed |
 | E5d | not reachable | no NXDN / P25 peer rows in the native rig |
 | E6 | PASS | none of the 60 frames keyed 0.7 s into the replay relayed; replay intact (payload, length); a human over 1.5 s after the replay relayed in full |
 | E7a | PASS | `modules = { E = false }`: no replay; back to true: replay at 1.0 s (4 s waited after each edit) |
 | E7b | PASS | `modules = {}` 0.5 s into a 4 s replay: replay cut at 2.46 s (124 of 200 frames) with an end of stream, a human over 2 s later relayed and not replayed; launcher log "stopping dv-svc-echo" then "starting dv-svc-echo" after the row came back, replay works again |
 | E8 | not reachable | one DV-Router node in the rig |
-| T | PASS | `played` +9 (8 made, 1 unsure), `truncated` +2 (2 made), `short` +4 (2 made); label `room="e"` |
+| T | PASS | `played` +9 for the 9 overs made in the full run (the later 2-over run: +2 exactly), `truncated` +2 (2 made), `short` +4 for 2 deliberate short overs (the other 2 are DMR / YSF link joins: dv-router says counting a zero-voice stream as short is not intended, a follow-up will fix it; informational) |
+
+**YSF replay (FE2).** The FICH of the packets, live relay and replay alike: a header packet (`fi=0` HC, `dt=2`, `ft=7`, counter 0), voice packets
+(`fi=1`, `dt=2`, `ft=6`, `fn` cycling 0,1,2, counters 1..), a terminator (`fi=2`, EOT bit set). There is no extra leading voice packet: the
+replay has one extra trailing voice packet (30 voice packets sent, 31 in the replay; the last one starts with the pad frame `202222200000000000`),
+so 155 frames for 150 sent. The audio frames themselves differ: the live relay equals the sent frames, the replay does not (0 of 150 equal at the
+same position, the sent frames are at no offset of the replay). PRNG frames (`20261104T051933Z`, `20261104T052813Z`): sent / live frame 0
+`8e38664559c199e31f`, frame 1 `f20efac02aa36777ab`, frame 2 `70084b810b8b1abdd7`; replay frame 0 `ce5a01431b895da393`, frame 1
+`db53ba3f7eee9c5254`, frame 2 `ca077d7d2d46f9d354`. A tone encoded by transcoder-ref (valid AMBE+2, passed once through the YSF VCH coder,
+`20261104T053126Z`): sent / live frame 0 `4b45860b222b9af23c`, replay frame 0 `6f63a30902e3debeb4`, then `94cb63d022b4f38f0c` repeated. D-STAR and
+DMR replays of the same kind of over are bit-identical. Reported to dv-router; the assertion stays.
 
 ## Findings
 
@@ -120,11 +133,9 @@ design leaves the point open:
 | N4 | `result=short` also moving for link joins of DMR and YSF (empty streams): +4 for 2 short overs made; recorded, not asserted. | T |
 | N5 | Counters of `dv_echo_overs_total` restart from zero when `dv-svc-echo` is stopped by removing the last row and respawned: the telemetry case runs before E7b. | T |
 
-Failures that are the SUT's (assertions unchanged, reported to dv-router):
+Failures that are the SUT's (assertion unchanged, reported to dv-router):
 
 | ID | Case | Observed |
 |----|------|----------|
-| FE1 | E5b | a USRP over of a dynamic-hub client is replayed 1.0 s after its end. Either dynamic-hub clients are local (class 0) in DV-Router or the class check does not cover them; needs a ruling. |
-| FE2 | E1c YSF | the replay of a YSF over does not carry the sent frames (155 frames, none equal); D-STAR and DMR replays are identical. |
-
-(Results of the runs are in `docs/results-wip-71ab207.md`, section "Echo (ECHO1/ECHO1c)".)
+| FE1 | E5b (closed) | a USRP over of a dynamic-hub client is replayed: INTENDED (dynamic-hub clients are `SessionKind::Client`, class 0; static `[[edges.usrp.endpoint]]` rows are peers, class 2). E5b now uses a static peer row; the dynamic client is the positive case E1e. |
+| FE2 | E1c YSF (open) | the replay of a YSF over does not carry the sent audio frames (155 frames for 150, none equal); bytes above. |

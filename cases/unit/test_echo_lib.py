@@ -78,12 +78,20 @@ def test_variants_stack_in_any_order_of_the_keys():
     assert echo.echo_settings(out) == {"max_seconds": 5, "delay_ms": 1000, "modules": {"E": True, "M": True}}
 
 
-@pytest.mark.parametrize("name", ["echo.toml", "echo-short.toml", "echo-off.toml", "echo-peers.toml"])
+def test_usrp_peer_snippet_adds_a_static_endpoint_row():
+    out = sut_config.render(TEMPLATE, "172.30.0", extras=[snippet("echo.toml"), snippet("echo-usrp-peer.toml")])
+    row = tomllib.loads(out)["edges"]["usrp"]["endpoint"]
+    assert row == [{"module": "E", "peer": "172.30.0.30:32003", "callsign": "N0TEST", "bind": "172.30.0.11:34003"}]
+    assert echo.echo_settings(out)["modules"] == {"E": True}
+
+
+@pytest.mark.parametrize("name", ["echo.toml", "echo-short.toml", "echo-off.toml", "echo-peers.toml", "echo-usrp-peer.toml"])
 def test_snippets_are_ascii_and_licensed(name):
     text = snippet(name)
     text.encode("ascii")
     assert text.startswith("# SPDX-License-Identifier: MIT")
-    assert "<" not in text.replace("<=", "")          # no tokens: nothing to substitute
+    if name != "echo-usrp-peer.toml":                 # the peer row uses the address tokens
+        assert "<" not in text.replace("<=", "")      # no tokens: nothing to substitute
     tomllib.loads(text)
 
 

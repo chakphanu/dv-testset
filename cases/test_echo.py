@@ -20,17 +20,21 @@ Needs DVT_SUT_PROFILE=dvrouter, native launch and rig/config/dv-router/echo.toml
 A difference the specification does not settle is a FINDING line in out/<run>/echo.txt, never an assertion.
 """
 import os
+import socket
 import time
 from collections import Counter, namedtuple
 
 import pytest
 
 from dvtest import clients, echo, specs
+from dvtest.audio import signals
+from dvtest.net import pace
+from dvtest.proto import usrp
 from dvtest import metrics as metrics_mod
 from dvtest.control import RigControl
 from dvtest.proto import dextra, m17
 from echo_support import (
-    MODULE, Drainer, EchoCfg, Scene, UsrpDyn, count_streams, note, wait_for_over, wait_reload,
+    MODULE, Drainer, EchoCfg, Scene, UsrpDyn, note, split_runs, wait_for_over, wait_reload,
 )
 
 pytestmark = pytest.mark.rig
@@ -128,24 +132,52 @@ def need_cfg(echo_rig, what):
 
 # ---------------------------------------------------------------- E1 / E4: one over per protocol
 
-Run = namedtuple("Run", "kind ident wire raw end observed_until listener talker delay")
+Run = namedtuple("Run", "kind ident wire raw end observed_until listener talker delay listener_packets")
 
 
 @pytest.fixture(scope="module", params=KINDS)
-def e1_run(request, echo_rig):
+def e1_run(request, echo_rig, target):
     kind = request.param
+    frames = None
+    if kind == "ysf":
+        # YSF: the SUT's egress of a foreign-origin (replayed) stream re-encodes the AMBE+2 frames, so frames that are
+        # valid codewords are needed (PRNG bytes are not; first run 20261104T052813Z): a tone encoded by the transcoder
+        frames = encoded_frames(target, FRAMES_E1)
     scene = Scene(echo_rig.ip, kind)
     try:
-        scene.over(FRAMES_E1, "e1")
+        scene.over(FRAMES_E1, "e1", frames=frames)
         end = scene.ends[0]
         until = end + echo_rig.delay + echo.over_seconds(FRAMES_E1) + 3 * echo_rig.delay + 1.0
         scene.until(until)
         run = Run(kind, scene.ident(), scene.sent[0], scene.raw[0], end, until, scene.overs("listener"), scene.overs("talker"),
-                  echo_rig.delay)
+                  echo_rig.delay, list(zip(*scene.packets("listener"))) if kind == "ysf" else [])
     finally:
         scene.close()
     TALLY["played"] += len([o for o in run.listener if o.start > run.end + 0.05])
     return run
+
+
+def ysf_packets(packets, end, replay, limit=4):
+    """First and last YSF stream packets before (live relay) or after (replay) the end of the over, as short text."""
+    from dvtest.proto import ysf
+    out = []
+    for data, t in packets:
+        info = ysf.parse(bytes(data))
+        if info is None or info["kind"] not in ("header", "voice", "terminator") or (t > end + 0.05) != replay:
+            continue
+        f = info["fich"] or {}
+        out.append("%s fi=%s dt=%s fn=%s ft=%s c=%d eot=%d %s" % (
+            info["kind"], f.get("fi"), f.get("dt"), f.get("fn"), f.get("ft"), info["counter"], info["eot"],
+            info["frames"][0].hex() if info.get("frames") else "-"))
+    return out[:limit] + ["..."] + out[-2:]
+
+
+def encoded_frames(target, n):
+    """n AMBE+2 (DMR form) frames of a tone, encoded by transcoder-ref, passed through the YSF VCH coder once."""
+    from dvtest.proto import ambed, ysf
+    pcm = signals.frames(signals.bursts(700, 8, on_ms=300, off_ms=100))[:n]
+    got = ambed.transcode(target.ambed_ref, ambed.PCM, [ambed.AMBEPLUS], pcm, port=target.ambed_port)[ambed.AMBEPLUS]
+    return [ysf.vch_decode(ysf.vch_encode(f)) for f in got][:n]
 
 
 def replays_of(run, who="listener"):
@@ -197,6 +229,9 @@ def test_e1c_payload_is_byte_identical_and_about_3_s(e1_run, target):
              got.prefix_ok, len(got.extra), replay.frames == original.frames,
              e1_run.raw[0].hex(), original.frames[0].hex() if original.frames else "-",
              replay.frames[0].hex() if replay.frames else "-"))
+    if not got.prefix_ok and kind == "ysf":
+        note(target, "E1c[ysf]", "RECORD", "YSF packets of the replay (kind, FICH fi/dt/fn/ft, counter, eot, first frame) %s; of the live relay %s" % (
+            ysf_packets(e1_run.listener_packets, e1_run.end, True), ysf_packets(e1_run.listener_packets, e1_run.end, False)))
     if not got.prefix_ok:
         raw, heard = e1_run.raw, replay.frames
         at = next((k for k in range(len(heard) - len(raw) + 1) if heard[k:k + len(raw)] == raw), None)
@@ -369,47 +404,86 @@ def test_e5a_xlx_peer_over_is_not_replayed(echo_rig, target):
         clients.close(far, near)
 
 
-def test_e5b_usrp_over_is_not_replayed(echo_rig, target):
+def usrp_hub(echo_rig, target):
     rules = specs.rule(target, "usrp") or {}
     if not rules.get("dynamic_server"):
         pytest.skip("no dynamic USRP hub in the profile (DVT_USRP_DYNAMIC=1, specs usrp dynamic_server)")
-    addr = (echo_rig.ip, int(rules.get("dynamic_port", 34001)))
-    talker, listener = UsrpDyn(addr, "N0CALL"), UsrpDyn(addr, "N0TEST")
-    dstar = clients.make("dstar", MODULE, 1)
-    drain = None
+    return (echo_rig.ip, int(rules.get("dynamic_port", 34001)))
+
+
+def usrp_join(addr, callsign):
+    client = UsrpDyn(addr, callsign)
+    end = time.monotonic() + 15
+    while not client.register():
+        if time.monotonic() > end:
+            client.close()
+            pytest.skip("the dynamic USRP hub does not answer REG:DVSWITCH at %s:%d" % addr)
+    client.join(MODULE)
+    return client
+
+
+def test_e1e_dynamic_usrp_client_over_is_replayed(echo_rig, target):
+    """Clients of the dynamic USRP hub are local (origin class 0, dv-router ruling 2026-11-04): their overs are echoed."""
+    addr = usrp_hub(echo_rig, target)
+    talker, listener = usrp_join(addr, "N0CALL"), usrp_join(addr, "N0TEST")
     try:
-        for c in (talker, listener):
-            end = time.monotonic() + 15
-            while not c.register():
-                if time.monotonic() > end:
-                    pytest.skip("the dynamic USRP hub does not answer REG:DVSWITCH at %s:%d" % addr)
-        talker.join(MODULE)
-        listener.join(MODULE)
-        assert dstar.link(echo_rig.ip)
-        drain = Drainer(dstar.client)
-        drain.start()
         end = talker.talk(FRAMES_E1, drain_with=(listener,))
         stop = end + echo_rig.delay + 3.0 + 2.0
         while time.monotonic() < stop:
             listener.pump(0.1)
-        times = listener.voice_times()
-        assert len(times) >= FRAMES_E1 * 0.5, "precondition: the USRP listener heard %d of %d frames of the over" % (
-            len(times), FRAMES_E1)
-        runs = count_streams(times)
-        first = min(times)
-        note(target, "E5b", "RECORD", "USRP listener: %d voice packets, %d run(s) of packets, last packet %.2f s after the over ended; "
-             "gaps over 0.2 s at %s" % (len(times), runs, max(times) - end,
-                                         [(round(a - first, 2), round(b - a, 2)) for a, b in zip(sorted(times), sorted(times)[1:]) if b - a > 0.2]))
-        assert runs == 1, "a USRP over (origin class 2) was replayed: the USRP listener heard %d overs" % runs
-        overs = echo.split_overs(echo.events("dstar", list(dstar.client.inbox), list(dstar.client.inbox_times)))
-        note(target, "E5b", "RECORD", "D-STAR listener heard %d over(s) of the USRP over (through the transcoder)" % len(overs))
-        assert len(overs) <= 1, "the D-STAR listener heard %d overs of one USRP over" % len(overs)
+        runs = split_runs(listener.voice_packets())
     finally:
-        if drain is not None:
-            drain.stop()
         talker.close()
         listener.close()
-        clients.close(dstar)
+    note(target, "E1e", "RECORD", "USRP listener heard runs of %s voice packets; replay starts %s s after the last packet of the over" % (
+        [len(r) for r in runs], [round(r[0][0] - end, 2) for r in runs[1:]]))
+    assert runs and len(runs[0]) >= FRAMES_E1 * 0.5, "precondition: the USRP listener did not hear the over"
+    TALLY["played"] += max(0, len(runs) - 1)
+    assert len(runs) == 2, "a dynamic-hub USRP over: %d runs heard, want the over and one replay" % len(runs)
+    gap = runs[1][0][0] - runs[0][-1][0]
+    assert echo.in_window(gap, START_LOW, START_HIGH), "replay starts %.2f s after the over, want %.1f..%.1f" % (gap, START_LOW, START_HIGH)
+    assert [d[32:] for _, d in runs[1]] == [d[32:] for _, d in runs[0]], "the replayed PCM is not what the listener heard of the over"
+    assert len(runs[1]) == len(runs[0]) == FRAMES_E1, "voice packets %d / %d, want %d" % (len(runs[0]), len(runs[1]), FRAMES_E1)
+
+
+def test_e5b_static_usrp_peer_over_is_not_replayed(echo_rig, target):
+    """A static [[edges.usrp.endpoint]] row is a peer (origin class 2): its overs are not echoed."""
+    if echo_rig.cfg is not None and "edges.usrp.endpoint" not in echo_rig.cfg.original:
+        pytest.skip("no static USRP peer on E: add rig/config/dv-router/echo-usrp-peer.toml to DVT_SUT_CONFIG_EXTRA")
+    addr = usrp_hub(echo_rig, target)
+    listener = usrp_join(addr, "N0TEST")
+    peer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    peer.bind(("0.0.0.0", 32003))
+    peer.setblocking(False)
+    heard = []
+    try:
+        dest = (echo_rig.ip, 34003)
+        pcm = signals.frames(signals.tone(700, FRAMES_E1 * 20))
+        start = time.monotonic() + 0.1
+        for i, frame in enumerate(pcm):
+            pace(start, i, 0.020)
+            peer.sendto(usrp.voice(i, frame), dest)
+            listener.pump(0)
+        peer.sendto(usrp.unkey(len(pcm)), dest)
+        end = time.monotonic()
+        stop = end + echo_rig.delay + 3.0 + 2.0
+        while time.monotonic() < stop:
+            listener.pump(0.1)
+            try:
+                while True:
+                    heard.append((time.monotonic(), peer.recv(2048)))
+            except BlockingIOError:
+                pass
+        runs = split_runs(listener.voice_packets())
+    finally:
+        peer.close()
+        listener.close()
+    peer_runs = split_runs([(t, d) for t, d in heard if len(d) == usrp.VOICE_SIZE and usrp.type_le(d) == 0 and usrp.parse(d).keyup == 1])
+    note(target, "E5b", "RECORD", "static USRP peer over: the dynamic listener heard runs %s, the peer itself heard runs %s" % (
+        [len(r) for r in runs], [len(r) for r in peer_runs]))
+    assert runs and len(runs[0]) >= FRAMES_E1 * 0.5, "precondition: the USRP listener did not hear the static peer's over"
+    assert len(runs) == 1, "an over of a static USRP peer (origin class 2) was replayed: the listener heard %d runs" % len(runs)
+    assert len(peer_runs) == 0, "the static peer heard %d runs of voice (a replay to it)" % len(peer_runs)
 
 
 def test_e5c_m17_peer_over_is_not_replayed(echo_rig, target, request):
@@ -483,8 +557,7 @@ def test_e6_floor_is_busy_during_the_replay(echo_rig, target):
     heard = {f for o in overs for f in o.frames}
     leaked = [f for f in f1 if f in heard]
     replay = next((o for o in overs if o.start > end_a + 0.05), None)
-    TALLY["played"] += 1 if replay is not None else 0
-    TALLY["played_maybe"] += 1                            # the replay of the second human over, not asserted here
+    TALLY["played"] += (1 if replay is not None else 0) + len([o for o in overs if o.start > end_i2 + 0.05])
     assert not leaked, "%d of %d frames of the human who keyed during the replay were relayed (the floor is busy: DENY 7)" % (
         len(leaked), len(f1))
     assert replay is not None, "no replay"
@@ -569,7 +642,7 @@ def test_e7_telemetry_counts_the_overs(echo_rig, target):
     assert got["short"] >= TALLY["short"], "result=short moved by %d, the cases made %d" % (got["short"], TALLY["short"])
     if got["short"] > TALLY["short"]:
         note(target, "telemetry", "FINDING", "result=short moved by %d, the cases made %d short overs (DMR / YSF link joins "
-             "are empty streams; not asserted)" % (got["short"], TALLY["short"]))
+             "are empty streams; dv-router: not intended, a follow-up counts only streams with a voice unit; not asserted)" % (got["short"], TALLY["short"]))
     assert metrics_mod.families(text or "") >= {"dv_echo_overs_total"}
 
 

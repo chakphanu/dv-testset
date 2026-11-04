@@ -32,7 +32,7 @@ Duration is the pytest time of the run. Repo head is the dv-testset commit the r
 | A | AllStar edge (30 cases of `cases/test_asl_edge.py` plus DVSwitch Mobile, phone and radio) | see the document | see the document | 30 of 30 accounted: pass, the long and stand-in variants included; R1-R7 clean run 10 passed in 104 s on a fresh rig (`20261104T001310Z`) | n/a | n/a | pass, `docs/asl-edge-results.md` (c165c93 column; the first R1 failure was a lab artifact, F-R1) |
 | S1 | SOAK1 GA (`DVT_SOAK=1 DVT_SOAK_GA=1`, `web.toml:totp-required.toml:soak-edges.toml`, `--profile web,webload`, `cases/test_web_soak.py`) | `2721dec` | `20261104T031836Z` | 0 / 1 / 0 | 59 min 20 s | 1.23 -> 3.53 | judge verdict FAIL (`rss:dv-svc-status`) recorded as is; ruled a known bounded LEAK1 item, see the notes. Everything else passes |
 | S2 | S3 superset, 2 hours | | | | | | pending |
-| E | ECHO1 / ECHO1c (`cases/test_echo.py`; `echo.toml:echo-peers.toml:xlx-peer.toml`, `--profile interlink`) | `8b8afea` + case fixes | `20261104T051933Z` (in the echo worktree's `out/`) | 28 / 2 / 2 | 6 min 00 s | 3.3 at the end | 2 failures, both the SUT's: E5b USRP over replayed, E1c YSF replay not the sent frames (FE1, FE2); 2 skips: NXDN / P25 and two-node (not reachable) |
+| E | ECHO1 / ECHO1c (`cases/test_echo.py`; `echo.toml:echo-usrp-peer.toml:echo-peers.toml:xlx-peer.toml`, `--profile interlink`) | `8b8afea` + case fixes | `20261104T051933Z` (full, in the echo worktree's `out/`), targeted `20261104T052813Z`, `20261104T053017Z`, `20261104T053126Z` | full 28 / 2 / 2, then E1e + E5b rewritten and passing | 6 min 00 s (full) | 3.3 at the end | 1 open failure, the SUT's: E1c YSF replay does not carry the sent frames (FE2); FE1 (dynamic USRP echoed) was intended and closed; 2 skips: NXDN / P25 and two-node (not reachable) |
 
 ## Per-step notes
 
@@ -96,8 +96,8 @@ New on wip-c165c93:
 | F9 | TOTP1b login banner case | `test_operator_login_with_totp_step` (3 engines): `#auth-error` no longer exists after the page clears the stale banner, `expect(...).not_to_contain_text(...)` on a missing element fails (`out/20261104T003849Z/pytest.log`) | the banner element stayed, empty | closed: test bug, product behaviour intended; case fixed in `0af7aa6` (ruled by the main session); rerun 3 / 0 / 0 (`20261104T012439Z`) |
 | F-R1 | AllStar R1 cadence | the first run of the R1-R7 selection failed on the refresh cadence (`20261103T232417Z`) | pass | closed: lab artifact (dv-router ruling 2026-11-04, details in `docs/asl-edge-results.md`); R1-R7 judge the last edge process only; clean run `20261104T001310Z` 10 passed (`docs/asl-edge-results.md`) |
 
-| FE1 | ECHO1 origin class | E5b: a USRP over from a dynamic-hub client on module E is replayed 1.0 s after its end (150 packets, a 1.0 s hole, 150 more; `20261104T051933Z/echo.txt`) | brief: USRP (class 2) is not replayed | open: ruling needed (are dynamic-hub clients class 0?) |
-| FE2 | ECHO1 YSF replay | E1c YSF: the replay has 155 frames and none of the 150 sent; the live relay is byte-identical to the sent frames; D-STAR and DMR replays are identical | spec: replay byte-identical | open: reported to dv-router |
+| FE1 | ECHO1 origin class | E5b: a USRP over from a dynamic-hub client on module E is replayed 1.0 s after its end (150 packets, a 1.0 s hole, 150 more; `20261104T051933Z/echo.txt`) | brief: USRP (class 2) is not replayed | closed, intended (ruling 2026-11-04): dynamic-hub clients are class 0 local clients and are echoed; static `[[edges.usrp.endpoint]]` rows are class 2. E5b now uses a static peer (`echo-usrp-peer.toml`), the dynamic client is E1e; both pass |
+| FE2 | ECHO1 YSF replay | E1c YSF: the replay has 155 frames (one extra trailing pad packet; header `fi=0`, voice `fi=1`, terminator `fi=2`, as in the live relay) and none of the 150 sent audio frames; the live relay is byte-identical to the sent frames; D-STAR and DMR replays are identical. Bytes in `docs/echo-cases.md` | spec: replay byte-identical | open: reported to dv-router |
 
 Carried over from `docs/results-wip-71ab207.md` and all closed there by ruling (nothing reopened on c165c93): F1 TOTP1 default is optional (steps
 use `totp-required.toml` except 5a), F2 user TOTP offer needs a step-up (403 `step_up_required`), F3 K22 lease end is a test race (204 then 401 and/or
@@ -152,5 +152,5 @@ DVT_SOAK=1 DVT_SOAK_GA=1 DVT_SUT_CONFIG_EXTRA=$W:$T:$C/soak-edges.toml scripts/r
 # 11
 DVT_NAT_SHORT=1 DVT_SUT_CONFIG_EXTRA=$W:$C/turn.toml:$T scripts/run.sh -m rig --profile web,browser,nat -- cases/test_web_nat.py
 # E
-DVT_SUT_CONFIG_EXTRA=$C/echo.toml:$C/echo-peers.toml:$C/xlx-peer.toml scripts/run.sh -m rig --profile interlink -- cases/test_echo.py
+DVT_SUT_CONFIG_EXTRA=$C/echo.toml:$C/echo-usrp-peer.toml:$C/echo-peers.toml:$C/xlx-peer.toml scripts/run.sh -m rig --profile interlink -- cases/test_echo.py
 ```
