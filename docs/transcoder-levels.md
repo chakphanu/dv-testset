@@ -17,10 +17,14 @@ Question from dv-router: which transcoder image tag to deploy. Three tags, the r
   One `run.sh` run per tag, `DVT_TRANSCODER_LEVELS=1` switches the case on, the real transcoder (no `DVT_TRANSCODER_FAKE`).
 - Nine pairs: M17 -> DMR, D-STAR, YSF; DMR -> D-STAR, M17, YSF; D-STAR -> DMR, M17, YSF. Per source protocol one talker and one listener of each target protocol
   on module H of the SUT; every listener hears every over.
-- Signals: the 700 Hz tone (amp 8000, active level -15.2 dBFS, 3 s) and **real speech**: three CMU ARCTIC utterances (bdl a0001 3.2 s, slt a0002 3.8 s,
-  bdl a0003 3.4 s; 8 kHz, English, fetched by `scripts/pre-fetch-speech.sh`, never committed) each scaled to an active level of -26, -20 and -14 dBFS (frames above
-  -50 dBFS count as active; peaks are clipped at 16 bit). The vocoder session used three Thai clips; they are not in this repository, ARCTIC is what the rig has.
-  Each signal is encoded into the talker's codec by transcoder-ref (so the talker's frames are real vocoder output of the same tag).
+- Signals: the 700 Hz tone (amp 8000, active level -15.2 dBFS, 3 s) and **real speech**: the three Thai clips the vocoder session measured
+  (`thai_fixed`, `porjai02`, `porjai03`; 8 kHz S16LE, the first 6.0 s of each; `thai_fixed` is the `thai_fixed_pk12.pcm` of the vocoder project's level
+  scratch directory, the other two its `tests/differential/ambe2400/crossdecode/porjai_thai_0{2,3}/source.pcm`), each scaled to an active level of
+  -26, -20 and -14 dBFS (frames above -50 dBFS count as active; peaks are clipped at 16 bit). Provenance and licence: copied from material that is
+  already on this host (nothing was downloaded); the repository records no licence for it, so the clips are **not committed** (git-ignored
+  `.cache/speech-levels/`); sha256 of the 8 kHz files used: `thai_fixed` 4f16b002...92c (96000 bytes), `porjai02` 56a20255...d63 (96000 bytes),
+  `porjai03` b3f4c9a2...446c (65280 bytes). Without them the case falls back to CMU ARCTIC utterances (`scripts/pre-fetch-speech.sh`; the rows are then
+  labelled `arctic_*`). Each signal is encoded into the talker's codec by transcoder-ref (so the talker's frames are real vocoder output of the same tag).
 - Measurement: the listener's frames of the over are decoded by transcoder-ref ("reference decoder = transcoder-ref direct", the same tag) to PCM; reported
   per (pair, tag, signal): `rms` (16-bit units, whole signal), active dBFS, delta to the source's active dBFS, frames received / sent (drops), content:
   tone = dominant frequency within 80 Hz of 700 and at least half of the spectrum within 60 Hz; speech = log-energy envelope correlation with the source

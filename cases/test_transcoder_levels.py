@@ -5,8 +5,8 @@ Run it once per tag: `TRANSCODER_IMAGE=<tag> DVT_TRANSCODER_LEVELS=1 scripts/run
 transcoder-ref and transcoder-sut both run the tag). Skips unless DVT_TRANSCODER_LEVELS=1, with the fake transcoder, or without transcoder-ref.
 
 For each of nine pairs (M17 -> DMR, D-STAR, YSF; DMR -> D-STAR, M17, YSF; D-STAR -> DMR, M17, YSF) a talker keys, on one module, the 700 Hz tone
-(amp 8000) and three real speech clips (CMU ARCTIC, 8 kHz, scaled to an active level of -26, -20 and -14 dBFS: `.cache/speech-levels/8k` or
-`.cache/speech/8k`, scripts/pre-fetch-speech.sh) encoded by transcoder-ref into the talker's codec; listeners of the other protocols hear it
+(amp 8000) and three real speech clips (the Thai clips thai_fixed, porjai02, porjai03 of the vocoder session, 8 kHz, first 6 s, git-ignored in
+`.cache/speech-levels/`; CMU ARCTIC from scripts/pre-fetch-speech.sh stands in when they are absent) scaled to an active level of -26, -20 and -14 dBFS, encoded by transcoder-ref into the talker's codec; listeners of the other protocols hear it
 through the SUT and transcoder-ref decodes their frames. One JSON row per measurement goes to out/<run>/transcoder-levels.jsonl
 (`python3 -m dvtest.tools.levels_table` makes the table). The cases assert delivery (frames) and content (tone: the dominant frequency; speech:
 the log-energy envelope follows the source); the levels are data.
@@ -32,7 +32,10 @@ ROOT = Path(__file__).resolve().parents[1]
 MODULE = "H"
 CODEC = {"dmr": ambed.AMBE2PLUS, "dstar": ambed.AMBEPLUS, "m17": ambed.CODEC2_3200, "ysf": ambed.AMBE2PLUS}
 TARGETS = {"m17": ("dmr", "dstar", "ysf"), "dmr": ("dstar", "m17", "ysf"), "dstar": ("dmr", "m17", "ysf")}
-CLIPS = (("bdl", "arctic_a0001"), ("slt", "arctic_a0002"), ("bdl", "arctic_a0003"))
+CLIPS = ("thai_fixed", "porjai02", "porjai03")
+# the same three Thai clips the vocoder session measured (git-ignored, copied to .cache/speech-levels/<name>.raw, 8 kHz S16LE, first 6 s);
+# without them the CMU ARCTIC clips of scripts/pre-fetch-speech.sh stand in (and the rows say "arctic")
+ARCTIC_FALLBACK = {"thai_fixed": ("bdl", "arctic_a0001"), "porjai02": ("slt", "arctic_a0002"), "porjai03": ("bdl", "arctic_a0003")}
 LEVELS = (-26, -20, -14)
 FREQ = 700
 LOAD_MODULES = "ABCDFGHIJKLOPQRS"            # 16 modules, not E / M / N (echo, M17 peers)
@@ -64,22 +67,28 @@ def emit(rig, row):
         pass
 
 
-def clip_pcm(speaker, uid):
+def clip_pcm(name):
+    """(label, pcm) of a clip: the Thai clip under .cache/speech-levels, else the ARCTIC stand-in."""
+    path = ROOT / ".cache" / "speech-levels" / (name + ".raw")
+    if path.is_file():
+        data = path.read_bytes()
+        return name, data[:len(data) // 2 * 2]
+    speaker, uid = ARCTIC_FALLBACK[name]
     for base in (ROOT / ".cache" / "speech-levels" / "8k", ROOT / ".cache" / "speech" / "8k"):
         path = base / speaker / (uid + ".raw")
         if path.is_file():
             data = path.read_bytes()
-            return data[:len(data) // 2 * 2]
-    pytest.skip("no speech clip %s/%s under .cache/speech-levels/8k or .cache/speech/8k: scripts/pre-fetch-speech.sh" % (speaker, uid))
+            return "arctic_" + uid[-4:], data[:len(data) // 2 * 2]
+    pytest.skip("no speech clip %s: copy it to .cache/speech-levels/%s.raw or run scripts/pre-fetch-speech.sh" % (name, name))
 
 
 def source_signals():
     """[(name, pcm)]: the tone and the clips at the three levels."""
     out = [("tone", b"".join(signals.frames(signals.tone(FREQ, 3000))))]
-    for speaker, uid in CLIPS:
-        raw = clip_pcm(speaker, uid)
+    for clip in CLIPS:
+        label, raw = clip_pcm(clip)
         for level in LEVELS:
-            out.append(("%s@%d" % (uid[-5:], level), crossaudio.scale_active(raw, level)))
+            out.append(("%s@%d" % (label, level), crossaudio.scale_active(raw, level)))
     return out
 
 
@@ -151,7 +160,7 @@ def test_load_16_streams(levels):
     """16 cross-mode streams at once (the nine pairs in turn), each a speech clip repeated for about 20 s at -20 dBFS: frames received
     per stream, and the window (epoch seconds) in out/<run>/transcoder-levels-load.json, to read the transcoder CPU of the same window."""
     rig = levels
-    raw = clip_pcm(*CLIPS[0])
+    _label, raw = clip_pcm(CLIPS[0])
     one = crossaudio.scale_active(raw, -20)
     pcm = (one + bytes(2 * 8000 // 2)) * 6
     result = {}
