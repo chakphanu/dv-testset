@@ -461,3 +461,63 @@ def test_gen_c165c93_removes_fabric_subtables_too():
     text = "[node]\na = 1\n[fabric.sub]\nb = 2\n[log]\nlevel = \"info\"\n"
     out = sut_config.apply_gen(text, "c165c93")
     assert "fabric" not in out and "[node]" in out and "[log]" in out
+
+
+MMDVM_TEMPLATE = """\
+schema = 1
+[fabric]
+acl = true
+[edges.mmdvm]
+enable = true
+[edges.mmdvm.limits]
+x = 1
+[[edges.mmdvm.peer]]
+id = 1
+[edges.mmdvmx]
+keep = true
+[edges.dmrplus]
+enable = true
+"""
+
+
+def test_gens_are_ordered_and_the_default_is_c165c93(monkeypatch):
+    monkeypatch.delenv("DVT_SUT_GEN", raising=False)
+    assert sut_config.GENS == ("71ab207", "c165c93", "c2465de") and sut_config.gen_value() == "c165c93"
+    assert sut_config.gen_at_least("c2465de", "c165c93") and not sut_config.gen_at_least("c165c93", "c2465de")
+    assert sut_config.gen_at_least("c165c93", "71ab207")
+
+
+def test_c2465de_renames_the_dmr_homebrew_edge_and_nothing_else(monkeypatch):
+    monkeypatch.setenv("DVT_SUT_GEN", "c2465de")
+    out = sut_config.render(MMDVM_TEMPLATE, "172.30.0")
+    for header in ("[edges.dmrhb]", "[edges.dmrhb.limits]", "[[edges.dmrhb.peer]]", "[edges.mmdvmx]", "[edges.dmrplus]"):
+        assert header in out, header
+    assert "[edges.mmdvm]" not in out and "edges.mmdvm." not in out and "[[edges.mmdvm" not in out
+    assert "fabric" not in out                                   # the c165c93 changes are included
+    tomllib.loads(out)
+
+
+def test_older_gens_keep_mmdvm(monkeypatch):
+    monkeypatch.delenv("DVT_SUT_GEN", raising=False)
+    out = sut_config.render(MMDVM_TEMPLATE, "172.30.0")          # default c165c93
+    assert "[edges.mmdvm]" in out and "[[edges.mmdvm.peer]]" in out and "dmrhb" not in out and "fabric" not in out
+    old = sut_config.render(MMDVM_TEMPLATE, "172.30.0", gen="71ab207")
+    assert old == MMDVM_TEMPLATE
+
+
+def test_edge_name_and_env_prefix_by_generation():
+    assert sut_config.edge_name("mmdvm", "c2465de") == "dmrhb" and sut_config.edge_name("mmdvm", "c165c93") == "mmdvm"
+    assert sut_config.edge_name("mmdvm", "71ab207") == "mmdvm"
+    assert sut_config.edge_name("dextra", "c2465de") == "dextra"           # every other edge keeps its name
+    assert sut_config.env_prefix("mmdvm", "c2465de") == "DV_DMRHB_" and sut_config.env_prefix("mmdvm", "c165c93") == "DV_MMDVM_"
+    assert sut_config.env_prefix("dmrplus", "c2465de") == "DV_DMRPLUS_"
+
+
+def test_edge_name_follows_the_environment(monkeypatch):
+    monkeypatch.setenv("DVT_SUT_GEN", "c2465de")
+    assert sut_config.edge_name("mmdvm") == "dmrhb"
+    monkeypatch.delenv("DVT_SUT_GEN")
+    assert sut_config.edge_name("mmdvm") == "mmdvm"
+    monkeypatch.setenv("DVT_SUT_GEN", "bogus")
+    with pytest.raises(sut_config.ConfigError):
+        sut_config.edge_name("mmdvm")

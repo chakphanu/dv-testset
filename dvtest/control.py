@@ -50,8 +50,9 @@ KILL_PROC_ALLOWED = {
 # read: kill-proc never signals it. "list" prints pid, ppid and comm of every process of the container.
 PROC_STAT_NAMES = (
     "dv-router",                # the launcher
-    # every edge is its own binary (there is no combined edge)
-    "dv-edge-dextra", "dv-edge-dplus", "dv-edge-dcs", "dv-edge-mmdvm", "dv-edge-dmrplus", "dv-edge-ysf",
+    # every edge is its own binary (there is no combined edge); dv-edge-dmrhb is the DMR Homebrew edge from wip-c2465de on (it was
+    # dv-edge-mmdvm: both are listed, the image has one of them)
+    "dv-edge-dextra", "dv-edge-dplus", "dv-edge-dcs", "dv-edge-mmdvm", "dv-edge-dmrhb", "dv-edge-dmrplus", "dv-edge-ysf",
     "dv-edge-m17", "dv-edge-g3", "dv-edge-imrs", "dv-edge-xlx", "dv-edge-nxdn", "dv-edge-p25", "dv-edge-usrp",
     "dv-edge-webrtc",           # the web load test: edge cpu and peak RSS
     "dv-edge-allstar",          # asl-edge: T11 reads the edge cpu under a NEW/POKE flood

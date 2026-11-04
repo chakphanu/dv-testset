@@ -35,7 +35,7 @@
 # Explicit list, never a pattern: every edge is its own binary (no combined edge); aprsis, ax25, codec-ambed and
 # the svc-* ones exist only when enabled. Keep in step with PROC_STAT_NAMES of dvtest/control.py (unit test).
 DVT_PROCSTAT_NAMES="dv-router \
-  dv-edge-dextra dv-edge-dplus dv-edge-dcs dv-edge-mmdvm dv-edge-dmrplus dv-edge-ysf \
+  dv-edge-dextra dv-edge-dplus dv-edge-dcs dv-edge-mmdvm dv-edge-dmrhb dv-edge-dmrplus dv-edge-ysf \
   dv-edge-m17 dv-edge-g3 dv-edge-imrs dv-edge-xlx dv-edge-nxdn dv-edge-p25 dv-edge-usrp dv-edge-webrtc dv-edge-allstar \
   dv-edge-aprsis dv-edge-ax25 \
   dv-room dv-data-worker dv-codec-ambed \

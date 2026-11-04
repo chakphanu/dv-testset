@@ -51,7 +51,7 @@ and the lane is dropped with a reason (`soak.json` `lanes_dropped`, a `FINDING:`
    allow-listed children of the launcher plus the launcher itself; children outside the allow-list are reported (`children_unsampled`).
    A child that is not running (an edge or service that is not enabled) is simply not listed: not an error. The allow-list is explicit
    (`scripts/lib/procstat.sh`, `dvtest/control.py`, a unit test compares both): `dv-router` (the launcher), the edges `dv-edge-dextra`, `-dplus`,
-   `-dcs`, `-mmdvm`, `-dmrplus`, `-ysf`, `-m17`, `-g3`, `-imrs`, `-xlx`, `-nxdn`, `-p25`, `-usrp`, `-webrtc`, `-aprsis`, `-ax25` (every edge is its own
+   `-dcs`, `-mmdvm` (`-dmrhb` from wip-c2465de on, `DVT_SUT_GEN=c2465de`, docs/rig.md), `-dmrplus`, `-ysf`, `-m17`, `-g3`, `-imrs`, `-xlx`, `-nxdn`, `-p25`, `-usrp`, `-webrtc`, `-aprsis`, `-ax25` (every edge is its own
    binary, there is no combined edge), `dv-room`, `dv-data-worker`, `dv-codec-ambed` and `dv-svc-status`, `-web`, `-admin`, `-iddb`, `-idsync`,
    `-callhome`, `-recorder`.
 2. Before any traffic: three samples 10 s apart (phase `idle0`: the quiet baseline) and a counter snapshot.

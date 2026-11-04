@@ -77,12 +77,17 @@ def require_ident_value(value=None):
     return value
 
 
-# DV-Router generations the rig knows. DVT_SUT_GEN selects the config dialect of the image under test. The default is the newest,
-# wip-c165c93 (ACL0c-f, NOX1, CFG2, TOTP1b), which turns keys that were warnings into errors: the `[fabric]` table (the broker ACL
-# is gone), access.allow_file / deny_file, callhome interlink_file. DVT_SUT_GEN=71ab207 keeps the old dialect (the rendered file is
-# the template as it was); wip-71ab207 accepts the c165c93 dialect too (checked with dvtest/tools/config_check.py).
-GENS = ("71ab207", "c165c93")
+# DV-Router generations the rig knows, oldest first. DVT_SUT_GEN selects the config dialect and the names of the image under test.
+# The default stays wip-c165c93 (ACL0c-f, NOX1, CFG2, TOTP1b), which turns keys that were warnings into errors: the `[fabric]` table
+# (the broker ACL is gone), access.allow_file / deny_file, callhome interlink_file. `71ab207` renders the template as it was (c165c93
+# accepts the c165c93 rendering too: dvtest/tools/config_check.py). `c2465de` (tags >= wip-c2465de) also renames the DMR Homebrew edge
+# "mmdvm" to "dmrhb": child dv-edge-dmrhb, edge id dmrhb-<inc>, API/events edge "dmrhb", metrics label proc="dmrhb", config table
+# [edges.dmrhb] ([edges.mmdvm] still loads for one release, with a warning), env DV_MMDVM_* -> DV_DMRHB_*; wire id 2 and UDP 62030 are
+# unchanged. The MMDVM PROTOCOL name (spec entry "mmdvm", dvtest/proto/dmr.py, the xlxd reference side) is not renamed.
+GENS = ("71ab207", "c165c93", "c2465de")
 DEFAULT_GEN = "c165c93"
+RENAMES = {"mmdvm": "dmrhb"}          # edge name before -> from generation c2465de on
+RENAMED_FROM = "c2465de"
 
 
 def gen_value(value=None):
@@ -94,15 +99,39 @@ def gen_value(value=None):
     return value
 
 
+def gen_at_least(gen, minimum):
+    """True when generation `gen` is `minimum` or newer."""
+    return GENS.index(gen_value(gen)) >= GENS.index(minimum)
+
+
+def edge_name(name, gen=None):
+    """The name of an edge (child dv-edge-<name>, API / events edge id, metrics label proc, [edges.<name>]) on generation `gen` (else
+    env DVT_SUT_GEN, else the default): "mmdvm" is "dmrhb" from c2465de on, every other name is unchanged."""
+    return RENAMES.get(name, name) if gen_at_least(gen, RENAMED_FROM) else name
+
+
+def env_prefix(name, gen=None):
+    """The DV_<NAME>_ environment prefix of an edge on generation `gen`: DV_MMDVM_ before c2465de, DV_DMRHB_ from then on."""
+    return "DV_%s_" % edge_name(name, gen).upper()
+
+
+_EDGES_HEADER = re.compile(r"^(\s*\[\[?\s*)edges\.mmdvm(\b)")
+
+
 def apply_gen(text, gen):
-    """The rendered text in the dialect of generation `gen`. 71ab207: unchanged. c165c93: the `[fabric]` table is removed (the
-    broker ACL is gone: its only key `acl` was ignored with a warning before, and the table itself is an unknown field now, so
-    the validator refuses the file); sub-tables `[fabric.x]` go with it. Other removed keys (access.allow_file / deny_file,
-    callhome interlink_file) are not rewritten: dvtest/tools/config_check.py reports them."""
-    if gen != "c165c93":
+    """The rendered text in the dialect of generation `gen`. 71ab207: unchanged. From c165c93 on: the `[fabric]` table is removed (the
+    broker ACL is gone: its only key `acl` was ignored with a warning before, and the table itself is an unknown field now, so the
+    validator refuses the file); sub-tables `[fabric.x]` go with it. From c2465de on: every `[edges.mmdvm]`, `[edges.mmdvm.x]` and
+    `[[edges.mmdvm.x]]` header becomes `edges.dmrhb`. Other removed keys (access.allow_file / deny_file, callhome interlink_file) are
+    not rewritten: dvtest/tools/config_check.py reports them."""
+    gen = gen_value(gen)
+    if gen == "71ab207":
         return text
     parts = [p for p in _split_tables(text) if not (p[0] == "fabric" or (p[0] or "").startswith("fabric."))]
-    return _join_tables(parts)
+    text = _join_tables(parts)
+    if gen_at_least(gen, RENAMED_FROM):
+        text = "\n".join(_EDGES_HEADER.sub(lambda m: m.group(1) + "edges.dmrhb" + m.group(2), line) for line in text.split("\n"))
+    return text
 
 
 def split_extras(value):

@@ -53,7 +53,7 @@ def test_discover_children_of_the_launcher_and_the_unlisted_ones():
 
 
 REAL_CHILDREN = [
-    "dv-edge-dextra", "dv-edge-dplus", "dv-edge-dcs", "dv-edge-mmdvm", "dv-edge-dmrplus", "dv-edge-ysf", "dv-edge-m17", "dv-edge-g3",
+    "dv-edge-dextra", "dv-edge-dplus", "dv-edge-dcs", "dv-edge-mmdvm", "dv-edge-dmrhb", "dv-edge-dmrplus", "dv-edge-ysf", "dv-edge-m17", "dv-edge-g3",
     "dv-edge-imrs", "dv-edge-xlx", "dv-edge-nxdn", "dv-edge-p25", "dv-edge-usrp", "dv-edge-webrtc",
     "dv-room", "dv-data-worker", "dv-codec-ambed", "dv-svc-status", "dv-svc-web", "dv-svc-admin", "dv-svc-iddb", "dv-svc-idsync",
     "dv-svc-callhome", "dv-svc-recorder"]

@@ -20,7 +20,7 @@ SERVICES = ["xlxd-sut", "xlxd-ref", "tester", "XLXD-SUT", "", "*"]
 # the real names (DV-Router, 2026-11-02): every edge is its own binary, there is no combined edge
 REAL_NAMES = {
     "dv-router", "dv-room", "dv-data-worker", "dv-codec-ambed",
-    "dv-edge-dextra", "dv-edge-dplus", "dv-edge-dcs", "dv-edge-mmdvm", "dv-edge-dmrplus", "dv-edge-ysf", "dv-edge-m17", "dv-edge-g3",
+    "dv-edge-dextra", "dv-edge-dplus", "dv-edge-dcs", "dv-edge-mmdvm", "dv-edge-dmrhb", "dv-edge-dmrplus", "dv-edge-ysf", "dv-edge-m17", "dv-edge-g3",
     "dv-edge-imrs", "dv-edge-xlx", "dv-edge-nxdn", "dv-edge-p25", "dv-edge-usrp", "dv-edge-webrtc", "dv-edge-allstar", "dv-edge-aprsis", "dv-edge-ax25",
     "dv-svc-status", "dv-svc-web", "dv-svc-admin", "dv-svc-iddb", "dv-svc-idsync", "dv-svc-callhome", "dv-svc-recorder",
 }
