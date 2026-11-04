@@ -6,6 +6,10 @@ Image content: ACL0a/ACL0b, TOTP1 (optional TOTP), I18N1/I18N1b, IDS1, ECHO1c, A
 time, loadavg and the disk checked before every run (unallocated 1.00 GiB on the root filesystem throughout; owner-only). Every run's load
 is the 1 / 5 / 15 minute average at start and end.
 
+**Verdict for wip-71ab207: NOT releasable (K22 regression, F3). Superseded by `dv-router:wip-c165c93`, the deploy candidate (`docs/results-wip-c165c93.md`).**
+The chain was stopped on the main session's change of plan: SOAK1 GA, the Stage 5 rerun, S3, the echo cases and the reruns of the cases changed by the rulings
+were not run (or not finished) on this image.
+
 ## Summary
 
 | # | Run | Out dir | Passed / failed / skipped | Duration | Load start -> end | Verdict |
@@ -24,13 +28,13 @@ is the 1 / 5 / 15 minute average at start and end.
 | 5b | Data ident `DVT_REQUIRE_IDENT=true` (`--profile interlink`, `--capture`) | `20261103T210903Z` | 8 / 0 / 0 | 5 min 11 s | 1.56 -> 1.76 | pass |
 | 5c | Data ident `DVT_REQUIRE_IDENT=false` | `20261103T211418Z` | 8 / 0 / 0 | 4 min 52 s | 1.94 -> 1.97 | pass |
 | 5d | T14 cross-mode (fake transcoder, import launch, `--capture`) | `20261103T211918Z` | 53 / 0 / 0 | 13 min 05 s | 1.90 -> 1.52 | pass (same as the adaptation pass) |
-| 5e | S3 superset, first try | `20261103T205803Z` | not run | 15 s | 5.4 -> 2.3 | infra error: pytest collection error, `cases/unit/test_echo.py` and uncommitted `cases/test_echo.py` share a basename (another session's echo work in the shared tree); to be rerun |
+| 5e | S3 superset | n/a | not run | n/a | n/a | first try: collection error (basename collision with another session's uncommitted echo cases, since fixed); not run afterwards, superseded by c165c93 |
 | 5f | P19 edge relink (import launch, `--profile interlink,nxdn,p25`, `--capture`) | `20261103T213234Z` | 6 / 0 / 0 | 3 min 43 s | 1.43 -> 1.89 | pass (same as the adaptation pass) |
 | 6a | Stage 5 W8 load, first try | `20261103T213619Z` | not run | 6 s | 1.89 -> 2.21 | infra error: the same docker build snapshot error as 2a (`parent snapshot ... does not exist` on `dvt-web-proxy`); rerun queued as 6b |
 | 7 | Short NAT (`DVT_NAT_SHORT=1`, `turn.toml`, `--profile web,browser,nat`) | `20261103T213634Z` | 17 / 0 / 31 | 16 min 20 s | 2.04 -> 0.86 | pass (same as be207d3: 17 / 0 / 31, 16 min 03 s) |
-| 8a | SOAK1 GA, run 1 | `20261103T215304Z` | no verdict | killed at 2287 s elapsed (about 26.5 min of the 40 min measured part sampled) | 0.72 -> 2.09 | KILLED EXTERNALLY (SIGTERM of the `systemd-run` scope at 22:34:19 UTC; incident below); partial numbers only |
-| 8b | SOAK1 GA, run 2 | `20261104T001943Z` | no verdict | killed at 483 s elapsed | n/a | KILLED EXTERNALLY at about 00:30:40 UTC (incident below) |
-| 6b | Stage 5 W8 load, rerun (`load2`) | `20261103T223432Z` | no verdict | killed after about 80 s | 1.44 -> n/a | KILLED EXTERNALLY at 22:35:51 UTC (incident below) |
+| 8a | SOAK1 GA, run 1 | `20261103T215304Z` | no verdict | stopped at 2287 s elapsed (about 26.5 min of the 40 min measured part sampled) | 0.72 -> 2.09 | ABORTED ON PURPOSE by the main session at 22:34:19 UTC (SIGTERM of `run.sh`; superseded by c165c93); partial numbers only |
+| 8b | SOAK1 GA, run 2 (started by this chain by mistake after the abort order, its message had not been read) | `20261104T001943Z` | no verdict | stopped at 483 s elapsed | n/a | SIGTERM at about 00:30:40 UTC, not by this chain; superseded, not to be repeated |
+| 6b | Stage 5 W8 load, rerun (`load2`) | `20261103T223432Z` | no verdict | stopped after about 80 s | 1.44 -> n/a | ABORTED ON PURPOSE by the main session at 22:35:51 UTC (superseded) |
 | 5e | S3 superset | n/a | not run | n/a | n/a | not rerun: the echo basename collision was fixed in the tree (`cases/unit/test_echo_lib.py`), but the rig was never free for the 2 h run; superseded by the c165c93 chain |
 
 ## Per-step notes
@@ -79,21 +83,25 @@ added.
 |----|------|--------------------------|--------|--------|
 | F1 | TOTP1 default | With `operator_totp = true` / `admin.totp = true` only: first operator login `totp: off` (no enrolment step), admin password-only login 200, admin session `totp: off` | enrol-first, password-only login 401 `totp_required` | EXPECTED (TOTP1), ruled by dv-router: the old keys only warn `is ignored; use ..._totp_required`; `totp-required.toml` is the right setting for the mandatory-enrolment cases; the optional default is covered by `cases/test_web_totp_optional.py` (step 1d) |
 | F2 | TOTP1 step-up | `POST auth/session/totp` as a `user` account answers 403 `step_up_required` (case `test_prefix_minimum_role[POST auth/session/totp \| user]`, `out/20261103T193312Z`) | 400 (API4 documented) | ruled 2026-11-04 (dv-router): TOTP1 supersedes API4's 400; the matrix assertion is now 403 `step_up_required` and `test_user_totp_offer_needs_step_up` covers the step-up path (200 offer, 400 for a malformed body after it). Results: before the update `out/20261103T193312Z` (1 failure), after the update `out/20261103T203247Z` (the matrix case passes; the new case fails on its last assertion, F4). F2 expected (TOTP1), case updated by ruling |
-| F3 | K22 guest lease after the peer is gone | `/rtc/alive` 204 for 29.4 s then 403 `forbidden` (`out/20261103T194120Z`, `test_guest_lease_without_a_peer`) | 204 then 401 (be207d3) | needs ruling (forwarded to dv-router); assertion unchanged |
-| F4 | TOTP1 user offer | after the password step-up a malformed offer body (raw `{`) answers 200, `test_user_totp_offer_needs_step_up` (`cases/test_web_api.py:695`) expects 400 `bad_request` | n/a (new case) | needs ruling (asl1-lab / dv-router); route seems to ignore its body; `out/20261103T203247Z` |
-| F5 | I18N1 admin sign-in text | admin page shows "Admin sign in" / "Manage node configuration and operation." with an EN\|TH switch; `test_admin_spa_loads` waits for "Sign in to the admin interface" (3 engines) | the old text | needs ruling (text change expected under I18N1); assertion unchanged; `out/20261103T203332Z` |
-| F6 | I18N1 ops events table | header cell 2 is "Time (local)"; `test_ops_pages_render` expects "Time (UTC)" (3 engines) | "Time (UTC)" | needs ruling; assertion unchanged; `out/20261103T203332Z` |
-| F7 | login TOTP step | after a wrong code, refilling the password field drops the TOTP code field, `test_operator_login_with_totp_step` times out on `login-totp` (3 engines); the dedicated wrong-code text itself shows | refill kept the challenge or the case did not refill | needs ruling; assertion unchanged; `out/20261103T203332Z` |
-| F8 | recordings page text | the Recordings page row says "Transmission ended" where `test_recordings_page_lists_and_plays` expects the end reason text "terminator" (3 engines) | "terminator" | needs ruling (I18N1 text change?); assertion unchanged; `out/20261103T204447Z` |
+| F3 | K22 guest lease after the peer is gone | `/rtc/alive` 204 for 29.4 s then 403 `forbidden` (`out/20261103T194120Z`, `test_guest_lease_without_a_peer`) | 204 then 401 (be207d3) | REGRESSION on wip-71ab207 (dv-router ruling 2026-11-04): documented contract is owned record past its lease -> 401 `RTC circuit expired`, then 403 after cleanup; observed 204 x30 then 403 x90 and no 401 window; the same case passed 13 / 0 on be207d3 (`20261102T134922Z`). Evidence: `out/20261103T194120Z/pytest.log:41`. Stays FAIL for this image (case NOT changed for it); dv-router is debugging. Later case change 460f0eb (401 no longer required) belongs to the c165c93 run |
+| F4 | TOTP1 user offer | after the password step-up a malformed offer body (raw `{`) answers 200, `test_user_totp_offer_needs_step_up` (`cases/test_web_api.py:695`) expects 400 `bad_request` | n/a (new case) | closed: intended (dv-router ruling 2026-11-04): the offer route ignores its body, 200 is the answer; case updated by ruling |
+| F5 | I18N1 admin sign-in text | admin page shows "Admin sign in" / "Manage node configuration and operation." with an EN\|TH switch; `test_admin_spa_loads` waits for "Sign in to the admin interface" (3 engines) | the old text | closed: intended UI change (I18N1, dv-router ruling 2026-11-04); case updated 08bffad |
+| F6 | I18N1 ops events table | header cell 2 is "Time (local)"; `test_ops_pages_render` expects "Time (UTC)" (3 engines) | "Time (UTC)" | closed: intended UI change (I18N1, dv-router ruling 2026-11-04); case updated 08bffad |
+| F7 | login TOTP step | after a wrong code, refilling the password field drops the TOTP code field, `test_operator_login_with_totp_step` times out on `login-totp` (3 engines); the dedicated wrong-code text itself shows | refill kept the challenge or the case did not refill | closed: intended UI change (dv-router ruling 2026-11-04: a password edit abandons the challenge); case updated 08bffad |
+| F8 | recordings page text | the Recordings page row says "Transmission ended" where `test_recordings_page_lists_and_plays` expects the end reason text "terminator" (3 engines) | "terminator" | closed: intended since I18N1 (dv-router ruling 2026-11-04: the page maps terminator to "Transmission ended"); case updated 9794597 |
 
-## Incidents: the rig was shared, runs were killed (not product results)
+## Incidents: aborts and kills (not product results)
 
-Project `dvt` has one compose project and one rig; at least two other sessions started runs of their own while this chain was running
-(worktrees `dvt-wt-recordings`: `--profile asl-edge -m asl_lab` loops, and `dvt-wt-rc`: the K22 / WebRTC / recorder reruns and the c165c93 chain).
-Each new `scripts/run.sh` start of another session coincided with a SIGTERM of this chain's run (`Terminated  systemd-run --user --scope ...`
-at the end of the logs) and of the chain scripts themselves (22:34 UTC SOAK1 run 1; 22:35 UTC load2; 00:30 UTC SOAK1 run 2). The chain never
-signalled anything and never ran `--down` (no hang deadline was reached). Consequence: SOAK1 GA, the Stage 5 rerun and S3 have NO verdict on
-`wip-71ab207`; the c165c93 regression (`docs/results-wip-c165c93.md`) supersedes this image for them.
+- 22:34:19 UTC: the main session stopped SOAK1 run 1 on purpose (SIGTERM to `run.sh`): `wip-c165c93` replaced this image as the deploy candidate.
+  The same session then stopped `load2` (22:35:51 UTC) and the queued chains (`chain2`, `chain3`, later `chain4`). The abort messages had not reached
+  this chain: its foreground poll loops blocked for up to 9 minutes and messages are only read between tool calls. Lesson for the next chain: poll in
+  loops of at most 5 minutes.
+- This chain then queued SOAK1 run 2 (`20261104T001943Z`) and a guarded loop against the instruction not to start 71ab207 steps (the order had not been
+  read); that run was SIGTERMed at about 00:30:40 UTC after 483 s (cause not established; other sessions were starting runs of their own in
+  `dvt-wt-rc` and `dvt-wt-recordings` on project `dvt` in those hours). It is no result and is not repeated.
+- Earlier infra errors with no tests run: docker build snapshot error on `dvt-web-proxy` (EDG1 first try, Stage 5 first try), pytest collection error
+  for S3 (basename collision with uncommitted echo cases).
+Consequence: SOAK1 GA, the Stage 5 rerun, S3 and the echo cases have NO verdict on `wip-71ab207`.
 
 Partial LEAK1 numbers from the first SOAK1 run (measured phase only, 26.5 minutes, least-squares slope of RSS, `soak-samples.jsonl`; NOT a verdict,
 the window is 2/3 of the gate and the ring of the status service had not filled):
