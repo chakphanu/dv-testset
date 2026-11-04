@@ -72,7 +72,7 @@ class Scene:
             if not c.link(ip):
                 self.close()
                 raise AssertionError("%s client did not link to %s (module %s)" % (kind, ip, module))
-        self.ends, self.sids, self.sent = [], [], []
+        self.ends, self.sids, self.sent, self.raw = [], [], [], []
         for c in self.made:
             c.client.drain()
             c.client.inbox.clear()
@@ -94,6 +94,7 @@ class Scene:
         self.ends.append(time.monotonic() if self.kind == "ysf" else self.talker.last_stamps[-1])
         self.sids.append(sid)
         self.sent.append(echo.expected_frames(self.kind, frames))
+        self.raw.append(frames)
         self.talk_drain = Drainer(self.talker.client)
         self.talk_drain.start()
         return frames
@@ -109,9 +110,12 @@ class Scene:
         data, times = list(c.client.inbox), list(c.client.inbox_times)
         return data, times
 
-    def overs(self, who, gap=0.4):
+    def overs(self, who, gap=0.4, voiced=True):
+        """The overs `who` heard. voiced: leave out streams without a single voice frame (the empty header +
+        terminator stream of a DMR / YSF join is relayed to the other clients of the module and is no over)."""
         data, times = self.packets(who)
-        return echo.split_overs(echo.events(self.kind, data, times), gap)
+        overs = echo.split_overs(echo.events(self.kind, data, times), gap)
+        return [o for o in overs if o.n_voice > 0] if voiced else overs
 
     def ident(self):
         """The talker as the packets name it: the D-STAR callsign (MY), the DMR id, the M17 / YSF callsign."""

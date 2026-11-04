@@ -54,8 +54,8 @@ talker and a second client of the same kind on module E (both timed by a drain t
 | Case | Test | Asserts |
 |------|------|---------|
 | E1a | `test_e1a_one_replay_after_the_delay` [dstar dmr m17 ysf] | exactly one replay over reaches the listener; it starts 0.8 to 2.0 s after the last packet of the over (spec: about 1.0 s; the value is recorded) |
-| E1b | `test_e1b_talker_identity_is_kept` | the replay names the talker (callsign / DMR id) exactly as the live relay does; D-STAR: a header is synthesized before the voice |
-| E1c | `test_e1c_payload_is_byte_identical_and_about_3_s` | every sent frame is there, in order, byte for byte (a frame list as the talk puts it on the wire: DMR padded to bursts of three, M17 with packet 0 and the EOT repeat, YSF padded to packets of five); the replay equals the live relay frame for frame; length 2.5 to 3.6 s; the stream ends |
+| E1b | `test_e1b_talker_identity_is_kept` | the replay names the talker (callsign / DMR id) as the talker is, and as the live relay does; D-STAR: a header is synthesized before the voice |
+| E1c | `test_e1c_payload_is_byte_identical_and_about_3_s` | every frame sent is in the replay, in order, byte for byte, at its start (the audio frames the talker sent; the live relay is judged the same way and a difference there is only a finding); length 2.5 to 3.6 s; the stream ends. Frames the protocol adds (M17 EOT repeat, pads) are findings, not failures |
 | E1d | `test_e1d_talker_hears_the_replay_too` | the talker's own client hears one replay, the same payload and name as the other listener (D-STAR header included) |
 | E2 | `test_e2_short_over_is_not_replayed` [dstar dmr] | an over of 25 frames (0.5 s) gets no replay within 5.5 s, at the listener and at the talker |
 | E3 | `test_e3_long_over_is_truncated` | with `max_seconds` = 5 (live edit, or `echo-short.toml`) an 8 s over (D-STAR and DMR) is replayed once, 5 s long (+- 0.5), at most `max_seconds * 50` frames and at least 3 fewer than that (whole bundles), the retained prefix identical to what was sent |
@@ -86,6 +86,27 @@ talker and a second client of the same kind on module E (both timed by a drain t
 - Validation of out-of-range values (`max_seconds` 5..120, `delay_ms` 200..10000) and of an unknown module row is not covered.
 - The bridge ping-pong of the design (a bridge to an external parrot) needs a bridge; not built.
 
+## Results (dv-router:wip-c165c93, out/20261104T051933Z): 28 passed, 2 failed, 2 skipped
+
+| Case | Result | Measured |
+|------|--------|----------|
+| E1a | PASS x4 | replay starts 1.00 to 1.01 s after the last packet (D-STAR, DMR, M17, YSF) |
+| E1b | PASS x4 | talker callsign / DMR id kept; D-STAR header present at the listener and the talker |
+| E1c | PASS D-STAR, DMR, M17; **FAIL YSF** | D-STAR 150/150 frames identical, 2.98 s; DMR 150/150, 2.94 s; M17 the 150 audio frames identical + 2 EOT frames (N2). YSF: replay of 155 frames, none of the 150 sent frames found at any offset (frame 0 sent `8e38664559c199e31f`, replay `ce5a01431b895da393`), while the live relay to the YSF listener is byte-identical to what was sent |
+| E1d | PASS x4 | the talker's own client hears the same replay |
+| E2 | PASS (D-STAR, DMR) | 25 frames: no replay in 5.5 s |
+| E3 | PASS (D-STAR, DMR) | max_seconds 5 (live edit): D-STAR 4.98 s / 250 frames, DMR 4.92 s / 249 frames (83 bundles, as the design says); `truncated` +2 |
+| E4 | PASS x4 | exactly one replay, nothing for 3 x delay_ms after it |
+| E5a | PASS | over from the XLX peer XLX998 heard once, not replayed |
+| E5b | **FAIL** | a USRP over from a dynamic-hub client is replayed: the second USRP client heard 150 voice packets, a hole of 1.0 s, 150 more (last packet 3.99 s after the over ended) |
+| E5c | PASS | M17 peer over heard once, not replayed; control: the local M17 over on M is replayed |
+| E5d | not reachable | no NXDN / P25 peer rows in the native rig |
+| E6 | PASS | none of the 60 frames keyed 0.7 s into the replay relayed; replay intact (payload, length); a human over 1.5 s after the replay relayed in full |
+| E7a | PASS | `modules = { E = false }`: no replay; back to true: replay at 1.0 s (4 s waited after each edit) |
+| E7b | PASS | `modules = {}` 0.5 s into a 4 s replay: replay cut at 2.46 s (124 of 200 frames) with an end of stream, a human over 2 s later relayed and not replayed; launcher log "stopping dv-svc-echo" then "starting dv-svc-echo" after the row came back, replay works again |
+| E8 | not reachable | one DV-Router node in the rig |
+| T | PASS | `played` +9 (8 made, 1 unsure), `truncated` +2 (2 made), `short` +4 (2 made); label `room="e"` |
+
 ## Findings
 
 Lines of the form `[FINDING] case: text` go to `out/<run>/echo.txt` and to the pytest output. Not asserted because the
@@ -96,6 +117,14 @@ design leaves the point open:
 | N1 | Room label of `dv_echo_overs_total`: the design says the lower case module letter (`room="e"`), the brief said `room="E"`. The cases compare without regard to case and record the spelling. | T |
 | N2 | Frames the replay carries beyond the frames sent (end pad, EOT repeat): not specified; the count and whether they are silent is recorded. | E1c |
 | N3 | A replay cut by `modules = {}`: complete or closed, both accepted by the spec; the case records which, and asserts that a cut replay ends in an end of stream. | E7b |
-| N4 | `result=short` also moving for link joins of DMR and YSF (empty streams): recorded, not asserted. | T |
+| N4 | `result=short` also moving for link joins of DMR and YSF (empty streams): +4 for 2 short overs made; recorded, not asserted. | T |
+| N5 | Counters of `dv_echo_overs_total` restart from zero when `dv-svc-echo` is stopped by removing the last row and respawned: the telemetry case runs before E7b. | T |
+
+Failures that are the SUT's (assertions unchanged, reported to dv-router):
+
+| ID | Case | Observed |
+|----|------|----------|
+| FE1 | E5b | a USRP over of a dynamic-hub client is replayed 1.0 s after its end. Either dynamic-hub clients are local (class 0) in DV-Router or the class check does not cover them; needs a ruling. |
+| FE2 | E1c YSF | the replay of a YSF over does not carry the sent frames (155 frames, none equal); D-STAR and DMR replays are identical. |
 
 (Results of the runs are in `docs/results-wip-71ab207.md`, section "Echo (ECHO1/ECHO1c)".)

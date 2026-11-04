@@ -128,7 +128,7 @@ def need_cfg(echo_rig, what):
 
 # ---------------------------------------------------------------- E1 / E4: one over per protocol
 
-Run = namedtuple("Run", "kind ident wire end observed_until listener talker delay")
+Run = namedtuple("Run", "kind ident wire raw end observed_until listener talker delay")
 
 
 @pytest.fixture(scope="module", params=KINDS)
@@ -140,7 +140,7 @@ def e1_run(request, echo_rig):
         end = scene.ends[0]
         until = end + echo_rig.delay + echo.over_seconds(FRAMES_E1) + 3 * echo_rig.delay + 1.0
         scene.until(until)
-        run = Run(kind, scene.ident(), scene.sent[0], end, until, scene.overs("listener"), scene.overs("talker"),
+        run = Run(kind, scene.ident(), scene.sent[0], scene.raw[0], end, until, scene.overs("listener"), scene.overs("talker"),
                   echo_rig.delay)
     finally:
         scene.close()
@@ -188,25 +188,37 @@ def test_e1c_payload_is_byte_identical_and_about_3_s(e1_run, target):
     replays = replays_of(e1_run)
     assert len(replays) == 1, "%s: %d replays" % (e1_run.kind, len(replays))
     replay = replays[0]
-    live = echo.compare_payload(e1_run.wire, original.frames)
+    kind = e1_run.kind
+    live = echo.compare_payload(e1_run.raw, original.frames)
+    got = echo.compare_payload(e1_run.raw, replay.frames)
+    note(target, "E1c[%s]" % kind, "RECORD", "sent %d frames (%d on the wire); live relay %d frames, prefix_ok=%s extra=%d; replay %d "
+         "frames, prefix_ok=%s extra=%d; replay equals the live relay: %s; frame 0 sent/live/replay %s / %s / %s" % (
+             len(e1_run.raw), len(e1_run.wire), len(original.frames), live.prefix_ok, len(live.extra), len(replay.frames),
+             got.prefix_ok, len(got.extra), replay.frames == original.frames,
+             e1_run.raw[0].hex(), original.frames[0].hex() if original.frames else "-",
+             replay.frames[0].hex() if replay.frames else "-"))
+    if not got.prefix_ok:
+        raw, heard = e1_run.raw, replay.frames
+        at = next((k for k in range(len(heard) - len(raw) + 1) if heard[k:k + len(raw)] == raw), None)
+        same = sum(1 for a, b in zip(raw, heard) if a == b)
+        note(target, "E1c[%s]" % kind, "RECORD", "replay is not the sent frames from frame 0: the sent frames start at replay frame %s; %d of the first "
+             "%d frames equal; first 6 replay frames %s" % (at, same, len(raw), [f.hex() for f in heard[:6]]))
     if not live.prefix_ok:
-        note(target, "E1c[%s]" % e1_run.kind, "FINDING", "the live relay itself is not byte exact (first difference at "
-             "frame %s of %d): not an echo defect, the replay is judged against the relay too" % (live.first_diff, len(e1_run.wire)))
-    got = echo.compare_payload(e1_run.wire, replay.frames)
+        note(target, "E1c[%s]" % kind, "FINDING", "the live relay itself does not carry the sent frames unchanged (first difference at "
+             "frame %s): not an echo defect" % live.first_diff)
     if got.prefix_ok and got.extra:
-        note(target, "E1c[%s]" % e1_run.kind, "FINDING", "the replay carries %d frame(s) after the %d sent (the live relay: %d): "
-             "%s" % (len(got.extra), len(e1_run.wire), len(live.extra), "all zero" if not any(any(f) for f in got.extra)
-                     else "not zero"))
-    assert got.prefix_ok, "%s: the replay differs from what was sent at frame %s of %d (heard %d, missing %d)" % (
-        e1_run.kind, got.first_diff, len(e1_run.wire), len(replay.frames), got.missing)
-    assert replay.frames == original.frames, "%s: the replay (%d frames) is not what the live relay carried (%d frames)" % (
-        e1_run.kind, len(replay.frames), len(original.frames))
+        note(target, "E1c[%s]" % kind, "FINDING", "the replay carries %d frame(s) after the %d sent (the live relay: %d), %s" % (
+            len(got.extra), len(e1_run.raw), len(live.extra),
+            "all zero" if not any(any(f) for f in got.extra) else "not all zero"))
+    if got.prefix_ok and replay.frames != original.frames:
+        note(target, "E1c[%s]" % kind, "FINDING", "the replay is not frame for frame what the live relay carried (%d vs %d frames): "
+             "lead-in / end frames of the protocol are not part of the sent audio" % (len(replay.frames), len(original.frames)))
+    assert got.prefix_ok, "%s: the replay differs from what was sent at frame %s of %d (heard %d, missing %d; the live relay " \
+        "carried the sent frames unchanged: %s)" % (kind, got.first_diff, len(e1_run.raw), len(replay.frames), got.missing, live.prefix_ok)
     length = echo.duration(replay)
-    note(target, "E1c[%s]" % e1_run.kind, "RECORD", "replay %.2f s, %d voice packets, %d frames" % (
-        length or 0, replay.n_voice, len(replay.frames)))
-    assert echo.in_window(length, LEN_LOW, LEN_HIGH), "%s: replay lasts %s s, want %.1f..%.1f" % (
-        e1_run.kind, length, LEN_LOW, LEN_HIGH)
-    assert replay.ended, "%s: the replay has no end of stream" % e1_run.kind
+    note(target, "E1c[%s]" % kind, "RECORD", "replay %.2f s, %d voice packets" % (length or 0, replay.n_voice))
+    assert echo.in_window(length, LEN_LOW, LEN_HIGH), "%s: replay lasts %s s, want %.1f..%.1f" % (kind, length, LEN_LOW, LEN_HIGH)
+    assert replay.ended, "%s: the replay has no end of stream" % kind
 
 
 def test_e1d_talker_hears_the_replay_too(e1_run, target):
@@ -384,6 +396,10 @@ def test_e5b_usrp_over_is_not_replayed(echo_rig, target):
         assert len(times) >= FRAMES_E1 * 0.5, "precondition: the USRP listener heard %d of %d frames of the over" % (
             len(times), FRAMES_E1)
         runs = count_streams(times)
+        first = min(times)
+        note(target, "E5b", "RECORD", "USRP listener: %d voice packets, %d run(s) of packets, last packet %.2f s after the over ended; "
+             "gaps over 0.2 s at %s" % (len(times), runs, max(times) - end,
+                                         [(round(a - first, 2), round(b - a, 2)) for a, b in zip(sorted(times), sorted(times)[1:]) if b - a > 0.2]))
         assert runs == 1, "a USRP over (origin class 2) was replayed: the USRP listener heard %d overs" % runs
         overs = echo.split_overs(echo.events("dstar", list(dstar.client.inbox), list(dstar.client.inbox_times)))
         note(target, "E5b", "RECORD", "D-STAR listener heard %d over(s) of the USRP over (through the transcoder)" % len(overs))
@@ -521,6 +537,42 @@ def test_e7a_toggle_off_and_on(echo_rig, target):
          "equal polls); the lower bound of the latency is not measured" % echo.reload_wait())
 
 
+# ---------------------------------------------------------------- telemetry (before E7b: removing the last row stops the
+# service, and its counters start again from zero when it is respawned)
+
+def test_e7_telemetry_counts_the_overs(echo_rig, target):
+    if echo_rig.control is None:
+        pytest.skip("no rig control channel (DVT_RIG_CONTROL=1): metrics xlxd-sut is not readable")
+    if not TALLY:
+        pytest.skip("no echo over was made in this run")
+    deadline = time.monotonic() + 40
+    while True:
+        text = hub_text(echo_rig.control)
+        got = {k: v - echo_rig.base[k] for k, v in results(text).items()}
+        if got["played"] >= TALLY["played"] and got["short"] >= TALLY["short"] and got["truncated"] >= TALLY["truncated"]:
+            break
+        if time.monotonic() > deadline:
+            break
+        time.sleep(3.0)
+    time.sleep(11.0)                                       # one more telemetry period: a late extra count shows
+    text = hub_text(echo_rig.control)
+    got = {k: v - echo_rig.base[k] for k, v in results(text).items()}
+    note(target, "telemetry", "RECORD", "dv_echo_overs_total{room=%s} delta %s, made by the cases %s; label spelling %s" % (
+        MODULE.lower(), got, dict(TALLY), sorted(echo.room_label_cases(text or ""))))
+    if "upper" in echo.room_label_cases(text or ""):
+        note(target, "telemetry", "FINDING", "the room label is upper case; the design writes the lower case module letter")
+    certain, maybe = TALLY["played"], TALLY["played_maybe"]
+    assert certain <= got["played"] <= certain + maybe, "result=played moved by %d, the cases made %d (+ up to %d unsure)" % (
+        got["played"], certain, maybe)
+    assert got["truncated"] == TALLY["truncated"], "result=truncated moved by %d, the cases made %d" % (
+        got["truncated"], TALLY["truncated"])
+    assert got["short"] >= TALLY["short"], "result=short moved by %d, the cases made %d" % (got["short"], TALLY["short"])
+    if got["short"] > TALLY["short"]:
+        note(target, "telemetry", "FINDING", "result=short moved by %d, the cases made %d short overs (DMR / YSF link joins "
+             "are empty streams; not asserted)" % (got["short"], TALLY["short"]))
+    assert metrics_mod.families(text or "") >= {"dv_echo_overs_total"}
+
+
 def test_e7b_row_removed_while_playing(echo_rig, target):
     cfg = need_cfg(echo_rig, "E7 edits the rendered TOML")
     scene = Scene(echo_rig.ip, "dstar")
@@ -574,38 +626,3 @@ def test_e7b_row_removed_while_playing(echo_rig, target):
 def test_e8_two_nodes_not_reachable():
     pytest.skip("not reachable: the rig has one DV-Router node; xlxd-peer-sut is an xlxd (no echo), so two echo nodes "
                 "on one XLX link cannot be built from what the rig has")
-
-
-# ---------------------------------------------------------------- telemetry (keep last)
-
-def test_zz_telemetry_counts_the_overs(echo_rig, target):
-    if echo_rig.control is None:
-        pytest.skip("no rig control channel (DVT_RIG_CONTROL=1): metrics xlxd-sut is not readable")
-    if not TALLY:
-        pytest.skip("no echo over was made in this run")
-    deadline = time.monotonic() + 40
-    while True:
-        text = hub_text(echo_rig.control)
-        got = {k: v - echo_rig.base[k] for k, v in results(text).items()}
-        if got["played"] >= TALLY["played"] and got["short"] >= TALLY["short"] and got["truncated"] >= TALLY["truncated"]:
-            break
-        if time.monotonic() > deadline:
-            break
-        time.sleep(3.0)
-    time.sleep(11.0)                                       # one more telemetry period: a late extra count shows
-    text = hub_text(echo_rig.control)
-    got = {k: v - echo_rig.base[k] for k, v in results(text).items()}
-    note(target, "telemetry", "RECORD", "dv_echo_overs_total{room=%s} delta %s, made by the cases %s; label spelling %s" % (
-        MODULE.lower(), got, dict(TALLY), sorted(echo.room_label_cases(text or ""))))
-    if "upper" in echo.room_label_cases(text or ""):
-        note(target, "telemetry", "FINDING", "the room label is upper case; the design writes the lower case module letter")
-    certain, maybe = TALLY["played"], TALLY["played_maybe"]
-    assert certain <= got["played"] <= certain + maybe, "result=played moved by %d, the cases made %d (+ up to %d unsure)" % (
-        got["played"], certain, maybe)
-    assert got["truncated"] == TALLY["truncated"], "result=truncated moved by %d, the cases made %d" % (
-        got["truncated"], TALLY["truncated"])
-    assert got["short"] >= TALLY["short"], "result=short moved by %d, the cases made %d" % (got["short"], TALLY["short"])
-    if got["short"] > TALLY["short"]:
-        note(target, "telemetry", "FINDING", "result=short moved by %d, the cases made %d short overs (DMR / YSF link joins "
-             "are empty streams; not asserted)" % (got["short"], TALLY["short"]))
-    assert metrics_mod.families(text or "") >= {"dv_echo_overs_total"}
