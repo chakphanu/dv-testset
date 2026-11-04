@@ -498,6 +498,9 @@ services:
       DVT_SUT_PROFILE: ${DVT_SUT_PROFILE:-xlxd}
       # 1 = transcoder-sut is the fake extended AMBEd (docs/ambed-fake.md; control <net>.21:10190)
       DVT_TRANSCODER_FAKE: ${DVT_TRANSCODER_FAKE:-}
+      # cases/test_transcoder_levels.py (docs/transcoder-levels.md): 1 = run it; the tag is the transcoder image of this run
+      DVT_TRANSCODER_LEVELS: ${DVT_TRANSCODER_LEVELS:-}
+      DVT_TRANSCODER_TAG: ${TRANSCODER_IMAGE:-}
       # wire cases: transcoder under test when run inside the rig
       DVT_AMBED_ADDR: ${DVT_AMBED_ADDR:-${DVT_NET:-172.30.0}.21}
       # on when xlxd-sut has USRP endpoints (A/B -> allstar, C -> tester)

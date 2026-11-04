@@ -6,6 +6,9 @@ through another protocol, and whether the decoded audio still carries the tone.
   heard_frames(events, t)    the voice frames of the first over after time t in a list of echo.Ev
   tone_report(pcm, freq)     dominant frequency, the share of spectrum power within 60 Hz of freq and the rms of a PCM byte string
   repetition(frames)         (most common frame, how often) - a garbled stream repeats one frame
+  active_dbfs(pcm) / scale_active(pcm, dbfs) / level_summary(pcm)
+                             levels in dBFS (re 32768): rms of the whole signal and of its active 20 ms frames
+  record_row / format_table  one measurement per (pair, tag, signal) as a dict, and the markdown table of a list of them
   gain_check(sent, heard, steps)
                              YSF egress / ingress change only the AMBE+2 gain index b2 (xlxd parity): every bit but b2
                              equal, b2 mapped by the named steps ("p10": YSF ingress +1.0 dB, "m04": YSF egress -0.4 dB)
@@ -13,6 +16,8 @@ through another protocol, and whether the decoded audio still carries the tone.
 The b2 maps are those of DV-Router (crates/lib/radio/src/ambe2.rs, xlxd B2_MAP_PLUS_1_0_DB and the nearest-entry
 fallback of AdjustAmbeGain for -0.4 dB); the ruling and the lab frames are in the report of 2026-11-04 (docs/echo-cases.md).
 """
+import math
+import struct
 from collections import Counter
 
 from . import echo
@@ -68,3 +73,77 @@ def gain_check(sent, heard, steps):
         if not same or nxdn.gain_index(h) != want:
             bad.append((i, nxdn.gain_index(a), nxdn.gain_index(h), want, same))
     return {"checked": n, "bad": bad}
+
+
+# ---------------------------------------------------------------- levels (cases/test_transcoder_levels.py)
+
+FULL_SCALE = 32768.0
+ACTIVE_FLOOR_DBFS = -50.0          # a 20 ms frame quieter than this is a pause
+
+
+def _samples(pcm):
+    return struct.unpack("<%dh" % (len(pcm) // 2), pcm[:len(pcm) // 2 * 2])
+
+
+def _dbfs(rms):
+    return 20 * math.log10(rms / FULL_SCALE) if rms > 0 else -120.0
+
+
+def active_dbfs(pcm, size=160):
+    """rms in dBFS of the frames of `size` samples that are not pauses (rms above ACTIVE_FLOOR_DBFS); -120 when none."""
+    s = _samples(pcm)
+    frames = [s[i:i + size] for i in range(0, len(s) - size + 1, size)]
+    power = [sum(x * x for x in f) / size for f in frames]
+    active = [p for p in power if p > 0 and _dbfs(math.sqrt(p)) > ACTIVE_FLOOR_DBFS]
+    return _dbfs(math.sqrt(sum(active) / len(active))) if active else -120.0
+
+
+def scale_active(pcm, target_dbfs):
+    """`pcm` scaled so that its active level is target_dbfs (samples clipped to 16 bit)."""
+    s = _samples(pcm)
+    gain = 10 ** ((target_dbfs - active_dbfs(pcm)) / 20)
+    return struct.pack("<%dh" % len(s), *[max(-32768, min(32767, int(round(x * gain)))) for x in s])
+
+
+def level_summary(pcm):
+    s = _samples(pcm)
+    rms = math.sqrt(sum(x * x for x in s) / len(s)) if s else 0.0
+    return {"rms": rms, "rms_dbfs": _dbfs(rms), "active_dbfs": active_dbfs(pcm)}
+
+
+def record_row(tag, pair, signal, in_active, sent, got, out, content, extra=None):
+    """One measurement: levels of the decoded audio `out` (a level_summary), content = {"ok", "dominant", "share", "env_corr"}."""
+    row = {"tag": tag, "pair": pair, "signal": signal, "in_active_dbfs": round(in_active, 1), "sent": sent, "got": got,
+           "drops": max(0, sent - got), "rms": round(out["rms"]), "out_active_dbfs": round(out["active_dbfs"], 1),
+           "delta_db": round(out["active_dbfs"] - in_active, 1)}
+    row.update(content)
+    row.update(extra or {})
+    return row
+
+
+def format_table(rows, tags=None):
+    """Markdown table, one line per (pair, signal) with the rms / active dBFS / delta of each tag side by side (rows from record_row)."""
+    tags = tags or sorted({r["tag"] for r in rows})
+    keys = []
+    for r in rows:
+        k = (r["pair"], r["signal"])
+        if k not in keys:
+            keys.append(k)
+    head = "| pair | signal | in act dBFS | " + " | ".join("%s: rms / act dBFS (delta) / got/sent / content" % t for t in tags) + " |"
+    lines = [head, "|" + "---|" * (3 + len(tags))]
+    for pair, signal in keys:
+        cells, in_act = [], ""
+        for t in tags:
+            r = next((x for x in rows if x["tag"] == t and x["pair"] == pair and x["signal"] == signal), None)
+            if r is None:
+                cells.append("-")
+                continue
+            in_act = r["in_active_dbfs"]
+            content = "ok" if r.get("ok") else "BAD"
+            if r.get("dominant") is not None and signal == "tone":
+                content += " %s Hz" % r["dominant"]
+            if r.get("env_corr") is not None and signal != "tone":
+                content += " env %.2f" % r["env_corr"]
+            cells.append("%d / %.1f (%+.1f) / %d/%d / %s" % (r["rms"], r["out_active_dbfs"], r["delta_db"], r["got"], r["sent"], content))
+        lines.append("| %s | %s | %s | %s |" % (pair, signal, in_act, " | ".join(cells)))
+    return "\n".join(lines)

@@ -80,3 +80,42 @@ def test_maps_are_32_entries_and_the_composition_of_the_report():
     assert len(crossaudio.P10) == len(crossaudio.M04) == 32
     comp = [crossaudio.mapped_gain(b, ("p10", "m04")) for b in range(32)]
     assert comp[:20] == [b + 3 for b in range(20)] and comp[30] == 30 and comp[31] == 30
+
+
+def test_levels_active_and_scaling():
+    tone = b"".join(signals.frames(signals.tone(700, 1000, amp=8000)))
+    silence = b"".join(signals.frames(signals.silence(500)))
+    assert crossaudio.active_dbfs(tone) == pytest.approx(20 * __import__("math").log10(8000 / 2 ** 0.5 / 32768), abs=0.1)
+    mixed = silence + tone + silence
+    assert crossaudio.active_dbfs(mixed) == pytest.approx(crossaudio.active_dbfs(tone), abs=0.1)      # pauses do not count
+    assert crossaudio.level_summary(mixed)["rms_dbfs"] < crossaudio.active_dbfs(mixed) - 2
+    assert crossaudio.active_dbfs(silence) == -120.0
+    for target in (-26, -20, -14):
+        assert crossaudio.active_dbfs(crossaudio.scale_active(mixed, target)) == pytest.approx(target, abs=0.2)
+    loud = crossaudio.scale_active(tone, -1.0)
+    assert max(abs(v) for v in __import__("struct").unpack("<%dh" % (len(loud) // 2), loud)) <= 32768
+
+
+def test_record_row_and_table():
+    out = {"rms": 441.2, "rms_dbfs": -37.5, "active_dbfs": -37.0}
+    rows = [crossaudio.record_row(tag, "m17>dmr", "tone", -15.0, 150, 150 if tag == "a" else 140, out,
+                                  {"ok": True, "dominant": 700, "share": 0.9, "env_corr": None}) for tag in ("a", "b")]
+    assert rows[0]["delta_db"] == -22.0 and rows[0]["drops"] == 0 and rows[1]["drops"] == 10 and rows[0]["rms"] == 441
+    table = crossaudio.format_table(rows)
+    lines = table.split("\n")
+    assert len(lines) == 3 and lines[0].startswith("| pair | signal |") and "a: rms" in lines[0] and "b: rms" in lines[0]
+    assert "441 / -37.0 (-22.0) / 150/150 / ok 700 Hz" in lines[2] and "140/150" in lines[2]
+    assert crossaudio.format_table(rows[:1] + [dict(rows[1], pair="x")], ["a", "b"]).count("\n") == 3
+
+
+def test_levels_table_tool_reads_jsonl_files(tmp_path, capsys):
+    import json
+
+    from dvtest.tools import levels_table
+    out = {"rms": 100.0, "rms_dbfs": -50.0, "active_dbfs": -45.0}
+    for i, tag in enumerate(("x", "y")):
+        row = crossaudio.record_row(tag, "dmr>dstar", "tone", -15.0, 150, 150, out, {"ok": True, "dominant": 688, "share": 0.9, "env_corr": None})
+        (tmp_path / ("f%d.jsonl" % i)).write_text(json.dumps(row) + "\n\n")
+    levels_table.main([str(tmp_path / "f0.jsonl"), str(tmp_path / "f1.jsonl")])
+    text = capsys.readouterr().out
+    assert "x: rms" in text and "y: rms" in text and text.count("dmr>dstar") == 1 and "688 Hz" in text
