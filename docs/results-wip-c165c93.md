@@ -30,7 +30,7 @@ Duration is the pytest time of the run. Repo head is the dv-testset commit the r
 | 10 | Stage 5 W8 load (`test_web_load.py`; `web.toml:totp-required.toml`, `--profile web,webload`) | `2721dec` | `20261104T021959Z` | 5 / 0 / 0 | 11 min 59 s | 0.79 -> 1.35 | pass: 200 listeners x 50 pps gate met, worst listener jitter p99 1.57 ms (gate 20 ms, reference c90 4.6 ms), source p99 0.04 ms, see the notes |
 | 11 | Short NAT (`DVT_NAT_SHORT=1`, `web.toml:turn.toml:totp-required.toml`, `--profile web,browser,nat`) | `2721dec` | `20261104T023207Z` | 17 / 0 / 31 | 16 min 03 s | 1.35 -> 3.21 | pass (same as be207d3 and 71ab207: 17 / 0 / 31) |
 | A | AllStar edge (30 cases of `cases/test_asl_edge.py` plus DVSwitch Mobile, phone and radio) | see the document | see the document | 30 of 30 accounted: pass, the long and stand-in variants included; R1-R7 clean run 10 passed in 104 s on a fresh rig (`20261104T001310Z`) | n/a | n/a | pass, `docs/asl-edge-results.md` (c165c93 column; the first R1 failure was a lab artifact, F-R1) |
-| S1 | SOAK1 GA, 65 minutes (`soak-edges.toml`) | | | | | | running (main session); added when it ends |
+| S1 | SOAK1 GA (`DVT_SOAK=1 DVT_SOAK_GA=1`, `web.toml:totp-required.toml:soak-edges.toml`, `--profile web,webload`, `cases/test_web_soak.py`) | `2721dec` | `20261104T031836Z` | 0 / 1 / 0 | 59 min 20 s | 1.23 -> 3.53 | judge verdict FAIL (`rss:dv-svc-status`) recorded as is; ruled a known bounded LEAK1 item, see the notes. Everything else passes |
 | S2 | S3 superset, 2 hours | | | | | | pending |
 | E | ECHO1 / ECHO1c (`cases/test_echo.py`) | | | | | | pending (echo agent) |
 
@@ -73,6 +73,19 @@ not mistaken for a regression (not analysed further here).
 ### 11: short NAT
 
 17 passed, 31 skipped, 0 failed, in 16 min 03 s. The skips are 22 cases "not part of the short profile" and 9 `404 fallback` cases (TURN is configured; they need a run without `turn.toml`).
+
+### S1: SOAK1 GA
+
+Judge verdict FAIL on one rule, `rss:dv-svc-status`: slope 118.3 KiB/min x 2400 s = 4730 KiB against the limit of 4096 KiB (start 14528 KiB, Anon the same
+slope). Ruling (dv-router, 2026-11-04): a known LEAK1 item, bounded. The hub event ring is a compile-time constant of 10 000 events
+(`crates/svc/status/src/hub.rs:44`); the measured part saw 5930 events (148.2 per minute, estimate 172 KiB/min at 1.16 KiB per event, ratio 1.45) and
+7640 at the end, so the ring was still filling. A definitive plateau needs a soak past ring saturation (about 68 minutes after the settle, a 90 minute
+window), required only for the GA verdict. The rule is NOT tuned.
+
+Everything else passes: no restart of any process, threads and fds flat (dv-router 8 threads, 124 fds), the 11 flat counters stay 0, the drops are
+legitimate, 400 of 400 overs, the idle check is clean after a 171 s settle. dv-router RSS passes with 97.6 KiB/min x 2400 s = 3904 KiB (95 percent of
+the limit; 145.8 KiB/min on be207d3), Anon 10340 -> 14200 KiB and still growing, not a plateau. dv-room x26 19.4 to 20.7 KiB/min, dv-edge-webrtc
+30.6 KiB/min. Raw samples and the verdict table stay local (`out/20261104T031836Z/web/soak-samples.jsonl`, `soak.json`).
 
 ## Findings
 
@@ -123,6 +136,8 @@ DVT_TRANSCODER_FAKE=1 DVT_SUT_LAUNCH=import scripts/run.sh -m crossmode --profil
 DVT_SUT_LAUNCH=import scripts/run.sh -m rig --profile interlink,nxdn,p25 -- cases/test_edge_relink.py
 # 10
 DVT_SUT_CONFIG_EXTRA=$W:$T scripts/run.sh -m rig --profile web,webload -- cases/test_web_load.py
+# S1
+DVT_SOAK=1 DVT_SOAK_GA=1 DVT_SUT_CONFIG_EXTRA=$W:$T:$C/soak-edges.toml scripts/run.sh -m rig --profile web,webload -- cases/test_web_soak.py
 # 11
 DVT_NAT_SHORT=1 DVT_SUT_CONFIG_EXTRA=$W:$C/turn.toml:$T scripts/run.sh -m rig --profile web,browser,nat -- cases/test_web_nat.py
 ```
