@@ -119,3 +119,23 @@ def test_levels_table_tool_reads_jsonl_files(tmp_path, capsys):
     levels_table.main([str(tmp_path / "f0.jsonl"), str(tmp_path / "f1.jsonl")])
     text = capsys.readouterr().out
     assert "x: rms" in text and "y: rms" in text and text.count("dmr>dstar") == 1 and "688 Hz" in text
+
+
+def test_summarize_per_pair():
+    out = lambda a: {"rms": 1000.0, "rms_dbfs": a, "active_dbfs": a}  # noqa: E731
+    cont = {"ok": True, "dominant": None, "share": None, "env_corr": 0.99}
+    rows = [crossaudio.record_row("t", "m17>dmr", "tone", -15.0, 150, 150, out(-37.0), cont)]
+    rows += [crossaudio.record_row("t", "m17>dmr", "c@%d" % lvl, lvl, 300, 290, out(lvl - d), dict(cont, ok=d < 5)) for lvl, d in ((-26, 1.0), (-20, 2.0), (-14, 6.0))]
+    text = crossaudio.summarize(rows)
+    line = text.split("\n")[2]
+    assert line.startswith("| m17>dmr |") and "-3.0 (-6.0..-1.0)" in line and "-22.0, 1000" in line and line.endswith("/ 30 / 1 |")
+
+
+def test_cpu_window_and_load_summary():
+    lines = ["100.0 1.00% 1.5MiB / 512MiB", "102.0 5.50% 2.5MiB / 512MiB", "104.0 7.50% 900KiB / 512MiB", "106.0 90.00% 1.0MiB / 512MiB", "bad", ""]
+    n, mean, peak, mem = crossaudio.cpu_window(lines, 101.0, 105.0)
+    assert n == 2 and mean == 6.5 and peak == 7.5 and mem == 2.5
+    load = {"tag": "t", "start": 101.0, "end": 105.0,
+            "streams": {"A": {"sent": 100, "got": 103}, "B": {"sent": 100, "got": 0}, "C": {"pair": "x", "error": "boom"}}}
+    got = crossaudio.load_summary(load, lines)
+    assert got["streams_ok"] == 1 and got["streams"] == 3 and got["lost"] == 100 and got["frames_got"] == 103 and got["cpu_max"] == 7.5

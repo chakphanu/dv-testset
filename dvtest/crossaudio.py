@@ -147,3 +147,64 @@ def format_table(rows, tags=None):
             cells.append("%d / %.1f (%+.1f) / %d/%d / %s" % (r["rms"], r["out_active_dbfs"], r["delta_db"], r["got"], r["sent"], content))
         lines.append("| %s | %s | %s | %s |" % (pair, signal, in_act, " | ".join(cells)))
     return "\n".join(lines)
+
+
+def summarize(rows, tags=None):
+    """Markdown table, one line per pair with, for each tag: the mean level change of the speech rows (min..max), the tone row (active dBFS delta,
+    rms), the frames lost over all rows of the pair and the number of rows whose content check failed."""
+    tags = tags or sorted({r["tag"] for r in rows})
+    pairs = []
+    for r in rows:
+        if r["pair"] not in pairs:
+            pairs.append(r["pair"])
+    head = "| pair | " + " | ".join("%s: speech delta dB mean (min..max) / tone delta dB, rms / lost frames / bad" % t for t in tags) + " |"
+    lines = [head, "|" + "---|" * (1 + len(tags))]
+    for pair in pairs:
+        cells = []
+        for t in tags:
+            mine = [r for r in rows if r["tag"] == t and r["pair"] == pair]
+            speech = [r["delta_db"] for r in mine if r["signal"] != "tone"]
+            tone = next((r for r in mine if r["signal"] == "tone"), None)
+            if not mine:
+                cells.append("-")
+                continue
+            cells.append("%+.1f (%+.1f..%+.1f) / %s / %d / %d" % (
+                sum(speech) / len(speech) if speech else 0.0, min(speech or [0.0]), max(speech or [0.0]),
+                "%+.1f, %d" % (tone["delta_db"], tone["rms"]) if tone else "-",
+                sum(r["drops"] for r in mine), sum(1 for r in mine if not r.get("ok"))))
+        lines.append("| %s | %s |" % (pair, " | ".join(cells)))
+    return "\n".join(lines)
+
+
+def cpu_window(lines, start, end):
+    """(samples, mean cpu %, max cpu %, max memory MiB) of the docker stats lines "<epoch> <cpu>% <mem> / <limit>" inside [start, end]."""
+    cpu, mem = [], []
+    for line in lines:
+        parts = line.split()
+        if len(parts) < 3 or not parts[1].endswith("%"):
+            continue
+        try:
+            t, c = float(parts[0]), float(parts[1].rstrip("%"))
+        except ValueError:
+            continue
+        if start <= t <= end:
+            cpu.append(c)
+            m = parts[2]
+            try:
+                mem.append(float(m[:-3]) / (1024.0 if m.endswith("KiB") else 1.0) if m[-3:] in ("MiB", "KiB") else float(m[:-3]) * 1024.0)
+            except ValueError:
+                pass
+    return (len(cpu), sum(cpu) / len(cpu) if cpu else 0.0, max(cpu or [0.0]), max(mem or [0.0]))
+
+
+def load_summary(load, cpu_lines):
+    """One line for a load run: streams complete / total, frames received / sent, lost, transcoder CPU in the window."""
+    streams = load["streams"]
+    ok = [s for s in streams.values() if "error" not in s and s["got"] >= s["sent"] * 0.9]
+    sent = sum(s.get("sent", 0) for s in streams.values())
+    got = sum(s.get("got", 0) for s in streams.values())
+    lost = sum(max(0, s.get("sent", 0) - s.get("got", 0)) for s in streams.values())
+    n, mean, peak, mem = cpu_window(cpu_lines, load["start"], load["end"])
+    return {"tag": load["tag"], "streams_ok": len(ok), "streams": len(streams), "frames_got": got, "frames_sent": sent, "lost": lost,
+            "window_s": round(load["end"] - load["start"], 1), "cpu_samples": n, "cpu_mean": round(mean, 1), "cpu_max": round(peak, 1),
+            "mem_max_mib": round(mem, 1)}

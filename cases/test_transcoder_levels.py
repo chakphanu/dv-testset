@@ -23,7 +23,7 @@ import pytest
 
 from dvtest import clients, crossaudio, echo
 from dvtest.audio import score, signals
-from dvtest.proto import ambed
+from dvtest.proto import ambed, dextra, dmr, m17, ysf
 from echo_support import Drainer
 
 pytestmark = pytest.mark.rig
@@ -55,7 +55,8 @@ def levels(rig):
 
 
 def tag():
-    return os.environ.get("DVT_TRANSCODER_TAG") or "unknown"
+    """The image tag of the run without the repository and the common prefix: 823ce72a, 688d9bf7-gain, 688d9bf7-unity."""
+    return (os.environ.get("DVT_TRANSCODER_TAG") or "unknown").split(":")[-1].replace("64s-pcm-", "")
 
 
 def emit(rig, row):
@@ -110,6 +111,28 @@ def content(name, src_pcm, out_pcm):
     return {"ok": corr >= 0.5 and crossaudio.active_dbfs(out_pcm) > -70, "dominant": None, "share": None, "env_corr": round(corr, 2)}
 
 
+class KeepAlive(threading.Thread):
+    """Sends the protocol keepalive of the clients every few seconds (DMR RPTPING, D-STAR, YSF poll): the main thread is busy encoding and
+    decoding for seconds between overs and a silent client would be dropped by the reflector (first run: the later overs reached nobody)."""
+
+    def __init__(self, *made, period=8.0):
+        super().__init__(daemon=True)
+        self.made, self.period, self.halt = made, period, threading.Event()
+
+    def run(self):
+        while not self.halt.wait(self.period):
+            for c in self.made:
+                try:
+                    if hasattr(c, "keepalive"):
+                        c.keepalive()
+                except OSError:
+                    pass
+
+    def stop(self):
+        self.halt.set()
+        self.join(2.0)
+
+
 @pytest.mark.parametrize("src", ["m17", "dmr", "dstar"])
 def test_levels_by_source(levels, src):
     rig = levels
@@ -117,6 +140,7 @@ def test_levels_by_source(levels, src):
     talker = clients.make(src, MODULE, 0)
     heard = {dst: clients.make(dst, MODULE, 1) for dst in TARGETS[src]}
     drains, problems = [], []
+    keep = None
     try:
         for c in [talker] + list(heard.values()):
             assert c.link(rig.xlxd_sut), "%s client did not link" % c.__class__.__name__
@@ -126,10 +150,17 @@ def test_levels_by_source(levels, src):
             c.client.inbox_times.clear()
             drains.append(Drainer(c.client))
             drains[-1].start()
+        keep = KeepAlive(talker, *heard.values())
+        keep.start()
+        talk_drain = Drainer(talker.client)                  # answers the reflector's PING / keepalive while the main thread encodes
+        talk_drain.start()
         for name, pcm in sigs:
             sent = encode(rig, CODEC[src], pcm)
+            talk_drain.stop()
             t0 = time.monotonic()
             clients.talk(talker, src, sent, tail=0.0)
+            talk_drain = Drainer(talker.client)
+            talk_drain.start()
             time.sleep(SETTLE)
             for dst, listener in heard.items():
                 evs = echo.events(dst, list(listener.client.inbox), list(listener.client.inbox_times))
@@ -147,13 +178,28 @@ def test_levels_by_source(levels, src):
                     problems.append("%s>%s %s: content check failed %s" % (src, dst, name, cont))
             time.sleep(1.0)
     finally:
-        for d in drains:
+        if keep is not None:
+            keep.stop()
+        for d in drains + ([talk_drain] if keep is not None else []):
             d.stop()
         clients.close(talker, *heard.values())
     assert not problems, "; ".join(problems)
 
 
 PAIRS = [(s, d) for s in TARGETS for d in TARGETS[s]]
+
+
+def make_as(kind, module, number):
+    """A client with its own identity STR<number> (rig/config/dmrid.dat has STR001.. with DMR ids 1023100 + number): the reflector lets one
+    callsign / id hold one floor at a time (Deny OriginHoldsFloor), so 16 simultaneous talkers need 16 identities."""
+    callsign = "STR%03d" % number
+    if kind == "dstar":
+        return dextra.DstarClient("0.0.0.0", callsign=callsign, module=module)
+    if kind == "dmr":
+        return dmr.DmrClient("0.0.0.0", dmrid=1023100 + number, module=module)
+    if kind == "m17":
+        return m17.M17Client("0.0.0.0", callsign=callsign, module=module)
+    return ysf.YsfClient("0.0.0.0", callsign=callsign, module=module)
 
 
 def test_load_16_streams(levels):
@@ -169,12 +215,14 @@ def test_load_16_streams(levels):
         src, dst = PAIRS[i % len(PAIRS)]
         streams.append((LOAD_MODULES[i], src, dst))
 
-    def run(module, src, dst, ready, go):
-        talker, listener = clients.make(src, module, 0), clients.make(dst, module, 1)
+    encoded = {src: encode(rig, CODEC[src], pcm) for src in TARGETS}      # one at a time: parallel streams to transcoder-ref collide
+
+    def run(index, module, src, dst, ready, go):
+        talker, listener = make_as(src, module, index + 1), make_as(dst, module, index + 41)
         drain = None
         try:
             assert talker.link(rig.xlxd_sut) and listener.link(rig.xlxd_sut), "link failed on module %s" % module
-            frames = encode(rig, CODEC[src], pcm)
+            frames = encoded[src]
             listener.client.drain()
             listener.client.inbox.clear()
             listener.client.inbox_times.clear()
@@ -196,7 +244,7 @@ def test_load_16_streams(levels):
             clients.close(talker, listener)
 
     ready, go = [], threading.Event()
-    threads = [threading.Thread(target=run, args=(m, s, d, ready, go)) for m, s, d in streams]
+    threads = [threading.Thread(target=run, args=(i, m, s, d, ready, go)) for i, (m, s, d) in enumerate(streams)]
     for t in threads:
         t.start()
     deadline = time.monotonic() + 120
