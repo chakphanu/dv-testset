@@ -26,7 +26,7 @@ from collections import Counter, namedtuple
 
 import pytest
 
-from dvtest import clients, echo, specs
+from dvtest import clients, crossaudio, echo, specs
 from dvtest.audio import signals
 from dvtest.net import pace
 from dvtest.proto import usrp
@@ -248,8 +248,20 @@ def test_e1c_payload_is_byte_identical_and_about_3_s(e1_run, target):
     if got.prefix_ok and replay.frames != original.frames:
         note(target, "E1c[%s]" % kind, "FINDING", "the replay is not frame for frame what the live relay carried (%d vs %d frames): "
              "lead-in / end frames of the protocol are not part of the sent audio" % (len(replay.frames), len(original.frames)))
-    assert got.prefix_ok, "%s: the replay differs from what was sent at frame %s of %d (heard %d, missing %d; the live relay " \
-        "carried the sent frames unchanged: %s)" % (kind, got.first_diff, len(e1_run.raw), len(replay.frames), got.missing, live.prefix_ok)
+    if kind == "ysf":
+        # dv-router ruling 2026-11-04 (xlxd parity): the YSF ingress steps the gain index b2 by +1.0 dB and the YSF egress of a
+        # foreign-origin stream by -0.4 dB; the echo replay passes both. Every other bit is unchanged; the live relay (raw path) is exact.
+        chk = crossaudio.gain_check(e1_run.raw, replay.frames, ("p10", "m04"))
+        note(target, "E1c[ysf]", "RECORD", "gain check of %d frames (all bits but b2 equal, b2 = M04[P10[b2]]): %d bad %s" % (
+            chk["checked"], len(chk["bad"]), chk["bad"][:3]))
+        assert chk["checked"] == len(e1_run.raw) and not chk["bad"], \
+            "ysf: %d of %d replay frames differ from the sent ones by more than the two b2 steps (index, b2 sent, b2 heard, b2 wanted, " \
+            "other bits equal): %s" % (len(chk["bad"]), chk["checked"], chk["bad"][:3])
+        assert len(replay.frames) - len(e1_run.raw) == 5, "ysf: %d frames after the sent ones, want 5 (the terminator's zero unit and pads)" % (
+            len(replay.frames) - len(e1_run.raw))
+    else:
+        assert got.prefix_ok, "%s: the replay differs from what was sent at frame %s of %d (heard %d, missing %d; the live relay " \
+            "carried the sent frames unchanged: %s)" % (kind, got.first_diff, len(e1_run.raw), len(replay.frames), got.missing, live.prefix_ok)
     length = echo.duration(replay)
     note(target, "E1c[%s]" % kind, "RECORD", "replay %.2f s, %d voice packets" % (length or 0, replay.n_voice))
     assert echo.in_window(length, LEN_LOW, LEN_HIGH), "%s: replay lasts %s s, want %.1f..%.1f" % (kind, length, LEN_LOW, LEN_HIGH)

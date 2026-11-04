@@ -88,13 +88,13 @@ talker and a second client of the same kind on module E (both timed by a drain t
 - Validation of out-of-range values (`max_seconds` 5..120, `delay_ms` 200..10000) and of an unknown module row is not covered.
 - The bridge ping-pong of the design (a bridge to an external parrot) needs a bridge; not built.
 
-## Results (dv-router:wip-c165c93): 29 passed, 1 failed (full run `20261104T051933Z` plus targeted runs `20261104T052813Z`, `20261104T053017Z`, `20261104T053126Z`)
+## Results (dv-router:wip-c165c93): all reachable cases pass (full run `20261104T051933Z` 28/2/2, targeted runs `20261104T052813Z`, `20261104T053017Z`, `20261104T053126Z`, final revalidation `20261104T054135Z` 7/0/0)
 
 | Case | Result | Measured |
 |------|--------|----------|
 | E1a | PASS x4 | replay starts 1.00 to 1.01 s after the last packet (D-STAR, DMR, M17, YSF) |
 | E1b | PASS x4 | talker callsign / DMR id kept; D-STAR header present at the listener and the talker |
-| E1c | PASS D-STAR, DMR, M17; **FAIL YSF** (FE2, open) | D-STAR 150/150 frames identical, 2.98 s; DMR 150/150, 2.94 s; M17 the 150 audio frames identical + 2 EOT frames (N2, accepted by dv-router: foreign-origin stream). YSF: see below |
+| E1c | PASS D-STAR, DMR, M17, YSF (FE2 closed as ruled) | D-STAR 150/150 frames identical, 2.98 s; DMR 150/150, 2.94 s; M17 the 150 audio frames identical + 2 EOT frames (N2, accepted by dv-router: foreign-origin stream). YSF: all bits but the gain index b2 equal and b2 = M04[P10[b2]] for 150/150 frames, 155 frames in all (see below) |
 | E1d | PASS x4 | the talker's own client hears the same replay |
 | E1e | PASS | dynamic-hub USRP client: runs of 150 + 150 voice packets, replay 1.01 s after the over, PCM identical |
 | E2 | PASS (D-STAR, DMR) | 25 frames: no replay in 5.5 s |
@@ -110,15 +110,16 @@ talker and a second client of the same kind on module E (both timed by a drain t
 | E8 | not reachable | one DV-Router node in the rig |
 | T | PASS | `played` +9 for the 9 overs made in the full run (the later 2-over run: +2 exactly), `truncated` +2 (2 made), `short` +4 for 2 deliberate short overs (the other 2 are DMR / YSF link joins: dv-router says counting a zero-voice stream as short is not intended, a follow-up will fix it; informational) |
 
-**YSF replay (FE2).** The FICH of the packets, live relay and replay alike: a header packet (`fi=0` HC, `dt=2`, `ft=7`, counter 0), voice packets
-(`fi=1`, `dt=2`, `ft=6`, `fn` cycling 0,1,2, counters 1..), a terminator (`fi=2`, EOT bit set). There is no extra leading voice packet: the
-replay has one extra trailing voice packet (30 voice packets sent, 31 in the replay; the last one starts with the pad frame `202222200000000000`),
-so 155 frames for 150 sent. The audio frames themselves differ: the live relay equals the sent frames, the replay does not (0 of 150 equal at the
-same position, the sent frames are at no offset of the replay). PRNG frames (`20261104T051933Z`, `20261104T052813Z`): sent / live frame 0
-`8e38664559c199e31f`, frame 1 `f20efac02aa36777ab`, frame 2 `70084b810b8b1abdd7`; replay frame 0 `ce5a01431b895da393`, frame 1
-`db53ba3f7eee9c5254`, frame 2 `ca077d7d2d46f9d354`. A tone encoded by transcoder-ref (valid AMBE+2, passed once through the YSF VCH coder,
-`20261104T053126Z`): sent / live frame 0 `4b45860b222b9af23c`, replay frame 0 `6f63a30902e3debeb4`, then `94cb63d022b4f38f0c` repeated. D-STAR and
-DMR replays of the same kind of over are bit-identical. Reported to dv-router; the assertion stays.
+**YSF replay (FE2, closed as ruled by dv-router 2026-11-04, report `debug-ysf-echo-egress.md`).** Packet structure of live relay and replay alike: a header
+packet (`fi=0` HC, `dt=2`, `ft=7`, counter 0), voice packets (`fi=1`, `dt=2`, `ft=6`, `fn` cycling 0,1,2, counters 1..), a terminator (`fi=2`, EOT bit
+set). The replay has one extra trailing voice packet (the terminator's zero unit plus 4 zero pads: 30 voice packets sent, 31 in the replay, 155 frames
+for 150 sent; its first frame `202222200000000000`). The audio frames differ from the sent ones in the gain index b2 only: the YSF ingress steps b2 by
++1.0 dB (xlxd `B2_MAP_PLUS_1_0_DB`) and the YSF cross-mode egress by -0.4 dB (nearest-entry fallback map), the replay (a foreign-origin stream) passes
+both, they do not cancel and the +1.0 dB map is not injective, so no egress can restore the sent frames. Recorded pairs (sent -> replay, b2): `8e38664559c199e31f`
+-> `ce5a01431b895da393` (12 -> 15), `4b45860b222b9af23c` -> `6f63a30902e3debeb4` (2 -> 5), `b0ef64d2065cf7c780` -> `94cb63d022b4f38f0c` (2 -> 5); they
+are pinned in `cases/unit/test_crossaudio.py` with the maps of `dvtest/crossaudio.py` (P10, M04; ambe2.rs of DV-Router). The case asserts: every bit but b2
+equal and b2 = M04[P10[b2]] for the 150 sent frames, 5 frames after them; it does not require replay == live relay (the live YSF -> YSF relay is the raw fast
+path and byte exact).
 
 ## Findings
 
@@ -138,7 +139,7 @@ Failures that are the SUT's (assertion unchanged, reported to dv-router):
 | ID | Case | Observed |
 |----|------|----------|
 | FE1 | E5b (closed) | a USRP over of a dynamic-hub client is replayed: INTENDED (dynamic-hub clients are `SessionKind::Client`, class 0; static `[[edges.usrp.endpoint]]` rows are peers, class 2). E5b now uses a static peer row; the dynamic client is the positive case E1e. |
-| FE2 | E1c YSF (open) | the replay of a YSF over does not carry the sent audio frames (155 frames for 150, none equal); bytes above. |
+| FE2 | E1c YSF (closed) | not a bug: the two b2 gain steps (+1.0 dB ingress, -0.4 dB egress), all other bits unchanged; the case asserts exactly that. |
 
 ## Related: real-transcoder cross-mode audio into YSF (`cases/test_crossmode_real_ysf.py`)
 
@@ -149,14 +150,16 @@ the others: transcoder-ref's output for the same input) and the decoded audio (d
 against the expected frames). Skips when `DVT_TRANSCODER_FAKE=1` or transcoder-ref is not given. Helpers and unit tests: `dvtest/crossaudio.py`,
 `cases/unit/test_crossaudio.py`. Command: `... scripts/run.sh -m rig -- cases/test_crossmode_real_ysf.py` (about 80 s).
 
-Result on wip-c165c93 (`20261104T053737Z`, `crossmode-real-ysf.txt`): the audio is NOT garbled, a steady tone encodes to one repeated frame by itself
-(that is not a fault: the expected frames repeat the same way).
+Result on wip-c165c93 (final `20261104T054135Z`, `crossmode-real-ysf.txt`, 3 passed): the audio is NOT garbled. A steady tone encodes to one repeated frame
+by itself (the expected frames repeat the same way). The YSF egress changes only the gain index b2 by -0.4 dB (xlxd parity, dv-router ruling 2026-11-04);
+with that step applied to the expected frames all three sources match 150/150 frames:
 
 | Source | Dominant | Level (rms heard / expected) | Frames |
 |--------|----------|------------------------------|--------|
-| DMR | 690 Hz (as expected) | 5145 / 6058 (-1.4 dB) | frame 0 `954be6500310b00777` unchanged, frames 1..149 `9eb9e8ce38f1a2c488` where the sent (and expected) frame is `fcd98eea5eb962c404`: the same codec, but the YSF egress replaces the frames; assertion "heard == sent" fails |
-| D-STAR | 690 Hz (as expected) | 4740 / 5584 (-1.4 dB) | `57cc8353bc7c6966c1`, then `9a9fccc81819a78804` x149; transcoder-ref gives `53ea845598942d6e4d`, `9eb9e8ce38f1a3c488`: audio equal, bytes not (informational); PASS |
-| M17 | 700 Hz | 73 / 441 (15.6 dB down) | 155 frames heard (pad packet); `dba0603598fe41cd83` vs expected `dba0613598fe41cd83`, then `7f404507705419a347` vs `3d02234572389de7cb`; level check fails |
+| DMR | 690 Hz (as expected) | 5145 / 5145 | sent `fcd98eea5eb962c404` (b2 14) -> heard `9eb9e8ce38f1a2c488` (b2 12), frame 0 `954be6500310b00777` unchanged; 150/150 equal to the expected |
+| D-STAR | 690 Hz (as expected) | 4740 / 4740 | transcoder-ref `53ea845598942d6e4d` (28 -> 27) and `9eb9e8ce38f1a3c488` (12 -> 10); heard `57cc8353bc7c6966c1`, `9a9fccc81819a78804`; 150/150 |
+| M17 | 700 Hz | 73 / 74 | transcoder-ref `3d02234572389de7cb` (3 -> 1), `dba0613598fe41cd83` (31 -> 30); heard 155 frames (pad packet), 150/150 equal |
 
-FE2 (echo YSF replay) is the same behaviour: the replay frames after frame 0 are the re-encoded steady-state codeword; the live YSF -> YSF relay is the
-raw fast path and byte exact.
+M17 -> YSF is quiet (rms 73 against about 5000 for DMR and D-STAR, -23 dB), and it is the transcoder, not DV-Router: the same M17 tone through the
+reference reflector xlxd-ref with the same real transcoder gives rms 73 as well (SUT 73, reference reflector 73, transcoder-ref direct 74).
+The case compares the SUT's level with the reference reflector (within 3 dB) and records the numbers.

@@ -3,6 +3,7 @@
 import pytest
 
 from dvtest import crossaudio, echo
+from dvtest.proto import nxdn
 from dvtest.audio import signals
 from dvtest.proto import dextra
 
@@ -38,3 +39,44 @@ def test_tone_report_finds_a_tone_and_not_silence():
 def test_repetition():
     assert crossaudio.repetition([]) == (None, 0)
     assert crossaudio.repetition([b"a", b"b", b"a"]) == (b"a", 2)
+
+
+# byte pairs recorded on dv-router:wip-c165c93 (out/20261104T051933Z, 20261104T052813Z, 20261104T053737Z)
+ECHO_YSF = [("8e38664559c199e31f", "ce5a01431b895da393", 12, 15), ("4b45860b222b9af23c", "6f63a30902e3debeb4", 2, 5),
+            ("b0ef64d2065cf7c780", "94cb63d022b4f38f0c", 2, 5), ("f20efac02aa36777ab", "924c9de62eeba33727", None, None),
+            ("70084b810b8b1abdd7", "106c0ea3a52bd679df", None, None)]
+LIVE_YSF = [("fcd98eea5eb962c404", "9eb9e8ce38f1a2c488", 14, 12), ("9eb9e8ce38f1a3c488", "9a9fccc81819a78804", 12, 10),
+            ("53ea845598942d6e4d", "57cc8353bc7c6966c1", 28, 27), ("3d02234572389de7cb", "7f404507705419a347", 3, 1),
+            ("dba0613598fe41cd83", "dba0603598fe41cd83", 31, 30)]
+
+
+@pytest.mark.parametrize("sent,heard,b2_sent,b2_heard", ECHO_YSF)
+def test_recorded_echo_pairs_follow_the_two_gain_steps(sent, heard, b2_sent, b2_heard):
+    got = crossaudio.gain_check([bytes.fromhex(sent)], [bytes.fromhex(heard)], ("p10", "m04"))
+    assert got == {"checked": 1, "bad": []}
+    if b2_sent is not None:
+        assert nxdn.gain_index(nxdn.from_dmr(bytes.fromhex(sent))) == b2_sent
+        assert nxdn.gain_index(nxdn.from_dmr(bytes.fromhex(heard))) == b2_heard
+
+
+@pytest.mark.parametrize("sent,heard,b2_sent,b2_heard", LIVE_YSF)
+def test_recorded_live_pairs_follow_the_egress_step(sent, heard, b2_sent, b2_heard):
+    got = crossaudio.gain_check([bytes.fromhex(sent)], [bytes.fromhex(heard)], ("m04",))
+    assert got == {"checked": 1, "bad": []}
+    assert nxdn.gain_index(nxdn.from_dmr(bytes.fromhex(sent))) == b2_sent
+    assert nxdn.gain_index(nxdn.from_dmr(bytes.fromhex(heard))) == b2_heard
+
+
+def test_gain_check_names_a_wrong_gain_and_a_changed_bit():
+    sent = bytes.fromhex("8e38664559c199e31f")
+    assert crossaudio.gain_check([sent], [sent], ("m04",))["bad"] == [(0, 12, 12, 10, True)]
+    other = bytearray(bytes.fromhex("ce5a01431b895da393"))
+    other[0] ^= 0x80
+    bad = crossaudio.gain_check([sent], [bytes(other)], ("p10", "m04"))["bad"]
+    assert len(bad) == 1 and bad[0][0] == 0
+
+
+def test_maps_are_32_entries_and_the_composition_of_the_report():
+    assert len(crossaudio.P10) == len(crossaudio.M04) == 32
+    comp = [crossaudio.mapped_gain(b, ("p10", "m04")) for b in range(32)]
+    assert comp[:20] == [b + 3 for b in range(20)] and comp[30] == 30 and comp[31] == 30
