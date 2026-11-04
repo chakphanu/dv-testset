@@ -28,6 +28,10 @@ is the 1 / 5 / 15 minute average at start and end.
 | 5f | P19 edge relink (import launch, `--profile interlink,nxdn,p25`, `--capture`) | `20261103T213234Z` | 6 / 0 / 0 | 3 min 43 s | 1.43 -> 1.89 | pass (same as the adaptation pass) |
 | 6a | Stage 5 W8 load, first try | `20261103T213619Z` | not run | 6 s | 1.89 -> 2.21 | infra error: the same docker build snapshot error as 2a (`parent snapshot ... does not exist` on `dvt-web-proxy`); rerun queued as 6b |
 | 7 | Short NAT (`DVT_NAT_SHORT=1`, `turn.toml`, `--profile web,browser,nat`) | `20261103T213634Z` | 17 / 0 / 31 | 16 min 20 s | 2.04 -> 0.86 | pass (same as be207d3: 17 / 0 / 31, 16 min 03 s) |
+| 8a | SOAK1 GA, run 1 | `20261103T215304Z` | no verdict | killed at 2287 s elapsed (about 26.5 min of the 40 min measured part sampled) | 0.72 -> 2.09 | KILLED EXTERNALLY (SIGTERM of the `systemd-run` scope at 22:34:19 UTC; incident below); partial numbers only |
+| 8b | SOAK1 GA, run 2 | `20261104T001943Z` | no verdict | killed at 483 s elapsed | n/a | KILLED EXTERNALLY at about 00:30:40 UTC (incident below) |
+| 6b | Stage 5 W8 load, rerun (`load2`) | `20261103T223432Z` | no verdict | killed after about 80 s | 1.44 -> n/a | KILLED EXTERNALLY at 22:35:51 UTC (incident below) |
+| 5e | S3 superset | n/a | not run | n/a | n/a | not rerun: the echo basename collision was fixed in the tree (`cases/unit/test_echo_lib.py`), but the rig was never free for the 2 h run; superseded by the c165c93 chain |
 
 ## Per-step notes
 
@@ -82,9 +86,27 @@ added.
 | F7 | login TOTP step | after a wrong code, refilling the password field drops the TOTP code field, `test_operator_login_with_totp_step` times out on `login-totp` (3 engines); the dedicated wrong-code text itself shows | refill kept the challenge or the case did not refill | needs ruling; assertion unchanged; `out/20261103T203332Z` |
 | F8 | recordings page text | the Recordings page row says "Transmission ended" where `test_recordings_page_lists_and_plays` expects the end reason text "terminator" (3 engines) | "terminator" | needs ruling (I18N1 text change?); assertion unchanged; `out/20261103T204447Z` |
 
+## Incidents: the rig was shared, runs were killed (not product results)
+
+Project `dvt` has one compose project and one rig; at least two other sessions started runs of their own while this chain was running
+(worktrees `dvt-wt-recordings`: `--profile asl-edge -m asl_lab` loops, and `dvt-wt-rc`: the K22 / WebRTC / recorder reruns and the c165c93 chain).
+Each new `scripts/run.sh` start of another session coincided with a SIGTERM of this chain's run (`Terminated  systemd-run --user --scope ...`
+at the end of the logs) and of the chain scripts themselves (22:34 UTC SOAK1 run 1; 22:35 UTC load2; 00:30 UTC SOAK1 run 2). The chain never
+signalled anything and never ran `--down` (no hang deadline was reached). Consequence: SOAK1 GA, the Stage 5 rerun and S3 have NO verdict on
+`wip-71ab207`; the c165c93 regression (`docs/results-wip-c165c93.md`) supersedes this image for them.
+
+Partial LEAK1 numbers from the first SOAK1 run (measured phase only, 26.5 minutes, least-squares slope of RSS, `soak-samples.jsonl`; NOT a verdict,
+the window is 2/3 of the gate and the ring of the status service had not filled):
+
+| Child | RSS first KiB | RSS last KiB | slope KiB/min (RSS / Anon) | be207d3 (full 40 min) |
+|-------|---------------|--------------|----------------------------|-----------------------|
+| dv-router | 20720 | 22928 | 92.1 / 93.8 | 145.8 |
+| dv-svc-status | 14944 | 17908 | 117.9 / 119.6 | 119.4 |
+| dv-edge-webrtc | 25620 | 26328 | 32.1 / 33.4 | 29.5 |
+
 ## Load flakes
 
-None so far.
+None. No failure of this chain was rerun as a load flake: every failure is deterministic (findings F3 to F8) and the loads were 0.7 to 6.1.
 
 ## Commands
 
