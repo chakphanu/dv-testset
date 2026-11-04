@@ -69,7 +69,7 @@ the four WebKit talk cases and `test_listen_receives_the_tone[webkit]` (the know
 
 ### Echo (ECHO1c)
 
-No case for ECHO1c exists: `grep -ri echo cases docs/testlist.md` finds only the protocol "no echo to the talker" / "poll echoed" cases (P-DPL-28, P-NXD-17,
+At the time of the run no case for ECHO1c existed (the ECHO1 / ECHO1c cases `cases/test_echo.py`, commit 8b8afea, arrived later and were NOT run on wip-71ab207): `grep -ri echo cases docs/testlist.md` finds only the protocol "no echo to the talker" / "poll echoed" cases (P-DPL-28, P-NXD-17,
 `test_allstar::test_usrp_no_echo`, ...) and `test_m17::test_m17_parrot` (P-M17-42, record only). They are members of the S3 and M17 runs below; nothing was
 added.
 
