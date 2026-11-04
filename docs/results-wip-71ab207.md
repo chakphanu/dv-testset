@@ -6,7 +6,7 @@ Image content: ACL0a/ACL0b, TOTP1 (optional TOTP), I18N1/I18N1b, IDS1, ECHO1c, A
 time, loadavg and the disk checked before every run (unallocated 1.00 GiB on the root filesystem throughout; owner-only). Every run's load
 is the 1 / 5 / 15 minute average at start and end.
 
-**Verdict for wip-71ab207: NOT releasable (K22 regression, F3). Superseded by `dv-router:wip-c165c93`, the deploy candidate (`docs/results-wip-c165c93.md`).**
+**Verdict for wip-71ab207: not completed (superseded by `dv-router:wip-c165c93`, the deploy candidate, `docs/results-wip-c165c93.md`). No product regression found: F3 was a test race, fixed in 460f0eb (13/13 on c165c93); F4-F8 closed by ruling.**
 The chain was stopped on the main session's change of plan: SOAK1 GA, the Stage 5 rerun, S3, the echo cases and the reruns of the cases changed by the rulings
 were not run (or not finished) on this image.
 
@@ -21,7 +21,7 @@ were not run (or not finished) on this image.
 | 1e | F2 rerun, `test_web_api.py -k totp` with `totp-required.toml` | `20261103T203247Z` | 19 / 1 / 0 | 35 s | 3.59 -> 3.16 | F2 case now passes; 1 failure: finding F4 |
 | 2a | EDG1 / K1 (`test_web_k22.py -k "silently_closed or closing_only_the_ctl"`), first try | `20261103T194114Z` | not run | 6 s | 4.15 -> 4.29 | infra error, rerun (docker build `failed to prepare extraction snapshot ... parent snapshot ... does not exist` on the web-proxy image; nothing of ours tested) |
 | 2b | EDG1 / K1 rerun | `20261103T202532Z` | 4 / 0 / 0 | 4 min 15 s | 2.09 -> 4.71 | pass |
-| 2c | K22 / K22b, full file | `20261103T194120Z` | 12 / 1 / 0 | 24 min 47 s | 4.29 -> 3.69 | 1 failure: finding F3 (needs ruling) |
+| 2c | K22 / K22b, full file | `20261103T194120Z` | 12 / 1 / 0 | 24 min 47 s | 4.29 -> 3.69 | 1 failure: finding F3 (test race, see F3 below) |
 | 3a | Web stage 3a browser UI (`test_web_browser.py`, `web.toml:admin.toml:totp-required.toml`) | `20261103T203332Z` | 45 / 9 / 3 | 11 min 04 s | 3.46 -> 6.14 | FAIL: 3 cases x 3 engines, findings F5, F6, F7 (deterministic, not load) |
 | 3b | Web stage 3b WebRTC + recorder (`test_web_webrtc.py`, `test_web_recorder.py`, `recorder.toml`) | `20261103T204447Z` | 52 / 3 / 0 | 13 min 02 s | 5.43 -> 2.86 | FAIL: 1 case x 3 engines, finding F8; no WebKit tone glitch and no Playwright setup error this time |
 | 5a | M17 (`test_m17_peer_link.py`, `test_m17_relay.py`, `test_m17_packet.py`, native, `--capture`) | `20261103T205833Z` | 97 / 0 / 0 | 10 min 27 s | 2.26 -> 1.56 | pass (same count as Gate B) |
@@ -52,7 +52,7 @@ unit test in `cases/unit/test_sut_config.py`) restores the enrol-first behaviour
 The first EDG1 attempt died in the image build before any test ran (containerd snapshot error on `dvt-web-proxy`; the next build, started by the
 K22 run seconds later, worked). EDG1 rerun: 4 / 0 / 0, same cases as `docs/results-be207d3.md`. Full K22 file: 12 passed, 1 failed:
 `test_guest_lease_without_a_peer`: after the peer is kicked `/rtc/alive` answers 204 for 29.4 s (30 answers) and then 403 (90 answers up to 119.8 s);
-the case asserts 401 (be207d3: 204 for about 29 s, then 401). Assertion not edited; forwarded to dv-router (F3).
+the case asserts 401 (be207d3: 204 for about 29 s, then 401). Assertion not edited; forwarded to dv-router (F3: ruled a test race, not a product regression; case fixed in 460f0eb).
 
 ### 1d / 1e: TOTP1 cases (added by the main session's ruling)
 
@@ -82,7 +82,7 @@ added.
 |----|------|--------------------------|--------|--------|
 | F1 | TOTP1 default | With `operator_totp = true` / `admin.totp = true` only: first operator login `totp: off` (no enrolment step), admin password-only login 200, admin session `totp: off` | enrol-first, password-only login 401 `totp_required` | EXPECTED (TOTP1), ruled by dv-router: the old keys only warn `is ignored; use ..._totp_required`; `totp-required.toml` is the right setting for the mandatory-enrolment cases; the optional default is covered by `cases/test_web_totp_optional.py` (step 1d) |
 | F2 | TOTP1 step-up | `POST auth/session/totp` as a `user` account answers 403 `step_up_required` (case `test_prefix_minimum_role[POST auth/session/totp \| user]`, `out/20261103T193312Z`) | 400 (API4 documented) | ruled 2026-11-04 (dv-router): TOTP1 supersedes API4's 400; the matrix assertion is now 403 `step_up_required` and `test_user_totp_offer_needs_step_up` covers the step-up path (200 offer, 400 for a malformed body after it). Results: before the update `out/20261103T193312Z` (1 failure), after the update `out/20261103T203247Z` (the matrix case passes; the new case fails on its last assertion, F4). F2 expected (TOTP1), case updated by ruling |
-| F3 | K22 guest lease after the peer is gone | `/rtc/alive` 204 for 29.4 s then 403 `forbidden` (`out/20261103T194120Z`, `test_guest_lease_without_a_peer`) | 204 then 401 (be207d3) | REGRESSION on wip-71ab207 (dv-router ruling 2026-11-04): documented contract is owned record past its lease -> 401 `RTC circuit expired`, then 403 after cleanup; observed 204 x30 then 403 x90 and no 401 window; the same case passed 13 / 0 on be207d3 (`20261102T134922Z`). Evidence: `out/20261103T194120Z/pytest.log:41`. Stays FAIL for this image (case NOT changed for it); dv-router is debugging. Later case change 460f0eb (401 no longer required) belongs to the c165c93 run |
+| F3 | K22 guest lease after the peer is gone | `/rtc/alive` 204 for 29.4 s then 403 `forbidden` (`out/20261103T194120Z`, `test_guest_lease_without_a_peer`) | 204 then 401 (be207d3) | closed: TEST RACE, not a product regression (dv-router ruling 2026-11-04 after the Opus debug `debug-k22-guest-403.md`): the rtc server code is byte-identical to be207d3; the documented contract is 401 while an owned record is retained past its lease and 403 after cleanup, with no minimum 401 window, and the 5 s sweep can run between two 1 s polls (observed 204 x30 then 403 x90 and no 401 window; the same case passed 13 / 0 on be207d3, `20261102T134922Z`; evidence `out/20261103T194120Z/pytest.log:41`). Fixed in the case by 460f0eb (204, then 401 and/or 403, ending in 403); 13/13 on wip-c165c93 (`docs/results-wip-c165c93.md`) |
 | F4 | TOTP1 user offer | after the password step-up a malformed offer body (raw `{`) answers 200, `test_user_totp_offer_needs_step_up` (`cases/test_web_api.py:695`) expects 400 `bad_request` | n/a (new case) | closed: intended (dv-router ruling 2026-11-04): the offer route ignores its body, 200 is the answer; case updated by ruling |
 | F5 | I18N1 admin sign-in text | admin page shows "Admin sign in" / "Manage node configuration and operation." with an EN\|TH switch; `test_admin_spa_loads` waits for "Sign in to the admin interface" (3 engines) | the old text | closed: intended UI change (I18N1, dv-router ruling 2026-11-04); case updated 08bffad |
 | F6 | I18N1 ops events table | header cell 2 is "Time (local)"; `test_ops_pages_render` expects "Time (UTC)" (3 engines) | "Time (UTC)" | closed: intended UI change (I18N1, dv-router ruling 2026-11-04); case updated 08bffad |
