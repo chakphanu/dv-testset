@@ -386,7 +386,8 @@ def test_operator_login_with_totp_step(browser_page, login_operator):
     pages.password_field(bp.page).fill(op.password)
     expect(pages.totp_field(bp.page)).to_have_count(0)
     if totp_optional.totp1b():
-        expect(pages.auth_error(bp.page)).not_to_contain_text(pages.TOTP_WRONG_TEXT)
+        # the banner may be emptied or removed from the page (TOTP1b removes #auth-error): no element may carry the wrong-code text
+        expect(bp.page.get_by_text(pages.TOTP_WRONG_TEXT)).to_have_count(0)
     expect(pages.signed_in_as(bp.page)).to_have_count(0)
     assert bp.session_cookie() is None, "a session after the challenge was abandoned"
     web.PACER.wait("login")
