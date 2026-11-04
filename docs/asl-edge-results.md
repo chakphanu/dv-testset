@@ -59,7 +59,7 @@ of each case is in `out/<run>/asl-lab/loadavg.jsonl`; cases run under load above
 | T11 | 60 NEW and 20 POKE from one address in 1.2 s: same pid, cpu bounded, a real node still links | pass | pass `L` | pass | pass | pass | | no source-address spoofing was attempted (raw sockets are not available to the tester); the per-IP limits are what one address triggers |
 | back-to-back | three overs 1 s apart each reach the client | XFAIL (finding 1) | pass | pass | pass | pass | | |
 | restart x5 | 5 x SIGUSR1, one over after each, no probe retry | - | pass | superseded (aborted for wip-71ab207) | pass | pass | | |
-| R1 | success: shape, one node per request, refresh at 60 s | - | pass | superseded (aborted for wip-71ab207) | pass | **FAIL** (finding F-R1, `20261103T232417Z`) | `20261103T120131Z/asl-lab/register/requests.jsonl` | gap 60.0 s |
+| R1 | success: shape, one node per request, refresh at 60 s | - | pass | superseded (aborted for wip-71ab207) | pass | pass (fresh rig `20261104T001310Z`; the first try `20261103T232417Z` failed on a lab artifact, F-R1) | `20261103T120131Z/asl-lab/register/requests.jsonl` | gap 60.0 s |
 | R2 | success with another port: mismatch counted | - | pass | superseded (aborted for wip-71ab207) | pass | pass | | refresh 60 s |
 | R3 | HTTP 500 retried with backoff | - | pass | superseded (aborted for wip-71ab207) | pass | pass | | first retry 24.1 s (30 s -20 %) |
 | R4 | 200 without "successfully registered" is a failure | - | pass | superseded (aborted for wip-71ab207) | pass | pass | | retry 26.4 s |
@@ -234,13 +234,14 @@ Four runs of `cases/test_asl_edge.py` on `dv-router:wip-c165c93` (OUT = `DVT_ASL
 |-----|---------|--------|
 | `20261103T230702Z` | OUT=1 (the main variant) | 20 passed, 10 skipped by design |
 | `20261103T231326Z` | OUT unset | T4, T4b, T5 x2, T7, T9, T10, T11, T1b, back-to-back, restart x5, R8-R12 pass; T3, T6, T6m, T8, T8b fail only because they need the outbound rows (now `needs_out`: they skip when OUT is unset) |
-| `20261103T232417Z` | `DVT_ASL_EDGE_REG=1`, `-k test_r` | R2-R7 pass, R8-R12 pass, restart x5 pass, **R1 FAIL** |
+| `20261103T232417Z` | `DVT_ASL_EDGE_REG=1`, `-k test_r` | R2-R7 pass, R8-R12 pass, restart x5 pass, R1 FAIL (lab artifact: the restart test ran first) |
+| `20261104T001310Z` | `DVT_ASL_EDGE_REG=1`, fresh rig, R1-R7 alone (after the fixture fix `43f8577`) | R1-R7 pass (R10-R12 too) |
 | `20261103T232753Z` | `DVT_ASL_LONG=1`, OUT=1, T1 + T2 | T1 pass (611.9 s), T2 pass (202.1 s) |
 
-So 30 cases: 29 pass in their variant, R1 fails (below), nothing is skipped in the variant that runs it. The R8-R12 rows are the new phone-mode cases
+So 30 cases: all pass in their variant (R1 after the lab fix, below), nothing is skipped in the variant that runs it. The R8-R12 rows are the new phone-mode cases
 (next section); DVSwitch Mobile radio and phone mode both pass (`docs/asl-dvswitch.md`).
 
-**F-R1 (resolved: lab artifact, dv-router ruling 2026-11-04; `debug-asl-r1-cadence`).** The 13-case selection ran `test_restart_then_over_five_times` first: five quiet SIGUSR1 restarts at 2.4 / 18.5 / 34.6 / 50.7 / 66.9 s inside the recording, each new edge process starting a fresh spread (S = 60 / 7 = 8.57 s, slot k at start + k * S; schedule state does not survive a restart); the registration code is byte-identical in 71ab207 and c165c93. The fixture now trims to the last edge process and asserts the slots (`docs/asl-lab.md`, "Registration cases R1-R7: one edge process only"); a clean run of R1-R7 on a fresh rig is pending. Original observation, kept for the record: `test_r1_success_registers_and_refreshes` asserts a first refresh gap of 50..90 s
+**F-R1 (resolved: lab artifact, dv-router ruling 2026-11-04; `debug-asl-r1-cadence`).** The 13-case selection ran `test_restart_then_over_five_times` first: five quiet SIGUSR1 restarts at 2.4 / 18.5 / 34.6 / 50.7 / 66.9 s inside the recording, each new edge process starting a fresh spread (S = 60 / 7 = 8.57 s, slot k at start + k * S; schedule state does not survive a restart); the registration code is byte-identical in 71ab207 and c165c93. The fixture now trims to the last edge process and asserts the slots (`docs/asl-lab.md`, "Registration cases R1-R7: one edge process only"); **clean run on a fresh rig, `out/20261104T001310Z` (`-k` R1-R7, 10 passed incl. R10-R12, 104 s): R1-R7 all pass.** Slots of the seven nodes at 0.0 / 8.6 / 17.1 / 25.7 / 34.3 / 42.9 / 51.4 s (S = 60 / 7 = 8.57 s), first refreshes at 60.0 s (1999), 68.6 s (1991), 77.2 s (1992); http 500 retry 61.2 - 25.7 = 35.5 s, no-text retry 62.9 - 34.3 = 28.6 s, oversize 75.6 - 51.4 = 24.2 s, slow reply 90.4 - 42.9 = 47.5 s. Original observation, kept for the record: `test_r1_success_registers_and_refreshes` asserts a first refresh gap of 50..90 s
 (`max(60, min(interval, refresh))` with `interval = "60s"` and the stand-in's `refresh` 180); on c165c93 node 1991 registered at 11.0, 27.1, 43.2,
 59.3 and 75.4 s (gaps 16.1 s x4) and then at 135.4 s (60.0 s). The registrations are serialised across all registering nodes at about one request
 every 8.5 s (the edge's own node 1999 registers too: 0.0, 2.4, 18.5, 34.6, 50.7, 66.9 s, ...; nodes 1992..1996 start at 84 to 110 s), and the log
