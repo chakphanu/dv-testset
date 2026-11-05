@@ -1,0 +1,169 @@
+# SPDX-License-Identifier: MIT
+# Profile svx: a real SvxReflector and two real SvxLink nodes on the rig network.
+# DRAFT, not validated, not read by scripts/run.sh yet (docs/svx-cases.md,
+# "What must change in scripts/run.sh"). Meant to be added with -f like
+# rig/compose.nat.yml, which is why it repeats the limit values of the sets in
+# rig/compose.yml (a YAML anchor cannot cross files). If the services are moved
+# into compose.yml, replace each limit block with the anchor named in its comment.
+#
+# Roles
+#   svxreflector  .98  server under test, or the reference for a client-side edge;
+#                      TCP+UDP 5300, HTTP /status 8080 (rig network only)
+#   svx-a         .99  SvxLink node N0TEST-1, audio: RX udp 0.0.0.0:10000,
+#                      TX to the tester udp :10001
+#   svx-b         .100 SvxLink node N0TEST-2, RX udp :10000, TX to the tester :10003
+#
+# One image (dvt-svxlink:local, rig/Dockerfile.svxlink) for all three. The
+# passwords are run secrets: scripts/run.sh would generate DVT_SVX_KEY_A/B into
+# .local/rig.env (mode 600) next to the other rig secrets; here they are only
+# passed through, an empty value stops the container (rig/svxlink-entry.sh).
+#
+# The callsigns are placeholders. Whoever points a real network at this changes
+# nothing here: the rig network is internal and the nodes join only this reflector.
+#
+# Edge cases (docs/svx-cases.md): the system under test is then NOT the
+# svxreflector service. Use `--profile svx` services svx-a / svx-b with
+# DVT_SVX_REFLECTOR_HOST pointing at the edge (the xlxd-sut address, or any
+# address a run sets), and start no svxreflector (compose `up` with the service
+# names, see the doc).
+
+x-svx-env: &svx-env
+  DVT_SVX_CODEC: ${DVT_SVX_CODEC:-OPUS}
+
+services:
+  svxreflector:
+    # limits: x-limits-medium (PKI generation at first start, Opus not used here)
+    mem_limit: ${DVT_MEM_MEDIUM:-512m}
+    memswap_limit: ${DVT_MEM_MEDIUM:-512m}
+    cpus: ${DVT_CPUS_MEDIUM:-2}
+    pids_limit: ${DVT_PIDS_MEDIUM:-512}
+    profiles: [svx]
+    init: true
+    restart: "no"
+    image: dvt-svxlink:local
+    build: &svx-build
+      context: .
+      dockerfile: Dockerfile.svxlink
+      args:
+        MAKE_JOBS: ${DVT_BUILD_JOBS:-4}
+        SVXLINK_BASE_IMAGE: ${SVXLINK_BASE_IMAGE:-error-set-svxlink-base-image-see-env-example}
+      additional_contexts:
+        src: ../.cache/svxlink-src
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+      - /run:size=1m
+      - /var/lib/svxlink:size=16m,uid=10001,gid=10001,mode=0700
+    environment:
+      <<: *svx-env
+      DVT_SVX_ROLE: reflector
+      DVT_SVX_IP: ${DVT_NET:-172.30.0}.98
+      DVT_SVX_CALLSIGN_A: ${DVT_SVX_CALLSIGN_A:-N0TEST-1}
+      DVT_SVX_CALLSIGN_B: ${DVT_SVX_CALLSIGN_B:-N0TEST-2}
+      DVT_SVX_KEY_A: ${DVT_SVX_KEY_A:-}
+      DVT_SVX_KEY_B: ${DVT_SVX_KEY_B:-}
+      DVT_SVX_SQL_TIMEOUT: ${DVT_SVX_SQL_TIMEOUT:-0}
+      DVT_SVX_SQL_BLOCKTIME: ${DVT_SVX_SQL_BLOCKTIME:-60}
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.98"}
+
+  svx-a:
+    # limits: x-limits-small (a node with one Opus encoder and one Tcl interpreter;
+    # the first run measures it, raise to medium if it is OOM killed)
+    mem_limit: ${DVT_MEM_SMALL:-256m}
+    memswap_limit: ${DVT_MEM_SMALL:-256m}
+    cpus: ${DVT_CPUS_SMALL:-0.5}
+    pids_limit: ${DVT_PIDS_SMALL:-128}
+    profiles: [svx]
+    init: true
+    restart: "no"
+    image: dvt-svxlink:local
+    build: *svx-build
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+      - /run:size=1m
+      - /var/lib/svxlink:size=16m,uid=10001,gid=10001,mode=0700
+    environment:
+      DVT_SVX_ROLE: node
+      DVT_SVX_CALLSIGN: ${DVT_SVX_CALLSIGN_A:-N0TEST-1}
+      DVT_SVX_KEY: ${DVT_SVX_KEY_A:-}
+      DVT_SVX_REFLECTOR_HOST: ${DVT_SVX_REFLECTOR_HOST:-${DVT_NET:-172.30.0}.98}
+      DVT_SVX_TESTER_IP: ${DVT_NET:-172.30.0}.30
+      DVT_SVX_RX_PORT: ${DVT_SVX_RX_PORT:-10000}
+      DVT_SVX_TX_PORT: ${DVT_SVX_TX_PORT_A:-10001}
+      DVT_SVX_LOGIC_TYPE: ${DVT_SVX_LOGIC_TYPE:-Reflector}
+      DVT_SVX_DEFAULT_TG: ${DVT_SVX_DEFAULT_TG_A:-111}
+      DVT_SVX_MONITOR_TGS: ${DVT_SVX_MONITOR_TGS_A:-}
+      DVT_SVX_TG_SELECT_TIMEOUT: ${DVT_SVX_TG_SELECT_TIMEOUT:-30}
+    depends_on:
+      svxreflector: {condition: service_started, restart: false}
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.99"}
+
+  svx-b:
+    # limits: x-limits-small, see svx-a
+    mem_limit: ${DVT_MEM_SMALL:-256m}
+    memswap_limit: ${DVT_MEM_SMALL:-256m}
+    cpus: ${DVT_CPUS_SMALL:-0.5}
+    pids_limit: ${DVT_PIDS_SMALL:-128}
+    profiles: [svx]
+    init: true
+    restart: "no"
+    image: dvt-svxlink:local
+    build: *svx-build
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+      - /run:size=1m
+      - /var/lib/svxlink:size=16m,uid=10001,gid=10001,mode=0700
+    environment:
+      DVT_SVX_ROLE: node
+      DVT_SVX_CALLSIGN: ${DVT_SVX_CALLSIGN_B:-N0TEST-2}
+      DVT_SVX_KEY: ${DVT_SVX_KEY_B:-}
+      DVT_SVX_REFLECTOR_HOST: ${DVT_SVX_REFLECTOR_HOST:-${DVT_NET:-172.30.0}.98}
+      DVT_SVX_TESTER_IP: ${DVT_NET:-172.30.0}.30
+      DVT_SVX_RX_PORT: ${DVT_SVX_RX_PORT:-10000}
+      DVT_SVX_TX_PORT: ${DVT_SVX_TX_PORT_B:-10003}
+      DVT_SVX_LOGIC_TYPE: ${DVT_SVX_LOGIC_TYPE:-Reflector}
+      DVT_SVX_DEFAULT_TG: ${DVT_SVX_DEFAULT_TG_B:-0}
+      DVT_SVX_MONITOR_TGS: ${DVT_SVX_MONITOR_TGS_B:-111}
+      DVT_SVX_TG_SELECT_TIMEOUT: ${DVT_SVX_TG_SELECT_TIMEOUT:-30}
+    depends_on:
+      svxreflector: {condition: service_started, restart: false}
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.100"}
+
+  # What the tester needs to drive the nodes (merged into the tester service of
+  # compose.yml): where to send the tone, where the node audio comes back.
+  tester:
+    environment:
+      DVT_SVX: "on"
+      DVT_SVX_REFLECTOR_ADDR: ${DVT_SVX_REFLECTOR_HOST:-${DVT_NET:-172.30.0}.98}
+      DVT_SVX_NODE_A_ADDR: ${DVT_NET:-172.30.0}.99
+      DVT_SVX_NODE_B_ADDR: ${DVT_NET:-172.30.0}.100
+      DVT_SVX_RX_PORT: ${DVT_SVX_RX_PORT:-10000}
+      DVT_SVX_TX_PORT_A: ${DVT_SVX_TX_PORT_A:-10001}
+      DVT_SVX_TX_PORT_B: ${DVT_SVX_TX_PORT_B:-10003}
+      DVT_SVX_STATUS_URL: http://${DVT_SVX_REFLECTOR_HOST:-${DVT_NET:-172.30.0}.98}:8080/status
+
+# Packet capture (draft, goes into compose.yml next to capture-mrefd because it
+# needs the x-capture anchor defined there):
+#
+#  capture-svxreflector:
+#    <<: *capture
+#    profiles: [capture-svx]
+#    network_mode: "service:svxreflector"
+#    depends_on:
+#      svxreflector: {condition: service_started, restart: false}
+#    command: ["svxreflector"]
+#
+# The capture holds protocol 3 TCP inside TLS and UDP inside AES-128-GCM, so
+# only the TCP handshake up to StartEncryption and the UDP/TCP metadata are
+# readable; docs/svx-cases.md, "Capture and decoder plan".

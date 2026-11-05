@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: MIT
+# SvxLink (sm0svx/svxlink, GPL-2.0-or-later): the svxreflector server and the
+# svxlink node, built from fetched source at a pinned commit. DRAFT, not built,
+# not validated.
+#
+# The source is the named build context "src" (.cache/svxlink-src, fetched by a
+# future scripts/pre-fetch-svxlink.sh from SVXLINK_REPO at SVXLINK_COMMIT, see
+# docs/svx-cases.md). One image serves all roles of the profile svx; the role
+# is DVT_SVX_ROLE (rig/svxlink-entry.sh).
+#
+# Build choices (each one checked in the source, docs/svx-cases.md "Build"):
+#  * cmake root is src/ of the checkout; USE_QT=OFF (no Qt), USE_ALSA=OFF and
+#    USE_OSS=OFF (the headless audio device "udp:" is always built in).
+#  * CMAKE_BUILD_TYPE=Release without touching CMAKE_CXX_FLAGS_RELEASE: the
+#    project sets it to "-O3" on purpose so that NDEBUG stays off, and the
+#    reflector packs its UDP replies INSIDE assert() (Reflector.cpp
+#    sendUdpDatagram). Never add -DNDEBUG: the server would send no datagrams.
+#  * libcurl is required by the svxlink target (FATAL_ERROR without it), libgcrypt
+#    by remotetrx and siglevdetcal, GSM by the audio library; Speex, Opus and
+#    Ogg are optional but give the codecs a real node offers (OPUS is the
+#    reflector default when built). No groff: no manual pages.
+#  * make install goes to a staging directory (DESTDIR is set, so the install
+#    does no chown and needs no svxlink user).
+ARG SVXLINK_BASE_IMAGE
+FROM ${SVXLINK_BASE_IMAGE} AS build
+ARG MAKE_JOBS=4
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        g++ make cmake pkg-config binutils ca-certificates \
+        libsigc++-2.0-dev libgsm1-dev libpopt-dev tcl8.6-dev libgcrypt20-dev \
+        libjsoncpp-dev libssl-dev libcurl4-openssl-dev \
+        libspeex-dev libopus-dev libogg-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=src src /svxlink/src
+RUN cmake -S /svxlink/src -B /build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DCMAKE_INSTALL_SYSCONFDIR=/etc \
+        -DCMAKE_INSTALL_LOCALSTATEDIR=/var \
+        -DUSE_QT=OFF -DUSE_ALSA=OFF -DUSE_OSS=OFF \
+    && cmake --build /build -j"${MAKE_JOBS}" \
+    && DESTDIR=/out cmake --install /build \
+    && rm -rf /out/usr/include /out/usr/share/man /out/usr/share/doc /out/etc/init.d \
+    && { find /out -type f \( -perm -u+x -o -name '*.so*' \) -exec strip --strip-unneeded {} + 2>/dev/null || true; } \
+    && test -x /out/usr/bin/svxlink && test -x /out/usr/bin/svxreflector
+
+FROM ${SVXLINK_BASE_IMAGE}
+# Runtime libraries of the packages above. libtcl8.6 carries the Tcl library
+# scripts (init.tcl) that the event handler needs.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libsigc++-2.0-0v5 libgsm1 libpopt0 libtcl8.6 libgcrypt20 \
+        libjsoncpp25 libssl3 libcurl4 libspeex1 libopus0 libogg0 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 --home-dir /var/lib/svxlink --shell /usr/sbin/nologin svxlink \
+    && install -d -o svxlink -g svxlink -m 0700 /var/lib/svxlink
+COPY --from=build /out/ /
+COPY config/svxlink/ /svx/config/
+COPY svxlink-entry.sh /svx/entry.sh
+RUN chmod 755 /svx/entry.sh && ldconfig
+USER svxlink
+ENTRYPOINT ["/svx/entry.sh"]

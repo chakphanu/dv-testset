@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: MIT
+# svxlink.conf template for a headless rig node (profile svx). DRAFT, not
+# validated. Rendered by rig/svxlink-entry.sh (double-percent tokens from the
+# environment; never committed with values). One template for both protocol
+# generations: %%LOGIC_TYPE%% is Reflector (protocol 3) or ReflectorV2
+# (protocol 2.0, plaintext, ReflectorV2Logic.cpp); the CERT_* lines are read
+# only by the first.
+#
+# Audio without a sound card: the only non-hardware audio device of SvxLink
+# is "udp:<ip>:<port>" (src/async/audio/AsyncAudioDeviceUDP.cpp). RX binds
+# ip:port and reads raw int16, host byte order (little endian here), TX sends
+# raw int16 to ip:port. Frames are CARD_CHANNELS interleaved samples at
+# CARD_SAMPLE_RATE. The tester sends a tone at real time pace to the RX port;
+# the VOX squelch opens on it, which is the "PTT" of this node; the TX
+# audio arrives at the tester TX port.
+
+[GLOBAL]
+LOGICS=SimplexLogic,ReflectorLogic
+LINKS=ReflectorLink
+TIMESTAMP_FORMAT="%F %T"
+# Supported values are 16000 and 48000 only (svxlink.conf.5).
+CARD_SAMPLE_RATE=16000
+CARD_CHANNELS=1
+
+[SimplexLogic]
+TYPE=Simplex
+RX=Rx1
+TX=Tx1
+MODULES=
+CALLSIGN=%%CALLSIGN%%
+SHORT_IDENT_INTERVAL=0
+LONG_IDENT_INTERVAL=0
+DEFAULT_LANG=en_US
+
+[ReflectorLogic]
+TYPE=%%LOGIC_TYPE%%
+HOSTS=%%REFLECTOR_HOST%%
+HOST_PORT=5300
+CALLSIGN=%%CALLSIGN%%
+# Challenge answer: HMAC-SHA1(key, 20 byte challenge). Protocol 2 uses it
+# always; protocol 3 uses it inside TLS while the node has no signed certificate.
+AUTH_KEY="%%KEY%%"
+# Node selects this TG on its own squelch (local activity) when none is selected.
+DEFAULT_TG=%%DEFAULT_TG%%
+# Comma list; plus signs raise the client side priority (never on the wire).
+MONITOR_TGS=%%MONITOR_TGS%%
+# Default is 1: the first over after a local selection would be muted.
+MUTE_FIRST_TX_LOC=0
+MUTE_FIRST_TX_REM=0
+# Seconds until a selected TG falls back to TG 0 (default 30).
+TG_SELECT_TIMEOUT=%%TG_SELECT_TIMEOUT%%
+# Seconds between UDP heartbeats from the node (default 15).
+UDP_HEARTBEAT_INTERVAL=15
+# Protocol 3 files; a state directory on a tmpfs, so every start begins fresh.
+CERT_PKI_DIR=/var/lib/svxlink/pki
+CERT_DOWNLOAD_CA_BUNDLE=1
+CERT_EMAIL=%%CERT_EMAIL%%
+
+[ReflectorLink]
+CONNECT_LOGICS=SimplexLogic:9:%%CALLSIGN%%
+DEFAULT_ACTIVE=1
+
+[Rx1]
+TYPE=Local
+RX_ID=R
+AUDIO_DEV=udp:0.0.0.0:%%RX_PORT%%
+AUDIO_CHANNEL=0
+SQL_DET=VOX
+VOX_FILTER_DEPTH=20
+VOX_THRESH=500
+SQL_HANGTIME=200
+
+[Tx1]
+TYPE=Local
+TX_ID=T
+AUDIO_DEV=udp:%%TESTER_IP%%:%%TX_PORT%%
+AUDIO_CHANNEL=0
+PTT_TYPE=Dummy

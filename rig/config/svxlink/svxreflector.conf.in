@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: MIT
+# svxreflector.conf template for the dv-testset rig (profile svx). DRAFT, not
+# validated. rig/svxlink-entry.sh replaces every double-percent token at container
+# start from environment variables and refuses to start while one is left.
+# Passwords are generated per run into .local/rig.env and never committed.
+# Key names and defaults: src/doc/man/svxreflector.conf.5 and
+# src/svxlink/reflector/svxreflector.conf.in of the pinned SvxLink commit.
+
+[GLOBAL]
+TIMESTAMP_FORMAT="%F %T"
+# TCP and UDP use the same port number.
+LISTEN_PORT=5300
+# One codec only (ReflectorClient.cpp constructor keeps the first of a list).
+CODECS=%%CODEC%%
+# 0 = no limit on the length of an over (Reflector.cpp initialize).
+SQL_TIMEOUT=%%SQL_TIMEOUT%%
+SQL_TIMEOUT_BLOCKTIME=%%SQL_BLOCKTIME%%
+# Only used for protocol 1 clients.
+TG_FOR_V1_CLIENTS=999
+# Plain HTTP /status (JSON, per node: tg, isTalker, rx levels). Rig network only.
+HTTP_SRV_PORT=8080
+# Generated PKI (root CA, issuing CA, server certificate) lives on a tmpfs.
+CERT_PKI_DIR=/var/lib/svxlink/pki
+# No COMMAND_PTY and no CERT_CA_HOOK: nodes are never signed in the rig, they
+# fall back to the AUTH_KEY challenge inside TLS (ReflectorClient.cpp
+# handleMsgClientCsr). COMMAND_PTY and the hook are not network protocol.
+# ACCEPT_CALLSIGN default: [A-Z0-9][A-Z]{0,2}\d[A-Z0-9]{0,3}[A-Z](?:-[A-Z0-9]{1,3})?
+
+[ROOT_CA]
+COMMON_NAME="Example Root CA"
+ORG="Example Org"
+COUNTRY=XX
+
+[ISSUING_CA]
+COMMON_NAME="Example Issuing CA"
+ORG="Example Org"
+COUNTRY=XX
+
+# The node verifies this certificate against the host name or the IP address
+# it connected to (ReflectorLogic.cpp onSslConnectionReady: matchHost or
+# matchIp), so the rig address has to be in the SAN.
+[SERVER_CERT]
+COMMON_NAME=svxreflector
+SUBJECT_ALT_NAME=DNS:svxreflector,IP:%%REFLECTOR_IP%%
+ORG="Example Org"
+COUNTRY=XX
+
+# callsign = auth group; auth group = password. Callsigns are placeholders.
+[USERS]
+%%CALLSIGN_A%%=NODE_A
+%%CALLSIGN_B%%=NODE_B
+
+[PASSWORDS]
+NODE_A="%%KEY_A%%"
+NODE_B="%%KEY_B%%"
+
+# Restricted talk group for the admission cases (SelectTG denied silently,
+# monitor needs ALLOW_MONITOR as well):
+#[TG#900]
+#ALLOW=%%CALLSIGN_A%%
+#ALLOW_MONITOR=%%CALLSIGN_A%%
