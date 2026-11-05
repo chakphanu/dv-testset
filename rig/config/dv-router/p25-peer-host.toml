@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, profile p25): the P25Reflector of the rig (p25-sut,
+# P25 TG 31672, module G, UDP 41000; P19 cases/test_edge_relink.py -k p25) named by HOST NAME `p25-sut`
+# instead of an IP (SANSIO4).
+[[edges.p25.peer]]
+id = 31672
+host = "p25-sut"
+port = 41000
+module = "G"

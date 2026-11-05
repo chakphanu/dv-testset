@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, profile nxdn): the NXDN "probe" row of the rig
+# (the tester plays the NXDN reflector: P19 cases/test_edge_relink.py -k nxdn, FakeReflector on UDP 41411,
+# TG 31673, module I as in rig/compose.yml DVT_NXDN_PROBE_*), named by HOST NAME `tester` (the compose
+# service of the tester, resolved by the rig network DNS) instead of an IP (SANSIO4).
+[[edges.nxdn.peer]]
+tg = 31673
+host = "tester"
+port = 41411
+module = "I"

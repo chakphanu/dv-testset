@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: MIT
+# As xlx-peer2.toml, but the second XLX peer (XLX997, the rig service xlxd-peer2-sut) is named by
+# HOST NAME (SANSIO4). Use next to xlx-peer-host.toml or xlx-peer-host-bad.toml.
+[[edges.xlx.peer]]
+callsign = "XLX997"
+host = "xlxd-peer2-sut"
+modules = "DE"

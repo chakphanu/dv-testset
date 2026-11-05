@@ -150,7 +150,8 @@ def test_soak_sixty_minutes(soak_on, load_gen, load_ready, rig_control, target, 
     stop_file.unlink(missing_ok=True)
     (out / ".soak-touch").write_text("")                                  # the disk takes a file before an hour starts
     t_wall = time.monotonic()
-    cap = t_wall + soak.WALL_CAP_S
+    wall_cap_s = soak.wall_cap(env)
+    cap = t_wall + wall_cap_s
 
     def should_stop():
         return stop_file.exists() or time.monotonic() > cap
@@ -166,7 +167,7 @@ def test_soak_sixty_minutes(soak_on, load_gen, load_ready, rig_control, target, 
     names, unlisted = ss.discover(rig_control)
     report.update(children=names, children_unsampled=unlisted, seed=seed, warmup_s=warmup_s, measured_s=measured_s,
                   modules=modules, smoke=smoke, ga=tm["ga"], short=tm["short"], sample_s=sample_s, rss_scale=tm["rss_scale"],
-                  wall_cap_s=soak.WALL_CAP_S, settle_s=SETTLE_S, median_window_s=tm["median_window_s"])
+                  wall_cap_s=wall_cap_s, settle_s=SETTLE_S, median_window_s=tm["median_window_s"])
     if unlisted:
         web.finding("SOAK1: children of the launcher that are not in the proc-stat allow-list (not sampled): %s" % unlisted)
     lanes, skipped = ss.make_lanes(target, env, modules)
@@ -236,7 +237,7 @@ def test_soak_sixty_minutes(soak_on, load_gen, load_ready, rig_control, target, 
                 sampler.phase = "measured"
                 state = "measured"
         if should_stop():
-            reason = "stop file" if stop_file.exists() else "wall clock cap of %d s" % soak.WALL_CAP_S
+            reason = "stop file" if stop_file.exists() else "wall clock cap of %d s" % wall_cap_s
             sink.write(soak.mark_row(time.time(), sampler.phase, "stopped early: " + reason))
             report.update(state="stopped early", stopped=reason)
             pytest.fail("SOAK1 stopped early (%s); the traffic is torn down, no verdict" % reason)

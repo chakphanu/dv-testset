@@ -843,3 +843,13 @@ def test_rejudge_reads_a_run_directory_and_applies_the_current_rules(tmp_path):
 def test_rejudge_without_samples_is_an_error(tmp_path):
     with pytest.raises(FileNotFoundError):
         soak.rejudge(str(tmp_path))
+
+
+def test_wall_cap_default_and_override():
+    assert soak.wall_cap({}) == soak.WALL_CAP_S == 75 * 60
+    # the long run: 600 s warmup + 5100 s measured needs a cap above 5700 + 170 + 120
+    assert soak.wall_cap({"DVT_SOAK_MEASURE_S": "5100", "DVT_SOAK_WALL_CAP_S": "6600"}) == 6600.0
+    with pytest.raises(ValueError):
+        soak.wall_cap({"DVT_SOAK_MEASURE_S": "5100", "DVT_SOAK_WALL_CAP_S": "5700"})
+    with pytest.raises(ValueError):
+        soak.wall_cap({"DVT_SOAK_WALL_CAP_S": "soon"})

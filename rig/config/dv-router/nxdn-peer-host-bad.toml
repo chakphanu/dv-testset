@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+# nxdn-peer-host.toml plus a second NXDN row whose name never resolves (.invalid, RFC 6761): it must stay
+# pending (resolved again before each poll), must not fail the start-up and must not disturb the first row.
+[[edges.nxdn.peer]]
+tg = 31673
+host = "tester"
+port = 41411
+module = "I"
+
+[[edges.nxdn.peer]]
+tg = 31674
+host = "no-such-peer.example.invalid"
+port = 41400
+module = "H"

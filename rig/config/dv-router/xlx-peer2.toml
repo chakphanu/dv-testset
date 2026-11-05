@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch): the second XLX interlink peer of the rig,
+# xlxd-peer2-sut (XLX997, host NET.14), linked only with xlxd-sut. Add it next to xlx-peer.toml
+# (or xlx-peer-host.toml) when a case needs two XLX peers: test_interlink_no_xlx_transit in
+# cases/test_xlxd_interlink.py does (a stream from one XLX peer must never reach the other).
+[[edges.xlx.peer]]
+callsign = "XLX997"
+host = "<NET>.14"
+modules = "DE"

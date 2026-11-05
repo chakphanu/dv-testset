@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+# p25-peer-host.toml plus a second P25 row whose name never resolves: it must stay pending, not fail the
+# start-up and not disturb the first row.
+[[edges.p25.peer]]
+id = 31672
+host = "p25-sut"
+port = 41000
+module = "G"
+
+[[edges.p25.peer]]
+id = 31675
+host = "no-such-peer.example.invalid"
+port = 41000
+module = "H"

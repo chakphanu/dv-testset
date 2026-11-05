@@ -51,7 +51,7 @@ LINK_TIMEOUTS_S = {"imrs": 150, "mmdvm": 100, "dextra": 60, "dcs": 60, "ysf": 60
                    "p25": 30}                   # usrp (dynamic) never expires
 SWEEP_TICK_S = 20
 SETTLE_MIN_S = max(LINK_TIMEOUTS_S.values()) + SWEEP_TICK_S        # 170 s; cases/test_web_soak.py SETTLE_S must be >= this
-WALL_CAP_S = 75 * 60.0
+WALL_CAP_S = 75 * 60.0         # the default hard cap; DVT_SOAK_WALL_CAP_S raises it for a long measured part (wall_cap)
 SEATS = 100                     # receive-only WebRTC listeners held at any time
 CHURN_PER_MIN = 5
 OVER_S = 10.0
@@ -135,6 +135,23 @@ def _env_float(env, *names):
                 raise ValueError("%s=%r must be a number of seconds >= 0" % (name, raw))
             return value
     return None
+
+
+def wall_cap(env):
+    """The hard wall clock cap of a run in seconds: WALL_CAP_S, or DVT_SOAK_WALL_CAP_S when set. ValueError for a bad number
+    or a cap below the planned warmup + measured part + the 170 s settle + 2 minutes idle."""
+    raw = (env.get("DVT_SOAK_WALL_CAP_S") or "").strip()
+    if not raw:
+        return WALL_CAP_S
+    try:
+        cap = float(raw)
+    except ValueError:
+        raise ValueError("DVT_SOAK_WALL_CAP_S=%r is not a number" % raw)
+    tm = timing(env)
+    need = tm["warmup_s"] + tm["measured_s"] + SETTLE_MIN_S + 120.0
+    if cap < need:
+        raise ValueError("DVT_SOAK_WALL_CAP_S=%g is below warmup + measured + settle + idle = %g s" % (cap, need))
+    return cap
 
 
 def timing(env):
