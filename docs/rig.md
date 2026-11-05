@@ -315,6 +315,7 @@ another launch mode the variable draws a warning. Snippets in
 |------|------|
 | `data-ident.toml` | `[data] enable = true`, `require_ident = <REQUIRE_IDENT>`, `xlx_text_overs = true`: the data worker on, with the identity policy of the run |
 | `xlx-peer.toml` | `[[edges.xlx.peer]]` XLX998 at `<NET>.12` on modules `DE` |
+| `xlx-peer-host.toml` | the same peer named by HOST NAME (`xlxd-peer-sut`, resolved by the rig network DNS), for SANSIO4; `xlx-peer-host-bad.toml` adds a second row `no-such-peer.example.invalid` that never resolves (must stay pending, no start-up failure). Use one of the three XLX peer snippets, never two |
 | `web.toml` | the web service, a persistent state dir and the WebRTC edge; added by `--profile web` itself (next section) |
 | `recorder.toml` | the recorder (K14b): `[recorder] dir = "/var/lib/dv-recorder"`, `keep_days = 7`, `max_gb = 1`; naming it in `DVT_SUT_CONFIG_EXTRA` is the switch (see "Recorder" in the web profile section) |
 | `guest.toml` | `[web] guest_listen = true`: anonymous guests may Listen (two per IPv4, no Talk); used by the K22 cases (`docs/web-k22-cases.md`); name it after `web.toml` |

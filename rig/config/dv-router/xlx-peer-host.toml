@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/rig.md): the same XLX interlink peer as
+# xlx-peer.toml (XLX998, the rig service xlxd-peer-sut), but the row names the peer by HOST NAME
+# instead of an IP literal (SANSIO4: the runtime shell resolves the name through the bounded resolver
+# pool before the first tick). The rig network's own DNS answers the compose service name. Use either
+# this file or xlx-peer.toml, never both.
+[[edges.xlx.peer]]
+callsign = "XLX998"
+host = "xlxd-peer-sut"
+modules = "DE"

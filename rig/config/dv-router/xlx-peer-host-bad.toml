@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA: xlx-peer-host.toml plus a second row whose name never resolves
+# (the reserved .invalid top level, RFC 6761). SANSIO4: the unresolvable row must stay pending, must
+# not fail the start-up of the edge or of the node, and must not disturb the row that does resolve.
+# Use instead of xlx-peer-host.toml, never together with it.
+[[edges.xlx.peer]]
+callsign = "XLX998"
+host = "xlxd-peer-sut"
+modules = "DE"
+
+[[edges.xlx.peer]]
+callsign = "XLX996"
+host = "no-such-peer.example.invalid"
+modules = "D"
