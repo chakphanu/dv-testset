@@ -21,7 +21,7 @@ LIB = Path(__file__).resolve().parents[2] / "scripts" / "lib" / "killproc.sh"
 METRICS_LIB = Path(__file__).resolve().parents[2] / "scripts" / "lib" / "metrics.sh"
 
 SERVICES = ["xlxd-sut", "xlxd-ref", "tester", "transcoder-sut", "allstar", "XLXD-SUT", "", "xlxd-sut ", "*"]
-PROCESSES = ["dv-edge-xlx", "dv-edge-nxdn", "dv-edge-p25", "dv-edge-allstar", "dv-router", "dv-codec-ambed", "dv-svc-web", "dv-svc-admin", "dv-edge-webrtc", "dv-svc-status", "dv-codec", "dv-codec-ambed2", "dv-codec-*", "dv-edge-dextra", "dv-edge-*", "dv-edge",
+PROCESSES = ["dv-edge-xlx", "dv-edge-nxdn", "dv-edge-p25", "dv-edge-allstar", "dv-router", "dv-codec-ambed", "dv-svc-web", "dv-svc-admin", "dv-edge-webrtc", "dv-svc-status", "dv-room", "dv-room2", "dv-codec", "dv-codec-ambed2", "dv-codec-*", "dv-edge-dextra", "dv-edge-*", "dv-edge",
              "dv-router2", "DV-ROUTER", "xlxd", "sh", "", "dv-edge-xlx;id", "../dv-router", "-1", "1"]
 SIGNALS = ["KILL", "USR1", "TERM", "SIGKILL", "kill", "9", "HUP", "USR2", "INT", "STOP", "", "-9", "KILL;id"]
 
@@ -60,8 +60,36 @@ def test_python_table():
         for sig in ("USR1", "TERM", "HUP", "INT", "STOP"):
             assert not control.kill_proc_allowed("xlxd-sut", proc, sig)
         assert not control.kill_proc_allowed("xlxd-ref", proc, "KILL")
-    assert sum(len(v) for v in control.KILL_PROC_ALLOWED.values()) == 12
+    # the room controller: KILL only, and only with a rooms selector
+    assert control.kill_proc_allowed("xlxd-sut", "dv-room", "KILL", "B")
+    assert not control.kill_proc_allowed("xlxd-sut", "dv-room", "KILL")             # no blanket kill
+    assert not control.kill_proc_allowed("xlxd-sut", "dv-room", "KILL", None)
+    for sig in ("USR1", "TERM", "HUP", "INT", "STOP"):
+        assert not control.kill_proc_allowed("xlxd-sut", "dv-room", sig, "B")
+    assert not control.kill_proc_allowed("xlxd-ref", "dv-room", "KILL", "B")
+    assert sum(len(v) for v in control.KILL_PROC_ALLOWED.values()) == 13
     assert not any(proc == "dv-router" for _svc, proc in control.KILL_PROC_ALLOWED)
+
+
+@pytest.mark.parametrize("rooms", ["a", "AB", "", "1", " ", "A ", "A,B", "*", "A;id", "rooms=A", "-A", "\u00c4", 1, ["A"]])
+def test_python_refuses_malformed_rooms_selector(rooms):
+    assert not control.kill_proc_allowed("xlxd-sut", "dv-room", "KILL", rooms)
+    with pytest.raises(ValueError):
+        control.kill_proc_line("xlxd-sut", "dv-room", "KILL", rooms)
+
+
+def test_python_refuses_selector_on_other_processes():
+    for proc in ("dv-edge-xlx", "dv-edge-p25", "dv-codec-ambed", "dv-svc-web", "dv-edge-webrtc", "dv-svc-status", "dv-router"):
+        for sig in ("KILL", "USR1"):
+            assert not control.kill_proc_allowed("xlxd-sut", proc, sig, "A")
+    with pytest.raises(ValueError):
+        control.kill_proc_line("xlxd-sut", "dv-edge-xlx", "KILL", "A")
+
+
+def test_kill_proc_line_rooms():
+    assert control.kill_proc_line("xlxd-sut", "dv-room", "KILL", "C") == "kill-proc xlxd-sut dv-room KILL rooms=C"
+    with pytest.raises(ValueError):
+        control.kill_proc_line("xlxd-sut", "dv-room", "KILL")
 
 
 def test_bash_and_python_agree_on_every_combination():
@@ -80,8 +108,33 @@ def test_bash_and_python_agree_on_every_combination():
     allowed_bash = {combos[int(i)] for v, i in verdicts if v == "1"}
     allowed_py = {c for c in combos if control.kill_proc_allowed(*c)}
     assert allowed_bash == allowed_py
-    assert len(allowed_py) == 12
+    assert len(allowed_py) == 12                    # dv-room is not among them: it needs a selector
     assert not any(p == "dv-router" for _s, p, _g in allowed_bash)
+    assert not any(p == "dv-room" for _s, p, _g in allowed_bash)
+
+
+SELECTORS = ["rooms=A", "rooms=B", "rooms=Z", "rooms=a", "rooms=AB", "rooms=", "rooms=1", "rooms=A,B", "rooms==A", "room=A",
+             "ROOMS=A", "rooms=A;id", "rooms=*", "--rooms=A", "A", "", "rooms=\u00c4"]
+
+
+def test_bash_and_python_agree_with_a_rooms_selector():
+    if not shutil.which("bash"):
+        pytest.skip("bash is not installed")
+    combos = [c for c in itertools.product(["xlxd-sut", "xlxd-ref"], ["dv-room", "dv-edge-xlx", "dv-svc-web", "dv-router", "dv-room2"],
+                                           ["KILL", "USR1", "TERM"], SELECTORS) if c[3]]
+    script = ('i=0; while IFS=$\'\\t\' read -r s p g r; do '
+              'if dvt_killproc_allowed "$s" "$p" "$g" "$r"; then echo "1 $i"; else echo "0 $i"; fi; i=$((i+1)); done')
+    feed = "".join("%s\t%s\t%s\t%s\n" % c for c in combos)
+    run = subprocess.run(["bash", "-c", 'source "$1"; ' + script, "x", str(LIB)], input=feed,
+                         capture_output=True, text=True, timeout=60)
+    assert run.returncode == 0, run.stderr
+    verdicts = [line.split() for line in run.stdout.splitlines()]
+    assert len(verdicts) == len(combos)
+    allowed_bash = {combos[int(i)] for v, i in verdicts if v == "1"}
+    assert allowed_bash == {("xlxd-sut", "dv-room", "KILL", "rooms=" + x) for x in "ABZ"}
+    # the python side takes the bare letter: the same three of the tried ones
+    assert {x for x in "ABZab1" if control.kill_proc_allowed("xlxd-sut", "dv-room", "KILL", x)} == set("ABZ")
+    assert not any(control.kill_proc_allowed(s_, p_, g_, "A") for s_, p_, g_, _r in combos if (p_, g_) != ("dv-room", "KILL"))
 
 
 def test_bash_allowed_needs_exactly_three_words():
@@ -90,6 +143,16 @@ def test_bash_allowed_needs_exactly_three_words():
     assert bash('dvt_killproc_allowed xlxd-sut dv-edge-p25 USR1 extra').returncode == 1
     assert bash('dvt_killproc_allowed xlxd-sut dv-router USR1').returncode == 1
     assert bash('dvt_killproc_allowed').returncode == 1
+
+
+def test_bash_allowed_selector_rules():
+    assert bash('dvt_killproc_allowed xlxd-sut dv-room KILL rooms=B').returncode == 0
+    assert bash('dvt_killproc_allowed xlxd-sut dv-room KILL').returncode == 1                  # blanket kill refused
+    assert bash('dvt_killproc_allowed xlxd-sut dv-room KILL rooms=b').returncode == 1
+    assert bash('dvt_killproc_allowed xlxd-sut dv-room KILL rooms=AB').returncode == 1
+    assert bash('dvt_killproc_allowed xlxd-sut dv-room USR1 rooms=B').returncode == 1
+    assert bash('dvt_killproc_allowed xlxd-sut dv-edge-xlx KILL rooms=B').returncode == 1       # selector only for dv-room
+    assert bash('dvt_killproc_allowed xlxd-sut dv-room KILL rooms=B extra').returncode == 1
 
 
 # ---- request parsing on the host
@@ -102,6 +165,8 @@ def test_bash_allowed_needs_exactly_three_words():
     ("kill-proc xlxd-sut dv-edge-nxdn USR1", "xlxd-sut dv-edge-nxdn USR1"),
     ("kill-proc xlxd-sut dv-edge-p25 USR1", "xlxd-sut dv-edge-p25 USR1"),
     ("kill-proc xlxd-sut dv-codec-ambed KILL", "xlxd-sut dv-codec-ambed KILL"),
+    ("kill-proc xlxd-sut dv-room KILL rooms=B", "xlxd-sut dv-room KILL rooms=B"),
+    ("kill-proc  xlxd-sut\tdv-room   KILL\trooms=Z  ", "xlxd-sut dv-room KILL rooms=Z"),
 ])
 def test_parse_accepts(line, out):
     run = bash('dvt_killproc_parse "$1"', line)
@@ -132,6 +197,25 @@ def test_parse_accepts(line, out):
     "kill xlxd-sut dv-edge-xlx KILL",
     "KILL-PROC xlxd-sut dv-edge-xlx KILL",
     "stop xlxd-sut",
+    "kill-proc xlxd-sut dv-room KILL",                # dv-room without the selector: no blanket kill
+    "kill-proc xlxd-sut dv-room",
+    "kill-proc xlxd-sut dv-room USR1 rooms=B",
+    "kill-proc xlxd-sut dv-room TERM rooms=B",
+    "kill-proc xlxd-ref dv-room KILL rooms=B",
+    "kill-proc xlxd-sut dv-room KILL rooms=b",        # malformed selectors
+    "kill-proc xlxd-sut dv-room KILL rooms=",
+    "kill-proc xlxd-sut dv-room KILL rooms=AB",
+    "kill-proc xlxd-sut dv-room KILL rooms=A,B",
+    "kill-proc xlxd-sut dv-room KILL rooms=1",
+    "kill-proc xlxd-sut dv-room KILL rooms=*",
+    "kill-proc xlxd-sut dv-room KILL rooms=A;id",
+    "kill-proc xlxd-sut dv-room KILL --rooms=A",
+    "kill-proc xlxd-sut dv-room KILL room=A",
+    "kill-proc xlxd-sut dv-room KILL A",
+    "kill-proc xlxd-sut dv-room KILL rooms=A extra",
+    "kill-proc xlxd-sut dv-edge-xlx KILL rooms=A",    # the selector exists for dv-room only
+    "kill-proc xlxd-sut dv-router KILL rooms=A",
+    "kill-proc xlxd-sut dv-svc-web KILL rooms=A",
 ])
 def test_parse_refuses(line):
     run = bash('dvt_killproc_parse "$1"', line)
@@ -143,14 +227,20 @@ def test_exec_refuses_odd_names_before_docker():
     for proc, sig in (("a b", "KILL"), ("dv-edge-*", "KILL"), ("x;y", "KILL"), ("dv-router", "-9"), ("dv-router", "")):
         run = bash('dvt_killproc_exec cid img "$1" "$2"', proc, sig)
         assert run.returncode == 1, (proc, sig)
+    # dv-room only with a well-formed rooms=<LETTER>
+    for sel in ("", "rooms=", "rooms=a", "rooms=AB", "rooms=A,B", "room=A", "A", "rooms=A;id"):
+        run = bash('dvt_killproc_exec cid img dv-room KILL "$1"', sel)
+        assert run.returncode == 1, sel
+    run = bash('dvt_killproc_exec cid img dv-room KILL')
+    assert run.returncode == 1
 
 
 # ---- the script that runs in the helper container: exact comm only
 
-def named_sleeper(name):
-    """A python process whose /proc comm is `name` (prctl PR_SET_NAME)."""
+def named_sleeper(name, *argv):
+    """A python process whose /proc comm is `name` (prctl PR_SET_NAME); `argv` ends up in its cmdline."""
     code = "import ctypes, sys, time; ctypes.CDLL(None).prctl(15, sys.argv[1].encode()); time.sleep(30)"
-    return subprocess.Popen([sys.executable, "-c", code, name])
+    return subprocess.Popen([sys.executable, "-c", code, name, *argv])
 
 
 def wait_comm(proc, name):
@@ -202,6 +292,42 @@ def test_helper_script_signals_exact_comm_only():
         run = subprocess.run(["sh", "-c", script, "dvt-killproc", "TERM", "dvt-nothing-like-this"],
                              capture_output=True, text=True, timeout=30)
         assert run.returncode == 3 and "none=dvt-nothing-like-this" in run.stdout
+    finally:
+        for proc in procs:
+            proc.kill()
+            proc.wait()
+
+
+def test_helper_script_rooms_selector_checks_the_cmdline():
+    """The optional third argument of the container script: of five processes called dvt-room only
+    those whose argv holds `--rooms <L>`, `--rooms=<L>` or a comma list with L are signalled, never
+    `--rooms` for another letter, a longer word, or the letter in another position."""
+    if not (shutil.which("sh") and shutil.which("date") and shutil.which("tr") and Path("/proc/self/comm").exists()):
+        pytest.skip("sh, date, tr or /proc missing")
+    specs = [("--rooms", "A"), ("--rooms", "B"), ("--rooms=B",), ("--rooms", "A,B,C"), ("--rooms", "AB"),
+             ("--rooms", "C", "B"), ("B", "--rooms", "A"), ("--roomsB",), ("--rooms=BB",)]
+    procs = [named_sleeper("dvt-room", *spec) for spec in specs]
+    try:
+        for proc in procs:
+            wait_comm(proc, "dvt-room")
+        script = bash('printf "%s" "$DVT_KILLPROC_SCRIPT"').stdout
+        run = subprocess.run(["sh", "-c", script, "dvt-killproc", "TERM", "dvt-room", "B"],
+                             capture_output=True, text=True, timeout=30)
+        assert run.returncode == 0, run.stderr
+        pids = sorted(int(x.split("=")[1]) for x in run.stdout.splitlines() if x.startswith("pid="))
+        assert pids == sorted(procs[i].pid for i in (1, 2, 3)), run.stdout
+        for index in (1, 2, 3):
+            procs[index].wait(5)
+        assert [procs[i].poll() for i in (0, 4, 5, 6, 7, 8)] == [None] * 6
+        # no match at all: exit 3, "none=", still a t_kill line
+        run = subprocess.run(["sh", "-c", script, "dvt-killproc", "TERM", "dvt-room", "Q"],
+                             capture_output=True, text=True, timeout=30)
+        assert run.returncode == 3 and "none=dvt-room" in run.stdout and "t_kill=" in run.stdout and "pid=" not in run.stdout
+        # the real argv shape is `--rooms <L>`; a stray earlier word does not hide it
+        run = subprocess.run(["sh", "-c", script, "dvt-killproc", "TERM", "dvt-room", "A"],
+                             capture_output=True, text=True, timeout=30)
+        pids = sorted(int(x.split("=")[1]) for x in run.stdout.splitlines() if x.startswith("pid="))
+        assert pids == sorted(procs[i].pid for i in (0, 6)), run.stdout
     finally:
         for proc in procs:
             proc.kill()
@@ -276,6 +402,24 @@ def test_rig_control_kill_proc(tmp_path):
     got = ctl.kill_proc("xlxd-sut", "dv-edge-xlx", "KILL", timeout=5)
     thread.join(5)
     assert seen == ["kill-proc xlxd-sut dv-edge-xlx KILL"] and got.pids == [12]
+
+
+def test_rig_control_kill_proc_rooms(tmp_path):
+    ctl = control.RigControl(tmp_path / "control")
+    seen, thread = watcher(ctl.dir, "ok", out="pid=7\nt_kill=%f\n" % time.time())
+    got = ctl.kill_proc("xlxd-sut", "dv-room", "KILL", timeout=5, rooms="B")
+    thread.join(5)
+    assert seen == ["kill-proc xlxd-sut dv-room KILL rooms=B"] and got.pids == [7]
+
+
+def test_rig_control_kill_proc_dv_room_needs_a_selector(tmp_path):
+    ctl = control.RigControl(tmp_path / "control")
+    for rooms in (None, "", "b", "AB", "A,B", "*"):
+        with pytest.raises(ValueError):
+            ctl.kill_proc("xlxd-sut", "dv-room", "KILL", rooms=rooms)
+    with pytest.raises(ValueError):
+        ctl.kill_proc("xlxd-sut", "dv-edge-xlx", "KILL", rooms="A")
+    assert not list(ctl.dir.iterdir())
 
 
 def test_rig_control_kill_proc_not_allowed_sends_nothing(tmp_path):

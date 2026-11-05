@@ -6,8 +6,10 @@ with one line; the host watcher answers with <id>.ack ("ok", "error <rc>" or
 "error refused") and, for some actions, a text file <id>.out.
 
   "<action> <service>"                       stop | start | restart | kill
-  "kill-proc <service> <process> <signal>"   signal one process by name INSIDE
-                                             a rig container (allow-list below)
+  "kill-proc <service> <process> <signal> [rooms=<LETTER>]"
+                                             signal one process by name INSIDE
+                                             a rig container (allow-list below);
+                                             dv-room needs the rooms selector
   "mark begin|end <tag>"                     only logged: brackets traffic a case
                                              makes abnormal on purpose (dvcheck)
   "metrics xlxd-sut"                         the Prometheus text of the sut hub
@@ -28,6 +30,7 @@ signals were sent (same host clock as time.time() of the tester).
 """
 import itertools
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -42,7 +45,13 @@ KILL_PROC_ALLOWED = {
     ("xlxd-sut", "dv-svc-web"): ("KILL",),       # resets the web service's in-memory limits and lockouts
     ("xlxd-sut", "dv-edge-webrtc"): ("KILL",),   # K22: a dropped Disconnect, guests calling /rtc/alive meanwhile
     ("xlxd-sut", "dv-svc-status"): ("KILL",),    # K22: the status hub's snapshots carry the guest proof
+    ("xlxd-sut", "dv-room"): ("KILL",),          # LEAK2: one room controller, ONLY with a rooms=<LETTER> selector
 }
+
+# processes that must carry the rooms=<LETTER> selector (a blanket kill of every one is refused), and the
+# only ones that accept it: the host then also requires `--rooms <LETTER>` in /proc/<pid>/cmdline
+KILL_PROC_NEEDS_ROOMS = (("xlxd-sut", "dv-room"),)
+ROOMS_SELECTOR_RE = re.compile(r"^rooms=[A-Z]$")
 
 
 # exact /proc comm names whose cpu ticks, memory, threads and fd count the host will READ
@@ -94,17 +103,26 @@ def metrics_line(service):
     return "metrics %s" % service
 
 
-def kill_proc_allowed(service, process, signal):
-    """True when the host watcher would run `kill-proc service process signal`."""
-    return signal in KILL_PROC_ALLOWED.get((service, process), ())
+def kill_proc_allowed(service, process, signal, rooms=None):
+    """True when the host watcher would run `kill-proc service process signal [rooms=<rooms>]`.
+    `rooms` is one room letter A-Z: required for the processes of KILL_PROC_NEEDS_ROOMS (dv-room),
+    refused for every other process."""
+    if signal not in KILL_PROC_ALLOWED.get((service, process), ()):
+        return False
+    needs = (service, process) in KILL_PROC_NEEDS_ROOMS
+    if rooms is None:
+        return not needs
+    return needs and isinstance(rooms, str) and ROOMS_SELECTOR_RE.match("rooms=" + rooms) is not None
 
 
-def kill_proc_line(service, process, signal):
+def kill_proc_line(service, process, signal, rooms=None):
     """The request line, or ValueError for anything outside the allow-list
     (nothing is sent then; the host refuses the same requests)."""
-    if not kill_proc_allowed(service, process, signal):
-        raise ValueError("kill-proc %s %s %s is not allow-listed" % (service, process, signal))
-    return "kill-proc %s %s %s" % (service, process, signal)
+    if not kill_proc_allowed(service, process, signal, rooms):
+        raise ValueError("kill-proc %s %s %s%s is not allow-listed"
+                         % (service, process, signal, "" if rooms is None else " rooms=%s" % (rooms,)))
+    line = "kill-proc %s %s %s" % (service, process, signal)
+    return line if rooms is None else line + " rooms=" + rooms
 
 
 @dataclass
@@ -206,13 +224,15 @@ class RigControl:
             raise ValueError("bad netem args %r" % (args,))
         self._request("netem %s %s" % (target, args), timeout)
 
-    def kill_proc(self, service, process, signal, timeout=30.0):
+    def kill_proc(self, service, process, signal, timeout=30.0, rooms=None):
         """Signal the process called `process` (exact comm) inside `service`
-        (allow-list: KILL_PROC_ALLOWED). Returns a KillResult; raises
-        ValueError before sending when the request is not allow-listed,
+        (allow-list: KILL_PROC_ALLOWED). `rooms="B"` additionally requires
+        `--rooms B` in the process's argv (dv-room: one room controller; it is
+        required for dv-room and refused for the others). Returns a KillResult;
+        raises ValueError before sending when the request is not allow-listed,
         RuntimeError("... error 3") when no such process runs, TimeoutError
         when the host does not answer in `timeout` seconds."""
-        line = kill_proc_line(service, process, signal)
+        line = kill_proc_line(service, process, signal, rooms)
         name = self._request(line, timeout)
         return parse_kill_out((self.dir / (name + ".out")).read_text())
 

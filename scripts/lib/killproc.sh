@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Sourced by scripts/run.sh (bash). The control-channel action
 #
-#   kill-proc <service> <process> <signal>
+#   kill-proc <service> <process> <signal> [rooms=<LETTER>]
 #
 # signals a process INSIDE a rig container. The DV-Router image is scratch
 # (no sh, ps, pkill), the container's processes belong to root, and the host
@@ -9,7 +9,11 @@
 # the tester image that joins the target's pid namespace (docker run --pid
 # container:<id>) and walks /proc/<pid>/comm: a process is signalled only when
 # its comm equals <process> exactly (no pattern, no cmdline match) and it is
-# not a zombie.
+# not a zombie. With the optional fifth word rooms=<LETTER> (one A-Z) the
+# process must also carry the argument --rooms <LETTER> in its /proc/<pid>/cmdline
+# (NUL separated; also the single token --rooms=<LETTER> and a comma list that
+# contains the letter), so one dv-room room controller can be killed without
+# touching the others.
 #
 # Allow-list (anything else is "error refused", nothing runs):
 #   service xlxd-sut only; dv-edge-xlx, dv-edge-nxdn, dv-edge-p25 with KILL or
@@ -19,40 +23,69 @@
 #   buckets and lockouts; the launcher respawns it), dv-edge-webrtc (the
 #   WebRTC edge: the K22 cases kill it under a guest that keeps calling
 #   /rtc/alive) and dv-svc-status (the status hub: its snapshots carry the
-#   guest proof) with KILL only. The
+#   guest proof) with KILL only; dv-room (a room controller: the LEAK2 cases
+#   kill the one of a module and the launcher respawns it) with KILL only and
+#   ONLY together with rooms=<LETTER> (a blanket kill of every controller is
+#   refused); the selector is refused for every other process. The
 #   launcher dv-router is never signalled: it has no handler and a stray signal
 #   kills the node.
 # dvtest/control.py (KILL_PROC_ALLOWED) mirrors the table for the tester;
 # cases/unit/test_control.py checks that the two agree.
 #
-# dvt_killproc_allowed SERVICE PROCESS SIGNAL   exit 0 when allow-listed
-# dvt_killproc_parse LINE                       prints "SERVICE PROCESS SIGNAL" or exit 1
-# dvt_killproc_exec CONTAINER IMAGE PROCESS SIGNAL
+# dvt_killproc_allowed SERVICE PROCESS SIGNAL [rooms=<LETTER>]   exit 0 when allow-listed
+# dvt_killproc_parse LINE                       prints "SERVICE PROCESS SIGNAL [rooms=<LETTER>]" or exit 1
+# dvt_killproc_exec CONTAINER IMAGE PROCESS SIGNAL [rooms=<LETTER>]
 #   stdout: "pid=<n>" per signalled process, then "t_kill=<epoch seconds>";
-#   exit 0 ok, 3 no process of that comm, 4 a signal failed, 5 no limits.
+#   exit 0 ok, 3 no process of that comm (and selector), 4 a signal failed, 5 no limits.
 
 dvt_killproc_allowed() {
-  [ "$#" -eq 3 ] || return 1
+  [ "$#" -eq 3 ] || [ "$#" -eq 4 ] || return 1
   [ "$1" = xlxd-sut ] || return 1
+  if [ "$#" -eq 4 ]; then
+    # the selector exists for dv-room only, and is a single room letter (a spelled-out class:
+    # a range like [A-Z] also matches accented letters in some locales)
+    [ "$2" = dv-room ] && [[ "$4" =~ ^rooms=[ABCDEFGHIJKLMNOPQRSTUVWXYZ]$ ]] || return 1
+  elif [ "$2" = dv-room ]; then
+    return 1                                      # dv-room needs rooms=<LETTER>
+  fi
   case "$2:$3" in
-    dv-edge-xlx:KILL|dv-edge-xlx:USR1|dv-edge-nxdn:KILL|dv-edge-nxdn:USR1|dv-edge-p25:KILL|dv-edge-p25:USR1|dv-edge-allstar:KILL|dv-edge-allstar:USR1|dv-codec-ambed:KILL|dv-svc-web:KILL|dv-edge-webrtc:KILL|dv-svc-status:KILL) return 0 ;;
+    dv-edge-xlx:KILL|dv-edge-xlx:USR1|dv-edge-nxdn:KILL|dv-edge-nxdn:USR1|dv-edge-p25:KILL|dv-edge-p25:USR1|dv-edge-allstar:KILL|dv-edge-allstar:USR1|dv-codec-ambed:KILL|dv-svc-web:KILL|dv-edge-webrtc:KILL|dv-svc-status:KILL|dv-room:KILL) return 0 ;;
   esac
   return 1
 }
 
 dvt_killproc_parse() {
-  local action svc proc sig extra
-  action="" svc="" proc="" sig="" extra=""
-  read -r action svc proc sig extra <<< "$1" || true
+  local action svc proc sig sel extra
+  action="" svc="" proc="" sig="" sel="" extra=""
+  read -r action svc proc sig sel extra <<< "$1" || true
   [ "$action" = kill-proc ] && [ -z "$extra" ] || return 1
-  dvt_killproc_allowed "$svc" "$proc" "$sig" || return 1
-  printf '%s %s %s\n' "$svc" "$proc" "$sig"
+  if [ -n "$sel" ]; then
+    dvt_killproc_allowed "$svc" "$proc" "$sig" "$sel" || return 1
+    printf '%s %s %s %s\n' "$svc" "$proc" "$sig" "$sel"
+  else
+    dvt_killproc_allowed "$svc" "$proc" "$sig" || return 1
+    printf '%s %s %s\n' "$svc" "$proc" "$sig"
+  fi
 }
 
 # Runs inside the helper container (sh = dash/bash of the tester image):
-# $1 signal, $2 exact comm. The helper's own pid is skipped; its comm is "sh".
+# $1 signal, $2 exact comm, $3 optional room letter (empty: no cmdline test).
+# The helper's own pid is skipped; its comm is "sh".
 DVT_KILLPROC_SCRIPT='
-sig=$1; want=$2; n=0; bad=0; st=
+sig=$1; want=$2; room=$3; n=0; bad=0; st=
+# true when the argv words in "$@" (after the letter in $1) hold --rooms L,
+# --rooms=L or either with a comma list that contains L
+has_room() {
+  letter=$1; shift; prev=
+  for a in "$@"; do
+    v=
+    [ "$prev" != --rooms ] || v=$a
+    case "$a" in --rooms=*) v=${a#--rooms=} ;; esac
+    if [ -n "$v" ]; then case ",$v," in *",$letter,"*) return 0 ;; esac; fi
+    prev=$a
+  done
+  return 1
+}
 for d in /proc/[0-9]*; do
   pid=${d#/proc/}
   [ "$pid" != "$$" ] || continue
@@ -62,6 +95,13 @@ for d in /proc/[0-9]*; do
   st=
   { while read -r k v; do [ "$k" != "State:" ] || { st=${v%"${v#?}"}; break; }; done < "$d/status"; } 2>/dev/null || continue
   [ "$st" != Z ] || continue
+  if [ -n "$room" ]; then
+    # cmdline is NUL separated: one argument per line (a room letter never holds a newline)
+    args=$(tr "\\0" "\\n" < "$d/cmdline" 2>/dev/null) || continue
+    oldifs=$IFS; IFS="
+"; set -f; set -- $args; set +f; IFS=$oldifs
+    has_room "$room" "$@" || continue
+  fi
   if kill -s "$sig" "$pid" 2>/dev/null; then echo "pid=$pid"; n=$((n + 1)); else echo "failed=$pid"; bad=$((bad + 1)); fi
 done
 echo "t_kill=$(date +%s.%N)"
@@ -70,13 +110,18 @@ echo "t_kill=$(date +%s.%N)"
 '
 
 dvt_killproc_exec() {
-  local cid="$1" img="$2" proc="$3" sig="$4" lim
+  local cid="$1" img="$2" proc="$3" sig="$4" sel="${5:-}" room="" lim
   # defense in depth: the caller checked the allow-list, the helper only ever
   # sees names made of the characters of the allowed ones
   [[ "$proc" =~ ^[a-z0-9-]+$ ]] && [[ "$sig" =~ ^[A-Z0-9]+$ ]] || return 1
+  if [ -n "$sel" ]; then
+    [[ "$sel" =~ ^rooms=[ABCDEFGHIJKLMNOPQRSTUVWXYZ]$ ]] || return 1
+    room="${sel#rooms=}"
+  fi
+  [ "$proc" != dv-room ] || [ -n "$room" ] || return 1       # no blanket kill of the controllers
   mapfile -t lim < <(python3 -c 'from dvtest.limits import docker_run_args; print("\n".join(docker_run_args()))') || return 5
   [ "${#lim[@]}" -gt 0 ] || return 5
   docker run --rm --pull never --network none --pid "container:$cid" --user 0:0 \
     --cap-drop ALL --cap-add KILL --security-opt no-new-privileges --read-only "${lim[@]}" \
-    --entrypoint sh "$img" -c "$DVT_KILLPROC_SCRIPT" dvt-killproc "$sig" "$proc"
+    --entrypoint sh "$img" -c "$DVT_KILLPROC_SCRIPT" dvt-killproc "$sig" "$proc" "$room"
 }

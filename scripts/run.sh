@@ -157,11 +157,15 @@
 # or, with the allstar profile: "asl usrp-show" (chan_usrp counters into
 # <id>.out) or "asl play-1901|play-1902" (app_rpt plays a short telemetry
 # file on that node, i.e. keys its USRP channel toward xlxd-sut).
-# or "kill-proc xlxd-sut <process> <signal>": signal one process INSIDE the sut
+# or "kill-proc xlxd-sut <process> <signal> [rooms=<LETTER>]": signal one process INSIDE the sut
 # container by exact /proc comm (scripts/lib/killproc.sh): dv-edge-xlx,
 # dv-edge-nxdn, dv-edge-p25 with KILL or USR1 (quiet restart), dv-codec-ambed, dv-svc-web,
 # dv-edge-webrtc and dv-svc-status with KILL only (the web cases reset its in-memory limits;
-# the K22 cases kill the WebRTC edge and the status hub); never dv-router; anything
+# the K22 cases kill the WebRTC edge and the status hub), dv-room with KILL only and
+# ONLY with the fifth word rooms=<LETTER> (one A-Z: the process must also carry
+# --rooms <LETTER> in its /proc cmdline; the LEAK2 cases kill one room controller,
+# the launcher respawns it; the selector is refused for every other process, a
+# dv-room kill without it too); never dv-router; anything
 # else is refused. <id>.out gets "pid=<n>" per process and "t_kill=<epoch s>";
 # exit 3 (error 3) when no process has that name.
 # or "metrics xlxd-sut" (no other word): <id>.out gets the Prometheus text of the
@@ -904,16 +908,17 @@ watch_control() {
            && [[ "$extra" =~ ^[A-Za-z0-9._-]+$ ]]; then
         rc=0
       elif [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$action" = kill-proc ]; then
-        # "kill-proc xlxd-sut <process> <signal>": see scripts/lib/killproc.sh (allow-list, exact comm)
+        # "kill-proc xlxd-sut <process> <signal> [rooms=<LETTER>]": see scripts/lib/killproc.sh (allow-list, exact comm)
         if kp="$(dvt_killproc_parse "$line")"; then
-          read -r ksvc kproc ksig <<< "$kp"
+          ksel=""
+          read -r ksvc kproc ksig ksel <<< "$kp"
           kcid="$("${compose[@]}" ps -q "$ksvc" 2>/dev/null | head -n 1 || true)"
           kimg="$(docker inspect -f '{{.Image}}' "$("${compose[@]}" ps -q tester 2>/dev/null | head -n 1 || true)" 2>/dev/null || true)"
           rc=0
           if [ -z "$kcid" ] || [ -z "$kimg" ]; then
             echo "kill-proc: no running $ksvc or tester container" > "$control/$id.out"; rc=4
           else
-            dvt_killproc_exec "$kcid" "$kimg" "$kproc" "$ksig" > "$control/$id.out" 2>> "$control/control.log" || rc=$?
+            dvt_killproc_exec "$kcid" "$kimg" "$kproc" "$ksig" "$ksel" > "$control/$id.out" 2>> "$control/control.log" || rc=$?
           fi
         fi
       elif [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$action" = metrics ]; then

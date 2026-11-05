@@ -615,7 +615,7 @@ Actions `stop`, `start`, `kill` (SIGKILL); services `transcoder-ref`,
 `control/control.log` gets `<utc> request <line>` before and
 `<utc> <line> -> <rc>` after each action.
 
-`kill-proc xlxd-sut <process> <signal>` signals one process inside the
+`kill-proc xlxd-sut <process> <signal> [rooms=<LETTER>]` signals one process inside the
 system-under-test container (the DV-Router image is `FROM scratch`: no shell,
 `ps` or `pkill`, and the host user may not signal root's processes). The host
 starts a throwaway container of the tester image that joins the target's pid
@@ -623,11 +623,11 @@ namespace (`docker run --pid container:<id>`, `dvtest.limits.docker_run_args()`
 caps, no network, only CAP_KILL) and walks `/proc/<pid>/comm`: a process is
 signalled only when its comm equals `<process>` exactly and it is not a zombie.
 Allow-list: `dv-edge-xlx`, `dv-edge-nxdn`, `dv-edge-p25` with `KILL` or `USR1` (quiet restart: the edge saves its sessions, exits and the
-launcher respawns it) the codec worker `dv-codec-ambed`, the web service `dv-svc-web` (its in-memory login/register limits and lockouts), the WebRTC edge `dv-edge-webrtc` and the status hub `dv-svc-status` (K22 cases, `docs/web-k22-cases.md`) with `KILL` only; the launcher `dv-router` is never signalled (no handler, a
+launcher respawns it) the codec worker `dv-codec-ambed`, the web service `dv-svc-web` (its in-memory login/register limits and lockouts), the WebRTC edge `dv-edge-webrtc` and the status hub `dv-svc-status` (K22 cases, `docs/web-k22-cases.md`) with `KILL` only; one room controller `dv-room` with `KILL` only and ONLY with the fifth word `rooms=<LETTER>` (one `A-Z`; the process must also carry `--rooms <LETTER>` in its NUL-separated `/proc/<pid>/cmdline`, which the launcher passes as two arguments; the single token `--rooms=<LETTER>` and a comma list holding the letter match too; LEAK2 cases, `docs/stream-registry-cases.md`; the launcher respawns it; without the selector a `dv-room` kill is refused so no blanket kill of every controller exists, and the selector is refused for every other process); the launcher `dv-router` is never signalled (no handler, a
 stray signal kills the node); anything else
 is `error refused`. `<id>.out` has `pid=<n>` per process and `t_kill=<epoch s>`
 (taken in the container right after the signals); `error 3` = no such process.
-Tester side: `rig_control.kill_proc(service, process, signal)` returns the pids
+Tester side: `rig_control.kill_proc(service, process, signal[, rooms="B"])` returns the pids
 and `t_kill` (`dvtest/control.py`; `KILL_PROC_ALLOWED` mirrors
 `scripts/lib/killproc.sh`, a unit test checks both agree).
 
