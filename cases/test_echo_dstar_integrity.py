@@ -107,12 +107,13 @@ def one_run(ip, delay, number):
     """One over; returns {"callsign", "forward", "echo_listener", "echo_sender"} of integrity() results."""
     n_frames = env_int("DVT_ECHO_INTEGRITY_FRAMES", RUN_FRAMES, 25)
     jitter = float(env_int("DVT_ECHO_INTEGRITY_JITTER_MS", 0, 0))
+    stall = float(env_int("DVT_ECHO_INTEGRITY_STALL_PCT", 0, 0))
     frames = echo.make_frames("dstar", n_frames, "e9-%d" % number)
     sender = DstarTap(ip, MODULE, 0)
     listener = DstarTap(ip, MODULE, 1)
     try:
         sid = clients.fresh_stream_id("dstar")
-        end = sender.send_over(frames, sid, jitter_ms=jitter, seed=number + 1)
+        end = sender.send_over(frames, sid, jitter_ms=jitter, seed=number + 1, stall_pct=stall)
         echo_end = echo_over(listener, end, delay, delay + echo.over_seconds(n_frames) + 4.0)
         time.sleep(0.6)                          # the sender's copy of the echo arrives with the listener's
         heard_l = echo.dstar_streams(listener.snapshot())
@@ -149,7 +150,7 @@ def test_e9_dstar_echo_return_integrity(e9_rig, target):
             time.sleep(max(0.0, quiet_from + QUIET_AFTER_ECHO - time.monotonic()))
 
     summaries = {key: echo.summarize(key, [r[key] for r in results]) for key in ("forward", "echo_listener", "echo_sender")}
-    summary = {"image": os.environ.get("DVT_ECHO_IMAGE_TAG") or os.environ.get("XLXD_SUT_IMAGE", ""), "runs": n_runs, "frames_per_run": env_int("DVT_ECHO_INTEGRITY_FRAMES", RUN_FRAMES, 25), "jitter_ms": env_int("DVT_ECHO_INTEGRITY_JITTER_MS", 0, 0),
+    summary = {"image": os.environ.get("DVT_ECHO_IMAGE_TAG") or os.environ.get("XLXD_SUT_IMAGE", ""), "runs": n_runs, "frames_per_run": env_int("DVT_ECHO_INTEGRITY_FRAMES", RUN_FRAMES, 25), "jitter_ms": env_int("DVT_ECHO_INTEGRITY_JITTER_MS", 0, 0), "stall_pct": env_int("DVT_ECHO_INTEGRITY_STALL_PCT", 0, 0),
                "gap_limit_ms": echo.GAP_MAX_MS, **summaries,
                "headers": headers,
                "per_run": [{k: {f: v for f, v in r[k].items() if f != "sync_frames"}

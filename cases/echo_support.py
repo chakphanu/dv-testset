@@ -197,7 +197,7 @@ class DstarTap(threading.Thread):
     def snapshot(self):
         return list(self.items)
 
-    def send_over(self, frames, stream_id, reflector="XLX999", settle=0.3, jitter_ms=0.0, seed=1):
+    def send_over(self, frames, stream_id, reflector="XLX999", settle=0.3, jitter_ms=0.0, seed=1, stall_pct=0.0):
         """Header, `settle` seconds, then the 9 byte frames one per 20 ms (sync pattern on frame 0 of each
         superframe, as DstarClient.talk) and the end packet; returns the monotonic time of the last packet."""
         dest = self.dc.dest
@@ -212,8 +212,9 @@ class DstarTap(threading.Thread):
         for i, packet in enumerate(packets):
             # jitter_ms > 0: each packet leaves up to that many ms early or late against its slot (a real client's timer
             # is not exact); the order is kept, the schedule does not drift
-            wait = start + i * TALK_GAP + (rng.uniform(-jitter_ms, jitter_ms) / 1000.0 if jitter_ms > 0 else 0.0) - time.monotonic()
-            if jitter_ms > 0:
+            late = 0.020 if stall_pct > 0 and rng.random() < stall_pct / 100.0 else 0.0     # an occasional 20 ms stall of the timer
+            wait = start + i * TALK_GAP + (rng.uniform(-jitter_ms, jitter_ms) / 1000.0 if jitter_ms > 0 else 0.0) + late - time.monotonic()
+            if jitter_ms > 0 or late:
                 if wait > 0:
                     time.sleep(wait)
             else:
