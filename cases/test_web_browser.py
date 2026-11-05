@@ -262,8 +262,13 @@ def test_signed_in_dashboard_offers_send_message(user_page, br_user):
     """WEBMSG1: a signed-in sender sees a compact Send message button (data-testid message-open) in a room without messages,
     and the composer form (message-send) in a room that has messages. One message to room A makes the second case certain."""
     bp = user_page
-    post_text(br_user, "n0test sender panel %s %d" % (bp.engine, int(time.time())))
+    status = post_text(br_user, "n0test sender panel %s %d" % (bp.engine, int(time.time())))
+    if status != 202:
+        pytest.skip("the message was refused (HTTP %d)" % status)
     open_dashboard(bp)
+    deadline = time.monotonic() + 15           # the history of a signed-in viewer loads after the first render
+    while time.monotonic() < deadline and pages.room_messages(bp.page, ROOM).count() == 0:
+        time.sleep(0.3)
     seen = {}
     for room in ("A", "B"):
         if pages.room_messages(bp.page, room).count() > 0:
@@ -273,8 +278,7 @@ def test_signed_in_dashboard_offers_send_message(user_page, br_user):
             expect(pages.message_open(bp.page, room)).to_be_visible()
             seen[room] = "opener"
     note("%s: signed-in message controls per room: %s" % (brlib.label(bp.engine), seen))
-    assert seen.get(ROOM) == "composer" or post_text(br_user, "n0test sender panel retry") != 202, \
-        "%s: room %s has a posted message but no composer: %s" % (brlib.label(bp.engine), ROOM, seen)
+    assert seen.get(ROOM) == "composer", "%s: room %s has a posted message but no composer after 15 s: %s" % (brlib.label(bp.engine), ROOM, seen)
 
 
 def wait_live_after(bp):
