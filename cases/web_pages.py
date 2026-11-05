@@ -41,7 +41,7 @@ OPS_PAGES = {"clients": "Clients", "events": "Events", "accounts": "Accounts", "
              "audit": "Audit", "ids": "Radio IDs"}       # ids: UI1, on dv-router:wip-5aa7cfd and later
 OPS_HEADINGS = {
     "clients": ["Callsign", "Kind", "Protocol", "Edge", "Circuit", "Room", "Address", "Connected", "Actions"],
-    "events": ["ID", "Time (local)", "Type", "Event", "Callsign", "Room", "Edge", "Details"],
+    "events": ["ID", "Time (local)", "Type", "Event", "Mode", "Edge", "Callsign", "Room", "Details"],     # WEBEV1 / WEBEV2 (2026-11-04)
     "accounts": ["Callsign", "Name", "Role", "Status", "TX", "Limits", "TOTP enrolled", "Actions"],
     "invites": ["Callsign", "Kind", "Role", "TX", "Expires (local)", "Actions"],
     "audit": ["Time (local)", "Operator", "Role", "Remote", "Action", "Target", "Result"],
@@ -71,6 +71,7 @@ TESTIDS = {
     "message_sign_in": "message-sign-in",               # "Sign in" link of a signed-out message panel
     "message_body": "message-body",
     "message_send": "message-send",
+    "message_open": "message-open",                     # compact "Send message" button of a signed-in sender (room without messages, WEBMSG1)
     # account pages (auth-page.js)
     "login_callsign": "login-callsign",
     "login_password": "login-password",
@@ -154,6 +155,17 @@ def message_texts(page, room):
 def sign_in_for_history_link(page, room):
     """The 'Sign in' link of a signed-out message panel (message-sign-in, scoped to the room's panel)."""
     return room_messages(page, room).get_by_test_id(TESTIDS["message_sign_in"])
+
+
+def message_open(page, room):
+    """The compact Send message opener of one room (a signed-in sender, room without messages): scoped to the room by its
+    aria-controls (message-<R>-compose); a signed-out viewer has none."""
+    return page.locator("[data-testid='%s'][aria-controls='message-%s-compose']" % (TESTIDS["message_open"], room))
+
+
+def message_send(page, room):
+    """The composer's submit button of one room (form message-<R>-compose)."""
+    return page.locator("#message-%s-compose" % room).get_by_test_id(TESTIDS["message_send"])
 
 
 def heard_filter(page):

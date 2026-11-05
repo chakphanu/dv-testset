@@ -210,12 +210,36 @@ def test_event_stream_slot_is_freed_on_reload(dashboard_page):
     expect(pages.heading(bp.page)).to_have_text(pages.ROUTE_TITLES["/"])
 
 
-def test_signed_out_dashboard_requests(dashboard_page):
+def test_signed_out_dashboard_requests(dashboard_page, br_user):
+    """WEBMSG1 (dv-router ruling 2026-11-05): a room's message panel exists ONLY when the room has messages; a signed-out
+    viewer never gets a composer or a Send message button. So: no panel (and no sign-in link, no opener) for a room without
+    messages; after one message to room A the panel is visible for the signed-out viewer with that text and the sign-in link."""
     bp = dashboard_page
     live = wait_live_after(bp)
     for room in ("A", "B"):
-        expect(pages.room_messages(bp.page, room)).to_be_visible()
-        expect(pages.sign_in_for_history_link(bp.page, room)).to_be_visible()
+        panel = pages.room_messages(bp.page, room)
+        if panel.count() == 0:
+            expect(pages.sign_in_for_history_link(bp.page, room)).to_have_count(0)
+        else:
+            expect(pages.sign_in_for_history_link(bp.page, room)).to_be_visible()
+        expect(pages.message_open(bp.page, room)).to_have_count(0)        # a signed-out viewer cannot send
+        expect(pages.message_send(bp.page, room)).to_have_count(0)
+    text = "n0test dashboard panel %s %d" % (bp.engine, int(time.time()))
+    status = post_text(br_user, text)
+    if status != 202:
+        pytest.skip("the message was refused (HTTP %d)" % status)
+    panel = pages.room_messages(bp.page, ROOM)
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline and panel.count() == 0:
+        time.sleep(0.3)
+    if panel.count() == 0:                    # the live path did not deliver it: a finding; the page as loaded afterwards must show it
+        finding(bp.engine, "signed-out dashboard: a posted room message did not appear live within 15 s (live %s)" % live)
+        wait_live_after(bp)
+    expect(pages.room_messages(bp.page, ROOM)).to_be_visible()
+    shown = [t.strip() for t in pages.message_texts(bp.page, ROOM).all_inner_texts()]
+    assert any(text in t for t in shown), "%s: the posted text is not in the panel of room %s: %s" % (brlib.label(bp.engine), ROOM, shown[:5])
+    expect(pages.sign_in_for_history_link(bp.page, ROOM)).to_be_visible()
+    expect(pages.message_open(bp.page, ROOM)).to_have_count(0)
     bp.page.wait_for_timeout(5000)           # past the first refresh and one resync interval
     # web.md "Roles": message history needs a user session. The page must not even ask.
     asked = bp.seen("/api/v1/user/") + bp.seen("/api/v1/operator/") + bp.seen("/api/v1/rtc/")
@@ -232,6 +256,25 @@ def test_signed_out_dashboard_requests(dashboard_page):
     for bad in ("Unauthorized", "Cannot connect", "HTTP 401", "Offline"):
         assert bad not in text, "%s: %r on the signed-out dashboard" % (brlib.label(bp.engine), bad)
     report(bp, EXPECT_401, "signed-out dashboard")
+
+
+def test_signed_in_dashboard_offers_send_message(user_page, br_user):
+    """WEBMSG1: a signed-in sender sees a compact Send message button (data-testid message-open) in a room without messages,
+    and the composer form (message-send) in a room that has messages. One message to room A makes the second case certain."""
+    bp = user_page
+    post_text(br_user, "n0test sender panel %s %d" % (bp.engine, int(time.time())))
+    open_dashboard(bp)
+    seen = {}
+    for room in ("A", "B"):
+        if pages.room_messages(bp.page, room).count() > 0:
+            expect(pages.message_send(bp.page, room)).to_be_visible()
+            seen[room] = "composer"
+        else:
+            expect(pages.message_open(bp.page, room)).to_be_visible()
+            seen[room] = "opener"
+    note("%s: signed-in message controls per room: %s" % (brlib.label(bp.engine), seen))
+    assert seen.get(ROOM) == "composer" or post_text(br_user, "n0test sender panel retry") != 202, \
+        "%s: room %s has a posted message but no composer: %s" % (brlib.label(bp.engine), ROOM, seen)
 
 
 def wait_live_after(bp):
