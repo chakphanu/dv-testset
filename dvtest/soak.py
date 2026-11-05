@@ -57,6 +57,20 @@ CHURN_PER_MIN = 5
 OVER_S = 10.0
 
 RSS_FLOOR_KIB = 5 * 1024
+# dv-svc-status keeps a ring of 10000 hub events (about 1.16 KiB each): its RSS grows until the ring is full and then stays flat.
+# The whole-window slope rule failed that flat plateau (a judge defect, not a product defect), so this child is judged by two
+# rules instead (judge_status_ring): BOUND (growth over the measured part <= counted events capped at the ring x 1.16 KiB x
+# STATUS_BOUND_FACTOR + STATUS_MARGIN_KIB) and, once the ring was full before the last STATUS_PLATEAU_S of the measured part,
+# PLATEAU (slope of that last window <= STATUS_PLATEAU_KIB_PER_MIN). The plateau limit is 8, not 5, KiB/min: the first 95
+# minute run (wip-239382b) measured 4.2 KiB/min over the last 30 minutes, 8 keeps a clear margin over that noise while a ring
+# that does not cap (about 174 KiB/min at 150 events/min) is 20 times over it.
+STATUS_CHILD = "dv-svc-status"
+STATUS_RING = 10000                 # = dvtest.events.RING (unit test cases/unit/test_soak.py keeps the two equal)
+STATUS_EVENT_KIB = 1.16             # = dvtest.events.EVENT_KIB
+STATUS_BOUND_FACTOR = 1.6
+STATUS_MARGIN_KIB = 2048.0
+STATUS_PLATEAU_S = 30 * 60.0
+STATUS_PLATEAU_KIB_PER_MIN = 8.0
 RSS_FRACTION = 0.10
 THREADS_FRACTION = 0.10
 THREADS_FLOOR = 3               # median rule: later median may exceed the earlier by max(10 percent, 3 threads)
@@ -545,6 +559,42 @@ def smaps_stats(rows):
     return out
 
 
+def judge_status_ring(meas, event_times, growth, slope, window_s, params=None):
+    """(ok, detail, info) of dv-svc-status by the ring rules. `meas` its measured proc rows, `event_times` the epoch seconds of
+    the hub events counted from the start of warmup (sorted or not), `growth` / `slope` the RSS growth over the measured window
+    (KiB) and the whole-window slope (KiB per second), `window_s` that window. Pure: no I/O."""
+    p = params or {}
+    ring = p.get("status_ring", STATUS_RING)
+    kib = p.get("status_event_kib", STATUS_EVENT_KIB)
+    plateau_s = p.get("status_plateau_s", STATUS_PLATEAU_S)
+    plateau_limit = p.get("status_plateau_kib_per_min", STATUS_PLATEAU_KIB_PER_MIN)
+    t_end = max(r["t"] for r in meas)
+    counted = sum(1 for t in event_times if t <= t_end)
+    bound = min(counted, ring) * kib * STATUS_BOUND_FACTOR + STATUS_MARGIN_KIB
+    bound_ok = growth <= bound
+    t_from = t_end - plateau_s
+    before = sum(1 for t in event_times if t < t_from)
+    info = {"rule": "ring", "counted": counted, "ring": ring, "bound_kib": round(bound, 1), "bound_ok": bound_ok,
+            "plateau_window_s": plateau_s, "counted_before_plateau": before}
+    detail = ("ring rule: growth %.0f KiB over %.0f s (whole-window slope %.2f KiB/min); BOUND = min(%d counted events, %d) x %.2f KiB x %.1f + %.0f KiB = %.0f KiB: %s"
+              % (growth, window_s, slope * 60.0, counted, ring, kib, STATUS_BOUND_FACTOR, STATUS_MARGIN_KIB, bound, "ok" if bound_ok else "OVER"))
+    if before < ring:
+        info.update(plateau="ring not full", plateau_ok=True)
+        return bound_ok, detail + "; ring not full (%d events counted before the last %.0f min): bound only" % (before, plateau_s / 60.0), info
+    pts = [r for r in meas if r["t"] >= t_from]
+    if len(pts) < 3:
+        info.update(plateau="too few samples", plateau_ok=False)
+        return False, detail + "; ring full but only %d samples in the last %.0f min: no plateau slope" % (len(pts), plateau_s / 60.0), info
+    pslope, _ = least_squares([r["t"] for r in pts], [r["rss_kib"] for r in pts])
+    pslope *= 60.0
+    plateau_ok = pslope <= plateau_limit
+    info.update(plateau="ring full", plateau_ok=plateau_ok, plateau_slope_kib_per_min=round(pslope, 3), plateau_limit_kib_per_min=plateau_limit,
+                plateau_samples=len(pts))
+    detail += ("; PLATEAU: ring full (%d events counted before the last %.0f min), slope of the last %.0f min %.2f KiB/min (%d samples), limit %.1f KiB/min: %s"
+               % (before, plateau_s / 60.0, plateau_s / 60.0, pslope, len(pts), plateau_limit, "ok" if plateau_ok else "STILL GROWING"))
+    return bound_ok and plateau_ok, detail, info
+
+
 def judge_child(name, rows, params):
     """(record, checks) of one child; `rows` are all its proc rows in time order."""
     checks = []
@@ -593,8 +643,15 @@ def judge_child(name, rows, params):
                       "hwm": max(r["hwm_kib"] for r in meas)}
     scaled = " (scaled x%.3f for a short measured part)" % p["rss_scale"] if p["rss_scale"] != 1.0 else ""
     lead = "" if judged else "LEAD ONLY, not a verdict (short run, warmup): "
-    checks.append(Check("rss:" + name, growth <= limit or not judged, "%sslope %.2f KiB/min x %.0f s = %.0f KiB, limit %.0f KiB%s (start %.0f KiB)"
-                        % (lead, slope * 60.0, window, growth, limit, scaled, base_rss)))
+    event_times = p.get("hub_event_times")
+    if name == STATUS_CHILD and event_times is not None:
+        ok_ring, detail, ring_info = judge_status_ring(meas, event_times, growth, slope, window, p)
+        rec["rss_kib"].update(ring_info, over_limit=not ok_ring, whole_window_limit_kib=round(limit, 1), limit_kib=ring_info["bound_kib"])
+        checks.append(Check("rss:" + name, ok_ring or not judged, "%s%s (start %.0f KiB)" % (lead, detail, base_rss)))
+    else:
+        rule = "" if name != STATUS_CHILD else " [whole-window rule: the hub events were not counted]"
+        checks.append(Check("rss:" + name, growth <= limit or not judged, "%sslope %.2f KiB/min x %.0f s = %.0f KiB, limit %.0f KiB%s (start %.0f KiB)%s"
+                            % (lead, slope * 60.0, window, growth, limit, scaled, base_rss, rule)))
 
     flags = []
     window_s = p.get("median_window_s") or MEDIAN_WINDOW_S * min(1.0, (p.get("measured_s") or span) / MEASURED_S)
@@ -865,7 +922,7 @@ def default_params():
             "threads_fraction": THREADS_FRACTION, "threads_floor": THREADS_FLOOR, "fds_fraction": FDS_FRACTION,
             "fds_floor": FDS_FLOOR, "flag_threads_floor": FLAG_THREADS_FLOOR, "flag_fds_floor": FLAG_FDS_FLOOR,
             "median_window_s": None, "idle_fds_slack": IDLE_FDS_SLACK, "rss_scale": 1.0, "flat_overrides": None,
-            "rss_judged": True, "measured_s": None}
+            "rss_judged": True, "measured_s": None, "hub_event_times": None}
 
 
 def evaluate(rows, events=None, params=None, expected=()):

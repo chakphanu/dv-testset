@@ -273,7 +273,8 @@ def test_soak_sixty_minutes(soak_on, load_gen, load_ready, rig_control, target, 
         # a short run is a validation: its RSS slopes are leads (warmup), not a verdict; the real run judges them
         result = soak.evaluate(rows, events=events, expected=names,
                                params={"rss_scale": tm["rss_scale"], "rss_judged": not tm["short"], "measured_s": measured_s,
-                                       "median_window_s": tm["median_window_s"]})
+                                       "median_window_s": tm["median_window_s"],
+                                       "hub_event_times": ss.hub_event_times(reader)})
         gsum, gchecks = soak.generator_summary(gen_rows, min_packets=ROOMS_HEARD_MIN_PACKETS)
         tsum = traffic.summary()
         # hub events per minute and distinct streams next to the RSS slopes (recorded, never asserted)

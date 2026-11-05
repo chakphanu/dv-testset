@@ -853,3 +853,76 @@ def test_wall_cap_default_and_override():
         soak.wall_cap({"DVT_SOAK_MEASURE_S": "5100", "DVT_SOAK_WALL_CAP_S": "5700"})
     with pytest.raises(ValueError):
         soak.wall_cap({"DVT_SOAK_WALL_CAP_S": "soon"})
+
+
+# ---- dv-svc-status: the ring rules (bound, plateau) instead of the whole-window slope
+
+STATUS = "dv-svc-status"
+
+
+def status_run(rss, rate_per_s, measured=3000):
+    """(rows, event times) of a dv-svc-status series and a hub event stream at `rate_per_s` from the start of warmup."""
+    rows = series(STATUS, rss=rss, measured=measured)
+    t_end = 600 + measured
+    times = [T0 + i / rate_per_s for i in range(int(t_end * rate_per_s))]
+    extra = gauge_rows() + counter_rows(window_s=float(measured))
+    return rows, times, extra
+
+
+def status_verdict(rss, rate, measured, **params):
+    rows, times, extra = status_run(rss, rate, measured)
+    return verdict(rows, extra=extra, params=dict({"measured_s": float(measured), "hub_event_times": times}, **params))
+
+
+def test_status_ring_constants_equal_the_events_module():
+    from dvtest import events
+    assert soak.STATUS_RING == events.RING and soak.STATUS_EVENT_KIB == events.EVENT_KIB
+
+
+def test_status_ring_not_full_judges_the_bound_only_and_says_so():
+    # the 50 minute run of wip-239382b: 119 KiB/min, 9213 events counted; the old whole-window rule failed it (5976 > 5120 KiB)
+    res = status_verdict(lambda t: 14560 + max(0, t - 600) * 119 / 60.0, 3.0, 3000)
+    assert STATUS not in failed(res) and "rss:" + STATUS not in failed(res), failed(res)
+    check = next(c for c in res.checks if c.name == "rss:" + STATUS)
+    assert check.ok and "ring not full" in check.detail and "bound only" in check.detail and "BOUND" in check.detail
+    rec = res.children[STATUS]["rss_kib"]
+    assert rec["rule"] == "ring" and rec["plateau"] == "ring not full" and rec["bound_ok"] and rec["growth_kib"] > rec["whole_window_limit_kib"]
+    # without the event times the old rule applies and fails the same series; the detail says so
+    old = verdict(series(STATUS, rss=lambda t: 14560 + max(0, t - 600) * 119 / 60.0), params={"measured_s": 3000.0})
+    assert failed(old) == ["rss:" + STATUS]
+    assert "whole-window rule" in next(c for c in old.checks if c.name == "rss:" + STATUS).detail
+
+
+def test_status_ring_full_and_flat_passes():
+    # grows 119 KiB/min while the ring fills (10000 events at 3/s = 3333 s), flat after; 5100 s measured
+    res = status_verdict(lambda t: 14560 + (min(t, 3333) - 600) * 119 / 60.0 if t > 600 else 14560, 3.0, 5100)
+    check = next(c for c in res.checks if c.name == "rss:" + STATUS)
+    assert check.ok, check.detail
+    rec = res.children[STATUS]["rss_kib"]
+    assert rec["plateau"] == "ring full" and rec["plateau_ok"] and rec["plateau_slope_kib_per_min"] == pytest.approx(0.0, abs=0.01)
+    assert "PLATEAU" in check.detail and "limit 8.0 KiB/min" in check.detail
+
+
+def test_status_ring_full_and_still_growing_fails_on_the_plateau():
+    # 100 KiB/min all the way although the ring (10000 events) was full long before the last 30 minutes
+    res = status_verdict(lambda t: 14560 + max(0, t - 600) * 100 / 60.0, 3.0, 5100)
+    assert failed(res) == ["rss:" + STATUS]
+    rec = res.children[STATUS]["rss_kib"]
+    assert rec["bound_ok"] and rec["plateau"] == "ring full" and not rec["plateau_ok"] and rec["over_limit"]
+    assert "STILL GROWING" in next(c for c in res.checks if c.name == "rss:" + STATUS).detail
+
+
+def test_status_growth_above_the_bound_fails_even_with_the_ring_not_full():
+    # 300 KiB/min x 50 min = 15000 KiB against 9000 counted events x 1.16 x 1.6 + 2048 = 18750 KiB passes; 600 KiB/min does not
+    ok = status_verdict(lambda t: 14560 + max(0, t - 600) * 300 / 60.0, 3.0, 3000)
+    assert not failed(ok), failed(ok)
+    bad = status_verdict(lambda t: 14560 + max(0, t - 600) * 600 / 60.0, 3.0, 3000)
+    assert failed(bad) == ["rss:" + STATUS]
+    assert "OVER" in next(c for c in bad.checks if c.name == "rss:" + STATUS).detail
+
+
+def test_other_children_keep_the_whole_window_rule_with_event_times_given():
+    rows = series("dv-router", rss=lambda t: 20000 + max(0, t - 600) * 105 / 60.0, measured=3000)
+    res = verdict(rows, params={"measured_s": 3000.0, "hub_event_times": [T0 + i for i in range(20000)]})
+    assert failed(res) == ["rss:dv-router"]
+    assert "ring rule" not in next(c for c in res.checks if c.name == "rss:dv-router").detail

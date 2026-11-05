@@ -607,6 +607,20 @@ def _params_of(fn):
         return {}
 
 
+def hub_event_times(reader):
+    """Epoch seconds of the hub events the reader counted (start of warmup to the end of reading), for the ring rule of the
+    dv-svc-status RSS judgement (dvtest.soak.judge_status_ring). None when the stream was not read or delivered nothing (the
+    judge then keeps the whole-window rule and says so)."""
+    if reader is None:
+        return None
+    try:
+        times_names, _gaps, _first, _last = reader.tally.snapshot(reader.t_stop or reader.clock())
+    except Exception:                                             # noqa: BLE001 - the verdict falls back to the old rule
+        return None
+    times = [t for t, _n in times_names]
+    return times or None
+
+
 def record_events_and_streams(reader, sampler, traffic, lane_modules, win_from, win_to, children, method="over"):
     """See _record_events_and_streams; a failure is recorded as a note, never raised (the verdict must not depend on it)."""
     try:
