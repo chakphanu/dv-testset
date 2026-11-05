@@ -12,7 +12,7 @@ from pathlib import Path
 from dvtest import clients, echo
 from dvtest.audio import signals
 from dvtest.net import pace
-from dvtest.proto import usrp
+from dvtest.proto import dextra, usrp
 
 MODULE = "E"
 TALK_GAP = 0.020
@@ -150,6 +150,95 @@ def wait_for_over(scene, after_t, who="listener", timeout=6.0):
             return later[0]
         time.sleep(0.05)
     return None
+
+
+# ---------------------------------------------------------------- a timed raw D-STAR tap (E9)
+
+class DstarTap(threading.Thread):
+    """A DExtra client linked to `module` whose receive thread stamps every datagram with time.monotonic()
+    at recv and keeps the raw bytes: .items = [(t, datagram)]. Keepalives of the reflector are answered
+    from the thread. send_over() paces a header and voice packets on a monotonic clock. The thread owns
+    the socket after the link; close() stops it, then unlinks."""
+
+    def __init__(self, ip, module=MODULE, index=0):
+        super().__init__(daemon=True)
+        self.dc = clients.make("dstar", module, index)
+        if not self.dc.link(ip):
+            self.dc.close()
+            raise AssertionError("dstar client %d did not link to %s (module %s)" % (index, ip, module))
+        self.dc.client.inbox.clear()
+        self.dc.client.inbox_times.clear()
+        self.items = []
+        self.halt = threading.Event()
+        self.callsign = self.dc.callsign.decode("ascii").strip()
+        self.start()
+
+    def run(self):
+        udp = self.dc.client
+        sock = udp.sock
+        sock.settimeout(0.02)
+        while not self.halt.is_set():
+            try:
+                data, addr = sock.recvfrom(2048)
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            stamp = time.monotonic()
+            self.items.append((stamp, data))
+            reply = udp.responder(data, addr) if udp.responder else None
+            if reply is not None:
+                try:
+                    sock.sendto(reply, addr)
+                except OSError:
+                    pass
+
+    def snapshot(self):
+        return list(self.items)
+
+    def send_over(self, frames, stream_id, reflector="XLX999", settle=0.3):
+        """Header, `settle` seconds, then the 9 byte frames one per 20 ms (sync pattern on frame 0 of each
+        superframe, as DstarClient.talk) and the end packet; returns the monotonic time of the last packet."""
+        dest = self.dc.dest
+        send = self.dc.client.send
+        send(dest, self.dc.header(stream_id, reflector))
+        time.sleep(settle)
+        packets = [dextra.voice(stream_id, i, f, False, dextra.SYNC_DATA if i % 21 == 0 else dextra.SLOW_DATA)
+                   for i, f in enumerate(frames)]
+        packets.append(dextra.voice(stream_id, len(frames), b"\x00" * 9, True))
+        start = time.monotonic()
+        for i, packet in enumerate(packets):
+            pace(start, i, TALK_GAP)
+            send(dest, packet)
+        return time.monotonic()
+
+    def close(self):
+        self.halt.set()
+        self.join(1.0)
+        try:
+            clients.close(self.dc)
+        except Exception:
+            pass
+
+
+def warm_up(ip, delay, budget=60.0, frames=60):
+    """True when a short D-STAR over on the module is replayed within `budget` seconds (the echo child may
+    still be starting after a spawn or a reload)."""
+    end = time.monotonic() + budget
+    n = 0
+    while True:
+        n += 1
+        scene = Scene(ip, "dstar")
+        try:
+            scene.over(frames, "e9-warm-%d" % n)
+            if wait_for_over(scene, scene.ends[0] + 0.05, timeout=delay + 3.0) is not None:
+                scene.until(scene.ends[0] + delay + echo.over_seconds(frames) + 1.0)
+                return True
+        finally:
+            scene.close()
+        if time.monotonic() > end:
+            return False
+        time.sleep(2.0)
 
 
 # ---------------------------------------------------------------- the rendered config of the run

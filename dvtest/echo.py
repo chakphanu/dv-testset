@@ -20,6 +20,12 @@ the rendered dv-router.toml of the run.
                              the voice frames a same-kind listener may hear for a
                              talk of `frames` (pads and EOT repeats of the egress)
   compare_payload(sent, got) byte comparison of the sent frames with a replay
+  dstar_streams(items, gap)  the DSVT streams (header + voice packets) among timed datagrams
+  header_record(packet)      RPT1 / RPT2 / MY / UR of a DSVT header, as text
+  integrity(...)             the D-STAR echo return judge (E9): lost frames, arrival gaps,
+                             seq bytes, sync pattern, end bit, header
+  summarize(label, results)  the numbers of the E9 summary for a list of integrity() results
+  integrity_failures(...)    the assertion messages of E9 for the summaries of all streams
 """
 import re
 import tomllib
@@ -293,3 +299,187 @@ _LETTER = re.compile(r"^[A-Z]$")
 
 def valid_module(letter):
     return bool(_LETTER.match(letter or ""))
+
+
+# ---------------------------------------------------------------- D-STAR echo return integrity (E9)
+
+GAP_MAX_MS = 25.0               # an arrival gap above this is a lost or late frame (a frame is 20 ms)
+SEQ_PERIOD = 21                 # D-STAR frame counter: 0..20, frame 0 of a superframe carries the sync pattern
+END_BIT = 0x40                  # on the seq byte of the last voice packet
+SEQ_BAD_KEEP = 5                # how many (index, got, want) rows integrity() keeps
+SYNC_FIELD = dextra.SYNC_DATA   # slow data 55 2d 16 on frame 0 of each superframe
+
+
+def dstar_streams(items, gap=0.4):
+    """Streams among `items` = [(t, datagram)]: datagrams that are not a DSVT header or voice packet
+    (keepalives, link replies) are left out; a new stream starts when more than `gap` seconds passed
+    since the previous header or voice packet (the echo starts about 1 s after the over it repeats).
+    Returns [{"start": t, "end": t, "sids": [stream ids], "header": 56 B packet or None,
+    "voice": [(t, 27 B packet)]}] in time order."""
+    out, last = [], None
+    for t, data in sorted(((t, bytes(d)) for t, d in items), key=lambda i: i[0]):
+        head = dextra.parse_header(data)
+        voice = None if head else dextra.parse_voice(data)
+        if not head and not voice:
+            continue
+        if last is None or t - last > gap:
+            out.append({"start": t, "end": t, "sids": [], "header": None, "voice": []})
+        cur = out[-1]
+        last = cur["end"] = t
+        sid = head["stream_id"] if head else voice[0]
+        if sid not in cur["sids"]:
+            cur["sids"].append(sid)
+        if head:
+            cur["header"] = cur["header"] or data
+        else:
+            cur["voice"].append((t, data))
+    return out
+
+
+def header_record(packet):
+    """{"rpt1", "rpt2", "my", "ur"} of a 56 B DSVT header as stripped text (ASCII, replacement for
+    other bytes), None for anything else."""
+    head = dextra.parse_header(bytes(packet)) if packet else None
+    if head is None:
+        return None
+    return {k: head[k].decode("ascii", "replace").strip() for k in ("rpt1", "rpt2", "my", "ur")}
+
+
+def integrity(sent_frames, voice_packets, arrivals=None, header=None, max_gap_ms=GAP_MAX_MS):
+    """Judge one D-STAR stream (a forward copy or an echo return) against the frames that were sent.
+    Pure: no I/O, no clock.
+
+    sent_frames   the 9 byte AMBE frames of the over, in order (the sender's end packet is not one)
+    voice_packets the 27 byte DSVT voice packets of the stream in arrival order, the last one included
+    arrivals      the arrival time (seconds, monotonic) of each packet; None skips the gap checks
+    header        the 56 byte DSVT header of the stream, or None
+
+    Voice packet layout (27 bytes): "DSVT" (0-3), 0x20 (4), 00 00 00 (5-7), 0x20 (8), 00 01 02 (9-11),
+    stream id (12-13, little endian), seq byte (14), AMBE (15-23), slow data (24-26). The seq byte is the
+    frame's position in the stream (0-based) modulo 21, and the last packet of the stream has bit 0x40
+    set on top of it. The slow data of a frame at position mod 21 == 0 is the sync pattern 55 2d 16 and
+    no other frame carries it. Position is counted in the stream as heard, so a lost frame shows as a
+    gap and as a wrong seq from there on, as it would to a receiver.
+
+    Returns a dict:
+      frames_sent, frames_heard (voice packets but the last, which is the end of the stream),
+      lost (sent frames whose payload was not heard), lost_indexes (first few), extra (frames heard that
+      were not sent), reordered (heard frames earlier in the sent order than the one before),
+      max_gap_ms, gaps_over_25ms ([(position, gap_ms)] over max_gap_ms),
+      seq_checked, seq_bad_count, seq_ok_share, seq_bad ([(position, got, want)], first few),
+      last_frame_has_end_bit, sync_frames (positions of packets with 55 2d 16), sync_missing (positions
+      mod 21 == 0 without it), sync_extra (other positions with it), header (header_record or None),
+      packets (voice packets in the stream)."""
+    sent = [bytes(f) for f in sent_frames]
+    packets = [bytes(p) for p in voice_packets]
+    parsed = [dextra.parse_voice_raw(p) for p in packets]
+    body = [(pos, v) for pos, v in enumerate(parsed) if v and not v["last"]]
+    heard = [v["ambe"] for _, v in body]
+
+    # payload comparison: a sent frame is lost when no unused heard frame equals it
+    pool = {}
+    for i, frame in enumerate(heard):
+        pool.setdefault(frame, []).append(i)
+    lost_idx, matched = [], []
+    for i, frame in enumerate(sent):
+        slot = pool.get(frame)
+        if slot:
+            matched.append((slot.pop(0), i))
+        else:
+            lost_idx.append(i)
+    used = {h for h, _ in matched}
+    extra = len(heard) - len(used)
+    order = [i for _, i in sorted(matched)]
+    reordered = sum(1 for a, b in zip(order, order[1:]) if b < a)
+
+    # arrival gaps between consecutive packets
+    gaps = []
+    max_gap = 0.0
+    if arrivals is not None:
+        times = list(arrivals)
+        for pos in range(1, min(len(times), len(packets))):
+            gap = (times[pos] - times[pos - 1]) * 1000.0
+            max_gap = max(max_gap, gap)
+            if gap > max_gap_ms:
+                gaps.append((pos, round(gap, 1)))
+
+    # seq byte and sync pattern by position
+    seq_bad, seq_bad_count, sync_frames, sync_missing, sync_extra = [], 0, [], [], []
+    last_pos = len(parsed) - 1
+    for pos, v in enumerate(parsed):
+        if v is None:
+            continue
+        want = (pos % SEQ_PERIOD) | (END_BIT if pos == last_pos else 0)
+        if v["counter"] != want:
+            seq_bad_count += 1
+            if len(seq_bad) < SEQ_BAD_KEEP:
+                seq_bad.append((pos, v["counter"], want))
+        has_sync = v["slow"] == SYNC_FIELD
+        if has_sync:
+            sync_frames.append(pos)
+        if v["last"]:
+            continue                    # the end packet carries the end pattern, not slow data of a frame
+        if pos % SEQ_PERIOD == 0 and not has_sync:
+            sync_missing.append(pos)
+        elif pos % SEQ_PERIOD != 0 and has_sync:
+            sync_extra.append(pos)
+    checked = sum(1 for v in parsed if v)
+    return {
+        "frames_sent": len(sent), "frames_heard": len(heard), "lost": len(lost_idx),
+        "lost_indexes": lost_idx[:SEQ_BAD_KEEP * 4], "extra": extra, "reordered": reordered,
+        "max_gap_ms": round(max_gap, 1), "gaps_over_25ms": gaps,
+        "seq_checked": checked, "seq_bad_count": seq_bad_count,
+        "seq_ok_share": round((checked - seq_bad_count) / checked, 4) if checked else 0.0,
+        "seq_bad": seq_bad,
+        "last_frame_has_end_bit": bool(parsed and parsed[-1] and parsed[-1]["last"]),
+        "sync_frames": sync_frames, "sync_missing": sync_missing, "sync_extra": sync_extra,
+        "header": header_record(header), "packets": len(packets)}
+
+
+def summarize(label, results):
+    """The numbers of one stream kind (forward / echo_listener / echo_sender) over the runs:
+    `results` is the list of integrity() dicts, one per run (an empty stream is integrity() of no
+    packets). share_of_frames_with_wrong_seq is over every packet judged."""
+    checked = sum(r["seq_checked"] for r in results)
+    return {
+        "stream": label, "runs": len(results),
+        "echoes_with_lost_frame": sum(1 for r in results if r["lost"]),
+        "lost_frames_total": sum(r["lost"] for r in results),
+        "extra_frames_total": sum(r["extra"] for r in results),
+        "share_of_frames_with_wrong_seq": round(sum(r["seq_bad_count"] for r in results) / checked, 4) if checked else None,
+        "max_gap_ms": max([r["max_gap_ms"] for r in results] or [0.0]),
+        "gaps_over_25ms": sum(len(r["gaps_over_25ms"]) for r in results),
+        "sync_errors": sum(len(r["sync_missing"]) + len(r["sync_extra"]) for r in results),
+        "missing_end_bit": sum(1 for r in results if not r["last_frame_has_end_bit"]),
+        "empty_streams": sum(1 for r in results if not r["packets"])}
+
+
+def integrity_failures(summaries):
+    """Assertion messages of E9 for {"forward": summary, "echo_listener": ..., "echo_sender": ...}
+    (summarize() dicts). The forward copy is the control: a failure there is a different defect and
+    is worded so. Empty list when everything is clean."""
+    names = {"forward": "forward copy (control, a defect of the live relay)",
+             "echo_listener": "echo return to the listener", "echo_sender": "echo return to the sender"}
+    out = []
+    for key in ("forward", "echo_listener", "echo_sender"):
+        s = summaries.get(key)
+        if s is None:
+            continue
+        bad = []
+        if s["empty_streams"]:
+            bad.append("%d run(s) with no stream at all" % s["empty_streams"])
+        if s["lost_frames_total"]:
+            bad.append("%d lost frame(s) in %d run(s)" % (s["lost_frames_total"], s["echoes_with_lost_frame"]))
+        if s["extra_frames_total"]:
+            bad.append("%d frame(s) that were not sent" % s["extra_frames_total"])
+        if s["share_of_frames_with_wrong_seq"]:
+            bad.append("%.1f%% of the frames with a wrong seq byte" % (100.0 * s["share_of_frames_with_wrong_seq"]))
+        if s["gaps_over_25ms"]:
+            bad.append("%d arrival gap(s) over %g ms (max %.1f ms)" % (s["gaps_over_25ms"], GAP_MAX_MS, s["max_gap_ms"]))
+        if s["sync_errors"]:
+            bad.append("%d frame(s) with a wrong sync pattern" % s["sync_errors"])
+        if s["missing_end_bit"]:
+            bad.append("%d stream(s) whose last packet has no end bit" % s["missing_end_bit"])
+        if bad:
+            out.append("%s: %s" % (names[key], "; ".join(bad)))
+    return out

@@ -72,6 +72,53 @@ talker and a second client of the same kind on module E (both timed by a drain t
 | E8 | `test_e8_two_nodes_not_reachable` | skip with the reason below |
 | T | `test_zz_telemetry_counts_the_overs` | `dv_echo_overs_total{room, result}` moves by the overs the cases made: `played` within [made, made + unsure], `truncated` exactly, `short` at least (needs `DVT_RIG_CONTROL=1`; the hub refreshes every 10 s, the case polls up to 40 s and then waits one more period) |
 
+## E9 D-STAR echo return integrity (`cases/test_echo_dstar_integrity.py`)
+
+Regression case for two defects the owner's production voice test found in the echo RETURN path for a D-STAR
+(DExtra) sender, while the forward copy to another DExtra listener is bit exact:
+
+- **A** the echo loses exactly one 20 ms frame in about 2 of 5 echoes (arrival gap 40 ms);
+- **B** the seq byte of the echo stream is wrong (about 3 to 5 percent of the frames carry seq == n mod 21; the
+  forward copy is 100 percent right); the slow data sync pattern is on the right frames; the echo header RPT2 is
+  the node callsign + module (`N0CALL B` in the voice test) where the forward copy has the reflector name
+  (`XLX345 G`). On the rig the names differ, so the case only records the pair.
+
+One run: a DExtra sender S (`N0CALL`, fresh stream id) and a second DExtra listener L (`N0TEST`) link to module E;
+S sends a header, 330 PRNG AMBE frames (6.6 s, 20 ms from a monotonic clock) and the end packet. L records the
+forward copy during the over and the echo about 1 s after it; S records the echo that returns to it. A receive
+thread per client (`DstarTap` in `cases/echo_support.py`) stamps every datagram with `time.monotonic()` at recv and
+keeps the raw bytes. The streams are split by a hole longer than 0.4 s (`echo.dstar_streams`). Each of the three
+streams (forward copy, echo to L, echo to S) is judged by `echo.integrity`:
+
+| Check | Rule |
+|-------|------|
+| frames | every frame sent is heard, byte for byte (matched by payload, so a lost frame is found, not only counted); none extra |
+| gaps | no arrival gap above `GAP_MAX_MS` = 25 ms between consecutive packets (the max is recorded) |
+| seq | seq byte of the packet at position n (0-based) = n mod 21, the last packet with 0x40 on top; the share of wrong packets is recorded |
+| sync | slow data `55 2d 16` on positions mod 21 == 0 and on no other packet |
+| header | recorded (RPT1 / RPT2 / MY / UR of forward copy and echo, `echo.txt`); asserted only: an echo header is present and MY is the sender's callsign |
+
+The forward copy is the control and is judged the same way: if it fails, that is a different defect (the live relay)
+and the message says so. Runs are separate overs; the next over starts 3 s after the end of the echo (the floor is busy
+during the replay).
+
+```sh
+DVT_ECHO_INTEGRITY_RUNS=10 XLXD_SUT_IMAGE=<image> DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-router DVT_SUT_LAUNCH=native \
+  DVT_SUT_CONFIG=<template path> DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/echo.toml \
+  scripts/run.sh -m rig -- cases/test_echo_dstar_integrity.py
+```
+
+About 3 to 4 minutes for 10 runs (6.6 s over + 1 s delay + 6.6 s echo + 3 s quiet + 5 s link and unlink). The case writes
+`out/<run>/echo-integrity.json` and prints one line before it asserts, so a failing image still gives its numbers: the
+image tag (`XLXD_SUT_IMAGE`), `runs`, and for each of `forward`, `echo_listener`, `echo_sender`:
+`echoes_with_lost_frame`, `lost_frames_total`, `share_of_frames_with_wrong_seq`, `max_gap_ms`, `gaps_over_25ms`
+(a count), `sync_errors`, plus `extra_frames_total`, `missing_end_bit`, `empty_streams`, the headers of every run and the
+per-run `integrity` dicts (first wrong seq bytes, gap positions). Assertions at the end: zero lost frames, zero wrong seq,
+no gap over 25 ms, no sync error, an end bit on the last packet, all for the forward copy and both echo returns. The
+seq rule is by position in the stream as heard, so a lost frame also shows as wrong seq / sync from there on if the SUT
+keeps the original counters; the lost-frame count and the gap tell A from B. Needs `echo.toml` (skips without it, like
+`cases/test_echo.py`). Pure judge and unit tests: `dvtest/echo.py` / `cases/unit/test_echo_lib.py`.
+
 ## What could not be reached, and why
 
 - **E5, NXDN and P25 peers.** The rig template has no NXDN or P25 peer rows, and the native launch ignores `DVT_NXDN`
