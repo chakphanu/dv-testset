@@ -32,7 +32,7 @@ from echo_support import MODULE, DstarTap, EchoCfg, note, warm_up
 
 pytestmark = pytest.mark.rig
 
-RUN_FRAMES = 330                    # 6.6 s
+RUN_FRAMES = 330                    # 6.6 s; DVT_ECHO_INTEGRITY_FRAMES overrides (a 9 s over is 450)
 QUIET_AFTER_ECHO = 3.0              # seconds between the end of the echo and the next over (the floor is busy during the replay)
 ECHO_START_MIN = 0.3                # a stream that starts later than this after the end of the over is the echo
 CASE = "E9"
@@ -58,9 +58,16 @@ def e9_rig(rig, target):
     return target.xlxd_sut, delay
 
 
+def env_int(name, default, low=1):
+    try:
+        return max(low, int(os.environ.get(name) or default))
+    except ValueError:
+        return default
+
+
 def runs_wanted():
     try:
-        return max(1, int(os.environ.get("DVT_ECHO_INTEGRITY_RUNS", "10")))
+        return max(1, int(os.environ.get("DVT_ECHO_INTEGRITY_RUNS") or "10"))
     except ValueError:
         return 10
 
@@ -98,13 +105,15 @@ def echo_over(tap_listener, end, delay, limit):
 
 def one_run(ip, delay, number):
     """One over; returns {"callsign", "forward", "echo_listener", "echo_sender"} of integrity() results."""
-    frames = echo.make_frames("dstar", RUN_FRAMES, "e9-%d" % number)
+    n_frames = env_int("DVT_ECHO_INTEGRITY_FRAMES", RUN_FRAMES, 25)
+    jitter = float(env_int("DVT_ECHO_INTEGRITY_JITTER_MS", 0, 0))
+    frames = echo.make_frames("dstar", n_frames, "e9-%d" % number)
     sender = DstarTap(ip, MODULE, 0)
     listener = DstarTap(ip, MODULE, 1)
     try:
         sid = clients.fresh_stream_id("dstar")
-        end = sender.send_over(frames, sid)
-        echo_end = echo_over(listener, end, delay, delay + echo.over_seconds(RUN_FRAMES) + 4.0)
+        end = sender.send_over(frames, sid, jitter_ms=jitter, seed=number + 1)
+        echo_end = echo_over(listener, end, delay, delay + echo.over_seconds(n_frames) + 4.0)
         time.sleep(0.6)                          # the sender's copy of the echo arrives with the listener's
         heard_l = echo.dstar_streams(listener.snapshot())
         heard_s = echo.dstar_streams(sender.snapshot())
@@ -140,7 +149,7 @@ def test_e9_dstar_echo_return_integrity(e9_rig, target):
             time.sleep(max(0.0, quiet_from + QUIET_AFTER_ECHO - time.monotonic()))
 
     summaries = {key: echo.summarize(key, [r[key] for r in results]) for key in ("forward", "echo_listener", "echo_sender")}
-    summary = {"image": os.environ.get("XLXD_SUT_IMAGE", ""), "runs": n_runs, "frames_per_run": RUN_FRAMES,
+    summary = {"image": os.environ.get("DVT_ECHO_IMAGE_TAG") or os.environ.get("XLXD_SUT_IMAGE", ""), "runs": n_runs, "frames_per_run": env_int("DVT_ECHO_INTEGRITY_FRAMES", RUN_FRAMES, 25), "jitter_ms": env_int("DVT_ECHO_INTEGRITY_JITTER_MS", 0, 0),
                "gap_limit_ms": echo.GAP_MAX_MS, **summaries,
                "headers": headers,
                "per_run": [{k: {f: v for f, v in r[k].items() if f != "sync_frames"}

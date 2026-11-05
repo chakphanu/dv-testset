@@ -5,6 +5,7 @@ USRP client and the notes file. The pure part (events, comparison, TOML editing)
 dvtest/echo.py, unit-tested offline."""
 import os
 import socket
+import random
 import threading
 import time
 from pathlib import Path
@@ -196,7 +197,7 @@ class DstarTap(threading.Thread):
     def snapshot(self):
         return list(self.items)
 
-    def send_over(self, frames, stream_id, reflector="XLX999", settle=0.3):
+    def send_over(self, frames, stream_id, reflector="XLX999", settle=0.3, jitter_ms=0.0, seed=1):
         """Header, `settle` seconds, then the 9 byte frames one per 20 ms (sync pattern on frame 0 of each
         superframe, as DstarClient.talk) and the end packet; returns the monotonic time of the last packet."""
         dest = self.dc.dest
@@ -207,8 +208,16 @@ class DstarTap(threading.Thread):
                    for i, f in enumerate(frames)]
         packets.append(dextra.voice(stream_id, len(frames), b"\x00" * 9, True))
         start = time.monotonic()
+        rng = random.Random(seed)
         for i, packet in enumerate(packets):
-            pace(start, i, TALK_GAP)
+            # jitter_ms > 0: each packet leaves up to that many ms early or late against its slot (a real client's timer
+            # is not exact); the order is kept, the schedule does not drift
+            wait = start + i * TALK_GAP + (rng.uniform(-jitter_ms, jitter_ms) / 1000.0 if jitter_ms > 0 else 0.0) - time.monotonic()
+            if jitter_ms > 0:
+                if wait > 0:
+                    time.sleep(wait)
+            else:
+                pace(start, i, TALK_GAP)
             send(dest, packet)
         return time.monotonic()
 
