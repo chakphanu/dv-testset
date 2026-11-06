@@ -42,6 +42,7 @@ pytestmark = pytest.mark.rig
 KINDS = ("dstar", "dmr", "m17", "ysf")
 FRAMES_E1 = 150                     # 3 s
 SHORT_FRAMES = 25                   # under a second, under the 50 frame threshold
+JOIN_SILENT = os.environ.get("DVT_ECHO_JOIN_SILENT") == "1"   # ECHO1f fixed (wip-5d72b94 on): a header + terminator join is freed silently
 PROBE_FRAMES = 60                   # 1.2 s: over the threshold, short to wait for
 START_LOW, START_HIGH = 0.8, 2.0    # allowed delay of the replay after the over (spec: about 1.0 s)
 LEN_LOW, LEN_HIGH = 2.5, 3.6        # allowed length of the replay of a 3 s over
@@ -312,7 +313,7 @@ def test_e4_no_storm_after_the_replay(e1_run, target):
 
 # ---------------------------------------------------------------- E2: short over
 
-@pytest.mark.parametrize("kind", ["dstar", "dmr"])
+@pytest.mark.parametrize("kind", ["dstar", "dmr", "ysf"])
 def test_e2_short_over_is_not_replayed(echo_rig, target, kind):
     scene = Scene(echo_rig.ip, kind)
     try:
@@ -673,7 +674,10 @@ def test_e7_telemetry_counts_the_overs(echo_rig, target):
     assert got["truncated"] == TALLY["truncated"], "result=truncated moved by %d, the cases made %d" % (
         got["truncated"], TALLY["truncated"])
     assert got["short"] >= TALLY["short"], "result=short moved by %d, the cases made %d" % (got["short"], TALLY["short"])
-    if got["short"] > TALLY["short"]:
+    if JOIN_SILENT:
+        assert got["short"] == TALLY["short"], "result=short moved by %d, the cases made %d short overs (a join pair must not count)" % (
+            got["short"], TALLY["short"])
+    elif got["short"] > TALLY["short"]:
         note(target, "telemetry", "FINDING", "result=short moved by %d, the cases made %d short overs (DMR / YSF link joins "
              "are empty streams; dv-router: not intended, a follow-up counts only streams with a voice unit; not asserted)" % (got["short"], TALLY["short"]))
     if TALLY["played_m"]:
@@ -699,16 +703,29 @@ def test_e9y_link_only_probe(echo_rig, target, kind):
         note(target, "probe[%s]" % kind, "RECORD", "%s: frames in %d out %d, overs %s" % (label, fr["in"], fr["out"], results(text)))
         return fr
 
-    snap("before the link")
+    first = snap("before the link"), results(hub_text(echo_rig.control))
     scene = Scene(echo_rig.ip, kind)
     try:
         time.sleep(12.0)                                    # one telemetry period
-        snap("after the link of two clients (talker + listener), no voice")
+        linked = snap("after the link of two clients (talker + listener), no voice")
+        linked_overs = results(hub_text(echo_rig.control))
+        if JOIN_SILENT:
+            assert linked_overs["short"] == first[1]["short"], "the join moved result=short: %s -> %s" % (first[1], linked_overs)
+            if kind == "ysf":
+                assert linked == first[0], "the YSF join moved dv_echo_frames_total: %s -> %s" % (first[0], linked)
         scene.over(FRAMES_E1, "probe")
         TALLY["played_maybe"] += 1                          # an over the hub counts, made after the telemetry case
         scene.until(scene.ends[0] + echo_rig.delay + echo.over_seconds(FRAMES_E1) + 3.0)
         time.sleep(12.0)
-        snap("after one %d frame over and its replay" % FRAMES_E1)
+        after = snap("after one %d frame over and its replay" % FRAMES_E1)
+        if JOIN_SILENT:
+            final = results(hub_text(echo_rig.control))
+            assert final["short"] == first[1]["short"], "the %d frame over moved result=short: %s -> %s" % (FRAMES_E1, first[1], final)
+            moved_played = final["played"] - first[1]["played"]
+            assert moved_played >= 1 and (kind != "ysf" or moved_played == 1), "result=played moved by %d for one over" % moved_played
+            if kind == "ysf":
+                din, dout = after["in"] - linked["in"], after["out"] - linked["out"]
+                assert din == dout and din >= FRAMES_E1, "YSF %d frame over: frames in +%d, out +%d (end unit kept: in == out)" % (FRAMES_E1, din, dout)
     finally:
         scene.close()
 

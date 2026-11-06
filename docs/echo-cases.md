@@ -258,3 +258,10 @@ with that step applied to the expected frames all three sources match 150/150 fr
 M17 -> YSF is quiet (rms 73 against about 5000 for DMR and D-STAR, -23 dB), and it is the transcoder, not DV-Router: the same M17 tone through the
 reference reflector xlxd-ref with the same real transcoder gives rms 73 as well (SUT 73, reference reflector 73, transcoder-ref direct 74).
 The case compares the SUT's level with the reference reflector (within 3 dB) and records the numbers.
+
+## ECHO1f check (wip-5d72b94 on): joins are silent
+
+`DVT_ECHO_JOIN_SILENT=1` turns the YSF / DMR join findings into assertions: E7 requires `result=short` == the short overs the cases made (a header +
+terminator join pair no longer counts); `test_e9y_link_only_probe` requires the link of two clients to leave `result=short` unchanged and, for YSF,
+`dv_echo_frames_total` in / out unchanged, and a 150 frame YSF over to move in and out equally (end unit kept) with `played` +1 and `short` +0.
+`test_e2_short_over_is_not_replayed` now also runs for YSF (a real 25 frame over still counts short). Images before wip-5d72b94 fail these on purpose.
