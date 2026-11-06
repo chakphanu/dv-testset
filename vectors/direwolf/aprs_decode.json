@@ -1,4 +1,7 @@
 {
+ "compare_policy": "EXACT as encoded: source/dest/path, data type, symbol table and code, message addressee/text/id, ack/rej ids, status text, object/item name and live/killed flag, course and speed as encoded integers, altitude feet as encoded, PHG/RNG/DFS fields, weather fields. Positions: lat/lon equal the generator's exact integer (expect.position) and within half of decode_aprs's printed precision (0.00005 minute) of decode_aprs. Timestamps and ambiguity: generator only. dao-base91-bare: generator value is the authority, decode_aprs does not apply the DAO.",
+ "expect_notes": "record.expect = the generator's exact values (dvtest/aprs_expect.py); an axis {int, per_degree} is exactly int / per_degree degrees; record.expect_vs_decode_aprs = mismatches under the policy (empty = agree); record.expect.decode_aprs = documented differences of decode_aprs",
+ "expect_schema": "dvt-aprs-expect/1",
  "groups": {
   "ack": [
    "msg-ack",
@@ -145,6 +148,32 @@
     "N 00 00.0000, E 000 00.0000",
     "test"
    ],
+   "expect": {
+    "comment": "test",
+    "data_type": "!",
+    "dest": "APRS",
+    "kind": "position",
+    "messaging": false,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 0,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": 0,
+      "per_degree": 6000
+     },
+     "symbol_code": ">",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-7",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "test",
     "data_type": "Position",
@@ -183,6 +212,16 @@
     "Status Report, WB2OSZ DireWolf",
     "status"
    ],
+   "expect": {
+    "data_type": ">",
+    "dest": "APDW18",
+    "kind": "status",
+    "path": [],
+    "source": "N0CALL",
+    "text": "status",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "status",
     "data_type": "Status Report",
@@ -214,6 +253,16 @@
     "Tell the sender (N0CALL-1) to use the proper product identifier from https://github.com/aprsorg/aprs-deviceid ",
     "Hello"
    ],
+   "expect": {
+    "addressee": "N0TEST-1",
+    "dest": "APRS",
+    "kind": "message",
+    "message_id": "123",
+    "path": [],
+    "source": "N0CALL-1",
+    "text": "Hello"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "Hello",
     "data_type": "APRS Message",
@@ -246,6 +295,17 @@
     "N0CALL-15>N0TEST-1,N0DIG-2*,WIDE2-1:hello",
     "ERROR!!!  Unknown APRS Data Type Indicator \"h\", UNKNOWN vendor/model"
    ],
+   "expect": {
+    "data_type": "h",
+    "dest": "N0TEST-1",
+    "kind": "unknown-dti",
+    "path": [
+     "N0DIG-2*",
+     "WIDE2-1"
+    ],
+    "source": "N0CALL-15"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "ERROR!!!  Unknown APRS Data Type Indicator \"h\"",
     "error": true,
@@ -271,6 +331,17 @@
     "N0CALL-15>N0TEST-1,N0DIG-2,WIDE2-1*:hello",
     "ERROR!!!  Unknown APRS Data Type Indicator \"h\", UNKNOWN vendor/model"
    ],
+   "expect": {
+    "data_type": "h",
+    "dest": "N0TEST-1",
+    "kind": "unknown-dti",
+    "path": [
+     "N0DIG-2",
+     "WIDE2-1*"
+    ],
+    "source": "N0CALL-15"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "ERROR!!!  Unknown APRS Data Type Indicator \"h\"",
     "error": true,
@@ -296,6 +367,23 @@
     "A>B,D1,D2,D3,D4,D5,D6,D7,D8:x",
     "ERROR!!!  Unknown APRS Data Type Indicator \"x\", UNKNOWN vendor/model"
    ],
+   "expect": {
+    "data_type": "x",
+    "dest": "B",
+    "kind": "unknown-dti",
+    "path": [
+     "D1",
+     "D2",
+     "D3",
+     "D4",
+     "D5",
+     "D6",
+     "D7",
+     "D8"
+    ],
+    "source": "A"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "ERROR!!!  Unknown APRS Data Type Indicator \"x\"",
     "error": true,
@@ -321,6 +409,14 @@
     "A>B:x",
     "ERROR!!!  Unknown APRS Data Type Indicator \"x\", UNKNOWN vendor/model"
    ],
+   "expect": {
+    "data_type": "x",
+    "dest": "B",
+    "kind": "unknown-dti",
+    "path": [],
+    "source": "A"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "ERROR!!!  Unknown APRS Data Type Indicator \"x\"",
     "error": true,
@@ -346,6 +442,14 @@
     "ABCDEF-9>GHIJKL-10:ssid",
     "ERROR!!!  Unknown APRS Data Type Indicator \"s\", UNKNOWN vendor/model"
    ],
+   "expect": {
+    "data_type": "s",
+    "dest": "GHIJKL-10",
+    "kind": "unknown-dti",
+    "path": [],
+    "source": "ABCDEF-9"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "ERROR!!!  Unknown APRS Data Type Indicator \"s\"",
     "error": true,
@@ -373,6 +477,13 @@
     "Use of \"APRS\" in the destination field is obsolete.  You can help to improve the quality of APRS signals.",
     "Tell the sender (N0CALL) to use the proper product identifier from https://github.com/aprsorg/aprs-deviceid "
    ],
+   "expect": {
+    "dest": "APRS",
+    "kind": "empty",
+    "path": [],
+    "source": "N0CALL"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "ERROR!!!  Unknown APRS Data Type Indicator: unprintable 0x00",
     "error": true,
@@ -402,6 +513,15 @@
     "Tell the sender (N0CALL) to use the proper product identifier from https://github.com/aprsorg/aprs-deviceid ",
     "\u00c0x\u00dby\u00db\u00dc\u00db\u00dd\u00c0\u00c0"
    ],
+   "expect": {
+    "data_type": "m",
+    "dest": "APRS",
+    "kind": "unknown-dti",
+    "note": "decode_aprs reads 'm' as Morse code data",
+    "path": [],
+    "source": "N0CALL"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "\u00c0x\u00dby\u00db\u00dc\u00db\u00dd\u00c0\u00c0",
     "data_type": "Morse Code Data",
@@ -431,6 +551,14 @@
     "Use of \"APRS\" in the destination field is obsolete.  You can help to improve the quality of APRS signals.",
     "Tell the sender (N0CALL) to use the proper product identifier from https://github.com/aprsorg/aprs-deviceid "
    ],
+   "expect": {
+    "data_type": "0xff",
+    "dest": "APRS",
+    "kind": "unknown-dti",
+    "path": [],
+    "source": "N0CALL"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "ERROR!!!  Unknown APRS Data Type Indicator: unprintable 0xff",
     "error": true,
@@ -459,6 +587,14 @@
     "Use of \"APRS\" in the destination field is obsolete.  You can help to improve the quality of APRS signals.",
     "Tell the sender (N0CALL) to use the proper product identifier from https://github.com/aprsorg/aprs-deviceid "
    ],
+   "expect": {
+    "data_type": "x",
+    "dest": "APRS",
+    "kind": "unknown-dti",
+    "path": [],
+    "source": "N0CALL"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "ERROR!!!  Unknown APRS Data Type Indicator \"x\"",
     "error": true,
@@ -487,6 +623,14 @@
     "Use of \"APRS\" in the destination field is obsolete.  You can help to improve the quality of APRS signals.",
     "Tell the sender (N0CALL) to use the proper product identifier from https://github.com/aprsorg/aprs-deviceid "
    ],
+   "expect": {
+    "data_type": "a",
+    "dest": "APRS",
+    "kind": "unknown-dti",
+    "path": [],
+    "source": "N0CALL"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "ERROR!!!  Unknown APRS Data Type Indicator \"a\"",
     "error": true,
@@ -515,6 +659,33 @@
     "N 49 03.5000, W 072 01.7500",
     "Test 001234"
    ],
+   "expect": {
+    "comment": "Test 001234",
+    "data_type": "!",
+    "dest": "APDW18",
+    "kind": "position",
+    "messaging": false,
+    "path": [
+     "WIDE1-1",
+     "WIDE2-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 294350,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -432175,
+      "per_degree": 6000
+     },
+     "symbol_code": "-",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "Test 001234",
     "data_type": "Position",
@@ -552,6 +723,16 @@
     "Status Report, Ricardo, CA2RXU ESP32 LoRa Tracker",
     "Test status"
    ],
+   "expect": {
+    "data_type": ">",
+    "dest": "APLRT1",
+    "kind": "status",
+    "path": [],
+    "source": "N0CALL-7",
+    "text": "Test status",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "Test status",
     "data_type": "Status Report",
@@ -584,6 +765,32 @@
     "N 00 00.0000, E 000 00.0000",
     "Test"
    ],
+   "expect": {
+    "comment": "Test",
+    "data_type": "!",
+    "dest": "APLRT1",
+    "kind": "position",
+    "messaging": false,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 0,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": 0,
+      "per_degree": 6000
+     },
+     "symbol_code": "[",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-7",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "Test",
     "data_type": "Position",
@@ -624,6 +831,32 @@
     "N 00 00.0000, E 000 00.0000",
     "LoRa iGate test"
    ],
+   "expect": {
+    "comment": "LoRa iGate test",
+    "data_type": "=",
+    "dest": "APLRG1",
+    "kind": "position",
+    "messaging": true,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 0,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": 0,
+      "per_degree": 6000
+     },
+     "symbol_code": "-",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-7",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "LoRa iGate test",
     "data_type": "Position",
@@ -663,6 +896,18 @@
     "APRS Message, number \"123\", from \"N0CALL-9\" to \"N0TEST-1\", UNKNOWN vendor/model",
     "Hello"
    ],
+   "expect": {
+    "addressee": "N0TEST-1",
+    "dest": "APZ000",
+    "kind": "message",
+    "message_id": "123",
+    "path": [
+     "WIDE1-1"
+    ],
+    "source": "N0CALL-9",
+    "text": "Hello"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "Hello",
     "data_type": "APRS Message",
@@ -695,6 +940,18 @@
     "APRS Message, with no number, from \"N0CALL-9\" to \"N0TEST\", UNKNOWN vendor/model",
     "Plain text, no message id"
    ],
+   "expect": {
+    "addressee": "N0TEST",
+    "dest": "APZ000",
+    "kind": "message",
+    "message_id": null,
+    "path": [
+     "WIDE1-1"
+    ],
+    "source": "N0CALL-9",
+    "text": "Plain text, no message id"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "Plain text, no message id",
     "data_type": "APRS Message",
@@ -727,6 +984,18 @@
     "APRS Message, number \"1\", from \"N0CALL-9\" to \"N0TEST-15\", UNKNOWN vendor/model",
     "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
    ],
+   "expect": {
+    "addressee": "N0TEST-15",
+    "dest": "APZ000",
+    "kind": "message",
+    "message_id": "1",
+    "path": [
+     "WIDE1-1"
+    ],
+    "source": "N0CALL-9",
+    "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
     "data_type": "APRS Message",
@@ -761,6 +1030,26 @@
     "APRS Message, number \"with} brace\", from \"N0CALL-9\" to \"N0TEST-1\", UNKNOWN vendor/model",
     "text<0x20>"
    ],
+   "expect": {
+    "addressee": "N0TEST-1",
+    "decode_aprs": {
+     "differs": [
+      "message_id",
+      "text"
+     ],
+     "message_id": "with} brace",
+     "text": "text "
+    },
+    "dest": "APZ000",
+    "kind": "message",
+    "message_id": "77",
+    "path": [
+     "WIDE1-1"
+    ],
+    "source": "N0CALL-9",
+    "text": "text {with} braces inside"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "text<0x20>",
     "data_type": "APRS Message",
@@ -795,6 +1084,17 @@
     "N0CALL-9>APZ000,WIDE1-1::N0TEST-1 :ack123",
     "\"N0CALL-9\" ACKnowledged message number \"123\" from \"N0TEST-1\", UNKNOWN vendor/model"
    ],
+   "expect": {
+    "ack_id": "123",
+    "addressee": "N0TEST-1",
+    "dest": "APZ000",
+    "kind": "ack",
+    "path": [
+     "WIDE1-1"
+    ],
+    "source": "N0CALL-9"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "by_station": "N0CALL-9",
     "data_type": "ACKnowledged message",
@@ -823,6 +1123,17 @@
     "N0CALL-9>APZ000,WIDE1-1::N0TEST   :ackA5",
     "\"N0CALL-9\" ACKnowledged message number \"A5\" from \"N0TEST\", UNKNOWN vendor/model"
    ],
+   "expect": {
+    "ack_id": "A5",
+    "addressee": "N0TEST",
+    "dest": "APZ000",
+    "kind": "ack",
+    "path": [
+     "WIDE1-1"
+    ],
+    "source": "N0CALL-9"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "by_station": "N0CALL-9",
     "data_type": "ACKnowledged message",
@@ -851,6 +1162,17 @@
     "N0CALL-9>APZ000,WIDE1-1::N0TEST-1 :rej123",
     "\"N0CALL-9\" REJected message number \"123\" from \"N0TEST-1\", UNKNOWN vendor/model"
    ],
+   "expect": {
+    "ack_id": "123",
+    "addressee": "N0TEST-1",
+    "dest": "APZ000",
+    "kind": "reject",
+    "path": [
+     "WIDE1-1"
+    ],
+    "source": "N0CALL-9"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "by_station": "N0CALL-9",
     "data_type": "REJected message",
@@ -879,6 +1201,17 @@
     "N0CALL-9>APZ000,WIDE1-1::N0TEST   :rejZ9",
     "\"N0CALL-9\" REJected message number \"Z9\" from \"N0TEST\", UNKNOWN vendor/model"
    ],
+   "expect": {
+    "ack_id": "Z9",
+    "addressee": "N0TEST",
+    "dest": "APZ000",
+    "kind": "reject",
+    "path": [
+     "WIDE1-1"
+    ],
+    "source": "N0CALL-9"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "by_station": "N0CALL-9",
     "data_type": "REJected message",
@@ -908,6 +1241,19 @@
     "Bulletin with identifier \"3\", UNKNOWN vendor/model",
     "Road closed until Friday"
    ],
+   "expect": {
+    "addressee": "BLN3",
+    "bulletin_group": null,
+    "bulletin_id": "3",
+    "dest": "APZ000",
+    "kind": "bulletin",
+    "path": [
+     "WIDE1-1"
+    ],
+    "source": "N0CALL-9",
+    "text": "Road closed until Friday"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "bulletin_id": "3",
     "comment": "Road closed until Friday",
@@ -936,6 +1282,19 @@
     "Group Bulletin with identifier \"1\", group name \"WX\", UNKNOWN vendor/model",
     "Weather group bulletin one"
    ],
+   "expect": {
+    "addressee": "BLN1WX",
+    "bulletin_group": "WX",
+    "bulletin_id": "1",
+    "dest": "APZ000",
+    "kind": "bulletin",
+    "path": [
+     "WIDE1-1"
+    ],
+    "source": "N0CALL-9",
+    "text": "Weather group bulletin one"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "bulletin_group": "WX",
     "bulletin_id": "1",
@@ -966,6 +1325,19 @@
     "Bulletin with identifier \"A\", UNKNOWN vendor/model",
     "General announcement"
    ],
+   "expect": {
+    "addressee": "BLNA",
+    "bulletin_group": null,
+    "bulletin_id": "A",
+    "dest": "APZ000",
+    "kind": "announcement",
+    "path": [
+     "WIDE1-1"
+    ],
+    "source": "N0CALL-9",
+    "text": "General announcement"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "bulletin_id": "A",
     "comment": "General announcement",
@@ -994,6 +1366,25 @@
     "Bulletin with identifier \"ZGRP\", UNKNOWN vendor/model",
     "Group announcement Z"
    ],
+   "expect": {
+    "addressee": "BLNZGRP",
+    "bulletin_group": "GRP",
+    "bulletin_id": "Z",
+    "decode_aprs": {
+     "bulletin_id": "ZGRP",
+     "differs": [
+      "bulletin_id"
+     ]
+    },
+    "dest": "APZ000",
+    "kind": "announcement",
+    "path": [
+     "WIDE1-1"
+    ],
+    "source": "N0CALL-9",
+    "text": "Group announcement Z"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "bulletin_id": "ZGRP",
     "comment": "Group announcement Z",
@@ -1023,6 +1414,32 @@
     "N 49 03.5000, W 072 01.7500",
     "Test 001234"
    ],
+   "expect": {
+    "comment": "Test 001234",
+    "data_type": "!",
+    "dest": "APZ000",
+    "kind": "position",
+    "messaging": false,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 294350,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -432175,
+      "per_degree": 6000
+     },
+     "symbol_code": "-",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "Test 001234",
     "data_type": "Position",
@@ -1059,6 +1476,32 @@
     "S 30 12.3400, W 140 00.1000",
     "Pacific car"
    ],
+   "expect": {
+    "comment": "Pacific car",
+    "data_type": "=",
+    "dest": "APZ000",
+    "kind": "position",
+    "messaging": true,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": -181234,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -840010,
+      "per_degree": 6000
+     },
+     "symbol_code": ">",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "Pacific car",
     "data_type": "Position",
@@ -1094,6 +1537,32 @@
     "Position, normal car (side view), UNKNOWN vendor/model",
     "N 00 00.0000, E 000 00.0000"
    ],
+   "expect": {
+    "comment": "",
+    "data_type": "!",
+    "dest": "APZ000",
+    "kind": "position",
+    "messaging": false,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 0,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": 0,
+      "per_degree": 6000
+     },
+     "symbol_code": ">",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Position",
     "error": false,
@@ -1128,6 +1597,32 @@
     "Position, I=Igte IGate R=RX T=1hopTX 2=2hopTX w/overlay 1, UNKNOWN vendor/model",
     "N 49 03.5000, W 072 01.7500"
    ],
+   "expect": {
+    "comment": "",
+    "data_type": "!",
+    "dest": "APZ000",
+    "kind": "position",
+    "messaging": false,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 294350,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -432175,
+      "per_degree": 6000
+     },
+     "symbol_code": "&",
+     "symbol_table": "1"
+    },
+    "source": "N0CALL-9",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Position",
     "error": false,
@@ -1162,6 +1657,32 @@
     "Position, House, UNKNOWN vendor/model",
     "S 30 12.3400, E 140 00.1000"
    ],
+   "expect": {
+    "comment": "",
+    "data_type": "!",
+    "dest": "APZ000",
+    "kind": "position",
+    "messaging": false,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": -181234,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": 840010,
+      "per_degree": 6000
+     },
+     "symbol_code": "-",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Position",
     "error": false,
@@ -1196,6 +1717,33 @@
     "Position, normal car (side view), UNKNOWN vendor/model",
     "N 49 03.5000, W 072 01.7500, alt 376 m (1234 ft)"
    ],
+   "expect": {
+    "altitude_ft": 1234,
+    "comment": "/A=001234",
+    "data_type": "!",
+    "dest": "APZ000",
+    "kind": "position",
+    "messaging": false,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 294350,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -432175,
+      "per_degree": 6000
+     },
+     "symbol_code": ">",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Position",
     "error": false,
@@ -1233,6 +1781,32 @@
     "N 49 03.5000, W 072 01.7000",
     "ambiguity 1"
    ],
+   "expect": {
+    "comment": "ambiguity 1",
+    "data_type": "!",
+    "dest": "APZ000",
+    "kind": "position",
+    "messaging": false,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 1,
+     "lat": {
+      "int": 294350,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -432170,
+      "per_degree": 6000
+     },
+     "symbol_code": "-",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "ambiguity 1",
     "data_type": "Position",
@@ -1269,6 +1843,32 @@
     "N 49 03.0000, W 072 01.0000",
     "ambiguity 2"
    ],
+   "expect": {
+    "comment": "ambiguity 2",
+    "data_type": "!",
+    "dest": "APZ000",
+    "kind": "position",
+    "messaging": false,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 2,
+     "lat": {
+      "int": 294300,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -432100,
+      "per_degree": 6000
+     },
+     "symbol_code": "-",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "ambiguity 2",
     "data_type": "Position",
@@ -1305,6 +1905,32 @@
     "N 49 00.0000, W 072 00.0000",
     "ambiguity 3"
    ],
+   "expect": {
+    "comment": "ambiguity 3",
+    "data_type": "!",
+    "dest": "APZ000",
+    "kind": "position",
+    "messaging": false,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 3,
+     "lat": {
+      "int": 294000,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -432000,
+      "per_degree": 6000
+     },
+     "symbol_code": "-",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "ambiguity 3",
     "data_type": "Position",
@@ -1341,6 +1967,32 @@
     "N 49 00.0000, W 072 00.0000",
     "ambiguity 4"
    ],
+   "expect": {
+    "comment": "ambiguity 4",
+    "data_type": "!",
+    "dest": "APZ000",
+    "kind": "position",
+    "messaging": false,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 4,
+     "lat": {
+      "int": 294000,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -432000,
+      "per_degree": 6000
+     },
+     "symbol_code": "-",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "ambiguity 4",
     "data_type": "Position",
@@ -1376,6 +2028,39 @@
     "Position with time, normal car (side view), UNKNOWN vendor/model",
     "N 49 03.5000, W 072 01.7500"
    ],
+   "expect": {
+    "comment": "",
+    "data_type": "/",
+    "dest": "APZ000",
+    "kind": "position",
+    "messaging": false,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 294350,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -432175,
+      "per_degree": 6000
+     },
+     "symbol_code": ">",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": {
+     "day": 9,
+     "hour": 23,
+     "kind": "dhm",
+     "minute": 45,
+     "text": "092345z",
+     "zone": "z"
+    }
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Position with time",
     "error": false,
@@ -1410,6 +2095,39 @@
     "Position with time, normal car (side view), UNKNOWN vendor/model",
     "N 49 03.5000, W 072 01.7500"
    ],
+   "expect": {
+    "comment": "",
+    "data_type": "@",
+    "dest": "APZ000",
+    "kind": "position",
+    "messaging": true,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 294350,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -432175,
+      "per_degree": 6000
+     },
+     "symbol_code": ">",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": {
+     "day": 9,
+     "hour": 23,
+     "kind": "dhm",
+     "minute": 45,
+     "text": "092345/",
+     "zone": "/"
+    }
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Position with time",
     "error": false,
@@ -1444,6 +2162,39 @@
     "Position with time, normal car (side view), UNKNOWN vendor/model",
     "N 49 03.5000, W 072 01.7500"
    ],
+   "expect": {
+    "comment": "",
+    "data_type": "/",
+    "dest": "APZ000",
+    "kind": "position",
+    "messaging": false,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 294350,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -432175,
+      "per_degree": 6000
+     },
+     "symbol_code": ">",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": {
+     "hour": 23,
+     "kind": "hms",
+     "minute": 45,
+     "second": 17,
+     "text": "234517h",
+     "zone": "h"
+    }
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Position with time",
     "error": false,
@@ -1478,6 +2229,37 @@
     "Positionless Weather Report, UNKNOWN vendor/model",
     "wind 4.0 mph, direction 220, gust 5, temperature 77, rain 0.01 in last hour, rain 0.02 in last 24 hours, rain 0.03 since midnight, humidity 50, barometer 29.24, \"\""
    ],
+   "expect": {
+    "data_type": "_",
+    "dest": "APZ000",
+    "kind": "weather-positionless",
+    "path": [
+     "WIDE1-1"
+    ],
+    "source": "N0CALL-9",
+    "timestamp": {
+     "day": 9,
+     "hour": 5,
+     "kind": "mdhm",
+     "minute": 56,
+     "month": 10,
+     "text": "10090556"
+    },
+    "weather": {
+     "barometer_tenths_mbar": 9900,
+     "gust_mph": 5,
+     "humidity_pct": 50,
+     "luminosity_wm2": null,
+     "rain_1h_hundredths_in": 1,
+     "rain_24h_hundredths_in": 2,
+     "rain_midnight_hundredths_in": 3,
+     "software_tag": null,
+     "temp_f": 77,
+     "wind_dir_deg": 220,
+     "wind_speed_mph": 4
+    }
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Positionless Weather Report",
     "error": false,
@@ -1515,6 +2297,36 @@
     "Position, normal car (side view), UNKNOWN vendor/model",
     "N 49 30.0000, W 072 45.0002, 67 km/h (42 MPH), course 88"
    ],
+   "expect": {
+    "comment": "",
+    "compressed": {
+     "course_deg": 88,
+     "speed_code": 47
+    },
+    "data_type": "!",
+    "dest": "APZ000",
+    "kind": "position",
+    "messaging": false,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 18855837,
+      "per_degree": 380926
+     },
+     "lon": {
+      "int": -13856184,
+      "per_degree": 190463
+     },
+     "symbol_code": ">",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Position",
     "error": false,
@@ -1552,6 +2364,33 @@
     "Position, normal car (side view), UNKNOWN vendor/model",
     "N 49 30.0000, W 072 45.0002"
    ],
+   "expect": {
+    "comment": "",
+    "compressed": {},
+    "data_type": "=",
+    "dest": "APZ000",
+    "kind": "position",
+    "messaging": true,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 18855837,
+      "per_degree": 380926
+     },
+     "lon": {
+      "int": -13856184,
+      "per_degree": 190463
+     },
+     "symbol_code": ">",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Position",
     "error": false,
@@ -1586,6 +2425,36 @@
     "Position, normal car (side view), UNKNOWN vendor/model",
     "N 49 30.0000, W 072 45.0002, alt 305 m (999 ft)"
    ],
+   "expect": {
+    "altitude_ft_requested": 1000,
+    "comment": "",
+    "compressed": {
+     "alt_code": 3457
+    },
+    "data_type": "!",
+    "dest": "APZ000",
+    "kind": "position",
+    "messaging": false,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 18855837,
+      "per_degree": 380926
+     },
+     "lon": {
+      "int": -13856184,
+      "per_degree": 190463
+     },
+     "symbol_code": ">",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Position",
     "error": false,
@@ -1622,6 +2491,36 @@
     "Position, Restrooms, UNKNOWN vendor/model, range=20.1",
     "N 49 30.0000, W 072 45.0002"
    ],
+   "expect": {
+    "comment": "",
+    "compressed": {
+     "range_code": 30
+    },
+    "data_type": "!",
+    "dest": "APZ000",
+    "kind": "position",
+    "messaging": false,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 18855837,
+      "per_degree": 380926
+     },
+     "lon": {
+      "int": -13856184,
+      "per_degree": 190463
+     },
+     "symbol_code": "r",
+     "symbol_table": "\\"
+    },
+    "range_mi_requested": 20,
+    "source": "N0CALL-9",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Position",
     "error": false,
@@ -1658,6 +2557,43 @@
     "Position with time, normal car (side view), UNKNOWN vendor/model",
     "N 49 30.0000, W 072 45.0002, 67 km/h (42 MPH), course 88"
    ],
+   "expect": {
+    "comment": "",
+    "compressed": {
+     "course_deg": 88,
+     "speed_code": 47
+    },
+    "data_type": "@",
+    "dest": "APZ000",
+    "kind": "position",
+    "messaging": true,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 18855837,
+      "per_degree": 380926
+     },
+     "lon": {
+      "int": -13856184,
+      "per_degree": 190463
+     },
+     "symbol_code": ">",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": {
+     "day": 9,
+     "hour": 23,
+     "kind": "dhm",
+     "minute": 45,
+     "text": "092345z",
+     "zone": "z"
+    }
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Position with time",
     "error": false,
@@ -1695,6 +2631,37 @@
     "Position, truck, UNKNOWN vendor/model",
     "S 30 12.3359, W 140 00.1021, 85 km/h (53 MPH), course 180"
    ],
+   "expect": {
+    "comment": "",
+    "compressed": {
+     "course_deg": 180,
+     "speed_code": 50
+    },
+    "data_type": "!",
+    "dest": "APZ000",
+    "kind": "position",
+    "messaging": false,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": -11506098,
+      "per_degree": 380926
+     },
+     "lon": {
+      "int": -26665144,
+      "per_degree": 190463
+     },
+     "symbol_code": "k",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "speed_kn_requested": 45,
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Position",
     "error": false,
@@ -1732,6 +2699,34 @@
     "MIC-E, normal car (side view), UNKNOWN vendor/model, Off Duty",
     "N 33 25.6400, W 112 07.7400, 0 km/h (0 MPH)"
    ],
+   "expect": {
+    "course_deg": 0,
+    "custom": false,
+    "data_type": "`",
+    "dest": "SSRUVT",
+    "kind": "mic-e",
+    "message_code": "M0",
+    "message_index": 0,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 200564,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -672774,
+      "per_degree": 6000
+     },
+     "symbol_code": ">",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "speed_kn": 0
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "MIC-E",
     "error": false,
@@ -1770,6 +2765,34 @@
     "MIC-E, normal car (side view), UNKNOWN vendor/model, In Service",
     "N 33 25.6400, W 112 07.7400, 96 km/h (60 MPH), course 251"
    ],
+   "expect": {
+    "course_deg": 251,
+    "custom": false,
+    "data_type": "`",
+    "dest": "S3RUVT",
+    "kind": "mic-e",
+    "message_code": "M2",
+    "message_index": 2,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 200564,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -672774,
+      "per_degree": 6000
+     },
+     "symbol_code": ">",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "speed_kn": 52
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "MIC-E",
     "error": false,
@@ -1809,6 +2832,34 @@
     "MIC-E, normal car (side view), UNKNOWN vendor/model, Emergency",
     "S 05 10.1200, E 175 30.0600, 0 km/h (0 MPH)"
    ],
+   "expect": {
+    "course_deg": 0,
+    "custom": false,
+    "data_type": "`",
+    "dest": "0510Q2",
+    "kind": "mic-e",
+    "message_code": "Emergency",
+    "message_index": 7,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": -31012,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": 1053006,
+      "per_degree": 6000
+     },
+     "symbol_code": ">",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "speed_kn": 0
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "MIC-E",
     "error": false,
@@ -1847,6 +2898,34 @@
     "MIC-E, normal car (side view), UNKNOWN vendor/model, Custom-1",
     "N 51 12.3400, E 003 05.0100, 19 km/h (12 MPH), course 90"
    ],
+   "expect": {
+    "course_deg": 90,
+    "custom": true,
+    "data_type": "`",
+    "dest": "FB1RS4",
+    "kind": "mic-e",
+    "message_code": "C1",
+    "message_index": 1,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 307234,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": 18501,
+      "per_degree": 6000
+     },
+     "symbol_code": ">",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "speed_kn": 10
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "MIC-E",
     "error": false,
@@ -1886,6 +2965,34 @@
     "MIC-E, normal car (side view), UNKNOWN vendor/model, Returning",
     "N 10 00.0000, E 105 59.9900, 9 km/h (6 MPH), course 359"
    ],
+   "expect": {
+    "course_deg": 359,
+    "custom": false,
+    "data_type": "'",
+    "dest": "Q00PP0",
+    "kind": "mic-e",
+    "message_code": "M3",
+    "message_index": 3,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 60000,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": 635999,
+      "per_degree": 6000
+     },
+     "symbol_code": ">",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "speed_kn": 5
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "MIC-E",
     "error": false,
@@ -1925,6 +3032,34 @@
     "MIC-E, normal car (side view), UNKNOWN vendor/model, Committed",
     "N 00 00.1000, W 179 59.9900, 228 km/h (142 MPH), course 359"
    ],
+   "expect": {
+    "course_deg": 359,
+    "custom": false,
+    "data_type": "`",
+    "dest": "0PPPQP",
+    "kind": "mic-e",
+    "message_code": "M4",
+    "message_index": 4,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 10,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -1079999,
+      "per_degree": 6000
+     },
+     "symbol_code": ">",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "speed_kn": 123
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "MIC-E",
     "error": false,
@@ -1965,6 +3100,36 @@
     "N 12 03.5000, E 045 12.0000, 0 km/h (0 MPH)",
     "Status text"
    ],
+   "expect": {
+    "comment": "Status text",
+    "course_deg": 0,
+    "custom": false,
+    "data_type": "`",
+    "dest": "1R0S50",
+    "kind": "mic-e",
+    "message_code": "M5",
+    "message_index": 5,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 72350,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": 271200,
+      "per_degree": 6000
+     },
+     "symbol_code": ">",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "speed_kn": 0,
+    "type_code": "]"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "Status text",
     "data_type": "MIC-E",
@@ -2007,6 +3172,37 @@
     "S 12 03.5000, W 045 12.0000, 0 km/h (0 MPH), alt 250 m (820 ft)",
     "alt 250 m"
    ],
+   "expect": {
+    "altitude_m": 250,
+    "comment": "alt 250 m",
+    "course_deg": 0,
+    "custom": false,
+    "data_type": "`",
+    "dest": "12P35P",
+    "kind": "mic-e",
+    "message_code": "M6",
+    "message_index": 6,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": -72350,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -271200,
+      "per_degree": 6000
+     },
+     "symbol_code": ">",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "speed_kn": 0,
+    "type_code": "]"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "alt 250 m",
     "data_type": "MIC-E",
@@ -2050,6 +3246,42 @@
     "Position, Generic digipeater, UNKNOWN vendor/model, 25 W height(HAAT)=20ft=6m 3dBi E",
     "N 49 03.5000, W 072 01.7500"
    ],
+   "expect": {
+    "comment": "",
+    "data_type": "!",
+    "dest": "APZ000",
+    "kind": "position",
+    "messaging": false,
+    "path": [
+     "WIDE1-1"
+    ],
+    "phg": {
+     "d": 2,
+     "directivity": "E",
+     "g": 3,
+     "gain_dbi": 3,
+     "h": 1,
+     "height_ft": 20,
+     "p": 5,
+     "power_w": 25
+    },
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 294350,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -432175,
+      "per_degree": 6000
+     },
+     "symbol_code": "#",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Position",
     "error": false,
@@ -2093,6 +3325,42 @@
     "N 49 03.5000, W 072 01.7500",
     "/digi comment"
    ],
+   "expect": {
+    "comment": "/digi comment",
+    "data_type": "!",
+    "dest": "APZ000",
+    "kind": "position",
+    "messaging": false,
+    "path": [
+     "WIDE1-1"
+    ],
+    "phg": {
+     "d": 0,
+     "directivity": "omni",
+     "g": 6,
+     "gain_dbi": 6,
+     "h": 3,
+     "height_ft": 80,
+     "p": 2,
+     "power_w": 4
+    },
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 294350,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -432175,
+      "per_degree": 6000
+     },
+     "symbol_code": "#",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "/digi comment",
     "data_type": "Position",
@@ -2136,6 +3404,42 @@
     "Position, Generic digipeater, UNKNOWN vendor/model",
     "N 00 00.0000, E 000 00.0000"
    ],
+   "expect": {
+    "comment": "",
+    "data_type": "=",
+    "dest": "APZ000",
+    "kind": "position",
+    "messaging": true,
+    "path": [
+     "WIDE1-1"
+    ],
+    "phg": {
+     "d": 0,
+     "directivity": "omni",
+     "g": 0,
+     "gain_dbi": 0,
+     "h": 0,
+     "height_ft": 10,
+     "p": 0,
+     "power_w": 0
+    },
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 0,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": 0,
+      "per_degree": 6000
+     },
+     "symbol_code": "#",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Position",
     "error": false,
@@ -2171,6 +3475,33 @@
     "N 49 03.5000, W 072 01.7500",
     " range"
    ],
+   "expect": {
+    "comment": " range",
+    "data_type": "!",
+    "dest": "APZ000",
+    "kind": "position",
+    "messaging": false,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 294350,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -432175,
+      "per_degree": 6000
+     },
+     "symbol_code": "#",
+     "symbol_table": "/"
+    },
+    "range_mi": 50,
+    "source": "N0CALL-9",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": " range",
     "data_type": "Position",
@@ -2208,6 +3539,41 @@
     "Position, Triangle DF primary symbol, UNKNOWN vendor/model",
     "N 49 03.5000, W 072 01.7500"
    ],
+   "expect": {
+    "comment": "",
+    "data_type": "!",
+    "dest": "APZ000",
+    "dfs": {
+     "d": 0,
+     "directivity": "omni",
+     "g": 6,
+     "gain_dbi": 6,
+     "h": 3,
+     "height_ft": 80,
+     "s": 2
+    },
+    "kind": "position",
+    "messaging": false,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 294350,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -432175,
+      "per_degree": 6000
+     },
+     "symbol_code": "\\",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Position",
     "error": false,
@@ -2242,6 +3608,34 @@
     "Position, normal car (side view), UNKNOWN vendor/model",
     "N 49 03.5000, W 072 01.7500, 67 km/h (41 MPH), course 88"
    ],
+   "expect": {
+    "comment": "",
+    "course_deg": 88,
+    "data_type": "!",
+    "dest": "APZ000",
+    "kind": "position",
+    "messaging": false,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 294350,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -432175,
+      "per_degree": 6000
+     },
+     "symbol_code": ">",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "speed_kn": 36,
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Position",
     "error": false,
@@ -2279,6 +3673,34 @@
     "Position, normal car (side view), UNKNOWN vendor/model",
     "N 49 03.5000, W 072 01.7500, 0 km/h (0 MPH), course 0"
    ],
+   "expect": {
+    "comment": "",
+    "course_deg": 0,
+    "data_type": "!",
+    "dest": "APZ000",
+    "kind": "position",
+    "messaging": false,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 294350,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -432175,
+      "per_degree": 6000
+     },
+     "symbol_code": ">",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "speed_kn": 0,
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Position",
     "error": false,
@@ -2316,6 +3738,34 @@
     "Position, normal car (side view), UNKNOWN vendor/model",
     "N 49 03.5000, W 072 01.7500, 222 km/h (138 MPH), course 270"
    ],
+   "expect": {
+    "comment": "",
+    "course_deg": 270,
+    "data_type": "!",
+    "dest": "APZ000",
+    "kind": "position",
+    "messaging": false,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 294350,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -432175,
+      "per_degree": 6000
+     },
+     "symbol_code": ">",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "speed_kn": 120,
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Position",
     "error": false,
@@ -2353,6 +3803,37 @@
     "Positionless Weather Report, UNKNOWN vendor/model",
     "wind 4.0 mph, direction 220, gust 5, temperature 77, rain 0.00 in last hour, rain 0.00 in last 24 hours, rain 0.00 since midnight, humidity 50, barometer 29.24, \"wRSW\""
    ],
+   "expect": {
+    "data_type": "_",
+    "dest": "APZ000",
+    "kind": "weather-positionless",
+    "path": [
+     "WIDE1-1"
+    ],
+    "source": "N0CALL-9",
+    "timestamp": {
+     "day": 9,
+     "hour": 5,
+     "kind": "mdhm",
+     "minute": 56,
+     "month": 10,
+     "text": "10090556"
+    },
+    "weather": {
+     "barometer_tenths_mbar": 9900,
+     "gust_mph": 5,
+     "humidity_pct": 50,
+     "luminosity_wm2": null,
+     "rain_1h_hundredths_in": 0,
+     "rain_24h_hundredths_in": 0,
+     "rain_midnight_hundredths_in": 0,
+     "software_tag": "wRSW",
+     "temp_f": 77,
+     "wind_dir_deg": 220,
+     "wind_speed_mph": 4
+    }
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Positionless Weather Report",
     "error": false,
@@ -2391,6 +3872,37 @@
     "Positionless Weather Report, UNKNOWN vendor/model",
     ", temperature 77, \"\""
    ],
+   "expect": {
+    "data_type": "_",
+    "dest": "APZ000",
+    "kind": "weather-positionless",
+    "path": [
+     "WIDE1-1"
+    ],
+    "source": "N0CALL-9",
+    "timestamp": {
+     "day": 9,
+     "hour": 5,
+     "kind": "mdhm",
+     "minute": 56,
+     "month": 10,
+     "text": "10090556"
+    },
+    "weather": {
+     "barometer_tenths_mbar": null,
+     "gust_mph": null,
+     "humidity_pct": null,
+     "luminosity_wm2": null,
+     "rain_1h_hundredths_in": null,
+     "rain_24h_hundredths_in": null,
+     "rain_midnight_hundredths_in": null,
+     "software_tag": null,
+     "temp_f": 77,
+     "wind_dir_deg": null,
+     "wind_speed_mph": null
+    }
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Positionless Weather Report",
     "error": false,
@@ -2421,6 +3933,50 @@
     "N 49 03.5000, W 072 01.7500",
     "wind 4.6 mph, direction 220, gust 5, temperature 77, rain 0.00 in last hour, rain 0.00 in last 24 hours, rain 0.00 since midnight, humidity 50, barometer 29.24, \"wRSW\""
    ],
+   "expect": {
+    "data_type": "!",
+    "decode_aprs": {
+     "differs": [
+      "wind_speed_mph"
+     ],
+     "reason": "decode_aprs reads the speed of the _ccc/sss extension as knots (4 -> 4.6 mph)"
+    },
+    "dest": "APZ000",
+    "kind": "weather-position",
+    "messaging": false,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 294350,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -432175,
+      "per_degree": 6000
+     },
+     "symbol_code": "_",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": null,
+    "weather": {
+     "barometer_tenths_mbar": 9900,
+     "gust_mph": 5,
+     "humidity_pct": 50,
+     "luminosity_wm2": null,
+     "rain_1h_hundredths_in": 0,
+     "rain_24h_hundredths_in": 0,
+     "rain_midnight_hundredths_in": 0,
+     "software_tag": "wRSW",
+     "temp_f": 77,
+     "wind_dir_deg": 220,
+     "wind_speed_mph": 4
+    }
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Weather Report",
     "error": false,
@@ -2468,6 +4024,50 @@
     "S 30 12.3400, W 140 00.1000",
     "wind 11.5 mph, direction 90, gust 15, temperature -5, rain 0.00 in last hour, rain 0.00 in last 24 hours, rain 0.00 since midnight, humidity 85, barometer 29.92, \"\""
    ],
+   "expect": {
+    "data_type": "=",
+    "decode_aprs": {
+     "differs": [
+      "wind_speed_mph"
+     ],
+     "reason": "decode_aprs reads the speed of the _ccc/sss extension as knots (4 -> 4.6 mph)"
+    },
+    "dest": "APZ000",
+    "kind": "weather-position",
+    "messaging": true,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": -181234,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -840010,
+      "per_degree": 6000
+     },
+     "symbol_code": "_",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": null,
+    "weather": {
+     "barometer_tenths_mbar": 10132,
+     "gust_mph": 15,
+     "humidity_pct": 85,
+     "luminosity_wm2": null,
+     "rain_1h_hundredths_in": 0,
+     "rain_24h_hundredths_in": 0,
+     "rain_midnight_hundredths_in": 0,
+     "software_tag": null,
+     "temp_f": -5,
+     "wind_dir_deg": 90,
+     "wind_speed_mph": 10
+    }
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Weather Report",
     "error": false,
@@ -2514,6 +4114,57 @@
     "N 49 03.5000, W 072 01.7500",
     "wind 4.6 mph, direction 220, gust 5, temperature 77, rain 0.00 in last hour, rain 0.00 in last 24 hours, rain 0.00 since midnight, humidity 50, barometer 29.24, 123 watts/m^2, \"\""
    ],
+   "expect": {
+    "data_type": "@",
+    "decode_aprs": {
+     "differs": [
+      "wind_speed_mph"
+     ],
+     "reason": "decode_aprs reads the speed of the _ccc/sss extension as knots (4 -> 4.6 mph)"
+    },
+    "dest": "APZ000",
+    "kind": "weather-position",
+    "messaging": true,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 294350,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -432175,
+      "per_degree": 6000
+     },
+     "symbol_code": "_",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": {
+     "day": 9,
+     "hour": 23,
+     "kind": "dhm",
+     "minute": 45,
+     "text": "092345z",
+     "zone": "z"
+    },
+    "weather": {
+     "barometer_tenths_mbar": 9900,
+     "gust_mph": 5,
+     "humidity_pct": 50,
+     "luminosity_wm2": 123,
+     "rain_1h_hundredths_in": 0,
+     "rain_24h_hundredths_in": 0,
+     "rain_midnight_hundredths_in": 0,
+     "software_tag": null,
+     "temp_f": 77,
+     "wind_dir_deg": 220,
+     "wind_speed_mph": 4
+    }
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Weather Report",
     "error": false,
@@ -2561,6 +4212,38 @@
     "N 49 03.5080, W 072 01.7530",
     "Test<0x20>"
    ],
+   "expect": {
+    "comment": "Test",
+    "dao": {
+     "datum": "W",
+     "encoding": "human",
+     "lat_digit": 8,
+     "lon_digit": 3
+    },
+    "data_type": "!",
+    "dest": "APZ000",
+    "kind": "position",
+    "messaging": false,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 2943508,
+      "per_degree": 60000
+     },
+     "lon": {
+      "int": -4321753,
+      "per_degree": 60000
+     },
+     "symbol_code": "-",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "Test<0x20>",
     "data_type": "Position",
@@ -2597,6 +4280,38 @@
     "N 49 03.5076, W 072 01.7575",
     "Test<0x20>"
    ],
+   "expect": {
+    "comment": "Test",
+    "dao": {
+     "datum": "w",
+     "encoding": "base91",
+     "lat_char": "f",
+     "lon_char": "e"
+    },
+    "data_type": "!",
+    "dest": "APZ000",
+    "kind": "position",
+    "messaging": false,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 26785919,
+      "per_degree": 546000
+     },
+     "lon": {
+      "int": -39327993,
+      "per_degree": 546000
+     },
+     "symbol_code": "-",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "Test<0x20>",
     "data_type": "Position",
@@ -2633,6 +4348,59 @@
     "N 49 03.5000, W 072 01.7500",
     "!wfe!"
    ],
+   "expect": {
+    "comment": "",
+    "dao": {
+     "datum": "w",
+     "encoding": "base91",
+     "lat_char": "f",
+     "lon_char": "e"
+    },
+    "data_type": "!",
+    "decode_aprs": {
+     "applies_dao": false,
+     "comment": "!wfe!",
+     "differs": [
+      "position",
+      "comment"
+     ],
+     "position": {
+      "ambiguity": 0,
+      "lat": {
+       "int": 294350,
+       "per_degree": 6000
+      },
+      "lon": {
+       "int": -432175,
+       "per_degree": 6000
+      },
+      "symbol_code": "-",
+      "symbol_table": "/"
+     }
+    },
+    "dest": "APZ000",
+    "kind": "position",
+    "messaging": false,
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 26785919,
+      "per_degree": 546000
+     },
+     "lon": {
+      "int": -39327993,
+      "per_degree": 546000
+     },
+     "symbol_code": "-",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "!wfe!",
     "data_type": "Position",
@@ -2668,6 +4436,18 @@
     "Status Report, UNKNOWN vendor/model",
     "Net control tonight"
    ],
+   "expect": {
+    "data_type": ">",
+    "dest": "APZ000",
+    "kind": "status",
+    "path": [
+     "WIDE1-1"
+    ],
+    "source": "N0CALL-9",
+    "text": "Net control tonight",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "Net control tonight",
     "data_type": "Status Report",
@@ -2695,6 +4475,25 @@
     "Status Report, UNKNOWN vendor/model",
     "Net at twenty hundred"
    ],
+   "expect": {
+    "data_type": ">",
+    "dest": "APZ000",
+    "kind": "status",
+    "path": [
+     "WIDE1-1"
+    ],
+    "source": "N0CALL-9",
+    "text": "Net at twenty hundred",
+    "timestamp": {
+     "day": 9,
+     "hour": 23,
+     "kind": "dhm",
+     "minute": 45,
+     "text": "092345z",
+     "zone": "z"
+    }
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "Net at twenty hundred",
     "data_type": "Status Report",
@@ -2723,6 +4522,34 @@
     "Grid square = JJ00AA, N 00 01.2500, E 000 02.5000",
     "Grid status"
    ],
+   "expect": {
+    "data_type": ">",
+    "dest": "APZ000",
+    "grid": "JJ00AA",
+    "kind": "status",
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 125,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": 250,
+      "per_degree": 6000
+     },
+     "symbol_code": "-",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "symbol_code": "-",
+    "symbol_table": "/",
+    "text": "Grid status",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "Grid status",
     "data_type": "Status Report",
@@ -2760,6 +4587,34 @@
     "Grid square = JJ00, N 00 30.0000, E 001 00.0000",
     "Grid 4"
    ],
+   "expect": {
+    "data_type": ">",
+    "dest": "APZ000",
+    "grid": "JJ00",
+    "kind": "status",
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 3000,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": 6000,
+      "per_degree": 6000
+     },
+     "symbol_code": "-",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "symbol_code": "-",
+    "symbol_table": "/",
+    "text": "Grid 4",
+    "timestamp": null
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "Grid 4",
     "data_type": "Status Report",
@@ -2796,6 +4651,42 @@
     "Object, \"LEADER\", normal car (side view), UNKNOWN vendor/model",
     "N 49 03.5000, W 072 01.7500, 67 km/h (41 MPH), course 88"
    ],
+   "expect": {
+    "comment": "",
+    "course_deg": 88,
+    "data_type": ";",
+    "dest": "APZ000",
+    "kind": "object",
+    "live": true,
+    "name": "LEADER",
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 294350,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -432175,
+      "per_degree": 6000
+     },
+     "symbol_code": ">",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "speed_kn": 36,
+    "timestamp": {
+     "day": 9,
+     "hour": 23,
+     "kind": "dhm",
+     "minute": 45,
+     "text": "092345z",
+     "zone": "z"
+    }
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Object",
     "error": false,
@@ -2835,6 +4726,42 @@
     "Killed Object, \"LEADER\", normal car (side view), UNKNOWN vendor/model",
     "N 49 03.5000, W 072 01.7500, 67 km/h (41 MPH), course 88"
    ],
+   "expect": {
+    "comment": "",
+    "course_deg": 88,
+    "data_type": ";",
+    "dest": "APZ000",
+    "kind": "object",
+    "live": false,
+    "name": "LEADER",
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 294350,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -432175,
+      "per_degree": 6000
+     },
+     "symbol_code": ">",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "speed_kn": 36,
+    "timestamp": {
+     "day": 9,
+     "hour": 23,
+     "kind": "dhm",
+     "minute": 45,
+     "text": "092345z",
+     "zone": "z"
+    }
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Killed Object",
     "error": false,
@@ -2874,6 +4801,44 @@
     "Object, \"COMPOBJ\", normal car (side view), UNKNOWN vendor/model",
     "N 49 30.0000, W 072 45.0002, 67 km/h (42 MPH), course 88"
    ],
+   "expect": {
+    "comment": "",
+    "compressed": {
+     "course_deg": 88,
+     "speed_code": 47
+    },
+    "data_type": ";",
+    "dest": "APZ000",
+    "kind": "object",
+    "live": true,
+    "name": "COMPOBJ",
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 18855837,
+      "per_degree": 380926
+     },
+     "lon": {
+      "int": -13856184,
+      "per_degree": 190463
+     },
+     "symbol_code": ">",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": {
+     "day": 9,
+     "hour": 23,
+     "kind": "dhm",
+     "minute": 45,
+     "text": "092345z",
+     "zone": "z"
+    }
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Object",
     "error": false,
@@ -2913,6 +4878,40 @@
     "Object, \"TESTOBJ\", Human, UNKNOWN vendor/model",
     "N 49 03.5000, W 072 01.7500"
    ],
+   "expect": {
+    "comment": "",
+    "data_type": ";",
+    "dest": "APZ000",
+    "kind": "object",
+    "live": true,
+    "name": "TESTOBJ",
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 294350,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -432175,
+      "per_degree": 6000
+     },
+     "symbol_code": "[",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": {
+     "hour": 23,
+     "kind": "hms",
+     "minute": 45,
+     "second": 17,
+     "text": "234517h",
+     "zone": "h"
+    }
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Object",
     "error": false,
@@ -2949,6 +4948,50 @@
     "Object, \"REPEATER\", Generic digipeater, UNKNOWN vendor/model, 25 W height(HAAT)=20ft=6m 3dBi E",
     "N 49 03.5000, W 072 01.7500"
    ],
+   "expect": {
+    "comment": "",
+    "data_type": ";",
+    "dest": "APZ000",
+    "kind": "object",
+    "live": true,
+    "name": "REPEATER",
+    "path": [
+     "WIDE1-1"
+    ],
+    "phg": {
+     "d": 2,
+     "directivity": "E",
+     "g": 3,
+     "gain_dbi": 3,
+     "h": 1,
+     "height_ft": 20,
+     "p": 5,
+     "power_w": 25
+    },
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 294350,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -432175,
+      "per_degree": 6000
+     },
+     "symbol_code": "#",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9",
+    "timestamp": {
+     "day": 9,
+     "hour": 23,
+     "kind": "dhm",
+     "minute": 45,
+     "text": "092345z",
+     "zone": "z"
+    }
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Object",
     "error": false,
@@ -2993,6 +5036,32 @@
     "Item, \"AID #2\", Aid station, UNKNOWN vendor/model",
     "N 49 03.5000, W 072 01.7500"
    ],
+   "expect": {
+    "comment": "",
+    "data_type": ")",
+    "dest": "APZ000",
+    "kind": "item",
+    "live": true,
+    "name": "AID #2",
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 294350,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -432175,
+      "per_degree": 6000
+     },
+     "symbol_code": "A",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Item",
     "error": false,
@@ -3029,6 +5098,32 @@
     "Killed Item, \"AID #2\", Aid station, UNKNOWN vendor/model",
     "N 49 03.5000, W 072 01.7500"
    ],
+   "expect": {
+    "comment": "",
+    "data_type": ")",
+    "dest": "APZ000",
+    "kind": "item",
+    "live": false,
+    "name": "AID #2",
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 294350,
+      "per_degree": 6000
+     },
+     "lon": {
+      "int": -432175,
+      "per_degree": 6000
+     },
+     "symbol_code": "A",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Killed Item",
     "error": false,
@@ -3065,6 +5160,36 @@
     "Item, \"AID #3\", normal car (side view), UNKNOWN vendor/model",
     "N 49 30.0000, W 072 45.0002, 67 km/h (42 MPH), course 88"
    ],
+   "expect": {
+    "comment": "",
+    "compressed": {
+     "course_deg": 88,
+     "speed_code": 47
+    },
+    "data_type": ")",
+    "dest": "APZ000",
+    "kind": "item",
+    "live": true,
+    "name": "AID #3",
+    "path": [
+     "WIDE1-1"
+    ],
+    "position": {
+     "ambiguity": 0,
+     "lat": {
+      "int": 18855837,
+      "per_degree": 380926
+     },
+     "lon": {
+      "int": -13856184,
+      "per_degree": 190463
+     },
+     "symbol_code": ">",
+     "symbol_table": "/"
+    },
+    "source": "N0CALL-9"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Item",
     "error": false,
@@ -3105,6 +5230,42 @@
     "N 49 03.5000, W 072 01.7500",
     "Third party"
    ],
+   "expect": {
+    "data_type": "}",
+    "dest": "APZ000",
+    "inner": {
+     "comment": "Third party",
+     "data_type": "!",
+     "dest": "APZ000",
+     "kind": "position",
+     "messaging": false,
+     "path": [
+      "TCPIP",
+      "N0CALL*"
+     ],
+     "position": {
+      "ambiguity": 0,
+      "lat": {
+       "int": 294350,
+       "per_degree": 6000
+      },
+      "lon": {
+       "int": -432175,
+       "per_degree": 6000
+      },
+      "symbol_code": "-",
+      "symbol_table": "/"
+     },
+     "source": "N0TEST-1",
+     "timestamp": null
+    },
+    "kind": "third-party",
+    "path": [
+     "WIDE1-1"
+    ],
+    "source": "N0CALL-9"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "Third party",
     "data_type": "Position",
@@ -3140,6 +5301,27 @@
     "APRS Message, number \"12\", from \"N0TEST-1\" to \"N0DEST-2\", UNKNOWN vendor/model",
     "Hello via gateway"
    ],
+   "expect": {
+    "data_type": "}",
+    "dest": "APZ000",
+    "inner": {
+     "addressee": "N0DEST-2",
+     "dest": "APZ000",
+     "kind": "message",
+     "message_id": "12",
+     "path": [
+      "TCPIP*"
+     ],
+     "source": "N0TEST-1",
+     "text": "Hello via gateway"
+    },
+    "kind": "third-party",
+    "path": [
+     "WIDE1-1"
+    ],
+    "source": "N0CALL-9"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "Hello via gateway",
     "data_type": "APRS Message",
@@ -3172,6 +5354,27 @@
     "Status Report, UNKNOWN vendor/model",
     "status of someone else"
    ],
+   "expect": {
+    "data_type": "}",
+    "dest": "APZ000",
+    "inner": {
+     "data_type": ">",
+     "dest": "APZ000",
+     "kind": "status",
+     "path": [
+      "TCPIP*"
+     ],
+     "source": "N0TEST",
+     "text": "status of someone else",
+     "timestamp": null
+    },
+    "kind": "third-party",
+    "path": [
+     "WIDE1-1"
+    ],
+    "source": "N0CALL-9"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "comment": "status of someone else",
     "data_type": "Status Report",
@@ -3198,6 +5401,16 @@
     "N0CALL-9>APZ000,WIDE1-1:~unknown data type",
     "ERROR!!!  Unknown APRS Data Type Indicator \"~\", UNKNOWN vendor/model"
    ],
+   "expect": {
+    "data_type": "~",
+    "dest": "APZ000",
+    "kind": "unknown-dti",
+    "path": [
+     "WIDE1-1"
+    ],
+    "source": "N0CALL-9"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "ERROR!!!  Unknown APRS Data Type Indicator \"~\"",
     "error": true,
@@ -3225,6 +5438,24 @@
     "Position, --no-symbol--, UNKNOWN vendor/model",
     "N 49 03.5000, Invalid Longitude"
    ],
+   "expect": {
+    "data_type": "!",
+    "dest": "APZ000",
+    "kind": "invalid",
+    "partial": {
+     "lat": {
+      "int": 294350,
+      "per_degree": 6000
+     },
+     "lon": null
+    },
+    "path": [
+     "WIDE1-1"
+    ],
+    "reason": "longitude cut off",
+    "source": "N0CALL-9"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Position",
     "error": false,
@@ -3261,6 +5492,24 @@
     "Position, House, UNKNOWN vendor/model",
     "Invalid Latitude, W 072 01.7500"
    ],
+   "expect": {
+    "data_type": "!",
+    "dest": "APZ000",
+    "kind": "invalid",
+    "partial": {
+     "lat": null,
+     "lon": {
+      "int": -432175,
+      "per_degree": 6000
+     }
+    },
+    "path": [
+     "WIDE1-1"
+    ],
+    "reason": "latitude hemisphere letter is X",
+    "source": "N0CALL-9"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "Position",
     "error": false,
@@ -3296,6 +5545,17 @@
     "APRS Message must have a minimum of 11 characters for : 9 character addressee :",
     "APRS Message, UNKNOWN vendor/model"
    ],
+   "expect": {
+    "data_type": ":",
+    "dest": "APZ000",
+    "kind": "invalid",
+    "path": [
+     "WIDE1-1"
+    ],
+    "reason": "shorter than the 9 character addressee field",
+    "source": "N0CALL-9"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "APRS Message",
     "error": false,
@@ -3323,6 +5583,15 @@
     "N0CALL-9>APZ000,WIDE1-1:",
     "ERROR!!!  Unknown APRS Data Type Indicator: unprintable 0x00, UNKNOWN vendor/model"
    ],
+   "expect": {
+    "dest": "APZ000",
+    "kind": "empty",
+    "path": [
+     "WIDE1-1"
+    ],
+    "source": "N0CALL-9"
+   },
+   "expect_vs_decode_aprs": [],
    "fields": {
     "data_type": "ERROR!!!  Unknown APRS Data Type Indicator: unprintable 0x00",
     "error": true,

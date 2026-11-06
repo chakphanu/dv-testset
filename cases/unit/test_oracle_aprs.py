@@ -265,3 +265,203 @@ def test_vector_file_is_ascii_json_without_binary_blobs():
         raw = fh.read()
     raw.decode("ascii")
     assert b"/home/" not in raw
+
+
+# ------------------------------------------------------------------ generator's exact values and the compare policy
+
+from fractions import Fraction                                   # noqa: E402
+
+from dvtest import aprs_expect as x                              # noqa: E402
+
+
+def _info_text(case):
+    return _by_case()[case]["info_text"]
+
+
+def test_every_case_has_an_expectation_and_the_vector_file_is_current():
+    names = [n[0] for n in o.all_cases()]
+    assert set(x.table()) == set(names)
+    doc = _vec()
+    assert doc["compare_policy"] == x.POLICY and doc["expect_schema"] == x.SCHEMA
+    for rec in doc["records"]:
+        assert rec["expect"] == json.loads(json.dumps(x.expected(rec["case"], rec["frame_header"]))), rec["case"]
+
+
+def test_policy_text_names_every_rule():
+    for word in ("EXACT", "half", "Timestamps", "ambiguity", "dao-base91-bare", "generator"):
+        assert word in x.POLICY
+    with open(os.path.join(VEC, "README.md")) as fh:
+        readme = fh.read()
+    assert "compare policy" in readme.lower() and "half" in readme
+
+
+def test_decode_aprs_agrees_with_the_generator_under_the_policy():
+    for rec in _vec()["records"]:
+        assert x.compare(rec["expect"], rec) == [], rec["case"]
+        assert rec["expect_vs_decode_aprs"] == [], rec["case"]
+
+
+def test_positions_are_within_half_the_printed_precision():
+    seen = 0
+    for rec in _vec()["records"]:
+        exp = rec["expect"]
+        if "position" not in exp:
+            continue
+        pos = x.dw_position(exp)
+        p = rec["fields"]["position"]
+        assert x.position_within_half_precision(pos, p["lat_text"], p["lon_text"]), rec["case"]
+        # the half-precision rule is real: one encoded unit off (a hundredth of a minute is 200 printed units) fails
+        shifted = json.loads(json.dumps(pos))
+        shifted["lat"]["int"] += shifted["lat"]["per_degree"] // 6000 or 1
+        assert not x.position_within_half_precision(shifted, p["lat_text"], p["lon_text"]), rec["case"]
+        seen += 1
+    assert seen >= 50
+
+
+def test_exact_axes_are_integers_in_the_encoded_resolution():
+    for rec in _vec()["records"]:
+        pos = rec["expect"].get("position")
+        if not pos:
+            continue
+        for a in (pos["lat"], pos["lon"]):
+            assert type(a["int"]) is int and a["per_degree"] in (6000, 60000, 546000, 380926, 190463), rec["case"]
+    # hand-computed anchors: 49 03.50 N = 49 * 6000 + 350, 72 01.75 W = -(72 * 6000 + 175)
+    pos = x.expected("pos-plain", "A>B")["position"]
+    assert pos["lat"] == {"int": 294350, "per_degree": 6000} and pos["lon"] == {"int": -432175, "per_degree": 6000}
+    assert x.axis_degrees(pos["lat"]) == Fraction(49) + Fraction(350, 6000)
+
+
+def test_plain_positions_match_their_strings():
+    for rec in _vec()["records"]:
+        exp = rec["expect"]
+        if exp["kind"] not in ("position", "weather-position") or "dao" in exp or "compressed" in exp:
+            continue
+        pos = exp["position"]
+        text = rec["info_text"]
+        start = 1 + len(exp["timestamp"]["text"]) if exp.get("timestamp") else 1
+        assert text[start:start + 19] == x.plain_text(pos), rec["case"]
+
+
+def test_ambiguity_is_the_number_of_blanked_digits():
+    for n in range(1, 5):
+        rec = _by_case()["amb-%d" % n]
+        assert rec["expect"]["position"]["ambiguity"] == n
+        assert rec["info_text"][1:9].count(" ") == n and rec["info_text"][10:19].count(" ") == n
+        # decode_aprs does not print the level: the blanked digits come out as zeros in the position
+        assert "ambig" not in " ".join(rec["dw_lines"][1:3]).lower()
+    for rec in _vec()["records"]:
+        if rec["group"] != "ambiguity" and "position" in rec["expect"] and rec["expect"]["kind"] == "position":
+            assert rec["expect"]["position"]["ambiguity"] == 0, rec["case"]
+
+
+def test_timestamps_are_in_the_strings_and_not_printed_by_decode_aprs():
+    stamped = 0
+    for rec in _vec()["records"]:
+        ts = rec["expect"].get("timestamp")
+        if not ts:
+            continue
+        stamped += 1
+        assert ts["text"] in rec["info_text"], rec["case"]
+        for line in rec["dw_lines"][1:]:
+            assert ts["text"] not in line, rec["case"]
+    assert stamped >= 12
+    assert x.dhm(9, 23, 45, "z")["text"] == "092345z" and x.hms(23, 45, 17)["text"] == "234517h"
+    assert x.mdhm(10, 9, 5, 56)["text"] == "10090556"
+
+
+def test_compressed_axes_follow_the_base91_values():
+    pos = x.compressed_position(c.POS_C)
+    # the specification's example is 49 30.00 N, 72 45.00 W within one encoded unit
+    assert abs(x.axis_degrees(pos["lat"]) - Fraction(99, 2)) < Fraction(1, 380926)
+    assert abs(x.axis_degrees(pos["lon"]) + Fraction(291, 4)) < Fraction(1, 190463)
+    assert x.compressed_cs(c.POS_C) == {"course_deg": 88, "speed_code": 47}
+    cust = c.compressed(-30.2056, -140.0017, "/", "k", course=180, speed_kn=45)
+    p = x.compressed_position(cust)
+    assert abs(float(x.axis_degrees(p["lat"])) + 30.2056) < 1 / 380926 + 1e-9
+    assert abs(float(x.axis_degrees(p["lon"])) + 140.0017) < 1 / 190463 + 1e-9
+
+
+def test_mic_e_expectations_equal_the_numbers_the_strings_were_built_from():
+    for name, (lat, lon, spd, crs, msg, kw), _note in c.MICE_CASES:
+        exp = x.table()[name]
+        assert abs(float(x.axis_degrees(exp["position"]["lat"])) - lat) < 0.0001, name
+        assert abs(float(x.axis_degrees(exp["position"]["lon"])) - lon) < 0.0001, name
+        assert exp["speed_kn"] == spd and exp["course_deg"] == crs and exp["message_index"] == msg
+        assert exp["custom"] is bool(kw.get("custom", False))
+
+
+def test_dao_axes_and_the_bare_dao_difference():
+    h = x.table()["dao-human"]["position"]
+    assert x.axis_degrees(h["lat"]) - x.axis_degrees(x.POS["lat"]) == Fraction(8, 60000)
+    assert x.axis_degrees(h["lon"]) - x.axis_degrees(x.POS["lon"]) == -Fraction(3, 60000)
+    b = x.table()["dao-base91"]["position"]
+    assert x.axis_degrees(b["lat"]) - x.axis_degrees(x.POS["lat"]) == Fraction(69, 546000)       # 'f' - '!' = 69
+    assert x.axis_degrees(b["lon"]) - x.axis_degrees(x.POS["lon"]) == -Fraction(68, 546000)      # 'e' - '!' = 68
+    rec = _by_case()["dao-base91-bare"]
+    exp = rec["expect"]
+    assert exp["position"] == x.table()["dao-base91"]["position"]                  # the generator value has the DAO
+    assert exp["decode_aprs"]["applies_dao"] is False and exp["decode_aprs"]["comment"] == "!wfe!"
+    printed = rec["fields"]["position"]
+    assert printed["lat_text"] == "N 49 03.5000" and printed["lon_text"] == "W 072 01.7500"      # not applied
+    assert rec["fields"]["comment"] == "!wfe!"
+    # the generator value differs from the printed one by less than a hundredth of a minute but more than half the print precision
+    assert not x.position_within_half_precision(exp["position"], printed["lat_text"], printed["lon_text"])
+    assert x.position_within_half_precision(x.dw_position(exp), printed["lat_text"], printed["lon_text"])
+
+
+def test_documented_decode_aprs_differences_are_the_only_ones():
+    diffs = {r["case"]: r["expect"]["decode_aprs"] for r in _vec()["records"] if "decode_aprs" in r["expect"]}
+    assert set(diffs) == {"msg-brace-in-text", "bln-announce-group", "wx-pos", "wx-pos-negative", "wx-pos-ts", "dao-base91-bare"}
+    rec = _by_case()
+    assert rec["msg-brace-in-text"]["fields"]["message_number"] == "with} brace"
+    assert rec["bln-announce-group"]["fields"]["bulletin_id"] == "ZGRP"
+    assert rec["wx-pos"]["fields"]["weather"]["wind_mph"] == 4.6
+
+
+def test_exact_text_fields_match_the_strings():
+    # message, ack, bulletin, status, object and item fields are literal slices of the strings
+    for rec in _vec()["records"]:
+        exp, text = rec["expect"], rec["info_text"]
+        if exp["kind"] == "message" and "decode_aprs" not in exp:
+            assert text[1:11] == ":" + exp["addressee"].ljust(9)[:9] + ":"[:1] or text.startswith(":" + exp["addressee"].ljust(9) + ":"), rec["case"]
+            assert text.endswith(exp["text"] + ("{" + exp["message_id"] if exp["message_id"] else "")), rec["case"]
+        if exp["kind"] in ("ack", "reject"):
+            assert text.endswith(("ack" if exp["kind"] == "ack" else "rej") + exp["ack_id"]), rec["case"]
+        if exp["kind"] == "status" and "grid" not in exp:
+            assert text.endswith(exp["text"]), rec["case"]
+        if exp["kind"] in ("object", "item"):
+            assert exp["name"] in text and text[0] == exp["data_type"], rec["case"]
+            flag = text[10] if exp["kind"] == "object" else text[1 + len(exp["name"])]
+            assert flag == ("*" if exp["live"] else "_") or flag == ("!" if exp["live"] else "_"), rec["case"]
+        if exp["kind"] == "unknown-dti" and exp["data_type"] != "0xff":
+            assert text[0:1] == exp["data_type"], rec["case"]
+
+
+def test_weather_and_phg_expectations_are_the_encoded_digits():
+    t = x.table()
+    w = t["wx-positionless"]["weather"]
+    assert (w["wind_dir_deg"], w["wind_speed_mph"], w["gust_mph"], w["temp_f"], w["humidity_pct"], w["barometer_tenths_mbar"]) == \
+        (220, 4, 5, 77, 50, 9900)
+    assert all(v is None for k, v in t["wx-positionless-missing"]["weather"].items() if k != "temp_f")
+    assert t["wx-pos-negative"]["weather"]["temp_f"] == -5
+    g = x.phg(5, 1, 3, 2)
+    assert (g["power_w"], g["height_ft"], g["gain_dbi"], g["directivity"]) == (25, 20, 3, "E")
+    assert x.phg(2, 3, 6, 0)["height_ft"] == 80 and x.phg(0, 0, 0, 0)["power_w"] == 0
+    assert t["rng-0050"]["range_mi"] == 50
+    assert t["dfs-2360"]["dfs"]["height_ft"] == 80
+
+
+def test_compare_detects_a_wrong_expectation():
+    import copy
+    rec = _by_case()["msg-number"]
+    bad = copy.deepcopy(rec["expect"])
+    bad["message_id"] = "124"
+    assert x.compare(bad, rec)
+    rec = _by_case()["obj-kill"]
+    bad = copy.deepcopy(rec["expect"])
+    bad["live"] = True
+    assert x.compare(bad, rec)
+    rec = _by_case()["comp-cs"]
+    bad = copy.deepcopy(rec["expect"])
+    bad["position"]["lon"]["int"] += 1
+    assert x.compare(bad, rec)

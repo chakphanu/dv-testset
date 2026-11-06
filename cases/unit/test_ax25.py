@@ -231,3 +231,31 @@ def test_tx_vectors_overlong_kiss_message_is_refused_and_not_stored():
     assert len(bytes.fromhex(over["sent_hex"])) == 2049
     assert over["volatile"] is True and "dw_copy_hex" not in over        # stale memory: lengths only
     assert any("should end with FEND" in m for m in over["dw_messages"])
+
+
+def test_tx_vectors_dvr_receive_rule_cases_as_observed():
+    doc = {r["case"]: r for r in load("kiss_tx.json")["records"]}
+    # port nibble other than 0: the TNC logs it as an invalid transmit channel but its KISS layer takes the frame
+    for name, port in (("data-port1", 1), ("data-port2", 2), ("data-port15", 15)):
+        rec = doc[name]
+        frames = ax25.kiss_decode(bytes.fromhex(rec["sent_hex"]))
+        assert frames[0][0] == port and frames[0][1] == 0
+        assert any("Invalid transmit channel %d" % port in m for m in rec["dw_messages"]), name
+        assert rec["dw_unwrapped_hex"] == [frames[0][2].hex()]
+    # command nibbles 7 to 14: "KISS Invalid command N", no frame passed on
+    for cmd in range(7, 15):
+        rec = doc["cmd-unknown-%d" % cmd]
+        assert ax25.kiss_decode(bytes.fromhex(rec["sent_hex"]))[0][1] == cmd
+        assert any("Invalid command %d" % cmd in m for m in rec["dw_messages"]), cmd
+        assert rec["dw_copy_decode"] == []
+    # the 1100 / 1101 boundary: Dire Wolf's own limit is far above, it takes all four
+    for name, total, wire_extra in (("limit-1100-plain", 1100, 0), ("limit-1101-plain", 1101, 0),
+                                    ("limit-1100-escapes", 1100, 20), ("limit-1101-escapes", 1101, 20)):
+        rec = doc[name]
+        frames = ax25.kiss_decode(bytes.fromhex(rec["sent_hex"]))
+        assert len(frames) == 1 and len(frames[0][2]) == total, name
+        assert len(bytes.fromhex(rec["sent_hex"])) == total + 3 + wire_extra, name
+        assert rec["dw_unwrapped_hex"] == [frames[0][2].hex()] and rec["dw_copy_equals_sent"] is True, name
+    # FESC directly before the closing FEND: the frame is taken without the FESC, the next frame is noise
+    rec = doc["fesc-before-fend"]
+    assert len(rec["dw_unwrapped_hex"]) == 1 and len(rec["dw_unwrapped_hex"][0]) // 2 == 20

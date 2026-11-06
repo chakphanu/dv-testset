@@ -354,47 +354,63 @@ def dw_accepts_len(length):
 
 
 class DvrouterKiss:
-    """The lead's description of DV-Router's KISS receive decoder, as a streaming model:
+    """The DV-Router lead's description of its KISS receive decoder (crates/edge/ax25/src/kiss.rs,
+    read by the lead; lines 36-80 are the push() routine), as a streaming model:
 
     * bytes before the first FEND are dropped (`dropped_noise`);
+    * EVERY FEND closes the current frame and opens the next one (shared-FEND convention): the bytes
+      after an unescaped FEND are the type byte of a new frame. Dire Wolf instead calls them noise
+      until another FEND (documented difference, case `truncated-then-frame`). A FEND also wins over
+      a pending FESC (no bad escape is counted, the frame is closed);
     * FESC TFEND is FEND and FESC TFESC is FESC; FESC followed by any other byte drops BOTH
       bytes, keeps the frame and counts it (`bad_escapes`);
-    * an unescaped FEND inside a frame closes it; FEND FEND emits nothing;
-    * the command nibble of the type byte: 0 is data; 1 to 6 and the byte 0xFF are ignored
-      (`ignored_commands`); 7 to 14 are NOT SPECIFIED by the lead (treated as ignored and
-      counted in `unspecified_commands`);
-    * a data frame over `max_data` bytes is discarded up to the next FEND (`overlong`). Whether
-      the limit counts the type byte or the unescaped length is not stated: this model counts
-      the unescaped bytes after the type byte (UNVERIFIED).
+    * FEND FEND emits nothing (an empty buffer);
+    * the command nibble of the type byte: 0 is data; EVERY other value 1..15 (1..6 parameters, 7..14
+      undefined, 15 = the byte 0xFF Return) is ignored silently (`ignored_commands`, of which
+      `commands_7_to_14`; `unspecified_commands` is the same counter under its earlier name);
+    * a data frame whose port nibble is not a configured channel is dropped silently
+      (`dropped_channel`; crates/edge/ax25/src/adapter/tcp.rs about lines 373-379, 417-419);
+    * the length limit counts the UNESCAPED bytes after the type byte: the buffer holds the type byte
+      plus at most `max_data` (1100) data bytes, checked before each push as `len(buffer) > max_data`;
+      escape pairs are resolved first and are not counted. The 1101st data byte starts a discard up
+      to the next FEND, and that FEND reports the frame as too long (`overlong`, counted at the FEND
+      like the edge's frames_bad).
 
-    feed() returns the data frames as (port, bytes); the AX.25 acceptance rule
-    (dvrouter_accepts_frame) is a second step, applied by the caller."""
+    feed() returns the data frames of configured channels as (port, bytes); the AX.25 acceptance rule
+    (dvrouter_accepts_frame) is a second step, applied by the caller. `channels=None` keeps every
+    port (no channel filter)."""
 
-    def __init__(self, max_data=DVR_MAX_FRAME):
+    def __init__(self, max_data=DVR_MAX_FRAME, channels=(0,)):
         self.max_data = max_data
+        self.channels = None if channels is None else frozenset(channels)
         self._buf = None                  # None: before the first FEND
         self._esc = False
         self._discard = False
         self.dropped_noise = 0
         self.bad_escapes = 0
         self.ignored_commands = 0
-        self.unspecified_commands = 0
+        self.commands_7_to_14 = 0
+        self.dropped_channel = 0
         self.overlong = 0
+
+    @property
+    def unspecified_commands(self):
+        return self.commands_7_to_14
 
     def feed(self, data):
         frames = []
         for b in data:
+            if b == FEND:
+                if self._buf is not None:
+                    self._close(frames)
+                self._buf = bytearray()
+                self._esc = False
+                self._discard = False
+                continue
             if self._buf is None:
-                if b == FEND:
-                    self._buf = bytearray()
-                else:
-                    self.dropped_noise += 1
+                self.dropped_noise += 1
                 continue
             if self._discard:
-                if b == FEND:
-                    self._discard = False
-                    self._esc = False
-                    self._buf = bytearray()
                 continue
             if self._esc:
                 self._esc = False
@@ -402,37 +418,36 @@ class DvrouterKiss:
                     self._append(FEND)
                 elif b == TFESC:
                     self._append(FESC)
-                elif b == FEND:
-                    self.bad_escapes += 1
-                    self._close(frames)
                 else:
                     self.bad_escapes += 1          # both bytes dropped, the frame goes on
                 continue
-            if b == FEND:
-                self._close(frames)
-            elif b == FESC:
+            if b == FESC:
                 self._esc = True
             else:
                 self._append(b)
         return frames
 
     def _append(self, b):
-        self._buf.append(b)
-        if len(self._buf) - 1 > self.max_data:
-            self.overlong += 1
-            self._buf = bytearray()
+        if len(self._buf) > self.max_data:        # type byte + max_data bytes are already held
             self._discard = True
+            self._buf = bytearray()
+            return
+        self._buf.append(b)
 
     def _close(self, frames):
-        buf, self._buf = self._buf, bytearray()
+        if self._discard:
+            self.overlong += 1
+            return
+        buf = self._buf
         if not buf:
             return
         t = buf[0]
         cmd = t & 0x0F
-        if t == 0xFF or 1 <= cmd <= 6:
+        if cmd != 0:
             self.ignored_commands += 1
-        elif cmd == 0:
-            frames.append((t >> 4, bytes(buf[1:])))
+            if 7 <= cmd <= 14:
+                self.commands_7_to_14 += 1
+        elif self.channels is not None and (t >> 4) not in self.channels:
+            self.dropped_channel += 1
         else:
-            self.unspecified_commands += 1
-            self.ignored_commands += 1
+            frames.append((t >> 4, bytes(buf[1:])))

@@ -25,7 +25,7 @@ import json
 import re
 import sys
 
-from . import aprs_cases, ax25, oracle_direwolf
+from . import aprs_cases, aprs_expect, ax25, oracle_direwolf
 
 SCHEMA = "dvt-direwolf-aprs/1"
 SRC = aprs_cases.SRC
@@ -302,10 +302,14 @@ def records(result, cases=None):
         group, dest, info, note = meta[res["name"]]
         parsed = parse_output(res["output"])
         header = dest if ">" in dest else "%s>%s,%s" % (SRC, dest, VIA)
-        out.append({"schema": SCHEMA, "case": res["name"], "group": group, "note": note,
-                    "frame_header": header, "info_hex": bytes(info).hex(),
-                    "info_text": ax25.info_to_text(info), "rc": res["rc"],
-                    "dw_lines": parsed["lines"], "fields": parsed["fields"]})
+        rec = {"schema": SCHEMA, "case": res["name"], "group": group, "note": note,
+               "frame_header": header, "info_hex": bytes(info).hex(),
+               "info_text": ax25.info_to_text(info), "rc": res["rc"],
+               "dw_lines": parsed["lines"], "fields": parsed["fields"]}
+        # the generator's exact values (dvtest.aprs_expect) and what the policy finds against decode_aprs
+        rec["expect"] = aprs_expect.expected(res["name"], header)
+        rec["expect_vs_decode_aprs"] = aprs_expect.compare(rec["expect"], rec)
+        out.append(rec)
     return out
 
 
@@ -315,6 +319,10 @@ def document(result, version, cases=None):
     for r in recs:
         groups.setdefault(r["group"], []).append(r["case"])
     return {"schema": SCHEMA, "tool": version, "image": oracle_direwolf.IMAGE, "program": "decode_aprs (hex input)",
+            "compare_policy": aprs_expect.POLICY, "expect_schema": aprs_expect.SCHEMA,
+            "expect_notes": "record.expect = the generator's exact values (dvtest/aprs_expect.py); an axis {int, per_degree} is "
+                            "exactly int / per_degree degrees; record.expect_vs_decode_aprs = mismatches under the policy "
+                            "(empty = agree); record.expect.decode_aprs = documented differences of decode_aprs",
             "groups": groups, "records": recs}
 
 

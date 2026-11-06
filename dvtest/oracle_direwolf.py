@@ -181,6 +181,44 @@ def tx_cases():
         ("info-2029", ax25.kiss_encode(0, 0, _ui(b"x" * 2029)), "2029 information bytes: 2048 bytes from FEND to FEND (MAX_KISS_LEN counts both FEND and the type byte)"),
         ("info-2030", ax25.kiss_encode(0, 0, _ui(b"x" * 2030)), "2030 information bytes: 2049 bytes FEND to FEND, one more than the TNC's KISS buffer"),
     ]
+    return cases + dvr_boundary_cases()
+
+
+def _ui_len(total, info_fill=b"x", specials=b""):
+    """A UI frame of exactly `total` bytes (16 bytes of header, control and PID, then the information
+    field); `specials` are the first information bytes, the rest is `info_fill` repeated."""
+    n = total - 16
+    if n < len(specials):
+        raise ValueError("frame too short for the special bytes")
+    return _ui(specials + info_fill * (n - len(specials)))
+
+
+def dvr_boundary_cases():
+    """Cases added for the DV-Router KISS receive rules (docs/direwolf-cases.md, "KISS receive decoder"):
+    port nibble other than 0, command nibbles 7 to 14, the exact limit of 1100 UNESCAPED bytes after the
+    type byte with and without escapes inside, and a FESC directly before a FEND. Dire Wolf's answers are
+    recorded; DV-Router's side is dvtest.ax25.DvrouterKiss."""
+    cases = []
+    for port in (2, 15):
+        cases.append(("data-port%d" % port, ax25.kiss_encode(port, 0, _ui(b"p%d" % port)),
+                      "port nibble %d on a one-channel TNC" % port))
+    for cmd in range(8, 15):
+        cases.append(("cmd-unknown-%d" % cmd, ax25.kiss_encode(0, cmd, b"\x01"), "command nibble %d (undefined)" % cmd))
+    plain_1100 = _ui_len(1100)
+    plain_1101 = _ui_len(1101)
+    # 10 x C0 and 10 x DB among the information bytes: 20 escape pairs, so 1100 unescaped bytes are
+    # 1120 on the wire after the type byte; only the unescaped count may matter
+    specials = bytes([ax25.FEND, ax25.FESC]) * 10
+    esc_1100 = _ui_len(1100, specials=specials)
+    esc_1101 = _ui_len(1101, specials=specials)
+    cases += [
+        ("limit-1100-plain", ax25.kiss_encode(0, 0, plain_1100), "1100 data bytes after the type byte, no escapes"),
+        ("limit-1101-plain", ax25.kiss_encode(0, 0, plain_1101), "1101 data bytes after the type byte, no escapes"),
+        ("limit-1100-escapes", ax25.kiss_encode(0, 0, esc_1100), "1100 unescaped data bytes, 20 of them escaped (1120 on the wire)"),
+        ("limit-1101-escapes", ax25.kiss_encode(0, 0, esc_1101), "1101 unescaped data bytes, 20 of them escaped (1121 on the wire)"),
+        ("fesc-before-fend", bytes([ax25.FEND, 0x00]) + _ui(b"fesc") + bytes([ax25.FESC]) + ax25.kiss_encode(0, 0, _ui(b"after")),
+         "FESC directly before the closing FEND, then a complete frame in the same stream"),
+    ]
     return cases
 
 
@@ -338,23 +376,32 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="cmd", required=True)
     run = sub.add_parser("run", help="run the rx and tx jobs and write the vector files")
     run.add_argument("--out-dir", default="vectors/direwolf")
+    run.add_argument("--only", choices=("rx", "tx"), default=None,
+                     help="run and write one direction only (the other file is left as it is)")
     args = parser.parse_args(argv)
     os.makedirs(args.out_dir, exist_ok=True)
     version = run_job({"mode": "versions"})
-    rx = run_job(rx_job())
-    tx = run_job(tx_job())
-    rx_doc = {"schema": RX_SCHEMA, "tool": version["direwolf"], "image": IMAGE, "baud": BAUD,
-              "pre_flags": PRE_FLAGS, "post_flags": POST_FLAGS, "kiss_stream_hex": rx["kiss_rx_hex"],
-              "records": rx_records(rx)}
-    tx_doc = {"schema": TX_SCHEMA, "tool": version["direwolf"], "image": IMAGE,
-              "records": tx_records(tx), "kissutil_encoder": kissutil_records(tx)}
-    for name, doc in (("rx_frames.json", rx_doc), ("kiss_tx.json", tx_doc)):
+    rx = run_job(rx_job()) if args.only != "tx" else None
+    tx = run_job(tx_job()) if args.only != "rx" else None
+    docs = []
+    if rx is not None:
+        docs.append(("rx_frames.json", {"schema": RX_SCHEMA, "tool": version["direwolf"], "image": IMAGE, "baud": BAUD,
+                                         "pre_flags": PRE_FLAGS, "post_flags": POST_FLAGS, "kiss_stream_hex": rx["kiss_rx_hex"],
+                                         "records": rx_records(rx)}))
+    if tx is not None:
+        docs.append(("kiss_tx.json", {"schema": TX_SCHEMA, "tool": version["direwolf"], "image": IMAGE,
+                                       "records": tx_records(tx), "kissutil_encoder": kissutil_records(tx)}))
+    for name, doc in docs:
         with open(os.path.join(args.out_dir, name), "w", encoding="ascii") as fh:
             json.dump(doc, fh, indent=1, sort_keys=True, ensure_ascii=True)
             fh.write("\n")
-    bad = [r["case"] for r in rx_doc["records"] if r.get("dw_generated") and not r["case"].startswith("neg-") and not (r["ax25_match"] and r.get("kiss_match"))]
-    print("rx cases %d, mismatches %s" % (len(rx_doc["records"]), bad))
-    print("tx cases %d" % len(tx_doc["records"]))
+    bad = []
+    for name, doc in docs:
+        if name == "rx_frames.json":
+            bad = [r["case"] for r in doc["records"] if r.get("dw_generated") and not r["case"].startswith("neg-") and not (r["ax25_match"] and r.get("kiss_match"))]
+            print("rx cases %d, mismatches %s" % (len(doc["records"]), bad))
+        else:
+            print("tx cases %d" % len(doc["records"]))
     return 1 if bad else 0
 
 

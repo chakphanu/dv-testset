@@ -150,13 +150,15 @@ def test_upper_bound_is_above_exact_bits_for_all_17_frames():
         # ... and within the 6/5 allowance: the stuffed zeros are at most one per five bits
         assert ax25.stuffed_zeros(ax25.with_fcs(frame)) <= Fraction(8 * (len(frame) + 2), 5)
         assert upper_bits == Fraction((len(frame) + 4) * 8 * 6, 5)
-        # in time, with no TXDELAY / TXtail: exact <= upper < exact + 1 ms + the unused part of the allowance
+        # in time, with no TXDELAY / TXtail, in the unit of DV-Router (1 ns): the bound is the exact
+        # bit time of (len + 4) * 8 * 6 / 5 bits rounded UP to a whole nanosecond, nothing more
         exact_ms = a.afsk_exact_frame_ms(frame)
-        upper_ms = a.afsk_upper_bound_ms(len(frame), txdelay_ms=0, txtail_ms=0)
-        assert exact_ms <= upper_ms
-        assert upper_ms <= Fraction(len(frame) + 4, 1) * 8 * 6 / 5 * 1000 / 1200 + 1
+        upper_ns = a.afsk_airtime_ns(len(frame), 1200, 0, 0)
+        assert exact_ms * 1_000_000 <= upper_ns
+        want = Fraction((len(frame) + 4) * 8 * 6 * 10 ** 9, 5 * 1200)
+        assert want <= upper_ns < want + 1
         # and TXDELAY + TXtail only add
-        assert a.afsk_upper_bound_ms(len(frame)) == upper_ms + a.DVR_TXDELAY_MS + a.DVR_TXTAIL_MS
+        assert a.afsk_airtime_ns(len(frame)) == upper_ns + a.DVR_TXDELAY_NS + a.DVR_TXTAIL_NS
 
 
 def test_upper_bound_holds_for_worst_case_and_random_frames():
@@ -166,7 +168,7 @@ def test_upper_bound_holds_for_worst_case_and_random_frames():
                for _ in range(300)]
     for frame in frames:
         assert ax25.air_bits(frame) <= a.afsk_upper_bound_bits(len(frame))
-        assert a.afsk_exact_frame_ms(frame) <= a.afsk_upper_bound_ms(len(frame), txdelay_ms=0, txtail_ms=0)
+        assert a.afsk_exact_frame_ms(frame) * 1_000_000 <= a.afsk_airtime_ns(len(frame), 1200, 0, 0)
 
 
 def test_upper_bound_is_tight_enough_for_all_ones():
@@ -175,3 +177,94 @@ def test_upper_bound_is_tight_enough_for_all_ones():
     exact = ax25.air_bits(frame)
     upper = a.afsk_upper_bound_bits(len(frame))
     assert exact <= upper < exact * Fraction(102, 100)
+
+
+# ------------------------------------------------------------------ AFSK bound in integer nanoseconds
+
+AFSK_VEC = os.path.join(os.path.dirname(__file__), "..", "..", "vectors", "airtime", "afsk_bound.json")
+
+
+def _fraction_ceil(frame_len, bps):
+    """Second path for the frame term: exact Fraction, then ceil."""
+    f = Fraction((frame_len + 4) * 8 * 6 * 10 ** 9, bps * 5)
+    return -((-f.numerator) // f.denominator)
+
+
+def test_unit_is_one_nanosecond_not_one_millisecond():
+    # 17 bytes at 1200 bps is exactly 168 ms; 47 bytes 408 ms; the ceil is in ns
+    assert a.afsk_frame_ns(17, 1200) == 168_000_000
+    assert a.afsk_frame_ns(47, 1200) == 408_000_000
+    # a bit rate that does not divide: 47 bytes at 7 bps = 69942857142.857... ns -> ...143
+    assert a.afsk_frame_ns(47, 7) == 69_942_857_143
+    # +1 ms margin of the old model would be 1_000_000 ns more; the new bound is within 1 ns
+    n = Fraction(51 * 48 * 10 ** 9, 5 * 1201)
+    assert a.afsk_frame_ns(47, 1201) - n < 1
+    assert a.afsk_airtime_ns(47) == 408_000_000 + 300_000_000 + 30_000_000
+    assert a.afsk_airtime_ns(47, 1200, 1, 2, 3) == 408_000_006
+
+
+def test_airtime_ns_ceil_property_and_second_path():
+    rng = random.Random(7)
+    for _ in range(2000):
+        length = rng.randrange(0, 5000)
+        bps = rng.choice([1, 3, 7, 300, 1200, 1201, 2400, 4800, 9600, 19200, 5469, 4294967295, rng.randrange(1, 100000)])
+        ns = a.afsk_frame_ns(length, bps)
+        assert ns == _fraction_ceil(length, bps)
+        # ceil: ns is the smallest integer with ns * bps * 5 >= (len + 4) * 8 * 6 * 10^9
+        num = (length + 4) * 8 * 6 * 10 ** 9
+        assert ns * bps * 5 >= num > (ns - 1) * bps * 5
+
+
+def test_airtime_ns_errors():
+    with pytest.raises(a.AirtimeError) as exc:
+        a.afsk_airtime_ns(47, 0)
+    assert exc.value.kind == "zero-bit-rate"
+    with pytest.raises(a.AirtimeError) as exc:
+        a.afsk_airtime_ns(2 ** 64 - 1, 1)
+    assert exc.value.kind == "overflow"
+    with pytest.raises(a.AirtimeError):
+        a.afsk_airtime_ns(47, 1200, a.U64_MAX, 0, 0)
+    assert a.afsk_airtime_ns(0, 1200, 0, 0, 0) == 32_000_000
+    with pytest.raises(ValueError):
+        a.afsk_airtime_ns(-1)
+    with pytest.raises(ValueError):
+        a.afsk_airtime_ns(47, 2 ** 32)
+
+
+def test_old_ms_helper_is_never_below_the_ns_bound():
+    for length in (0, 1, 17, 47, 100, 1100):
+        for bps in (300, 1200, 9600, 1201):
+            ns = a.afsk_airtime_ns(length, bps, 0, 0)
+            assert a.afsk_upper_bound_ms(length, bps, 0, 0) * 1_000_000 >= ns
+
+
+def test_afsk_vector_table_is_current_and_integer():
+    if not os.path.exists(AFSK_VEC):
+        pytest.skip("afsk_bound.json not generated")
+    with open(AFSK_VEC, encoding="ascii") as fh:
+        doc = json.load(fh)
+    assert doc["schema"] == "dvt-airtime-afsk-bound/1"
+    assert doc["rows"] == a.afsk_rows()                     # regenerate with python3 -m dvtest.airtime
+    ids = [r["id"] for r in doc["rows"]]
+    assert len(ids) == len(set(ids)) and len(ids) >= 20
+    errors = {r["error"] for r in doc["rows"] if "error" in r}
+    assert errors == {"overflow", "zero-bit-rate"}
+    for r in doc["rows"]:
+        for key in ("frame_len", "bps", "txdelay_ns", "tail_ns", "preamble_ns", "expected_ns", "frame_ns"):
+            if key in r:
+                assert type(r[key]) is int, (r["id"], key)
+        if "expected_ns" in r:
+            # independent second path: Fraction ceil + the three additions
+            want = _fraction_ceil(r["frame_len"], r["bps"]) + r["txdelay_ns"] + r["tail_ns"] + r["preamble_ns"]
+            assert r["expected_ns"] == want <= a.U64_MAX, r["id"]
+
+
+def test_afsk_vector_hand_values():
+    rows = {r["id"]: r for r in a.afsk_rows()}
+    assert rows["len47-1200-default"]["expected_ns"] == 738_000_000
+    assert rows["len17-1200-bare"]["expected_ns"] == 168_000_000
+    assert rows["len0-1200-bare"]["expected_ns"] == 32_000_000          # 4 * 8 * 6/5 = 38.4 bits / 1200
+    assert rows["len47-7-bare"]["expected_ns"] == 69_942_857_143
+    assert rows["len47-u32max"]["expected_ns"] == 114
+    assert rows["overflow-frame"]["error"] == "overflow"
+    assert rows["zero-bit-rate"]["error"] == "zero-bit-rate"

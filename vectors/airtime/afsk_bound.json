@@ -1,0 +1,275 @@
+{
+ "formula": "frame_ns = ceil((len + 4) * 8 * 6 * 10^9 / (bps * 5)); airtime_ns = frame_ns + preamble_ns + txdelay_ns + tail_ns; integers only, 1 ns unit, u64 overflow is an error (DV-Router crates/lib/txsched/src/airtime.rs ax25_airtime_ns, stated by its lead)",
+ "rows": [
+  {
+   "bps": 1200,
+   "expected_ns": 738000000,
+   "frame_len": 47,
+   "frame_ns": 408000000,
+   "id": "len47-1200-default",
+   "preamble_ns": 0,
+   "tail_ns": 30000000,
+   "txdelay_ns": 300000000,
+   "why": "47 byte position frame, DV-Router's start-up TXDELAY 30 and TXtail 3: exact, no rounding"
+  },
+  {
+   "bps": 1200,
+   "expected_ns": 498000000,
+   "frame_len": 17,
+   "frame_ns": 168000000,
+   "id": "len17-1200-default",
+   "preamble_ns": 0,
+   "tail_ns": 30000000,
+   "txdelay_ns": 300000000,
+   "why": "shortest realistic frame (A>B:x)"
+  },
+  {
+   "bps": 1200,
+   "expected_ns": 168000000,
+   "frame_len": 17,
+   "frame_ns": 168000000,
+   "id": "len17-1200-bare",
+   "preamble_ns": 0,
+   "tail_ns": 0,
+   "txdelay_ns": 0,
+   "why": "frame time only"
+  },
+  {
+   "bps": 1200,
+   "expected_ns": 32000000,
+   "frame_len": 0,
+   "frame_ns": 32000000,
+   "id": "len0-1200-bare",
+   "preamble_ns": 0,
+   "tail_ns": 0,
+   "txdelay_ns": 0,
+   "why": "no frame bytes: only the 4 flag/FCS bytes allowance"
+  },
+  {
+   "bps": 1200,
+   "expected_ns": 9162000000,
+   "frame_len": 1100,
+   "frame_ns": 8832000000,
+   "id": "len1100-1200-default",
+   "preamble_ns": 0,
+   "tail_ns": 30000000,
+   "txdelay_ns": 300000000,
+   "why": "the KISS data limit"
+  },
+  {
+   "bps": 9600,
+   "expected_ns": 51000000,
+   "frame_len": 47,
+   "frame_ns": 51000000,
+   "id": "len47-9600-bare",
+   "preamble_ns": 0,
+   "tail_ns": 0,
+   "txdelay_ns": 0,
+   "why": "9600 bps"
+  },
+  {
+   "bps": 300,
+   "expected_ns": 1632000000,
+   "frame_len": 47,
+   "frame_ns": 1632000000,
+   "id": "len47-300-bare",
+   "preamble_ns": 0,
+   "tail_ns": 0,
+   "txdelay_ns": 0,
+   "why": "300 bps HF packet"
+  },
+  {
+   "bps": 1000,
+   "expected_ns": 489600000,
+   "frame_len": 47,
+   "frame_ns": 489600000,
+   "id": "len47-1000-bare",
+   "preamble_ns": 0,
+   "tail_ns": 0,
+   "txdelay_ns": 0,
+   "why": "1000 bps, fractional bits"
+  },
+  {
+   "bps": 7,
+   "expected_ns": 69942857143,
+   "frame_len": 47,
+   "frame_ns": 69942857143,
+   "id": "len47-7-bare",
+   "preamble_ns": 0,
+   "tail_ns": 0,
+   "txdelay_ns": 0,
+   "why": "7 bps: the division is never exact, the ceil adds under 1 ns"
+  },
+  {
+   "bps": 3,
+   "expected_ns": 16000000000,
+   "frame_len": 1,
+   "frame_ns": 16000000000,
+   "id": "len1-3-bare",
+   "preamble_ns": 0,
+   "tail_ns": 0,
+   "txdelay_ns": 0,
+   "why": "3 bps"
+  },
+  {
+   "bps": 1201,
+   "expected_ns": 407660284,
+   "frame_len": 47,
+   "frame_ns": 407660284,
+   "id": "len47-1201-bare",
+   "preamble_ns": 0,
+   "tail_ns": 0,
+   "txdelay_ns": 0,
+   "why": "1201 bps: rounding up by a fraction of a ns"
+  },
+  {
+   "bps": 4800,
+   "expected_ns": 208000000,
+   "frame_len": 100,
+   "frame_ns": 208000000,
+   "id": "len100-4800-bare",
+   "preamble_ns": 0,
+   "tail_ns": 0,
+   "txdelay_ns": 0,
+   "why": "4800 bps"
+  },
+  {
+   "bps": 5469,
+   "expected_ns": 454635217,
+   "frame_len": 255,
+   "frame_ns": 454635217,
+   "id": "len255-5469-bare",
+   "preamble_ns": 0,
+   "tail_ns": 0,
+   "txdelay_ns": 0,
+   "why": "5469 bps, a LoRa-like raw rate"
+  },
+  {
+   "bps": 1200,
+   "expected_ns": 988000000,
+   "frame_len": 47,
+   "frame_ns": 408000000,
+   "id": "len47-1200-preamble",
+   "preamble_ns": 250000000,
+   "tail_ns": 30000000,
+   "txdelay_ns": 300000000,
+   "why": "preamble 250 ms on top of TXDELAY and TXtail"
+  },
+  {
+   "bps": 1200,
+   "expected_ns": 531456789,
+   "frame_len": 47,
+   "frame_ns": 408000000,
+   "id": "len47-1200-txdelay-only",
+   "preamble_ns": 0,
+   "tail_ns": 0,
+   "txdelay_ns": 123456789,
+   "why": "odd TXDELAY in ns"
+  },
+  {
+   "bps": 1200,
+   "expected_ns": 1395654321,
+   "frame_len": 47,
+   "frame_ns": 408000000,
+   "id": "len47-1200-tail-only",
+   "preamble_ns": 0,
+   "tail_ns": 987654321,
+   "txdelay_ns": 0,
+   "why": "odd TXtail in ns"
+  },
+  {
+   "bps": 4294967295,
+   "expected_ns": 114,
+   "frame_len": 47,
+   "frame_ns": 114,
+   "id": "len47-u32max",
+   "preamble_ns": 0,
+   "tail_ns": 0,
+   "txdelay_ns": 0,
+   "why": "bit rate u32::MAX: the frame time is 100 ns or a bit more"
+  },
+  {
+   "bps": 4294967295,
+   "expected_ns": 2471,
+   "frame_len": 1100,
+   "frame_ns": 2468,
+   "id": "len1100-u32max-sum",
+   "preamble_ns": 1,
+   "tail_ns": 1,
+   "txdelay_ns": 1,
+   "why": "three single ns added to a rounded-up frame time"
+  },
+  {
+   "bps": 4294967295,
+   "expected_ns": 10307921512800000010,
+   "frame_len": 4611686018427387904,
+   "frame_ns": 10307921512800000010,
+   "id": "len-2pow62-bps-u32max",
+   "preamble_ns": 0,
+   "tail_ns": 0,
+   "txdelay_ns": 0,
+   "why": "a frame length of 2^62 at the largest bit rate: the u128 product is fine and the result still fits u64"
+  },
+  {
+   "bps": 4294967295,
+   "error": "overflow",
+   "frame_len": 18446744073709551615,
+   "id": "overflow-len-u64max-bps-u32max",
+   "preamble_ns": 0,
+   "tail_ns": 0,
+   "txdelay_ns": 0,
+   "why": "largest frame length even at the largest bit rate: over 2^64 ns, overflow"
+  },
+  {
+   "bps": 1,
+   "error": "overflow",
+   "frame_len": 18446744073709551615,
+   "id": "overflow-frame",
+   "preamble_ns": 0,
+   "tail_ns": 0,
+   "txdelay_ns": 0,
+   "why": "frame time over 2^64 ns: overflow"
+  },
+  {
+   "bps": 1200,
+   "error": "overflow",
+   "frame_len": 47,
+   "id": "overflow-sum",
+   "preamble_ns": 0,
+   "tail_ns": 0,
+   "txdelay_ns": 18446744073709551615,
+   "why": "frame time plus TXDELAY over 2^64 - 1: overflow"
+  },
+  {
+   "bps": 1200,
+   "error": "overflow",
+   "frame_len": 47,
+   "id": "overflow-sum-tail",
+   "preamble_ns": 0,
+   "tail_ns": 18446744073709551615,
+   "txdelay_ns": 0,
+   "why": "frame time plus TXtail over 2^64 - 1: overflow"
+  },
+  {
+   "bps": 1200,
+   "error": "overflow",
+   "frame_len": 47,
+   "id": "overflow-sum-preamble",
+   "preamble_ns": 18446744073709551615,
+   "tail_ns": 0,
+   "txdelay_ns": 0,
+   "why": "frame time plus preamble over 2^64 - 1: overflow"
+  },
+  {
+   "bps": 0,
+   "error": "zero-bit-rate",
+   "frame_len": 47,
+   "id": "zero-bit-rate",
+   "preamble_ns": 0,
+   "tail_ns": 0,
+   "txdelay_ns": 0,
+   "why": "bit rate 0: error"
+  }
+ ],
+ "schema": "dvt-airtime-afsk-bound/1"
+}

@@ -130,7 +130,13 @@ def _model_taken(rec):
 DIFFERENT = {
     "frame-15-control-only": "15 bytes: Dire Wolf takes it, DV-Router needs 16 (a PID)",
     "info-2029": "a 2045 byte frame: Dire Wolf takes it, DV-Router's KISS limit is 1100",
-    "truncated-then-frame": "after a closing FEND the next bytes: Dire Wolf calls them noise until another FEND, the model starts a frame (OPEN QUESTION)",
+    "truncated-then-frame": "after a closing FEND the next bytes: Dire Wolf calls them noise until another FEND, DV-Router starts a new frame (ANSWERED by the lead, kiss.rs)",
+    "fesc-before-fend": "FESC directly before the FEND: both close the first frame; Dire Wolf then calls the next frame noise, DV-Router starts it",
+    "data-port1": "port nibble 1: Dire Wolf's KISS layer takes the frame (and refuses to transmit it), DV-Router drops it silently (one configured channel)",
+    "data-port2": "port nibble 2: as data-port1",
+    "data-port15": "port nibble 15: as data-port1",
+    "limit-1101-plain": "1101 data bytes: Dire Wolf takes it, DV-Router discards the frame (limit 1100 unescaped bytes)",
+    "limit-1101-escapes": "1101 unescaped data bytes (20 escaped): Dire Wolf takes it, DV-Router discards it",
 }
 
 
@@ -148,6 +154,9 @@ def test_model_and_dire_wolf_take_the_same_frames_except_the_documented_ones():
     assert differ["frame-15-control-only"] == (0, 1)
     assert differ["info-2029"] == (0, 1)
     assert differ["truncated-then-frame"] == (2, 1)
+    assert differ["fesc-before-fend"] == (2, 1)
+    for name in ("data-port1", "data-port2", "data-port15", "limit-1101-plain", "limit-1101-escapes"):
+        assert differ[name] == (0, 1), name
 
 
 def test_model_counters_match_what_dire_wolf_logged():
@@ -165,8 +174,17 @@ def test_model_counters_match_what_dire_wolf_logged():
     for name in ("param-txdelay", "param-p", "param-slottime", "param-txtail", "param-fullduplex-1", "param-sethardware", "cmd-return"):
         _f, m = _model_taken(recs[name])
         assert _f == [] and m.ignored_commands == 1, name
-    _f, m = _model_taken(recs["cmd-unknown-7"])
-    assert m.unspecified_commands == 1
+    for cmd in range(7, 15):
+        _f, m = _model_taken(recs["cmd-unknown-%d" % cmd])
+        assert _f == [] and m.ignored_commands == 1 and m.commands_7_to_14 == 1 and m.unspecified_commands == 1, cmd
+        assert any("Invalid command %d" % cmd in x for x in recs["cmd-unknown-%d" % cmd]["dw_messages"]), cmd
+        assert recs["cmd-unknown-%d" % cmd]["dw_copy_decode"] == []
+    for name, port in (("data-port1", 1), ("data-port2", 2), ("data-port15", 15)):
+        _f, m = _model_taken(recs[name])
+        assert _f == [] and m.dropped_channel == 1 and m.ignored_commands == 0, name
+        assert any("Invalid transmit channel %d" % port in x for x in recs[name]["dw_messages"]), name
+    _f, m = _model_taken(recs["fesc-before-fend"])
+    assert m.bad_escapes == 0 and len(_f) == 2           # FEND wins over a pending FESC, no bad escape counted
 
 
 def test_model_streaming_and_limits():
@@ -185,3 +203,57 @@ def test_model_streaming_and_limits():
     # the exact-limit frame is taken
     m = ax25.DvrouterKiss(max_data=10)
     assert m.feed(bytes([ax25.FEND, 0x00]) + b"x" * 10 + bytes([ax25.FEND])) == [(0, b"x" * 10)]
+
+
+# ------------------------------------------------------------------ rules answered by the lead (kiss.rs, tcp.rs)
+
+def _frame(total, specials=b""):
+    n = total - 16
+    return ax25.from_tnc2("N0CALL-7>APRS:" + ax25.info_to_text(specials + b"x" * (n - len(specials))))
+
+
+def test_limit_counts_unescaped_bytes_after_the_type_byte():
+    specials = bytes([ax25.FEND, ax25.FESC]) * 10
+    for total, specials_, taken in ((1100, b"", True), (1101, b"", False), (1100, specials, True), (1101, specials, False)):
+        frame = _frame(total, specials_)
+        wire = ax25.kiss_encode(0, 0, frame)
+        assert len(wire) == 1 + 1 + total + len(specials_) + 1
+        m = ax25.DvrouterKiss()
+        out = m.feed(wire)
+        assert (out == [(0, frame)]) is taken, (total, len(specials_))
+        assert m.overlong == (0 if taken else 1)
+    # the model keeps listening after a discarded frame, and the FEND that reports it opens the next one
+    m = ax25.DvrouterKiss()
+    good = _frame(40)
+    out = m.feed(ax25.kiss_encode(0, 0, _frame(1101)) + ax25.kiss_encode(0, 0, good)[1:])
+    assert out == [(0, good)] and m.overlong == 1
+
+
+def test_overlong_is_counted_at_the_closing_fend_only():
+    m = ax25.DvrouterKiss()
+    m.feed(bytes([ax25.FEND, 0x00]) + b"x" * 2000)
+    assert m.overlong == 0                                   # no FEND yet: nothing reported
+    m.feed(bytes([ax25.FEND]))
+    assert m.overlong == 1
+
+
+def test_every_fend_closes_and_opens():
+    m = ax25.DvrouterKiss(channels=None)
+    out = m.feed(bytes([ax25.FEND, 0x00]) + b"abc" + bytes([ax25.FEND, 0x10]) + b"def" + bytes([ax25.FEND]))
+    assert out == [(0, b"abc"), (1, b"def")]
+    m = ax25.DvrouterKiss(channels=None)
+    assert m.feed(bytes([ax25.FEND, 0x00, ax25.FESC, ax25.FEND, 0x00]) + b"z" + bytes([ax25.FEND])) == [(0, b""), (0, b"z")]
+    assert m.bad_escapes == 0
+
+
+def test_command_nibbles_other_than_zero_are_ignored_and_other_ports_dropped():
+    for cmd in range(1, 16):
+        m = ax25.DvrouterKiss()
+        assert m.feed(bytes([ax25.FEND, cmd, 0x01, ax25.FEND])) == []
+        assert m.ignored_commands == 1 and m.commands_7_to_14 == (1 if 7 <= cmd <= 14 else 0)
+    m = ax25.DvrouterKiss(channels=(0, 3))
+    out = m.feed(bytes([ax25.FEND, 0x30, 0x41, ax25.FEND, 0x10, 0x42, ax25.FEND, 0x00, 0x43, ax25.FEND]))
+    assert out == [(3, b"A"), (0, b"C")] and m.dropped_channel == 1
+    # the whole byte 0xFF is port 15 command 15: ignored as a command, not as a channel
+    m = ax25.DvrouterKiss()
+    assert m.feed(bytes([ax25.FEND, 0xFF, ax25.FEND])) == [] and m.ignored_commands == 1 and m.dropped_channel == 0

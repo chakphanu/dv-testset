@@ -163,3 +163,20 @@ def test_volatile_case_keeps_only_lengths():
     assert all("hex" not in r for r in rec["dw_received"])
     blob = json.dumps(rec)
     assert junk[:16].hex() not in blob
+
+
+def test_dvr_boundary_cases_shape():
+    d = {n: b for n, b, _w in o.tx_cases()}
+    assert len(d) == 43
+    plain = ax25.kiss_decode(d["limit-1100-plain"])[0]
+    assert len(plain[2]) == 1100 and len(d["limit-1100-plain"]) == 1103
+    assert len(ax25.kiss_decode(d["limit-1101-plain"])[0][2]) == 1101
+    for name, total in (("limit-1100-escapes", 1100), ("limit-1101-escapes", 1101)):
+        frame = ax25.kiss_decode(d[name])[0][2]
+        assert len(frame) == total and frame.count(bytes([ax25.FEND])) == 10 and frame.count(bytes([ax25.FESC])) == 10
+        assert len(d[name]) == total + 3 + 20                              # 20 escape pairs: one byte more each
+    assert [ax25.kiss_decode(d["data-port%d" % p])[0][0] for p in (2, 15)] == [2, 15]
+    assert [ax25.kiss_decode(d["cmd-unknown-%d" % n])[0][1] for n in range(8, 15)] == list(range(8, 15))
+    assert d["fesc-before-fend"].count(bytes([ax25.FESC, ax25.FEND])) == 1
+    with pytest.raises(ValueError):
+        o._ui_len(10, specials=b"x" * 20)

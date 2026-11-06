@@ -169,6 +169,16 @@ def anchor_rows():
 
 # ------------------------------------------------------------------ AFSK upper bound (DV-Router)
 
+# DV-Router's unit is 1 ns (answered by the DV-Router lead; crates/lib/txsched/src/airtime.rs lines
+# 56-71 `ax25_airtime_ns` and 142-145 `ceil_duration`, all durations are integer nanoseconds):
+#
+#     frame_ns = ceil(((len + 4) * 8 * 6 / 5) / bps  in ns)
+#              = ceil((len + 4) * 8 * 6 * 10^9 / (bps * 5))      (one integer division, rounded up)
+#     airtime  = frame_ns + preamble_ns + txdelay_ns + tail_ns   (each addition checked for u64 overflow)
+#
+# afsk_airtime_ns() below is that formula with integers only (no float, no Fraction); the earlier
+# afsk_upper_bound_ms() ASSUMED a 1 ms unit and stays only as a display helper.
+
 # KISS parameters DV-Router sends on every (re)connect, as stated by the DV-Router lead
 # (docs/direwolf-cases.md, "Documented differences"): TXDELAY 30 and TXtail 3 in units of 10 ms.
 DVR_TXDELAY_MS = 300
@@ -186,15 +196,109 @@ def afsk_upper_bound_bits(frame_len):
 
 
 def afsk_upper_bound_ms(frame_len, bps=1200, txdelay_ms=DVR_TXDELAY_MS, txtail_ms=DVR_TXTAIL_MS, granule_ms=1):
-    """The upper bound as an int number of milliseconds: ceil(bits / bps) rounded up to a
-    multiple of `granule_ms` (the granularity of DV-Router's ceil is an ASSUMPTION: one
-    millisecond), plus TXDELAY and TXtail. The exact stuffed bit count of
+    """DISPLAY HELPER ONLY. The upper bound as an int number of milliseconds: ceil(bits / bps) rounded
+    up to a multiple of `granule_ms`, plus TXDELAY and TXtail. DV-Router's unit is 1 ns, not 1 ms
+    (afsk_airtime_ns is the bound itself); this function rounds the frame time UP to whole
+    milliseconds and is therefore never below the ns bound. The exact stuffed bit count of
     dvtest.ax25.air_bits(frame) is a LOWER bound of the first term."""
     if bps <= 0 or granule_ms <= 0:
         raise ValueError("bps and granule_ms must be positive")
     ms_exact = afsk_upper_bound_bits(frame_len) * 1000 / bps
     granules = -(-ms_exact // granule_ms)                  # ceil of a Fraction
     return int(granules) * granule_ms + txdelay_ms + txtail_ms
+
+
+U64_MAX = (1 << 64) - 1
+U32_MAX = (1 << 32) - 1
+NS = 1_000_000_000
+DVR_TXDELAY_NS = DVR_TXDELAY_MS * 1_000_000
+DVR_TXTAIL_NS = DVR_TXTAIL_MS * 1_000_000
+
+
+class AirtimeError(ValueError):
+    """The two error kinds of the airtime estimate that the Python model can reach: `kind` is
+    "zero-bit-rate" or "overflow" (the DV-Router enum has more variants for the LoRa paths)."""
+
+    def __init__(self, kind):
+        super().__init__(kind)
+        self.kind = kind
+
+
+def _ceil_div(numerator, denominator):
+    return -(-numerator // denominator)
+
+
+def afsk_frame_ns(frame_len, bps):
+    """ceil((frame_len + 4) * 8 * 6 * 10^9 / (bps * 5)) with integers only: nanoseconds for the
+    frame bits of the 6/5 worst-case stuffing allowance. frame_len is 0..2^64-1, bps 1..2^32-1."""
+    if not 0 <= frame_len <= U64_MAX or not 0 <= bps <= U32_MAX:
+        raise ValueError("frame_len is a u64 and bps a u32")
+    if bps == 0:
+        raise AirtimeError("zero-bit-rate")
+    ns = _ceil_div((frame_len + 4) * 8 * 6 * NS, bps * 5)
+    if ns > U64_MAX:
+        raise AirtimeError("overflow")
+    return ns
+
+
+def afsk_airtime_ns(frame_len, bps=1200, txdelay_ns=DVR_TXDELAY_NS, tail_ns=DVR_TXTAIL_NS, preamble_ns=0):
+    """The DV-Router AFSK airtime bound in integer nanoseconds: afsk_frame_ns + preamble_ns +
+    txdelay_ns + tail_ns, each addition checked against 2^64 - 1 (AirtimeError("overflow"))."""
+    total = afsk_frame_ns(frame_len, bps)
+    for part in (preamble_ns, txdelay_ns, tail_ns):
+        if not 0 <= part <= U64_MAX:
+            raise ValueError("durations are u64 nanoseconds")
+        total += part
+        if total > U64_MAX:
+            raise AirtimeError("overflow")
+    return total
+
+
+# (id, frame_len, bps, txdelay_ns, tail_ns, preamble_ns, why). The expected value is computed by
+# afsk_airtime_ns (integers); the rows that matter most are the ones where the ceil changes the ns.
+_AFSK_ROWS = [
+    ("len47-1200-default", 47, 1200, 300_000_000, 30_000_000, 0, "47 byte position frame, DV-Router's start-up TXDELAY 30 and TXtail 3: exact, no rounding"),
+    ("len17-1200-default", 17, 1200, 300_000_000, 30_000_000, 0, "shortest realistic frame (A>B:x)"),
+    ("len17-1200-bare", 17, 1200, 0, 0, 0, "frame time only"),
+    ("len0-1200-bare", 0, 1200, 0, 0, 0, "no frame bytes: only the 4 flag/FCS bytes allowance"),
+    ("len1100-1200-default", 1100, 1200, 300_000_000, 30_000_000, 0, "the KISS data limit"),
+    ("len47-9600-bare", 47, 9600, 0, 0, 0, "9600 bps"),
+    ("len47-300-bare", 47, 300, 0, 0, 0, "300 bps HF packet"),
+    ("len47-1000-bare", 47, 1000, 0, 0, 0, "1000 bps, fractional bits"),
+    ("len47-7-bare", 47, 7, 0, 0, 0, "7 bps: the division is never exact, the ceil adds under 1 ns"),
+    ("len1-3-bare", 1, 3, 0, 0, 0, "3 bps"),
+    ("len47-1201-bare", 47, 1201, 0, 0, 0, "1201 bps: rounding up by a fraction of a ns"),
+    ("len100-4800-bare", 100, 4800, 0, 0, 0, "4800 bps"),
+    ("len255-5469-bare", 255, 5469, 0, 0, 0, "5469 bps, a LoRa-like raw rate"),
+    ("len47-1200-preamble", 47, 1200, 300_000_000, 30_000_000, 250_000_000, "preamble 250 ms on top of TXDELAY and TXtail"),
+    ("len47-1200-txdelay-only", 47, 1200, 123_456_789, 0, 0, "odd TXDELAY in ns"),
+    ("len47-1200-tail-only", 47, 1200, 0, 987_654_321, 0, "odd TXtail in ns"),
+    ("len47-u32max", 47, 4294967295, 0, 0, 0, "bit rate u32::MAX: the frame time is 100 ns or a bit more"),
+    ("len1100-u32max-sum", 1100, 4294967295, 1, 1, 1, "three single ns added to a rounded-up frame time"),
+    ("len-2pow62-bps-u32max", 4611686018427387904, 4294967295, 0, 0, 0, "a frame length of 2^62 at the largest bit rate: the u128 product is fine and the result still fits u64"),
+    ("overflow-len-u64max-bps-u32max", 18446744073709551615, 4294967295, 0, 0, 0, "largest frame length even at the largest bit rate: over 2^64 ns, overflow"),
+    ("overflow-frame", 18446744073709551615, 1, 0, 0, 0, "frame time over 2^64 ns: overflow"),
+    ("overflow-sum", 47, 1200, 18446744073709551615, 0, 0, "frame time plus TXDELAY over 2^64 - 1: overflow"),
+    ("overflow-sum-tail", 47, 1200, 0, 18446744073709551615, 0, "frame time plus TXtail over 2^64 - 1: overflow"),
+    ("overflow-sum-preamble", 47, 1200, 0, 0, 18446744073709551615, "frame time plus preamble over 2^64 - 1: overflow"),
+    ("zero-bit-rate", 47, 0, 0, 0, 0, "bit rate 0: error"),
+]
+
+
+def afsk_rows():
+    """The AFSK bound vector table: every row has its inputs and either `expected_ns` (an int)
+    or `error` ("overflow" / "zero-bit-rate"). Integers only."""
+    rows = []
+    for ident, length, bps, txdelay, tail, preamble, why in _AFSK_ROWS:
+        row = {"id": ident, "frame_len": length, "bps": bps, "txdelay_ns": txdelay, "tail_ns": tail,
+               "preamble_ns": preamble, "why": why}
+        try:
+            row["expected_ns"] = afsk_airtime_ns(length, bps, txdelay, tail, preamble)
+            row["frame_ns"] = afsk_frame_ns(length, bps)
+        except AirtimeError as exc:
+            row["error"] = exc.kind
+        rows.append(row)
+    return rows
 
 
 def afsk_exact_frame_ms(frame, bps=1200):
@@ -212,6 +316,7 @@ def main(argv=None):
     import sys
     parser = argparse.ArgumentParser(prog="airtime", description=main.__doc__.splitlines()[0])
     parser.add_argument("--out", default="vectors/airtime/anchors.json")
+    parser.add_argument("--afsk-out", default="vectors/airtime/afsk_bound.json")
     args = parser.parse_args(argv)
     doc = {"schema": "dvt-airtime-anchors/1",
            "formula": "Semtech AN1200.13 / SX1276 datasheet 4.1.1 (items 6 and 7), exact fractions (dvtest/airtime.py)",
@@ -223,6 +328,15 @@ def main(argv=None):
         json.dump(doc, fh, indent=1, sort_keys=True)
         fh.write("\n")
     print("wrote %d rows to %s" % (len(doc["rows"]), args.out))
+    afsk = {"schema": "dvt-airtime-afsk-bound/1",
+            "formula": "frame_ns = ceil((len + 4) * 8 * 6 * 10^9 / (bps * 5)); airtime_ns = frame_ns + preamble_ns + txdelay_ns + tail_ns; "
+                       "integers only, 1 ns unit, u64 overflow is an error (DV-Router crates/lib/txsched/src/airtime.rs ax25_airtime_ns, "
+                       "stated by its lead)",
+            "rows": afsk_rows()}
+    with open(args.afsk_out, "w", encoding="ascii") as fh:
+        json.dump(afsk, fh, indent=1, sort_keys=True)
+        fh.write("\n")
+    print("wrote %d rows to %s" % (len(afsk["rows"]), args.afsk_out))
     return 0
 
 
