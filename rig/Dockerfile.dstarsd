@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: MIT
+# Two independent D-STAR slow data decoders as test oracles (HWFREE1 item 4,
+# docs/dstar-slowdata-cases.md): MMDVMHost's CDStarSlowData (text, header resend, block types)
+# and DStarGateway's CTextCollector, CGPSACollector ($$CRC / D-PRS) and
+# CNMEASentenceCollector. Both are GPL-2.0-or-later and are linked UNMODIFIED from the
+# fetched source into two small drivers of ours (rig/dstarsd/oracle-*.cpp, MIT); the
+# drivers run as processes, dv-testset itself stays MIT and copies none of the code.
+#
+# Sources are the named build contexts "mmdvm" and "dgw" (scripts/pre-fetch-dstarsd.sh at
+# DSTARSD_*_REPO @ DSTARSD_*_COMMIT of .env.example): .cache/dstarsd-mmdvm, .cache/dstarsd-dgw
+# Build by hand, inside scripts/contained.sh --name build, never while the rig runs:
+#   docker build -f rig/Dockerfile.dstarsd --build-arg DSTARSD_BASE_IMAGE=$DSTARSD_BASE_IMAGE \
+#     --build-context mmdvm=.cache/dstarsd-mmdvm --build-context dgw=.cache/dstarsd-dgw \
+#     -t dvt-dstarsd:local rig
+#
+# Build choices:
+#  * only the few files each decoder needs are copied into one flat directory per driver;
+#    the two sets are never linked together (both have a class CUtils);
+#  * upstream Log.h (MMDVMHost: JSON + MQTT) and AMBEData.h (DStarGateway: network stack)
+#    are replaced by the small shims in rig/dstarsd/shim/ (the decoders use two members);
+#  * libboost-dev is header-only (DStarGateway string helpers): build stage only;
+#  * upstream Utils.cpp (MMDVMHost) uses struct tm without <ctime>: the compiler is run with
+#    -include ctime instead of editing the file;
+#  * statically linked C++ runtime, so the final image is the base image + two binaries;
+#  * run it with --network none and --entrypoint /usr/local/bin/dstarsd-mmdvm (or -dgw),
+#    frames on stdin, see dvtest.oracle_dstar_sd.
+ARG DSTARSD_BASE_IMAGE
+FROM ${DSTARSD_BASE_IMAGE} AS build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        g++ make libc6-dev libboost-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=mmdvm DStarSlowData.cpp DStarSlowData.h DStarHeader.cpp DStarHeader.h DStarDefines.h \
+     Defines.h CRC.cpp CRC.h Utils.cpp Utils.h /m/
+COPY dstarsd/shim/Log.h /m/Log.h
+COPY dstarsd/oracle-mmdvm.cpp /m/oracle-mmdvm.cpp
+COPY --from=dgw BaseCommon/Log.cpp BaseCommon/Log.h BaseCommon/LogTarget.cpp BaseCommon/LogTarget.h \
+     BaseCommon/LogConsoleTarget.cpp BaseCommon/LogConsoleTarget.h BaseCommon/LogSeverity.h \
+     BaseCommon/StringUtils.cpp BaseCommon/StringUtils.h BaseCommon/Utils.cpp BaseCommon/Utils.h /d/
+COPY --from=dgw Common/TextCollector.cpp Common/TextCollector.h Common/SlowDataCollector.cpp \
+     Common/SlowDataCollector.h Common/SentenceCollector.cpp Common/SentenceCollector.h \
+     Common/GPSACollector.cpp Common/GPSACollector.h Common/NMEASentenceCollector.cpp \
+     Common/NMEASentenceCollector.h Common/Defs.h /d/
+COPY --from=dgw APRS/APRSUtils.cpp APRS/APRSUtils.h /d/
+COPY --from=dgw DStarBase/DStarDefines.h /d/
+COPY dstarsd/shim/AMBEData.h /d/AMBEData.h
+COPY dstarsd/oracle-dgw.cpp /d/oracle-dgw.cpp
+RUN mkdir -p /out \
+    && g++ -std=c++17 -O1 -include ctime -I/m -static-libstdc++ -static-libgcc -o /out/dstarsd-mmdvm /m/*.cpp \
+    && g++ -std=c++17 -O1 -include ctime -I/d -static-libstdc++ -static-libgcc -o /out/dstarsd-dgw /d/*.cpp \
+    && strip --strip-unneeded /out/dstarsd-mmdvm /out/dstarsd-dgw \
+    && test -x /out/dstarsd-mmdvm && test -x /out/dstarsd-dgw
+
+FROM ${DSTARSD_BASE_IMAGE}
+RUN useradd --system --uid 10004 --home-dir /nonexistent --shell /usr/sbin/nologin dstarsd
+COPY --from=build /out/dstarsd-mmdvm /out/dstarsd-dgw /usr/local/bin/
+USER dstarsd
+WORKDIR /tmp
+ENTRYPOINT ["/usr/local/bin/dstarsd-dgw"]

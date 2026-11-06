@@ -18,6 +18,10 @@ characters, "source: body" padded with spaces.
   encode_text_over(text)     the 21 fields for a 20 character text (the inverse;
                              the fixture N0CALL / CQ DE N0CALL of data.md 7.6)
   overs(datagrams)           DSVT datagrams grouped into overs by stream id
+
+This module is the DV-Router text over only. The layout-parameterised, spec-derived generator
+and parser (every message type, start offsets, cross-superframe, D-PRS / NMEA, header resend,
+squelch, fast data) is dvtest/dstar_sd.py; its oracle record is docs/dstar-slowdata-cases.md.
 """
 from .proto import dextra
 

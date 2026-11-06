@@ -1,0 +1,119 @@
+{
+ "schema": "dvt-dstar-sd-published-structure/1",
+ "source": "J. Naylor (G4KLX), 'The Format of D-Star Slow Data' v0.2, 2009-03-10, hex tables of real-radio dumps (credited there to a third party); read 2026-11-06. Only the block layout is kept here: the strings in those dumps hold a personal callsign and position and are NOT copied. Hex is descrambled, one block = 6 bytes.",
+ "examples": {
+  "header": {
+   "blocks": [
+    "55",
+    "55",
+    "55",
+    "55",
+    "55",
+    "55",
+    "55",
+    "55",
+    "51"
+   ],
+   "payload_bytes": 41,
+   "note": "radio header resend: 8 x 0x55 + 0x51 (the 41st byte), then the filler block"
+  },
+  "gga": {
+   "blocks": [
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "31"
+   ],
+   "payload_bytes": 71,
+   "note": "$GPGGA ... *hh CR LF; the last block 0x31 holds the LF"
+  },
+  "rmc": {
+   "blocks": [
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "34"
+   ],
+   "payload_bytes": 74,
+   "note": "$GPRMC ... *hh CR LF; the last block 0x34 holds 4 characters (2 checksum digits, CR, LF)"
+  },
+  "free": {
+   "blocks": [
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "31"
+   ],
+   "payload_bytes": 31,
+   "note": "free-form line ending CR LF"
+  },
+  "dprs": {
+   "blocks": [
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "35",
+    "31"
+   ],
+   "payload_bytes": 81,
+   "note": "$$CRCxxxx,<APRS string> CR: 17 blocks, so two superframes"
+  },
+  "text": {
+   "blocks": [
+    "40",
+    "41",
+    "42",
+    "43"
+   ],
+   "payload_bytes": 20,
+   "note": "message function, 4 blocks of 5 characters"
+  },
+  "squelch": {
+   "blocks": [
+    "c2"
+   ],
+   "payload_bytes": 2,
+   "full_hex": [
+    "c21919666666"
+   ],
+   "note": "code squelch 19: c2 19 19 then filler (the only example without personal data, kept in full)"
+  }
+ }
+}
