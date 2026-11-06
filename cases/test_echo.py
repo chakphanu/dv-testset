@@ -683,6 +683,36 @@ def test_e7_telemetry_counts_the_overs(echo_rig, target):
     assert metrics_mod.families(text or "") >= {"dv_echo_overs_total"}
 
 
+@pytest.mark.parametrize("kind", ("ysf", "dmr"))
+def test_e9y_link_only_probe(echo_rig, target, kind):
+    """DVT_ECHO_DEBUG_COUNTERS=1: the echo room counters before the link, after the LINK of two clients only (no voice), and after
+    one 150 frame over: what the join itself puts into the room (YSF: a header + terminator stream per join is suspected to count
+    as one all-zero unit and as result=short, ECHO1f). Recorded only; the numbers go to the notes."""
+    if os.environ.get("DVT_ECHO_DEBUG_COUNTERS") != "1" or echo_rig.control is None:
+        pytest.skip("probe: DVT_ECHO_DEBUG_COUNTERS=1 and the rig control channel")
+
+    def snap(label):
+        text = hub_text(echo_rig.control) or ""
+        samples = metrics_mod.parse(text)
+        fr = {d: sum(x.value for x in samples if x.name == "dv_echo_frames_total" and x.labels.get("dir") == d
+                     and x.labels.get("room", "").lower() == MODULE.lower()) for d in ("in", "out")}
+        note(target, "probe[%s]" % kind, "RECORD", "%s: frames in %d out %d, overs %s" % (label, fr["in"], fr["out"], results(text)))
+        return fr
+
+    snap("before the link")
+    scene = Scene(echo_rig.ip, kind)
+    try:
+        time.sleep(12.0)                                    # one telemetry period
+        snap("after the link of two clients (talker + listener), no voice")
+        scene.over(FRAMES_E1, "probe")
+        TALLY["played_maybe"] += 1                          # an over the hub counts, made after the telemetry case
+        scene.until(scene.ends[0] + echo_rig.delay + echo.over_seconds(FRAMES_E1) + 3.0)
+        time.sleep(12.0)
+        snap("after one %d frame over and its replay" % FRAMES_E1)
+    finally:
+        scene.close()
+
+
 def test_e7b_row_removed_while_playing(echo_rig, target):
     cfg = need_cfg(echo_rig, "E7 edits the rendered TOML")
     scene = Scene(echo_rig.ip, "dstar")
