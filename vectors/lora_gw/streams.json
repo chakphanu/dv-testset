@@ -1,0 +1,2253 @@
+{
+ "basis": {
+  "convention": "the TNC2 monitor line format SRC>DEST[,VIA...]:info (ours)",
+  "invariant": "a stream parser must give the same result however the bytes are split into reads (ours)",
+  "open": "nothing known: left unspecified on purpose",
+  "plan-config": "the DV-Router configuration document as the plan quotes it: CR/LF delimited, exact prefix required and removed (not re-read)",
+  "plan-firmware": "the plan says the iGate firmware strips the prefix and ends lines with CRLF (not re-read)",
+  "size": "LoRa payload limit 255 bytes (general knowledge) and the plan's 'overlong line > 510 B'"
+ },
+ "limits": {
+  "lora_payload_max": 255,
+  "reject_over": 510
+ },
+ "prefix_hex": "3cff01",
+ "profiles": {
+  "3cff01": "3cff01",
+  "none": ""
+ },
+ "scenarios": [
+  {
+   "basis": [
+    "plan-firmware",
+    "plan-config"
+   ],
+   "group": "basic",
+   "name": "line-crlf",
+   "note": "one line, the profile's own prefix, CRLF",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "plan-firmware",
+    "plan-config"
+   ],
+   "group": "basic",
+   "name": "three-lines-one-read",
+   "note": "three lines in one read",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573",
+      "4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b54657374",
+      "4e3043414c4c2d373e41504c5247312c57494445312d313a3d303030302e30304e2f30303030302e3030452d4c6f52612069476174652074657374"
+     ],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a3cff014e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b546573740d0a3cff014e3043414c4c2d373e41504c5247312c57494445312d313a3d303030302e30304e2f30303030302e3030452d4c6f526120694761746520746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573",
+      "4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b54657374",
+      "4e3043414c4c2d373e41504c5247312c57494445312d313a3d303030302e30304e2f30303030302e3030452d4c6f52612069476174652074657374"
+     ],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b546573740d0a4e3043414c4c2d373e41504c5247312c57494445312d313a3d303030302e30304e2f30303030302e3030452d4c6f526120694761746520746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "plan-firmware",
+    "plan-config"
+   ],
+   "group": "basic",
+   "name": "three-lines-three-reads",
+   "note": "the same, one line per read",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573",
+      "4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b54657374",
+      "4e3043414c4c2d373e41504c5247312c57494445312d313a3d303030302e30304e2f30303030302e3030452d4c6f52612069476174652074657374"
+     ],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a",
+      "3cff014e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b546573740d0a",
+      "3cff014e3043414c4c2d373e41504c5247312c57494445312d313a3d303030302e30304e2f30303030302e3030452d4c6f526120694761746520746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573",
+      "4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b54657374",
+      "4e3043414c4c2d373e41504c5247312c57494445312d313a3d303030302e30304e2f30303030302e3030452d4c6f52612069476174652074657374"
+     ],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a",
+      "4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b546573740d0a",
+      "4e3043414c4c2d373e41504c5247312c57494445312d313a3d303030302e30304e2f30303030302e3030452d4c6f526120694761746520746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "plan-firmware",
+    "plan-config"
+   ],
+   "group": "profile",
+   "name": "unprefixed-line",
+   "note": "a line WITHOUT the prefix: what the firmware sends to the host",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "plan-firmware",
+    "plan-config",
+    "convention"
+   ],
+   "group": "profile",
+   "name": "prefixed-line",
+   "note": "a line WITH 3C FF 01: the raw radio payload",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "plan-config",
+    "convention"
+   ],
+   "group": "profile",
+   "name": "mixed-prefix",
+   "note": "prefixed, plain, prefixed in one stream",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573",
+      "4e3043414c4c2d373e41504c5247312c57494445312d313a3d303030302e30304e2f30303030302e3030452d4c6f52612069476174652074657374"
+     ],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b546573740d0a3cff014e3043414c4c2d373e41504c5247312c57494445312d313a3d303030302e30304e2f30303030302e3030452d4c6f526120694761746520746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b54657374"
+     ],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b54657374"
+     ],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b546573740d0a3cff014e3043414c4c2d373e41504c5247312c57494445312d313a3d303030302e30304e2f30303030302e3030452d4c6f526120694761746520746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a3e5465737420737461747573",
+      "3cff014e3043414c4c2d373e41504c5247312c57494445312d313a3d303030302e30304e2f30303030302e3030452d4c6f52612069476174652074657374"
+     ],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "open"
+   ],
+   "group": "ending",
+   "name": "lf-only",
+   "note": "LF is the only terminator (no CR)",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a3e54657374207374617475730a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a3e54657374207374617475730a"
+     ]
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e54657374207374617475730a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e54657374207374617475730a"
+     ]
+    }
+   }
+  },
+  {
+   "basis": [
+    "open"
+   ],
+   "group": "ending",
+   "name": "cr-only",
+   "note": "CR is the only terminator (no LF); the connection closes, so a CR waiting for its LF is not the answer",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a3e54657374207374617475730d"
+     ],
+     "eof": true,
+     "reject_hex": [],
+     "unspecified_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a3e54657374207374617475730d"
+     ]
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e54657374207374617475730d"
+     ],
+     "eof": true,
+     "reject_hex": [],
+     "unspecified_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e54657374207374617475730d"
+     ]
+    }
+   }
+  },
+  {
+   "basis": [
+    "open"
+   ],
+   "group": "ending",
+   "name": "lf-only-two-lines",
+   "note": "two lines, LF only: either two lines or one line holding a bare LF",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a3e54657374207374617475730a3cff014e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b546573740a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a3e54657374207374617475730a3cff014e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b546573740a"
+     ]
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e54657374207374617475730a4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b546573740a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e54657374207374617475730a4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b546573740a"
+     ]
+    }
+   }
+  },
+  {
+   "basis": [
+    "invariant"
+   ],
+   "group": "ending",
+   "name": "no-terminator-open",
+   "note": "a complete-looking line with no terminator, connection stays open: nothing is delivered",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "open"
+   ],
+   "group": "ending",
+   "name": "no-terminator-eof",
+   "note": "the same, then the connection closes: a gateway may or may not flush it",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "eof": true,
+     "reject_hex": [],
+     "unspecified_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ]
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "eof": true,
+     "reject_hex": [],
+     "unspecified_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ]
+    }
+   }
+  },
+  {
+   "basis": [
+    "plan-config",
+    "convention"
+   ],
+   "group": "ending",
+   "name": "double-crlf",
+   "note": "a line then an extra CRLF: the empty line is ignored",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a0d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a0d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "convention"
+   ],
+   "group": "empty",
+   "name": "empty-line",
+   "note": "a single CRLF: no line, no error",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "0d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "0d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "convention"
+   ],
+   "group": "empty",
+   "name": "empty-lines-between",
+   "note": "lines with several empty lines between",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573",
+      "4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b54657374"
+     ],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a0d0a0d0a0d0a3cff014e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b546573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573",
+      "4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b54657374"
+     ],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a0d0a0d0a0d0a4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b546573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "convention"
+   ],
+   "group": "empty",
+   "name": "space-line",
+   "note": "a line of one space",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff01200d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff0120"
+     ],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "200d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "20"
+     ],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "plan-config"
+   ],
+   "group": "prefix",
+   "name": "prefix-3cff02",
+   "note": "3C FF 02: last byte differs",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff024e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff024e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff024e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff024e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "plan-config"
+   ],
+   "group": "prefix",
+   "name": "prefix-3dff01",
+   "note": "3D FF 01: first byte differs",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3dff014e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3dff014e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3dff014e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3dff014e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "plan-config"
+   ],
+   "group": "prefix",
+   "name": "prefix-3cfe01",
+   "note": "3C FE 01: middle byte differs",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cfe014e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cfe014e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cfe014e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cfe014e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "plan-config"
+   ],
+   "group": "prefix",
+   "name": "prefix-swapped",
+   "note": "FF 3C 01: right bytes, wrong order",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "ff3c014e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "ff3c014e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "ff3c014e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "ff3c014e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "plan-config"
+   ],
+   "group": "prefix",
+   "name": "prefix-two-bytes",
+   "note": "3C FF only: the third byte is missing",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff4e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff4e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff4e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff4e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "plan-config"
+   ],
+   "group": "prefix",
+   "name": "prefix-ascii-hex",
+   "note": "the text '3cff01' in front of the line",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3363666630314e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3363666630314e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3363666630314e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3363666630314e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "plan-config"
+   ],
+   "group": "prefix",
+   "name": "prefix-twice",
+   "note": "3C FF 01 3C FF 01 and the line: the second prefix is part of the line",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff013cff014e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff013cff014e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff013cff014e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff013cff014e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "plan-config",
+    "convention"
+   ],
+   "group": "prefix",
+   "name": "prefix-only",
+   "note": "3C FF 01 and nothing else",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff010d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff01"
+     ],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff010d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff01"
+     ],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "plan-config",
+    "invariant"
+   ],
+   "group": "prefix",
+   "name": "prefix-twice-then-good",
+   "note": "a doubled prefix line, then a good line: the good one still arrives",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b54657374"
+     ],
+     "chunks_hex": [
+      "3cff013cff014e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a3cff014e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b546573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff013cff014e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b54657374"
+     ],
+     "chunks_hex": [
+      "3cff013cff014e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b546573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff013cff014e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "convention"
+   ],
+   "group": "garbage",
+   "name": "junk-no-gt",
+   "note": "no '>' after the source",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d3741504c5254313a746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff014e3043414c4c2d3741504c5254313a74657374"
+     ],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "4e3043414c4c2d3741504c5254313a746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "4e3043414c4c2d3741504c5254313a74657374"
+     ],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "convention"
+   ],
+   "group": "garbage",
+   "name": "junk-no-colon",
+   "note": "no ':' before the information",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254312c57494445312d3120746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff014e3043414c4c2d373e41504c5254312c57494445312d312074657374"
+     ],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254312c57494445312d3120746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "4e3043414c4c2d373e41504c5254312c57494445312d312074657374"
+     ],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "convention"
+   ],
+   "group": "garbage",
+   "name": "junk-empty-source",
+   "note": "empty source",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff013e41504c5254313a746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff013e41504c5254313a74657374"
+     ],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3e41504c5254313a746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3e41504c5254313a74657374"
+     ],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "convention"
+   ],
+   "group": "garbage",
+   "name": "junk-empty-dest",
+   "note": "empty destination",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e3a746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff014e3043414c4c2d373e3a74657374"
+     ],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "4e3043414c4c2d373e3a746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "4e3043414c4c2d373e3a74657374"
+     ],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "convention"
+   ],
+   "group": "garbage",
+   "name": "junk-empty-digi",
+   "note": "an empty digipeater",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254312c2c57494445312d313a746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff014e3043414c4c2d373e41504c5254312c2c57494445312d313a74657374"
+     ],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254312c2c57494445312d313a746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "4e3043414c4c2d373e41504c5254312c2c57494445312d313a74657374"
+     ],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "convention"
+   ],
+   "group": "garbage",
+   "name": "junk-text",
+   "note": "plain text",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff0168656c6c6f20776f726c640d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff0168656c6c6f20776f726c64"
+     ],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "68656c6c6f20776f726c640d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "68656c6c6f20776f726c64"
+     ],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "convention"
+   ],
+   "group": "garbage",
+   "name": "junk-binary",
+   "note": "binary bytes",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff01808182838485868788898a8b8c8d8e8f3e909192939495969798999a9b9c9d9e9f3aa0a1a2a3a4a5a6a7a8a9aaabacadaeaf0d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff01808182838485868788898a8b8c8d8e8f3e909192939495969798999a9b9c9d9e9f3aa0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+     ],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "808182838485868788898a8b8c8d8e8f3e909192939495969798999a9b9c9d9e9f3aa0a1a2a3a4a5a6a7a8a9aaabacadaeaf0d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "808182838485868788898a8b8c8d8e8f3e909192939495969798999a9b9c9d9e9f3aa0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+     ],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "open"
+   ],
+   "group": "garbage",
+   "name": "junk-nul",
+   "note": "NUL byte in the information",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a74650073740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a7465007374"
+     ]
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a74650073740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": [
+      "4e3043414c4c2d373e41504c5254313a7465007374"
+     ]
+    }
+   }
+  },
+  {
+   "basis": [
+    "open"
+   ],
+   "group": "garbage",
+   "name": "tnc2-lowercase",
+   "note": "lower case callsigns (Dire Wolf refuses them)",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff016e3063616c6c2d373e61706c7274313a746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": [
+      "3cff016e3063616c6c2d373e61706c7274313a74657374"
+     ]
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "6e3063616c6c2d373e61706c7274313a746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": [
+      "6e3063616c6c2d373e61706c7274313a74657374"
+     ]
+    }
+   }
+  },
+  {
+   "basis": [
+    "open"
+   ],
+   "group": "garbage",
+   "name": "tnc2-ssid-16",
+   "note": "SSID 16",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d31363e41504c5254313a746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": [
+      "3cff014e3043414c4c2d31363e41504c5254313a74657374"
+     ]
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "4e3043414c4c2d31363e41504c5254313a746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": [
+      "4e3043414c4c2d31363e41504c5254313a74657374"
+     ]
+    }
+   }
+  },
+  {
+   "basis": [
+    "open"
+   ],
+   "group": "garbage",
+   "name": "tnc2-call-7",
+   "note": "seven character callsign",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff014e3043414c4c583e41504c5254313a746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": [
+      "3cff014e3043414c4c583e41504c5254313a74657374"
+     ]
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "4e3043414c4c583e41504c5254313a746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": [
+      "4e3043414c4c583e41504c5254313a74657374"
+     ]
+    }
+   }
+  },
+  {
+   "basis": [
+    "open"
+   ],
+   "group": "garbage",
+   "name": "tnc2-digis-9",
+   "note": "nine digipeaters (AX.25 allows eight)",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254312c44312c44322c44332c44342c44352c44362c44372c44382c44393a746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": [
+      "3cff014e3043414c4c2d373e41504c5254312c44312c44322c44332c44342c44352c44362c44372c44382c44393a74657374"
+     ]
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254312c44312c44322c44332c44342c44352c44362c44372c44382c44393a746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": [
+      "4e3043414c4c2d373e41504c5254312c44312c44322c44332c44342c44352c44362c44372c44382c44393a74657374"
+     ]
+    }
+   }
+  },
+  {
+   "basis": [
+    "open"
+   ],
+   "group": "garbage",
+   "name": "tnc2-info-empty",
+   "note": "valid header, empty information",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a0d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a"
+     ]
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a0d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": [
+      "4e3043414c4c2d373e41504c5254313a"
+     ]
+    }
+   }
+  },
+  {
+   "basis": [
+    "open"
+   ],
+   "group": "garbage",
+   "name": "tnc2-info-high",
+   "note": "information with UTF-8 bytes",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a3e636166c3a90d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a3e636166c3a9"
+     ]
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e636166c3a90d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e636166c3a9"
+     ]
+    }
+   }
+  },
+  {
+   "basis": [
+    "convention"
+   ],
+   "group": "garbage",
+   "name": "tnc2-digis-8",
+   "note": "eight digipeaters: the AX.25 maximum, valid",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254312c44312c44322c44332c44342c44352c44362c44372c44383a74657374"
+     ],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254312c44312c44322c44332c44342c44352c44362c44372c44383a746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254312c44312c44322c44332c44342c44352c44362c44372c44383a74657374"
+     ],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254312c44312c44322c44332c44342c44352c44362c44372c44383a746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "convention"
+   ],
+   "group": "garbage",
+   "name": "tnc2-digi-star",
+   "note": "a digipeater with the has-been-repeated star",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254312c44312a2c57494445322d313a74657374"
+     ],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254312c44312a2c57494445322d313a746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254312c44312a2c57494445322d313a74657374"
+     ],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254312c44312a2c57494445322d313a746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "size"
+   ],
+   "group": "size",
+   "name": "size-80",
+   "note": "an ordinary line",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+     ],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878780d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+     ],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878780d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "size"
+   ],
+   "group": "size",
+   "name": "size-255",
+   "note": "255 raw bytes: the LoRa payload limit with the prefix",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+     ],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878780d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+     ],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878780d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "size"
+   ],
+   "group": "size",
+   "name": "size-256",
+   "note": "256 raw bytes: one over the LoRa payload",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878780d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+     ]
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878780d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": [
+      "4e3043414c4c2d373e41504c5254313a787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+     ]
+    }
+   }
+  },
+  {
+   "basis": [
+    "size"
+   ],
+   "group": "size",
+   "name": "size-510",
+   "note": "510 raw bytes: the plan's limit",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878780d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+     ]
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878780d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": [
+      "4e3043414c4c2d373e41504c5254313a7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+     ]
+    }
+   }
+  },
+  {
+   "basis": [
+    "size"
+   ],
+   "group": "size",
+   "name": "size-511",
+   "note": "511 raw bytes: over the plan's limit",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878780d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+     ],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878780d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "4e3043414c4c2d373e41504c5254313a787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+     ],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "size"
+   ],
+   "group": "size",
+   "name": "size-1024",
+   "note": "1024 raw bytes",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878780d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+     ],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878780d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "4e3043414c4c2d373e41504c5254313a787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+     ],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "size"
+   ],
+   "group": "size",
+   "name": "size-4096",
+   "note": "4096 raw bytes",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878780d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+     ],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878780d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "4e3043414c4c2d373e41504c5254313a787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+     ],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "size",
+    "invariant"
+   ],
+   "group": "size",
+   "name": "overlong-then-good",
+   "note": "an overlong line (1024 raw bytes), then a good one: the good one must still arrive",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b54657374"
+     ],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878780d0a3cff014e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b546573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+     ],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b54657374"
+     ],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878780d0a4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b546573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "4e3043414c4c2d373e41504c5254313a787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+     ],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "size",
+    "invariant"
+   ],
+   "group": "size",
+   "name": "overlong-4096-then-good",
+   "note": "4096 raw bytes, then a good line",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b54657374"
+     ],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878780d0a3cff014e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b546573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+     ],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b54657374"
+     ],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878780d0a4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b546573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "4e3043414c4c2d373e41504c5254313a787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+     ],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "size",
+    "invariant"
+   ],
+   "group": "size",
+   "name": "overlong-split-then-good",
+   "note": "an overlong line (2048 raw bytes) over three reads, then a good one",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5247312c57494445312d313a3d303030302e30304e2f30303030302e3030452d4c6f52612069476174652074657374"
+     ],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+      "7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+      "78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878780d0a3cff014e3043414c4c2d373e41504c5247312c57494445312d313a3d303030302e30304e2f30303030302e3030452d4c6f526120694761746520746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+     ],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5247312c57494445312d313a3d303030302e30304e2f30303030302e3030452d4c6f52612069476174652074657374"
+     ],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+      "7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+      "78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878780d0a4e3043414c4c2d373e41504c5247312c57494445312d313a3d303030302e30304e2f30303030302e3030452d4c6f526120694761746520746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "4e3043414c4c2d373e41504c5254313a78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+     ],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "size",
+    "invariant"
+   ],
+   "group": "size",
+   "name": "overlong-no-terminator",
+   "note": "2048 bytes and no terminator, connection open: nothing is delivered and nothing may grow without bound",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+      "78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+     ],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+      "78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "4e3043414c4c2d373e41504c5254313a78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+     ],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "invariant"
+   ],
+   "group": "split",
+   "name": "split-mid-line",
+   "note": "a line over two reads, cut in the middle",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a3e",
+      "54657374207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e546573",
+      "74207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "invariant"
+   ],
+   "group": "split",
+   "name": "split-before-crlf",
+   "note": "the line in one read, CRLF in the next",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a3e5465737420737461747573",
+      "0d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573",
+      "0d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "invariant"
+   ],
+   "group": "split",
+   "name": "split-between-cr-lf",
+   "note": "cut between CR and LF",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a3e54657374207374617475730d",
+      "0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e54657374207374617475730d",
+      "0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "invariant"
+   ],
+   "group": "split",
+   "name": "split-after-prefix",
+   "note": "the prefix in one read, the line in the next (the empty profile cuts at 0)",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "chunks_hex": [
+      "3cff01",
+      "4e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "invariant"
+   ],
+   "group": "split",
+   "name": "split-in-prefix",
+   "note": "cut after the first byte of the prefix (the empty profile cuts at 1 of the line)",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "chunks_hex": [
+      "3c",
+      "ff014e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "chunks_hex": [
+      "4e",
+      "3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "invariant"
+   ],
+   "group": "split",
+   "name": "split-in-prefix-2",
+   "note": "cut after the second byte",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "chunks_hex": [
+      "3cff",
+      "014e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "chunks_hex": [
+      "4e30",
+      "43414c4c2d373e41504c5254313a3e54657374207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "invariant"
+   ],
+   "group": "split",
+   "name": "split-bytewise",
+   "note": "every byte its own read",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b54657374"
+     ],
+     "chunks_hex": [
+      "3c",
+      "ff",
+      "01",
+      "4e",
+      "30",
+      "43",
+      "41",
+      "4c",
+      "4c",
+      "2d",
+      "37",
+      "3e",
+      "41",
+      "50",
+      "4c",
+      "52",
+      "54",
+      "31",
+      "2c",
+      "57",
+      "49",
+      "44",
+      "45",
+      "31",
+      "2d",
+      "31",
+      "3a",
+      "21",
+      "30",
+      "30",
+      "30",
+      "30",
+      "2e",
+      "30",
+      "30",
+      "4e",
+      "2f",
+      "30",
+      "30",
+      "30",
+      "30",
+      "30",
+      "2e",
+      "30",
+      "30",
+      "45",
+      "5b",
+      "54",
+      "65",
+      "73",
+      "74",
+      "0d",
+      "0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b54657374"
+     ],
+     "chunks_hex": [
+      "4e",
+      "30",
+      "43",
+      "41",
+      "4c",
+      "4c",
+      "2d",
+      "37",
+      "3e",
+      "41",
+      "50",
+      "4c",
+      "52",
+      "54",
+      "31",
+      "2c",
+      "57",
+      "49",
+      "44",
+      "45",
+      "31",
+      "2d",
+      "31",
+      "3a",
+      "21",
+      "30",
+      "30",
+      "30",
+      "30",
+      "2e",
+      "30",
+      "30",
+      "4e",
+      "2f",
+      "30",
+      "30",
+      "30",
+      "30",
+      "30",
+      "2e",
+      "30",
+      "30",
+      "45",
+      "5b",
+      "54",
+      "65",
+      "73",
+      "74",
+      "0d",
+      "0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "invariant"
+   ],
+   "group": "split",
+   "name": "split-two-lines-straddle",
+   "note": "two lines, the second cut in the middle",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573",
+      "4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b54657374"
+     ],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a3cff014e3043414c4c2d",
+      "373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b546573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573",
+      "4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b54657374"
+     ],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a4e3043414c4c2d373e41",
+      "504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b546573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "invariant",
+    "plan-config"
+   ],
+   "group": "split",
+   "name": "split-bad-prefix",
+   "note": "a bad prefix over two reads: still rejected",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff",
+      "024e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff024e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [],
+     "chunks_hex": [
+      "3cff",
+      "024e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff024e3043414c4c2d373e41504c5254313a3e5465737420737461747573"
+     ],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "invariant",
+    "convention"
+   ],
+   "group": "resync",
+   "name": "mid-line-connect",
+   "note": "the connection starts in the middle of a line (the tail of one), then good lines",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5247312c57494445312d313a3d303030302e30304e2f30303030302e3030452d4c6f52612069476174652074657374"
+     ],
+     "chunks_hex": [
+      "312d313a21303030302e30304e2f30303030302e3030455b546573740d0a3cff014e3043414c4c2d373e41504c5247312c57494445312d313a3d303030302e30304e2f30303030302e3030452d4c6f526120694761746520746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "312d313a21303030302e30304e2f30303030302e3030455b54657374"
+     ],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5247312c57494445312d313a3d303030302e30304e2f30303030302e3030452d4c6f52612069476174652074657374"
+     ],
+     "chunks_hex": [
+      "312d313a21303030302e30304e2f30303030302e3030455b546573740d0a4e3043414c4c2d373e41504c5247312c57494445312d313a3d303030302e30304e2f30303030302e3030452d4c6f526120694761746520746573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "312d313a21303030302e30304e2f30303030302e3030455b54657374"
+     ],
+     "unspecified_hex": []
+    }
+   }
+  },
+  {
+   "basis": [
+    "invariant",
+    "convention"
+   ],
+   "group": "resync",
+   "name": "garbage-between-lines",
+   "note": "good, junk, good: the junk does not break the next line",
+   "status": "UNVERIFIED",
+   "variants": {
+    "3cff01": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573",
+      "4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b54657374"
+     ],
+     "chunks_hex": [
+      "3cff014e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a3cff0168656c6c6f20776f726c640d0a3cff014e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b546573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "3cff0168656c6c6f20776f726c64"
+     ],
+     "unspecified_hex": []
+    },
+    "none": {
+     "accept_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e5465737420737461747573",
+      "4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b54657374"
+     ],
+     "chunks_hex": [
+      "4e3043414c4c2d373e41504c5254313a3e54657374207374617475730d0a68656c6c6f20776f726c640d0a4e3043414c4c2d373e41504c5254312c57494445312d313a21303030302e30304e2f30303030302e3030455b546573740d0a"
+     ],
+     "eof": false,
+     "reject_hex": [
+      "68656c6c6f20776f726c64"
+     ],
+     "unspecified_hex": []
+    }
+   }
+  }
+ ],
+ "schema": "dvt-lora-gw-streams/1",
+ "terminator_hex": "0d0a",
+ "verdicts": {
+  "accept": "must be delivered, in this order, with the prefix removed",
+  "reject": "must NOT be delivered (the raw line as received)",
+  "unspecified": "no expectation: a test must not assert on it"
+ }
+}

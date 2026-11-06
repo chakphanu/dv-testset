@@ -24,9 +24,11 @@ verifiable is this, all of it offline (no rig run, no DV-Router run):
    file, 16 derived (LoRa APRS shaped lines and sweeps).
 
 Not delivered: any rig case, a KISS pty bridge into a DV-Router container (`socat`
-recipe of the plan, section 2a.4), the `dvt-lora-gw` scripted TNC2/prefix source (plan
-row 2, second half), AFSK audio of DV-Router's own TX (see "Not verified"). What the
-DV-Router lead has to decide before those make sense is in "Open questions".
+recipe of the plan, section 2a.4), AFSK audio of DV-Router's own TX (see "Not verified").
+What the DV-Router lead has to decide before those make sense is in "Open questions".
+The other half of plan row 2, the `dvt-lora-gw` scripted TNC2 / prefix source, is delivered
+separately: `docs/lora-gw-cases.md`. Later stages added the APRS decode oracle (DP9) and the
+documented differences with DV-Router (sections below).
 
 Licence rule: dv-testset is MIT. Dire Wolf is GPL-2.0-or-later and runs only as a
 process in its own image; nothing of its code or text is in this repository, only
@@ -374,4 +376,5 @@ encoder output to `dw_ax25_hex`, adapter output to `dw_kiss_hex`).
 6. **Airtime**: ANSWERED: the four `external` anchors are accepted as quoted; the AFSK airtime in
    DV-Router is an upper bound (section "Documented differences"). Still open: the unit of its `ceil`.
 7. **Scope split**: `dvt-lora-gw` (scripted TNC2 source with and without the `3C FF 01` prefix,
-   CRLF, bad prefix, overlong lines) is the other half of plan row 2 and is not done here.
+   CRLF, bad prefix, overlong lines) is the other half of plan row 2: done as a pure-Python
+   generator with vectors, see `docs/lora-gw-cases.md`.
