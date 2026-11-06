@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: MIT
+# m17-fme (lwvmobile/m17-fme, GPL-3.0) as the independent verifier of M17
+# signed streams and of the GNSS / text META decode (P26j, docs/m17v3-cases.md).
+# DRAFT, not built, not validated. A separate image: the GPL program runs as a
+# process, dv-testset itself stays MIT and copies none of its code.
+#
+# Sources are the named build contexts (fetched by scripts/pre-fetch-m17.sh at
+# the pins M17_FME_REF and MICRO_ECC_REF of .env.example):
+#   fme  = .cache/m17-src/m17-fme
+#   uecc = .cache/m17-src/micro-ecc   (the micro-ecc submodule of m17-fme)
+# Build (by hand, inside scripts/contained.sh --name build, never while the rig runs):
+#   docker build -f rig/Dockerfile.m17fme --build-arg M17_FME_BASE_IMAGE=$M17_FME_BASE_IMAGE \
+#     --build-arg MAKE_JOBS=$DVT_BUILD_JOBS \
+#     --build-context fme=.cache/m17-src/m17-fme --build-context uecc=.cache/m17-src/micro-ecc \
+#     -t dvt-m17fme:local rig
+#
+# Build choices (each one read in the m17-fme source, docs/m17v3-cases.md):
+#  * CMakeLists.txt needs LibSndFile (REQUIRED) and PkgConfig; PulseAudio, Curses and
+#    Codec2 are optional and left out (no audio device, no terminal UI: headless);
+#    USE_UECC is defined only when src/micro-ecc/uECC.h exists, so the micro-ecc
+#    files are copied into that directory.
+#  * -DCOLORS=OFF: no ANSI escapes in the output that dvtest.oracle_m17 parses.
+#  * git is not installed: the version module falls back to GIT-NOTFOUND.
+#  * The run needs no network: start it with `docker run --network none`
+#    (dvtest.oracle_m17 does). Input is an "IP frame file" (m17-fme option -^),
+#    one line "054,<hex of the 54-byte packet>" per packet, and a public key file
+#    of 128 hex characters (option -k).
+ARG M17_FME_BASE_IMAGE
+FROM ${M17_FME_BASE_IMAGE} AS build
+ARG MAKE_JOBS=4
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc g++ make cmake pkg-config libc6-dev libsndfile1-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=fme CMakeLists.txt LICENSE /src/
+COPY --from=fme cmake /src/cmake
+COPY --from=fme include /src/include
+COPY --from=fme src /src/src
+COPY --from=uecc *.c *.h *.inc LICENSE.txt /src/src/micro-ecc/
+RUN cmake -S /src -B /build -DCMAKE_BUILD_TYPE=Release -DCOLORS=OFF \
+    && cmake --build /build -j"${MAKE_JOBS}" \
+    && strip --strip-unneeded /build/m17-fme \
+    && test -x /build/m17-fme
+
+FROM ${M17_FME_BASE_IMAGE}
+RUN apt-get update && apt-get install -y --no-install-recommends libsndfile1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 --home-dir /nonexistent --shell /usr/sbin/nologin m17fme
+COPY --from=build /build/m17-fme /usr/local/bin/m17-fme
+COPY m17fme-entry.sh /m17fme/entry.sh
+RUN chmod 755 /m17fme/entry.sh
+USER m17fme
+WORKDIR /tmp
+ENTRYPOINT ["/m17fme/entry.sh"]

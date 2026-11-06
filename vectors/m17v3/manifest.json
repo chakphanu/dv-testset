@@ -1,0 +1,68 @@
+{
+ "schema": "dvt-m17v3-vectors/1",
+ "generator": "python3 scripts/gen-m17v3-vectors.py",
+ "licence": "MIT; derived from the specification text and arithmetic, no code of any M17 implementation",
+ "sources_pinned_in_env_example": {
+  "M17_SPEC_REPO": "https://github.com/M17-Project/M17_spec",
+  "M17_SPEC_REF": "e67ac209d0ec73c1bab12d56d67f1d22e4680d35",
+  "M17_SPEC_V2_REF": "d3995d3131b2b0d15422624aff597e6ec50d2645",
+  "M17_FME_REPO": "https://github.com/lwvmobile/m17-fme",
+  "M17_FME_REF": "6a93a2abfc706eb1bb37adc89e1659cd417a9caa",
+  "MICRO_ECC_REPO": "https://github.com/M17-Project/micro-ecc",
+  "MICRO_ECC_REF": "31520c8f1f58920ef89086386d259640077ecb35",
+  "M17_IMPL_REPO": "https://github.com/M17-Project/M17_Implementations",
+  "M17_IMPL_REF": "f2000aec8a29b975aba2e80dd8c274afd6124421",
+  "LIBM17_REPO": "https://github.com/M17-Project/libm17",
+  "LIBM17_REF": "3684edce0866ce71b24a7be685673ca9999dd951"
+ },
+ "spec_refs": {
+  "draft": "M17_spec.tex at M17_SPEC_REF (branch dev, 3.0.0-draft, 3124 lines); l.N = line N",
+  "v2.0.10": "M17_spec.tex at M17_SPEC_V2_REF (branch main, 2.0.10, 3229 lines); l.N = line N",
+  "derived": "worked out from spec arithmetic; the text after 'derived:' says how"
+ },
+ "oracles": {
+  "m17-fme": "m17-fme -^ <ip-frame file> -k <public key file>; prints ' Signature Valid;' or ' Signature Invalid;' (src/encryption/ecdsa.c); v3 packets are re-labelled with legacy_type first (dvtest.proto.m17v3.retype_packets) because it rejects a v3 TYPE",
+  "libm17": "payload/lsf.c set_LSF_meta_position / get_LSF_meta_position / set_LSF_meta_ecd / set_LSF_meta_nonce; compare lat/lon within 1 LSB (float32)",
+  "libm17+mrefd": "libm17 as above and mrefd position.cpp (GNSS decode)",
+  "libm17+m17-fme": "libm17 set_LSF_meta_nonce and m17-fme aes_ctr_str_payload_crypt (IV bytes 14-15 = FN)",
+  "ecdsa-verifier": "any P-256 ECDSA verifier over the 32-byte digest",
+  "spec-only": "no independent v3 decoder exists; the specification text is the only oracle"
+ },
+ "policies": {
+  "map_v3_to_legacy omit": "a legacy receiver gets META dropped (zero) except an AES IV",
+  "map_v3_to_legacy convert": "GNSS passes, text converts if it fits 4 blocks, ECD is still dropped"
+ },
+ "entry_fields": {
+  "id": "unique",
+  "kind": "entry type",
+  "spec": "file and line read, or 'derived: ...'",
+  "oracle": "independent implementation that can check the entry",
+  "oracle_verdict": "null until that oracle was run"
+ },
+ "files": [
+  {
+   "path": "ecdsa.json",
+   "kind": "ecdsa",
+   "entries": 8,
+   "sha256": "5ef93291ab6b0f414215fb07929e5b681765b16032ee6853f2b11c5740caf78d"
+  },
+  {
+   "path": "keys.json",
+   "kind": "keys",
+   "entries": 2,
+   "sha256": "56eeb37b6fed23af60cf8a0e9ba84c10c6855674abec59ee9dccd03586812bf7"
+  },
+  {
+   "path": "signed_streams.json",
+   "kind": "signed_streams",
+   "entries": 27,
+   "sha256": "762ea065df33c013113980a5e93f41f12a06550f001bd031c61a1a6ee3084747"
+  },
+  {
+   "path": "type_meta.json",
+   "kind": "type_meta",
+   "entries": 75,
+   "sha256": "af9ac65b7d4377103fcf2c56e36536719e7446a0ce8d8153d426b2b02487754e"
+  }
+ ]
+}
