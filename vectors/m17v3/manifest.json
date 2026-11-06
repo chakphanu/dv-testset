@@ -55,14 +55,14 @@
   {
    "path": "signed_streams.json",
    "kind": "signed_streams",
-   "entries": 27,
-   "sha256": "762ea065df33c013113980a5e93f41f12a06550f001bd031c61a1a6ee3084747"
+   "entries": 39,
+   "sha256": "652650233d999cddd1f28af79d5c027c9ecf9cb2b75f51eb2315682cde1a01af"
   },
   {
    "path": "type_meta.json",
    "kind": "type_meta",
    "entries": 75,
-   "sha256": "af9ac65b7d4377103fcf2c56e36536719e7446a0ce8d8153d426b2b02487754e"
+   "sha256": "2239ef4829346198a6dce85ba18dff0f2ac64048c629a62d9bfc386c9c9f58fe"
   }
  ]
 }

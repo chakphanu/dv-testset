@@ -12,13 +12,20 @@ that project's code. Background, readings of the spec and the plan are in
 | File | Content |
 |------|---------|
 | `manifest.json` | schema, generator, source pins, citation and oracle tables, file list with sha256 |
-| `keys.json` | two P-256 test keys, `secret` (32 bytes), `public_xy` (x\|\|y, 64 bytes, micro-ecc form), `public_sec1_uncompressed` (04\|\|x\|\|y, 65 bytes) |
+| `keys.json` | two P-256 test keys, `secret` (32 bytes), `public_xy` (x\|\|y, 64 bytes big endian, micro-ecc form), `public_sec1_uncompressed` (04\|\|x\|\|y, 65 bytes). DV-Router uses `public_xy` and prepends the 04 itself; the SEC1 form is kept for other consumers |
 | `ecdsa.json` | digest + signature + public key + expected verify result; includes the two vectors published by RFC 6979 appendix A.2.5 (SHA-256 digests) |
 | `signed_streams.json` | signed M17 streams as lists of 54-byte stream packets (hex, arrival order) with the expected verdict |
 | `type_meta.json` | v3 TYPE values, the legacy <-> v3 mapping, META encodings (text v3 and v2, GNSS, ECD, AES IV) |
 
 All hex is lower case, all multi-byte fields are big endian. One entry per
-line; every entry has `id`, `kind`, `spec`, `oracle`, `oracle_verdict`:
+line; every entry has `id`, `kind`, `spec`, `oracle`, `oracle_verdict`. GNSS
+entries carry `decoded` (every field as the integer the spec scales it to:
+source, station, validity, radius n, bearing, latitude, longitude, altitude,
+speed; the integers are the expectation of a decoder, no encoder rounding is
+assumed) and `decoded_float` (the same values in degrees, metres, km/h; `null`
+where the validity bit is clear). The `inputs` and `libm17_args` are what the
+encoder was given; the decoded floats are the exact scaling of the integers and
+can differ from the inputs by less than one LSB:
 
 - `spec`: the file and line that were read (`draft l.N` = `M17_spec.tex` of the
   3.0.0 draft at the pin `M17_SPEC_REF`; `v2.0.10 l.N` = the same file at
@@ -52,8 +59,34 @@ digest read as one big-endian integer (left-padded to 32 bytes), `r||s`
 | `malformed` | FN or EOT rules broken, or a packet is not 54 bytes |
 | `unsigned` | signed bit clear (the tail, if present, is ignored) |
 
-`expect.also_acceptable` lists other verdicts a conforming receiver may give
+`expect.also_acceptable` lists other verdicts another oracle may give
 (reordered frames: a receiver that restores FN order verifies the stream).
+
+`expect.collector` is the outcome of a strict collector (reference:
+`dvtest.proto.m17v3.collect_stream`): data frames exactly FN 0, 1, 2, ..., the
+tail exactly 7FFC, 7FFD, 7FFE, FFFF in order (the 16-bit FN compared as sent,
+EOT bit included), the tail never in the digest.
+
+| `expect.collector` | Meaning |
+|--------------------|---------|
+| `complete_valid` | all four chunks, signature verifies |
+| `complete_invalid_signature` | all four chunks, verification returns false (tampered payload, wrong key, wrong message signed) |
+| `incomplete` | stream ended before the fourth chunk |
+| `sequence_error` | gap, duplicate, early tail chunk, reordered frame, wrong tail FN or EOT placement, packet after the tail |
+| `size_error` | a packet that is not 54 bytes |
+| `bad_public_key` | key not 64 bytes or not on the curve |
+| `bad_signature_encoding` | r or s zero or not below n |
+| `null` | unsigned stream: signing bit clear, no tail expected, the collector is not used |
+
+`expect.collector_also_acceptable` lists other collector outcomes that follow
+from a different but plausible reading (only `signed-bit-no-tail`: EOT on the
+last data frame is `sequence_error` when the FN is compared as sent,
+`incomplete` when the EOT bit of a data frame is read as "stream ended").
+
+Every stream entry also has `signing_bit` (the TYPE signed bit; false only
+for the `unsigned-*` entries), `tail_expected` (equal to `signing_bit`: an
+unsigned stream has no tail to wait for) and `verify_public_xy` (the 64-byte
+key to verify with, or the deliberately bad key of the `bad-key-*` entries).
 Most streams carry TYPE `2101` (v3: voice, not encrypted, signed, no META,
 CAN 1); `legacy_type` is the 2.0.x TYPE of the same stream (`0885`) for
 decoders that do not know the v3 layout (`legacy_meta: null` = zero META).

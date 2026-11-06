@@ -136,15 +136,65 @@ def ecdsa_file():
 
 # ---------------------------------------------------------------- signed streams
 
+# expect.collector: what a strict collector (dvtest.proto.m17v3.collect_stream) reports for a stream.
+# id -> (collector verdict, other acceptable collector verdicts). None = not a signed stream, the
+# collector is not used. The EOT bit is compared as sent (assumption, see docs/m17v3-cases.md).
+_SEQ = ("sequence_error", [])
+COLLECTOR = {
+    "valid": ("complete_valid", []),
+    "valid-meta-changes": ("complete_valid", []),
+    "tampered-payload": ("complete_invalid_signature", []),
+    "wrong-key": ("complete_invalid_signature", []),
+    "lost-frame": _SEQ,
+    "reordered-frames": _SEQ,
+    "duplicate-data-frame": _SEQ,
+    "early-tail-chunk": _SEQ,
+    "missing-tail-frame": ("incomplete", []),
+    "missing-tail-two": ("incomplete", []),
+    "missing-tail-all": ("incomplete", []),
+    "signed-bit-no-tail": ("sequence_error", ["incomplete"]),   # EOT on the last data frame
+    "truncated-mid-stream": ("incomplete", []),
+    "short-packet": ("size_error", []),
+    "short-data-packet": ("size_error", []),
+    "long-packet": ("size_error", []),
+    "eot-last-data": _SEQ, "eot-first-sig": _SEQ, "eot-third-sig": _SEQ, "eot-none": _SEQ, "eot-both": _SEQ,
+    "tail-duplicate-fn": _SEQ,
+    "tail-fn-shifted": _SEQ,
+    "unsigned-with-tail": (None, []),
+    "unsigned-plain": (None, []),
+    "digest-no-rotate": ("complete_invalid_signature", []),
+    "digest-right-padded-32": ("complete_invalid_signature", []),
+    "digest-sha256-of-digest": ("complete_invalid_signature", []),
+    "digest-sha256-of-payloads": ("complete_invalid_signature", []),
+    "digest-truncated-15": ("complete_invalid_signature", []),
+    "bad-key-off-curve": ("bad_public_key", []),
+    "bad-key-63-bytes": ("bad_public_key", []),
+    "bad-key-zero": ("bad_public_key", []),
+    "bad-signature-r-zero": ("bad_signature_encoding", []),
+    "bad-signature-s-equals-n": ("bad_signature_encoding", []),
+    "bad-signature-s-max": ("bad_signature_encoding", []),
+    "bad-signature-r-equals-n": ("bad_signature_encoding", []),
+    "boundary-max-frames": ("complete_valid", []),
+    "boundary-one-too-many": _SEQ,
+}
+
+
 def _entry(vid, title, packets, key, verify_key, digest, signature, verdict, reason, spec, also=None,
-           stream_id=0x4D01, type_=TYPE_VOICE_SIGNED_CAN1, extra=None):
+           stream_id=0x4D01, type_=TYPE_VOICE_SIGNED_CAN1, extra=None, pub=None):
+    collector, collector_also = COLLECTOR[vid]
+    signing_bit = bool(type_ & v3.V3_SIGNED_BIT)
+    if pub is None:
+        pub = ec.public_key(secret(verify_key))
     entry = {
         "id": vid, "kind": "signed_stream", "title": title,
         "stream_id": "%04x" % stream_id, "type": "%04x" % type_, "signing_key": key, "verify_key": verify_key,
+        "signing_bit": signing_bit, "tail_expected": signing_bit,
+        "verify_public_xy": hx(pub),
         "digest": hx(digest) if digest is not None else None,
         "signature": hx(signature) if signature is not None else None,
         "packets": [hx(p) for p in packets] if packets is not None else None,
-        "expect": {"verdict": verdict, "reason": reason, "also_acceptable": also or []},
+        "expect": {"verdict": verdict, "reason": reason, "also_acceptable": also or [],
+                   "collector": collector, "collector_also_acceptable": collector_also},
         "legacy_type": "%04x" % LEGACY_VOICE_SIGNED_CAN1, "legacy_meta": None,
         "spec": spec, "oracle": ORACLE_SIG, "oracle_verdict": None,
     }
@@ -165,10 +215,10 @@ def signed_streams_file():
         return v3.frames_to_packets(frm, sid, SRC, None, type_, meta, lsd)
 
     def add(vid, title, frm, verdict, reason, spec, key_sign="a", verify="a", dig=digest, sg=sig, also=None,
-            sid=0x4D01, type_=TYPE_VOICE_SIGNED_CAN1, packets=None, extra=None):
+            sid=0x4D01, type_=TYPE_VOICE_SIGNED_CAN1, packets=None, extra=None, pub=None):
         pk = packets if packets is not None else packets_of(frm, sid, type_)
         entries.append(_entry(vid, title, pk, key_sign, verify, dig, sg, verdict, reason, spec, also, sid, type_,
-                              extra))
+                              extra, pub))
 
     add("valid", "valid signed stream: 6 data frames, FN 0..5, tail FN 7FFC 7FFD 7FFE FFFF", frames, "valid",
         "digest of the data payloads is signed with key a", SPEC_SIG)
@@ -222,6 +272,19 @@ def signed_streams_file():
     add("short-packet", "the final signature packet is 53 bytes (one byte lost)", None, "malformed",
         "packet is not 54 bytes", "Part II stream packet is 54 bytes (existing dvtest/proto/m17.py PACKET_SIZE)",
         packets=pk[:-1] + [pk[-1][:53]])
+    # --- sequence and size faults of a strict collector
+    add("duplicate-data-frame", "data frame 2 arrives twice in a row", v3.neg_duplicate_frame(frames, 2),
+        "invalid_signature", "the duplicate enters an arrival-order digest",
+        SPEC_SIG + "; derived: FN must count 0,1,2,... (l.716)")
+    add("early-tail-chunk", "the first signature chunk (7FFC) arrives after data frame 2, data frames follow",
+        v3.neg_early_tail(frames, 3), "malformed", "a data frame after a signature frame",
+        SPEC_SIG + " l.2065, l.2073")
+    add("short-data-packet", "data packet 3 is 53 bytes (one byte lost)", None, "malformed",
+        "packet is not 54 bytes", "Part II stream packet is 54 bytes (existing dvtest/proto/m17.py PACKET_SIZE)",
+        packets=pk[:3] + [pk[3][:53]] + pk[4:])
+    add("long-packet", "data packet 3 is 55 bytes (one byte too many)", None, "malformed",
+        "packet is not 54 bytes", "Part II stream packet is 54 bytes (existing dvtest/proto/m17.py PACKET_SIZE)",
+        packets=pk[:3] + [pk[3] + b"\x00"] + pk[4:])
     # --- EOT placement
     for where, title in (("last_data", "EOT set on the last data frame and again on FFFF"),
                          ("first_sig", "EOT set on the first signature frame (7FFC)"),
@@ -250,6 +313,30 @@ def signed_streams_file():
             v3.signed_frames(payloads, bad_sig), "invalid_signature",
             "the verified message is the 16-byte digest read as an integer; this signature is over a different message",
             SPEC_SIG + "; derived: micro-ecc convention (module doc of dvtest/ecdsa_p256.py)", sg=bad_sig)
+
+    # --- unsigned stream without a tail: nothing to verify
+    plain = [(i, i == N_DATA - 1, p) for i, p in enumerate(payloads)]
+    add("unsigned-plain", "plain voice stream, signed bit clear, no tail, EOT on the last data frame", plain,
+        "unsigned", "the TYPE bit is clear: no signature expected", D + "l.1216-1221",
+        type_=v3.v3_type(2, 0, False, 0, 1), extra={"legacy_type": "0085"})
+    # --- malformed public key (the stream and signature are the genuine ones)
+    pub_a = ec.public_key(sec_a)
+    off_curve = pub_a[:63] + bytes([pub_a[63] ^ 0x01])
+    assert not ec.on_curve((int.from_bytes(off_curve[:32], "big"), int.from_bytes(off_curve[32:], "big")))
+    for vid, title, bad_pub in (("bad-key-off-curve", "public key x||y is not a point of the curve (last bit of y flipped)",
+                                 off_curve),
+                                ("bad-key-63-bytes", "public key is 63 bytes", pub_a[:63]),
+                                ("bad-key-zero", "public key is 64 zero bytes", bytes(64))):
+        add(vid, title, frames, "invalid_signature", "the key cannot verify anything",
+            "derived: x||y must be 64 bytes and on P-256 (micro-ecc uECC_valid_public_key)", verify=None, pub=bad_pub)
+    # --- signature with r or s out of range (a complete tail)
+    n_bytes = ec.N.to_bytes(32, "big")
+    for vid, title, bad_sig in (("bad-signature-r-zero", "r = 0", bytes(32) + sig[32:]),
+                                ("bad-signature-s-equals-n", "s = n", sig[:32] + n_bytes),
+                                ("bad-signature-s-max", "s = 2^256 - 1 (above n)", sig[:32] + b"\xff" * 32),
+                                ("bad-signature-r-equals-n", "r = n", n_bytes + sig[32:])):
+        add(vid, title, v3.signed_frames(payloads, bad_sig), "invalid_signature",
+            "r and s must be in 1..n-1", "derived: ECDSA range rule", sg=bad_sig)
 
     # --- frame count at the boundary (large: recipe instead of packets)
     for vid, count, verdict, reason in (
@@ -349,6 +436,20 @@ LEGACY_ROWS = (
 )
 
 
+def _gnss_floats(dec):
+    """The physical values of a decoded GNSS META as the spec scales them; a
+    field whose validity bit is clear is null."""
+    v = dec["validity"]
+    return {
+        "lat_deg": dec["lat_raw"] / 8388607.0 * 90.0 if v & v3.V_LATLON else None,
+        "lon_deg": dec["lon_raw"] / 8388607.0 * 180.0 if v & v3.V_LATLON else None,
+        "altitude_m": dec["alt_raw"] * 0.5 - 500.0 if v & v3.V_ALT else None,
+        "bearing_deg": float(dec["bearing"]) if v & v3.V_VELOCITY else None,
+        "speed_kmh": dec["speed_raw"] * 0.5 if v & v3.V_VELOCITY else None,
+        "radius_m": float(2 ** dec["radius_n"]) if v & v3.V_RADIUS else None,
+    }
+
+
 def type_meta_file():
     entries = []
     for vid, payload, enc, signed, meta, can, value in TYPE_ROWS:
@@ -444,6 +545,12 @@ def type_meta_file():
                        "bearing_deg": brg, "speed_kmh": spd, "radius_m": rad},
             "raw": {k: dec[k] for k in ("validity", "radius_n", "bearing", "lat_raw", "lon_raw", "alt_raw",
                                          "speed_raw")},
+            "decoded": {k: dec[k] for k in ("source", "station", "validity", "radius_n", "bearing", "lat_raw",
+                                            "lon_raw", "alt_raw", "speed_raw")},
+            "decoded_float": _gnss_floats(dec),
+            "expectation": "the integers of 'decoded' are the expectation of a decoder; 'decoded_float' is the "
+                           "same values in units (null = validity bit clear, field ignored); no encoder rounding "
+                           "is assumed",
             "libm17_args": {"data_source": src, "station_type": st, "lat": lat, "lon": lon, "validity": dec["validity"],
                             "altitude": alt, "bearing": brg, "speed": spd, "radius": rad},
             "spec": SPEC_GNSS + "; derived: lat/lon raw = trunc(deg/90*8388607) and trunc(deg/180*8388607) "

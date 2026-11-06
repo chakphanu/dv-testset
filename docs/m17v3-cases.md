@@ -111,6 +111,38 @@ RFC 6979 nonce. Published by RFC 6979 A.2.5: the two P-256 vectors in
 arithmetic against OpenSSL (`cryptography` package, skipped when absent) with
 the 16-byte digest left-padded to 32 bytes.
 
+## Strict collector expectations (`expect.collector`)
+
+DV-Router's signature collector (`dv_lib_pkt::m17_signature`) is strict, so each
+signed-stream entry also names its outcome there; `expect.verdict` stays the
+spec-level verdict. `dvtest.proto.m17v3.collect_stream` is the reference of
+the rules and the unit tests check every entry against it.
+
+| `collector` | Entries |
+|-------------|---------|
+| `complete_valid` | valid, valid-meta-changes, boundary-max-frames |
+| `complete_invalid_signature` | tampered-payload, wrong-key, digest-* (5) |
+| `incomplete` | missing-tail-frame, missing-tail-two, missing-tail-all, truncated-mid-stream |
+| `sequence_error` | lost-frame, reordered-frames, duplicate-data-frame, early-tail-chunk, eot-* (5), tail-duplicate-fn, tail-fn-shifted, boundary-one-too-many; signed-bit-no-tail (also acceptable: `incomplete`) |
+| `size_error` | short-packet, short-data-packet, long-packet |
+| `bad_public_key` | bad-key-off-curve, bad-key-63-bytes, bad-key-zero |
+| `bad_signature_encoding` | bad-signature-r-zero, bad-signature-s-equals-n, bad-signature-s-max, bad-signature-r-equals-n |
+| `null` (unsigned, signing bit clear, no tail expected) | unsigned-plain, unsigned-with-tail |
+
+Assumption to confirm with the collector's author: the 16-bit FN is compared as
+sent. Then EOT on any frame but the last chunk, or a last chunk of 7FFF instead
+of FFFF, is a `sequence_error` (all `eot-*` entries and `signed-bit-no-tail`,
+whose last data frame has FN 8005). If the collector masks the EOT bit of data
+frames and reads it as "stream ended", `signed-bit-no-tail` is `incomplete`
+(listed in `collector_also_acceptable`). `lost-frame` is a `sequence_error`,
+not `complete_invalid_signature`, because FN 0, 1, 2, ... has a gap.
+
+Added in this round: duplicate-data-frame, early-tail-chunk, short-data-packet,
+long-packet, unsigned-plain, bad-key-off-curve, bad-key-63-bytes, bad-key-zero,
+bad-signature-r-zero, bad-signature-s-equals-n, bad-signature-s-max,
+bad-signature-r-equals-n. The GNSS entries gained `decoded` and
+`decoded_float`; the key forms are unchanged (DV-Router uses `public_xy`).
+
 ## Planned cases P26j-1 .. P26j-9
 
 All are driven by the vector files, not by the rig. "Assert" is what the
@@ -120,7 +152,7 @@ DV-Router Rust test compares; "oracle" is what checks the vector itself.
 |------|--------------------------|--------|
 | P26j-1 TYPE codec | `type_meta.json` `v3_type` rows: TYPE integer and 2 bytes; `v3_type_invalid` rows are refused | spec only |
 | P26j-2 legacy <-> v3 mapping | `map_legacy_to_v3` (20 rows incl. 1600 bps and reserved bits unmappable) and `map_v3_to_legacy` | spec only |
-| P26j-3 gate matrix (test-only enable on, then off) | per `signed_streams.json` entry, the gate outcome next to the spec verdict: accept `valid`, `valid-meta-changes`, `boundary-max-frames`; `invalid_signature` entries (tampered payload, wrong key, lost frame, reordered, 5 digest variants); `incomplete` (missing tail frame x2, no tail, signed bit without tail, truncated); `malformed` (EOT x5, tail FN x2, short packet, one-too-many); `unsigned-with-tail`. With the gate off every v3 TYPE is refused. What "refuse" means (drop, strip signed flag, forward unsigned) is DV-Router's decision; the spec verdict is the vector | spec; signature rows also m17-fme |
+| P26j-3 gate matrix (test-only enable on, then off) | per `signed_streams.json` entry, the gate outcome next to the spec verdict: accept `valid`, `valid-meta-changes`, `boundary-max-frames`; `invalid_signature` entries (tampered payload, wrong key, lost frame, reordered, 5 digest variants); `incomplete` (missing tail frame x2, no tail, signed bit without tail, truncated); `malformed` (EOT x5, tail FN x2, short and long packets, early tail chunk, one-too-many); `unsigned-with-tail`, `unsigned-plain`; `bad-key-*`, `bad-signature-*` (see the collector table). With the gate off every v3 TYPE is refused. What "refuse" means (drop, strip signed flag, forward unsigned) is DV-Router's decision; the spec verdict is the vector | spec; signature rows also m17-fme |
 | P26j-4 signature verification | `keys.json` + `ecdsa.json` + `valid`: the verifier accepts the 64-byte `r\|\|s` over the 16-byte digest with `public_xy` (or SEC1 `04\|\|x\|\|y`); RFC 6979 rows prove the arithmetic | m17-fme / micro-ecc (Docker), OpenSSL (done in unit test) |
 | P26j-5 META encodings | `meta_text_v3` (13 bytes, 3 blocks, 15 blocks / 195 bytes, UTF-8, packet 0x11), `meta_text_v2`, `meta_gnss` (7 rows incl. extremes and nothing valid), `meta_ecd`, `meta_aes_iv` | libm17 / mrefd for GNSS, ECD, IV; spec only for text |
 | P26j-6 legacy receiver gets META omitted | `map_v3_to_legacy` rows with policy `omit`: GNSS, text, ECD dropped (zero META, null-encryption text subtype), AES IV kept; policy `convert` rows are the alternative | spec + research brief |

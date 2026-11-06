@@ -102,3 +102,5 @@ def test_verify_entry_with_a_fake_runner(tmp_path):
     assert len((tmp_path / "pub.txt").read_text()) == 128
     big = next(e for e in doc["entries"] if e["id"] == "boundary-max-frames")
     assert o.verify_entry(big, b"", "img", str(tmp_path), run=fake) is None
+    short_key = next(e for e in doc["entries"] if e["id"] == "bad-key-63-bytes")
+    assert o.verify_entry(short_key, bytes.fromhex(short_key["verify_public_xy"]), "img", str(tmp_path), run=fake) is None

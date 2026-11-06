@@ -324,6 +324,7 @@ def test_boundary_frame_counts():
         frames = v3.signed_frames(payloads, sig)
         packets = v3.frames_to_packets(frames, 0x4D03)
         assert v3.verify_stream(packets, PUB_A)["verdict"] == verdict, count
+        assert v3.collect_stream(packets, PUB_A) == ("complete_valid" if verdict == "valid" else "sequence_error"), count
     assert [f[0] for f in v3.signed_frames(v3.payload_stream("b", v3.MAX_DATA_FRAMES), bytes(64))][-5:] == \
         [0x7FFB, 0x7FFC, 0x7FFD, 0x7FFE, 0x7FFF]
 
@@ -380,24 +381,68 @@ def test_ecdsa_vectors():
 
 
 def test_signed_stream_vectors_give_their_stated_verdicts():
-    keys = {"a": PUB_A, "b": ec.public_key(KEY_B)}
     doc = _load("signed_streams.json")
     seen = set()
     for entry in doc["entries"]:
-        expect = entry["expect"]["verdict"]
+        expect = entry["expect"]
         seen.add(entry["id"])
+        assert expect["collector"] in v3.COLLECTOR_VERDICTS or expect["collector"] is None, entry["id"]
+        assert entry["signing_bit"] == (not (entry["id"].startswith("unsigned"))), entry["id"]
+        assert entry["tail_expected"] == entry["signing_bit"], entry["id"]
         if entry["packets"] is None:
             continue                                               # large recipes: test_boundary_frame_counts
+        pub = bytes.fromhex(entry["verify_public_xy"])
         packets = [bytes.fromhex(p) for p in entry["packets"]]
-        got = v3.verify_stream(packets, keys[entry["verify_key"]])["verdict"]
-        assert got == expect, entry["id"]
-        if expect == "valid":
+        assert v3.verify_stream(packets, pub)["verdict"] == expect["verdict"], entry["id"]
+        if expect["collector"] is None:
+            assert not entry["signing_bit"]
+        else:
+            assert v3.collect_stream(packets, pub) == expect["collector"], entry["id"]
+        if expect["verdict"] == "valid":
             legacy = v3.retype_packets(packets, int(entry["legacy_type"], 16), bytes(14))
-            assert v3.verify_stream(legacy, keys[entry["verify_key"]])["verdict"] == "valid", entry["id"]
+            assert v3.verify_stream(legacy, pub)["verdict"] == "valid", entry["id"]
     for needed in ("valid", "tampered-payload", "wrong-key", "missing-tail-frame", "reordered-frames", "truncated-mid-stream",
                    "digest-right-padded-32", "digest-truncated-15", "signed-bit-no-tail", "eot-last-data",
-                   "boundary-max-frames", "boundary-one-too-many"):
+                   "boundary-max-frames", "boundary-one-too-many", "duplicate-data-frame", "early-tail-chunk",
+                   "short-data-packet", "long-packet", "bad-key-off-curve", "bad-key-63-bytes", "bad-signature-r-zero",
+                   "bad-signature-s-equals-n", "bad-signature-s-max", "unsigned-plain"):
         assert needed in seen, needed
+    assert seen == set(vec.COLLECTOR)                              # every vector has a collector expectation
+
+
+def test_collector_classes_by_hand():
+    s = v3.signed_stream(KEY_A, v3.payload_stream("c", 6))
+    pk, pub = s["packets"], PUB_A
+    assert v3.collect_stream(pk, pub) == "complete_valid"
+    assert v3.collect_stream(pk[:9], pub) == "incomplete" and v3.collect_stream(pk[:3], pub) == "incomplete"
+    assert v3.collect_stream([], pub) == "incomplete"
+    assert v3.collect_stream(pk[:2] + pk[3:], pub) == "sequence_error"                 # gap
+    assert v3.collect_stream(pk[:3] + pk[2:], pub) == "sequence_error"                 # duplicate
+    assert v3.collect_stream([pk[1], pk[0]] + pk[2:], pub) == "sequence_error"         # reordered
+    assert v3.collect_stream(pk + [pk[-1]], pub) == "sequence_error"                   # packet after the tail
+    assert v3.collect_stream(pk[:3] + [pk[6]] + pk[3:6] + pk[7:], pub) == "sequence_error"   # early tail
+    assert v3.collect_stream(pk[:3] + [pk[3][:53]] + pk[4:], pub) == "size_error"
+    assert v3.collect_stream(pk[:3] + [pk[3] + b"\0"] + pk[4:], pub) == "size_error"
+    assert v3.collect_stream(pk, PUB_A[:63]) == "bad_public_key"
+    assert v3.collect_stream(pk, bytes(64)) == "bad_public_key"
+    assert v3.collect_stream(pk, ec.public_key(KEY_B)) == "complete_invalid_signature"
+    n = ec.N.to_bytes(32, "big")
+    sig = s["signature"]
+    for bad in (bytes(32) + sig[32:], sig[:32] + bytes(32), sig[:32] + n, n + sig[32:], sig[:32] + b"\xff" * 32):
+        stream = v3.frames_to_packets(v3.signed_frames(v3.payload_stream("c", 6), bad), 1)
+        assert v3.collect_stream(stream, pub) == "bad_signature_encoding"
+    # the EOT bit is compared as sent
+    assert v3.collect_stream(v3.frames_to_packets(v3.neg_eot(s["frames"], "none"), 1), pub) == "sequence_error"
+
+
+def test_new_negative_builders():
+    payloads = v3.payload_stream("n", 6)
+    s = v3.signed_stream(KEY_A, payloads)
+    dup = v3.neg_duplicate_frame(s["frames"], 2)
+    assert [f[0] for f in dup][:5] == [0, 1, 2, 2, 3] and len(dup) == len(s["frames"]) + 1
+    early = v3.neg_early_tail(s["frames"], 3)
+    assert [f[0] for f in early] == [0, 1, 2, 0x7FFC, 3, 4, 5, 0x7FFD, 0x7FFE, 0x7FFF]
+    assert early[-1][1] is True and sum(1 for f in early if f[1]) == 1
 
 
 def test_boundary_recipes_regenerate():
@@ -454,6 +499,17 @@ def test_type_meta_vectors_match_encoders():
         elif kind == "meta_gnss":
             dec = v3.decode_gnss(bytes.fromhex(entry["meta"]))
             assert {k: dec[k] for k in entry["raw"]} == entry["raw"]
+            assert {k: dec[k] for k in entry["decoded"]} == entry["decoded"]
+            assert set(entry["decoded"]) == {"source", "station", "validity", "radius_n", "bearing", "lat_raw",
+                                             "lon_raw", "alt_raw", "speed_raw"}
+            fl = entry["decoded_float"]
+            valid = dec["validity"]
+            assert (fl["lat_deg"] is None) == (not valid & v3.V_LATLON) == (fl["lon_deg"] is None)
+            assert (fl["altitude_m"] is None) == (not valid & v3.V_ALT)
+            assert (fl["speed_kmh"] is None) == (fl["bearing_deg"] is None) == (not valid & v3.V_VELOCITY)
+            assert (fl["radius_m"] is None) == (not valid & v3.V_RADIUS)
+            if fl["lat_deg"] is not None:
+                assert fl["lat_deg"] == dec["lat_raw"] / 8388607.0 * 90.0
         elif kind == "meta_ecd":
             c1, c2 = entry["callsigns"]
             assert bytes.fromhex(entry["meta"]) == v3.ecd_meta(c1, c2)
@@ -474,3 +530,23 @@ def test_overlay_fills_oracle_verdict_and_rejects_unknown_ids():
     assert entry["oracle_verdict"] == "Signature Valid"
     with pytest.raises(ValueError):
         vec.build_all(overlay={"no-such-id": "x"})
+
+
+def test_gnss_decoded_integers_by_hand():
+    entries = {e["id"]: e for e in _load("type_meta.json")["entries"] if e["kind"] == "meta_gnss"}
+    # all-valid: see test_gnss_hand_values for the derivation
+    assert entries["gnss-all-valid"]["decoded"] == {
+        "source": 0, "station": 1, "validity": 15, "radius_n": 3, "bearing": 270, "lat_raw": 4194303,
+        "lon_raw": 4194303, "alt_raw": 1201, "speed_raw": 175}
+    fl = entries["gnss-all-valid"]["decoded_float"]
+    assert fl["altitude_m"] == 100.5 and fl["speed_kmh"] == 87.5 and fl["bearing_deg"] == 270.0
+    assert fl["radius_m"] == 8.0 and abs(fl["lat_deg"] - 45.0) < 90.0 / 8388607
+    # extremes: lon -8388607, altitude 65535, speed 4095
+    ext = entries["gnss-extremes"]["decoded"]
+    assert (ext["lat_raw"], ext["lon_raw"], ext["alt_raw"], ext["speed_raw"], ext["radius_n"], ext["bearing"]) == \
+        (8388607, -8388607, 65535, 4095, 7, 359)
+    assert entries["gnss-extremes"]["decoded_float"]["altitude_m"] == 32267.5
+    # nothing valid: every integer zero, every float null
+    none = entries["gnss-nothing-valid"]
+    assert none["decoded"]["validity"] == 0 and none["decoded"]["lat_raw"] == 0
+    assert all(v is None for v in none["decoded_float"].values())

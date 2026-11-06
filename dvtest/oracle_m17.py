@@ -181,8 +181,8 @@ def verify_entry(entry, public_xy, image, workdir, run=run_command):
     """Write the entry's packets (legacy-labelled) and the key into workdir, run
     the container once, return compare()'s dict plus the summary. Entries with
     a recipe instead of packets are skipped (None)."""
-    if entry.get("packets") is None:
-        return None
+    if entry.get("packets") is None or len(public_xy) != 64:
+        return None                 # a recipe, or a key m17-fme's key file cannot hold
     packets = legacy_view([bytes.fromhex(p) for p in entry["packets"]], int(entry["legacy_type"], 16),
                           bytes(14))
     with open("%s/stream.ipf" % workdir, "w", encoding="ascii") as handle:
@@ -200,7 +200,7 @@ def verify_entry(entry, public_xy, image, workdir, run=run_command):
 def main(argv=None):
     """python3 -m dvtest.oracle_m17 --image dvt-m17fme:local [--vectors DIR] [--out FILE]
     Runs every signed-stream vector with packets through the container and writes
-    the comparison as JSON (the oracle_verdict values of the vector files are
+    the comparison as JSON (entries with a recipe or a key that is not 64 bytes are skipped; the oracle_verdict values of the vector files are
     filled from it by hand, not by this tool)."""
     import os
     import tempfile
@@ -213,12 +213,10 @@ def main(argv=None):
     args = parser.parse_args(argv)
     with open(os.path.join(args.vectors, "signed_streams.json"), encoding="ascii") as handle:
         entries = json.load(handle)["entries"]
-    with open(os.path.join(args.vectors, "keys.json"), encoding="ascii") as handle:
-        keys = {e["id"][4:]: bytes.fromhex(e["public_xy"]) for e in json.load(handle)["entries"]}
     results = []
     for entry in entries:
         with tempfile.TemporaryDirectory(prefix="dvt-m17fme-") as work:
-            res = verify_entry(entry, keys[entry["verify_key"]], args.image, work)
+            res = verify_entry(entry, bytes.fromhex(entry["verify_public_xy"]), args.image, work)
         if res is not None:
             results.append(res)
     doc = {"schema": SCHEMA, "image": args.image, "results": results,

@@ -612,6 +612,18 @@ def neg_swap_frames(frames, i, j):
     return out
 
 
+def neg_duplicate_frame(frames, index):
+    """Data frame `index` arrives twice in a row (same FN, same payload)."""
+    return frames[:index + 1] + [frames[index]] + frames[index + 1:]
+
+
+def neg_early_tail(frames, position=3):
+    """The first signature chunk (7FFC) arrives after `position` data frames and
+    the remaining data frames follow it."""
+    data = len(frames) - SIG_FRAMES
+    return frames[:position] + [frames[data]] + frames[position:data] + frames[data + 1:]
+
+
 def neg_truncated_tail(frames, keep):
     """Only the first `keep` (0..3) signature frames arrive."""
     return frames[:len(frames) - SIG_FRAMES + keep]
@@ -666,3 +678,55 @@ def _digest_no_rotate(payloads):
     for p in payloads:
         digest = bytes(a ^ b for a, b in zip(digest, p))
     return digest
+
+
+# ---------------------------------------------------------------- strict collector (reference)
+
+COLLECTOR_VERDICTS = ("complete_valid", "complete_invalid_signature", "incomplete", "sequence_error",
+                      "size_error", "bad_public_key", "bad_signature_encoding")
+TAIL_FNS = (0x7FFC, 0x7FFD, 0x7FFE, 0xFFFF)          # as sent: the EOT bit is part of the last one
+
+
+def collect_stream(packets, public_xy):
+    """Reference of a strict collector (the rules DV-Router's signature collector
+    states), for the packets of a SIGNED stream in arrival order. The 16-bit FN
+    field is compared as sent (EOT bit included):
+      * a packet that is not 54 bytes                      -> "size_error"
+      * FN below 0x7FFC must be exactly 0, 1, 2, ... in order and only before
+        the tail started; FN 0x7FFC or above must be exactly the next of
+        7FFC, 7FFD, 7FFE, FFFF; anything else (gap, duplicate, early tail,
+        reordered, extra packet after the tail)          -> "sequence_error"
+      * the tail never enters the digest
+      * fewer than four tail chunks at the end             -> "incomplete"
+      * public key not 64 bytes or not on the curve        -> "bad_public_key"
+      * r or s zero or not below n                         -> "bad_signature_encoding"
+      * verification false / true                -> "complete_invalid_signature" / "complete_valid"
+    """
+    expected = 0
+    tail = []
+    digest = bytes(16)
+    for pkt in packets:
+        if len(pkt) != m17.PACKET_SIZE:
+            return "size_error"
+        fn = int.from_bytes(pkt[34:36], "big")
+        payload = pkt[36:52]
+        if fn >= SIG_FN_FIRST:
+            if len(tail) >= SIG_FRAMES or fn != TAIL_FNS[len(tail)]:
+                return "sequence_error"
+            tail.append(payload)
+        else:
+            if tail or fn != expected:
+                return "sequence_error"
+            digest = digest_step(digest, payload)
+            expected += 1
+    if len(tail) < SIG_FRAMES:
+        return "incomplete"
+    try:
+        ecdsa_p256._point(public_xy)
+    except ecdsa_p256.EcdsaError:
+        return "bad_public_key"
+    sig = b"".join(tail)
+    r, s = int.from_bytes(sig[:32], "big"), int.from_bytes(sig[32:], "big")
+    if not (1 <= r < ecdsa_p256.N and 1 <= s < ecdsa_p256.N):
+        return "bad_signature_encoding"
+    return "complete_valid" if ecdsa_p256.verify_digest(public_xy, digest, sig) else "complete_invalid_signature"
