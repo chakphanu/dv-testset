@@ -21,11 +21,16 @@ the rendered dv-router.toml of the run.
                              talk of `frames` (pads and EOT repeats of the egress)
   compare_payload(sent, got) byte comparison of the sent frames with a replay
   dstar_streams(items, gap)  the DSVT streams (header + voice packets) among timed datagrams
-  header_record(packet)      RPT1 / RPT2 / MY / UR of a DSVT header, as text
-  integrity(...)             the D-STAR echo return judge (E9): lost frames, arrival gaps,
-                             seq bytes, sync pattern, end bit, header
+  header_record(packet)      flags / RPT1 / RPT2 / UR / MY / suffix of a D-STAR header, as text
+  header_failures(...)       the echo header rule of E9 (talker fields as sent, RPT2 as the live copy)
+  voice_view / header_view   the fields of a voice / header packet of any E9 kind
+  integrity(...)             the echo return judge (E9) for the kinds dextra, dplus, dcs, g3, xlx:
+                             lost frames, arrival gaps, seq bytes, sync pattern, end bit, the
+                             protocol's own counter (DCS frame counter, XLX DMR packet id)
+  aux_vs_forward(...)        the echo's own counter sequence against the forward copy's
   summarize(label, results)  the numbers of the E9 summary for a list of integrity() results
   integrity_failures(...)    the assertion messages of E9 for the summaries of all streams
+  xlx_peer_rows / xlx_mode   which XLX peer row of the rendered config the E9 xlx kind can use
 """
 import re
 import tomllib
@@ -33,7 +38,7 @@ from collections import namedtuple
 
 from . import clients, metrics, sut_config
 from .audio import signals
-from .proto import dextra, dmr, m17, ysf
+from .proto import dcs, dextra, dmr, dplus, m17, xlx, ysf
 
 DEFAULT_MAX_SECONDS = 30
 DEFAULT_DELAY_MS = 1000
@@ -302,77 +307,195 @@ def valid_module(letter):
 
 
 # ---------------------------------------------------------------- D-STAR echo return integrity (E9)
-
 GAP_MAX_MS = 25.0               # an arrival gap above this is a lost or late frame (a frame is 20 ms)
+GAP_CATCHUP_MS = 35.0           # a gap of this or more is a tick that should have emitted two units and emitted one (about 40 ms)
 SEQ_PERIOD = 21                 # D-STAR frame counter: 0..20, frame 0 of a superframe carries the sync pattern
 END_BIT = 0x40                  # on the seq byte of the last voice packet
 SEQ_BAD_KEEP = 5                # how many (index, got, want) rows integrity() keeps
 SYNC_FIELD = dextra.SYNC_DATA   # slow data 55 2d 16 on frame 0 of each superframe
+KINDS = ("dextra", "dplus", "dcs", "g3", "xlx")     # the client / peer kinds E9 judges
+HEADER_KEYS = ("flags", "rpt1", "ur", "my", "suffix")   # the echo must return these as the talker sent them
+DMR_IDS_PERIOD = 18             # XLX revision 2/3 voice frames: DMR packet id 0..5 x sub id 1..3 = 18 steps
 
 
-def dstar_streams(items, gap=0.4):
-    """Streams among `items` = [(t, datagram)]: datagrams that are not a DSVT header or voice packet
-    (keepalives, link replies) are left out; a new stream starts when more than `gap` seconds passed
-    since the previous header or voice packet (the echo starts about 1 s after the over it repeats).
-    Returns [{"start": t, "end": t, "sids": [stream ids], "header": 56 B packet or None,
-    "voice": [(t, 27 B packet)]}] in time order."""
+def _le16(raw):
+    return int.from_bytes(raw, "little")
+
+
+def header_view(kind, data):
+    """The header a packet of `kind` carries, as {"stream_id", "flags", "rpt2", "rpt1", "ur", "my", "suffix"}
+    (raw bytes), or None. dextra / g3 / xlx: the 56 byte DSVT header; dplus: the 58 byte packet (3a 80 +
+    DSVT header); dcs: the 100 byte voice packet (DCS has no header packet, every voice packet carries
+    the header fields, so the first voice packet of a stream is its header)."""
+    data = bytes(data) if data else b""
+    if kind == "dcs":
+        if len(data) < dcs.PACKET_SIZE or not data.startswith(b"0001"):
+            return None
+        raw = dcs.parse_raw(data)
+        return {"stream_id": _le16(raw["sid"]), **{k: raw[k] for k in ("flags", "rpt2", "rpt1", "ur", "my", "suffix")}}
+    if kind == "dplus":
+        if len(data) != dplus.HEADER_SIZE or data[:2] != b"\x3a\x80":
+            return None
+        data = data[2:]
+    full = dextra.parse_header_full(data)
+    if full is None:
+        return None
+    return {k: full[k] for k in ("stream_id", "flags", "rpt2", "rpt1", "ur", "my", "suffix")}
+
+
+def voice_view(kind, data):
+    """The voice packet of `kind` as {"stream_id", "counter" (the raw seq byte, 0x40 = last), "last", "ambe"
+    (9 bytes), "slow" (3 bytes)} plus the kind's own counter: dcs "frame_counter" (u24 at byte 58), xlx
+    "pid" / "subid" (DMR packet id and sub id, bytes 27 and 28 of a revision 2 / 3 frame). None for
+    anything that is not a voice packet of that kind (headers, keepalives, link packets).
+
+    dextra / g3: 27 byte DSVT; dplus: 29 byte (1d 80 + DSVT) and the 32 byte last form (20 80 + DSVT ...);
+    dcs: 100 byte packet starting 0001; xlx: 27 / 45 / 53 byte DSVT (revision 1 / 2 / 3)."""
+    data = bytes(data) if data else b""
+    if kind in ("dextra", "g3"):
+        return dextra.parse_voice_raw(data)
+    if kind == "dplus":
+        if len(data) == dplus.VOICE_SIZE and data[:2] == b"\x1d\x80":
+            return dextra.parse_voice_raw(data[2:])
+        if len(data) == dplus.LAST_SIZE and data[:2] == b"\x20\x80" and data[2:6] == b"DSVT" and data[6] == 0x20:
+            return {"stream_id": _le16(data[14:16]), "counter": data[16], "last": bool(data[16] & END_BIT),
+                    "ambe": data[17:26], "slow": data[26:29]}
+        return None
+    if kind == "dcs":
+        if len(data) < dcs.PACKET_SIZE or not data.startswith(b"0001"):
+            return None
+        raw = dcs.parse_raw(data)
+        return {"stream_id": _le16(raw["sid"]), "counter": raw["seq_byte"], "last": raw["last"],
+                "ambe": raw["frame"], "slow": raw["slow"], "frame_counter": raw["counter"]}
+    if kind == "xlx":
+        if len(data) not in xlx.REVISION_OF_SIZE or not data.startswith(b"DSVT") or data[4] != 0x20 or data[8] != 0x20:
+            return None
+        out = {"stream_id": _le16(data[12:14]), "counter": data[14], "last": bool(data[14] & END_BIT),
+               "ambe": data[15:24], "slow": data[24:27]}
+        if len(data) >= 45:
+            out["pid"], out["subid"] = data[27], data[28]
+        return out
+    raise ValueError("unknown kind %r (known: %s)" % (kind, ", ".join(KINDS)))
+
+
+def dstar_streams(items, gap=0.4, kind="dextra"):
+    """Streams among `items` = [(t, datagram)] of a client / peer of `kind` (default dextra): datagrams that
+    are not a header or voice packet of the kind (keepalives, link replies) are left out; a new stream
+    starts when more than `gap` seconds passed since the previous header or voice packet (the echo starts
+    about 1 s after the over it repeats).
+    Returns [{"start": t, "end": t, "sids": [stream ids], "header": the header packet or None,
+    "voice": [(t, voice packet)]}] in time order. For dcs there is no header packet: "header" is the
+    first voice packet of the stream (it carries the header fields)."""
     out, last = [], None
     for t, data in sorted(((t, bytes(d)) for t, d in items), key=lambda i: i[0]):
-        head = dextra.parse_header(data)
-        voice = None if head else dextra.parse_voice(data)
+        head = None if kind == "dcs" else header_view(kind, data)
+        voice = None if head else voice_view(kind, data)
         if not head and not voice:
             continue
         if last is None or t - last > gap:
             out.append({"start": t, "end": t, "sids": [], "header": None, "voice": []})
         cur = out[-1]
         last = cur["end"] = t
-        sid = head["stream_id"] if head else voice[0]
+        sid = (head or voice)["stream_id"]
         if sid not in cur["sids"]:
             cur["sids"].append(sid)
         if head:
             cur["header"] = cur["header"] or data
         else:
             cur["voice"].append((t, data))
+            if kind == "dcs" and cur["header"] is None:
+                cur["header"] = data
     return out
 
 
 def header_record(packet):
-    """{"rpt1", "rpt2", "my", "ur"} of a 56 B DSVT header as stripped text (ASCII, replacement for
-    other bytes), None for anything else."""
-    head = dextra.parse_header(bytes(packet)) if packet else None
-    if head is None:
+    """{"flags" (hex), "rpt1", "rpt2", "my", "ur", "suffix"} of a D-STAR header as stripped text (ASCII,
+    replacement for other bytes), None for anything else. `packet` is the 56 byte DSVT header (DExtra, G3,
+    XLX), the 58 byte DPlus header or a 100 byte DCS voice packet (told apart by size)."""
+    data = bytes(packet) if packet else b""
+    if len(data) == dextra.HEADER_SIZE:
+        view = header_view("dextra", data)
+    elif len(data) == dplus.HEADER_SIZE:
+        view = header_view("dplus", data)
+    elif len(data) >= dcs.PACKET_SIZE:
+        view = header_view("dcs", data)
+    else:
+        view = None
+    if view is None:
         return None
-    return {k: head[k].decode("ascii", "replace").strip() for k in ("rpt1", "rpt2", "my", "ur")}
+    out = {k: view[k].decode("ascii", "replace").strip() for k in ("rpt1", "rpt2", "my", "ur", "suffix")}
+    out["flags"] = bytes(view["flags"]).hex()
+    return out
 
 
-def integrity(sent_frames, voice_packets, arrivals=None, header=None, max_gap_ms=GAP_MAX_MS):
-    """Judge one D-STAR stream (a forward copy or an echo return) against the frames that were sent.
-    Pure: no I/O, no clock.
+def header_failures(sent, forward_header, echo_header):
+    """The echo header rule (DV-Router): the echo returns the talker's flags (3 bytes), RPT1, UR, MY and
+    suffix exactly as sent, and its RPT2 follows the live rule, i.e. is the RPT2 the forward (live) copy of
+    the same over carries (reflector name + room module, `XRF999 E`), so that ircDDBGateway style listeners
+    accept it. All three arguments are header_record() dicts (None: not heard). Returns the messages, empty
+    when the rule holds."""
+    if echo_header is None:
+        return ["no echo header"]
+    out = []
+    if sent is None:
+        out.append("the header the sender sent is unknown")
+    else:
+        for key in HEADER_KEYS:
+            if echo_header.get(key) != sent.get(key):
+                out.append("echo %s is %r, the sender sent %r" % (key.upper(), echo_header.get(key), sent.get(key)))
+    if forward_header is None:
+        out.append("no forward header to compare RPT2 with")
+    elif echo_header.get("rpt2") != forward_header.get("rpt2"):
+        out.append("echo RPT2 is %r, the forward copy carries %r" % (echo_header.get("rpt2"), forward_header.get("rpt2")))
+    return out
+
+
+def _dmr_ids_want(pos, base_pos, base_k):
+    k = (base_k + pos - base_pos) % DMR_IDS_PERIOD
+    return (k // 3, k % 3 + 1)
+
+
+def integrity(sent_frames, voice_packets, arrivals=None, header=None, max_gap_ms=GAP_MAX_MS, kind="dextra"):
+    """Judge one stream (a forward copy or an echo return) of a client / peer of `kind` against the frames
+    that were sent. Pure: no I/O, no clock.
 
     sent_frames   the 9 byte AMBE frames of the over, in order (the sender's end packet is not one)
-    voice_packets the 27 byte DSVT voice packets of the stream in arrival order, the last one included
+    voice_packets the voice packets of the stream (voice_view layout of the kind) in arrival order, the last
+                  one included
     arrivals      the arrival time (seconds, monotonic) of each packet; None skips the gap checks
-    header        the 56 byte DSVT header of the stream, or None
+    header        the header packet of the stream (header_record), or None
+    kind          dextra (default), dplus, dcs, g3 or xlx
 
-    Voice packet layout (27 bytes): "DSVT" (0-3), 0x20 (4), 00 00 00 (5-7), 0x20 (8), 00 01 02 (9-11),
-    stream id (12-13, little endian), seq byte (14), AMBE (15-23), slow data (24-26). The seq byte is the
-    frame's position in the stream (0-based) modulo 21, and the last packet of the stream has bit 0x40
-    set on top of it. The slow data of a frame at position mod 21 == 0 is the sync pattern 55 2d 16 and
-    no other frame carries it. Position is counted in the stream as heard, so a lost frame shows as a
-    gap and as a wrong seq from there on, as it would to a receiver.
+    What is judged, for every kind: the payload (each sent 9 byte frame is heard, byte for byte, none extra),
+    the arrival gaps between consecutive packets (above 25 ms; and the subset of 35 ms or more, a tick that
+    emitted one unit where it should have emitted two), the D-STAR seq byte, the sync pattern, the end bit.
+    The 27 byte DSVT voice layout (DExtra, G3, XLX revision 1; DPlus and DCS wrap the same fields): "DSVT"
+    (0-3), 0x20 (4), 00 00 00 (5-7), 0x20 (8), 00 01 02 (9-11), stream id (12-13, little endian), seq byte
+    (14), AMBE (15-23), slow data (24-26). The seq byte is the frame's position in the stream (0-based)
+    modulo 21, and the last packet of the stream has bit 0x40 set on top of it. The slow data of a frame at
+    position mod 21 == 0 is the sync pattern 55 2d 16 and no other frame carries it. Position is counted in
+    the stream as heard, so a lost frame shows as a gap and as a wrong seq from there on, as it would to a
+    receiver. On the XLX interlink this seq byte is xlxd's "packet id".
+    The kind's own counter (never on the last packet): dcs "frame_counter" (u24 at byte 58) must equal the
+    position; xlx revision 2 / 3 frames carry a DMR packet id (0..5) and sub id (1..3) that must advance by
+    one step per packet (id 0..5 x sub 1..3, wrapping) from the first packet's values; aux_vs_forward()
+    compares the sequence with the forward copy's.
 
     Returns a dict:
-      frames_sent, frames_heard (voice packets but the last, which is the end of the stream),
+      kind, frames_sent, frames_heard (voice packets but the last, which is the end of the stream),
       lost (sent frames whose payload was not heard), lost_indexes (first few), extra (frames heard that
       were not sent), reordered (heard frames earlier in the sent order than the one before),
-      max_gap_ms, gaps_over_25ms ([(position, gap_ms)] over max_gap_ms),
+      max_gap_ms, gaps_over_25ms ([(position, gap_ms)] over max_gap_ms), gaps_ge_35ms (the subset of
+      GAP_CATCHUP_MS or more),
       seq_checked, seq_bad_count, seq_ok_share, seq_bad ([(position, got, want)], first few),
       last_frame_has_end_bit, sync_frames (positions of packets with 55 2d 16), sync_missing (positions
       mod 21 == 0 without it), sync_extra (other positions with it), header (header_record or None),
-      packets (voice packets in the stream)."""
+      packets (voice packets in the stream),
+      aux_name (None, "frame_counter" or "dmr_packet_id"), aux_checked, aux_bad_count, aux_bad
+      ([(position, got, want)], first few), aux_seq (the counter values by position, for aux_vs_forward)."""
     sent = [bytes(f) for f in sent_frames]
     packets = [bytes(p) for p in voice_packets]
-    parsed = [dextra.parse_voice_raw(p) for p in packets]
+    parsed = [voice_view(kind, p) for p in packets]
     body = [(pos, v) for pos, v in enumerate(parsed) if v and not v["last"]]
     heard = [v["ambe"] for _, v in body]
 
@@ -393,7 +516,7 @@ def integrity(sent_frames, voice_packets, arrivals=None, header=None, max_gap_ms
     reordered = sum(1 for a, b in zip(order, order[1:]) if b < a)
 
     # arrival gaps between consecutive packets
-    gaps = []
+    gaps, catchup = [], []
     max_gap = 0.0
     if arrivals is not None:
         times = list(arrivals)
@@ -402,6 +525,8 @@ def integrity(sent_frames, voice_packets, arrivals=None, header=None, max_gap_ms
             max_gap = max(max_gap, gap)
             if gap > max_gap_ms:
                 gaps.append((pos, round(gap, 1)))
+            if gap >= GAP_CATCHUP_MS:
+                catchup.append((pos, round(gap, 1)))
 
     # seq byte and sync pattern by position
     seq_bad, seq_bad_count, sync_frames, sync_missing, sync_extra = [], 0, [], [], []
@@ -424,23 +549,65 @@ def integrity(sent_frames, voice_packets, arrivals=None, header=None, max_gap_ms
         elif pos % SEQ_PERIOD != 0 and has_sync:
             sync_extra.append(pos)
     checked = sum(1 for v in parsed if v)
+
+    # the kind's own counter
+    aux_name, aux_checked, aux_bad_count, aux_bad, aux_seq = None, 0, 0, [], []
+    base = None
+    for pos, v in body:
+        if "frame_counter" in v:
+            aux_name = "frame_counter"
+            got, want = v["frame_counter"], pos
+            aux_seq.append(got)
+        elif "pid" in v:
+            aux_name = "dmr_packet_id"
+            got = (v["pid"], v["subid"])
+            if base is None:
+                valid = 0 <= v["pid"] <= 5 and 1 <= v["subid"] <= 3
+                base = (pos, v["pid"] * 3 + v["subid"] - 1 if valid else pos % DMR_IDS_PERIOD)
+            want = _dmr_ids_want(pos, *base)
+            aux_seq.append(got)
+        else:
+            continue
+        aux_checked += 1
+        if got != want:
+            aux_bad_count += 1
+            if len(aux_bad) < SEQ_BAD_KEEP:
+                aux_bad.append((pos, got, want))
     return {
-        "frames_sent": len(sent), "frames_heard": len(heard), "lost": len(lost_idx),
+        "kind": kind, "frames_sent": len(sent), "frames_heard": len(heard), "lost": len(lost_idx),
         "lost_indexes": lost_idx[:SEQ_BAD_KEEP * 4], "extra": extra, "reordered": reordered,
-        "max_gap_ms": round(max_gap, 1), "gaps_over_25ms": gaps,
+        "max_gap_ms": round(max_gap, 1), "gaps_over_25ms": gaps, "gaps_ge_35ms": catchup,
         "seq_checked": checked, "seq_bad_count": seq_bad_count,
         "seq_ok_share": round((checked - seq_bad_count) / checked, 4) if checked else 0.0,
         "seq_bad": seq_bad,
         "last_frame_has_end_bit": bool(parsed and parsed[-1] and parsed[-1]["last"]),
         "sync_frames": sync_frames, "sync_missing": sync_missing, "sync_extra": sync_extra,
-        "header": header_record(header), "packets": len(packets)}
+        "header": header_record(header), "packets": len(packets),
+        "aux_name": aux_name, "aux_checked": aux_checked, "aux_bad_count": aux_bad_count, "aux_bad": aux_bad,
+        "aux_seq": aux_seq}
+
+
+def aux_vs_forward(forward, echo_result):
+    """The echo's own counter sequence (integrity() "aux_seq") against the forward copy's, position by position:
+    the echo must follow the same rule as the live copy (XLX: the DMR packet id / sub id). None when either
+    stream has no such counter, else {"compared": n, "differ": positions that differ (a length difference
+    counts), "first": [(position, forward value, echo value)] first few}."""
+    a, b = forward.get("aux_seq") or [], echo_result.get("aux_seq") or []
+    if not a or not b:
+        return None
+    rows = [(i, a[i], b[i]) for i in range(min(len(a), len(b))) if a[i] != b[i]]
+    return {"compared": min(len(a), len(b)), "differ": len(rows) + abs(len(a) - len(b)), "first": rows[:SEQ_BAD_KEEP]}
 
 
 def summarize(label, results):
     """The numbers of one stream kind (forward / echo_listener / echo_sender) over the runs:
     `results` is the list of integrity() dicts, one per run (an empty stream is integrity() of no
-    packets). share_of_frames_with_wrong_seq is over every packet judged."""
+    packets; a dict may carry "aux_vs_forward" from aux_vs_forward()). share_of_frames_with_wrong_seq
+    is over every packet judged. max_gap_ms is the largest arrival gap of any run; gaps_over_25ms
+    counts the gaps above 25 ms, gaps_ge_35ms the (separate, smaller) count of the gaps of 35 ms or more."""
     checked = sum(r["seq_checked"] for r in results)
+    names = [r["aux_name"] for r in results if r.get("aux_name")]
+    versus = [r["aux_vs_forward"] for r in results if r.get("aux_vs_forward")]
     return {
         "stream": label, "runs": len(results),
         "echoes_with_lost_frame": sum(1 for r in results if r["lost"]),
@@ -449,15 +616,19 @@ def summarize(label, results):
         "share_of_frames_with_wrong_seq": round(sum(r["seq_bad_count"] for r in results) / checked, 4) if checked else None,
         "max_gap_ms": max([r["max_gap_ms"] for r in results] or [0.0]),
         "gaps_over_25ms": sum(len(r["gaps_over_25ms"]) for r in results),
+        "gaps_ge_35ms": sum(len(r.get("gaps_ge_35ms") or []) for r in results),
         "sync_errors": sum(len(r["sync_missing"]) + len(r["sync_extra"]) for r in results),
         "missing_end_bit": sum(1 for r in results if not r["last_frame_has_end_bit"]),
-        "empty_streams": sum(1 for r in results if not r["packets"])}
+        "empty_streams": sum(1 for r in results if not r["packets"]),
+        "aux_name": names[0] if names else None,
+        "aux_errors": sum(r.get("aux_bad_count", 0) for r in results),
+        "aux_vs_forward_errors": sum(v["differ"] for v in versus)}
 
 
 def integrity_failures(summaries):
     """Assertion messages of E9 for {"forward": summary, "echo_listener": ..., "echo_sender": ...}
-    (summarize() dicts). The forward copy is the control: a failure there is a different defect and
-    is worded so. Empty list when everything is clean."""
+    (summarize() dicts; any subset). The forward copy is the control: a failure there is a different defect
+    and is worded so. Empty list when everything is clean."""
     names = {"forward": "forward copy (control, a defect of the live relay)",
              "echo_listener": "echo return to the listener", "echo_sender": "echo return to the sender"}
     out = []
@@ -476,10 +647,56 @@ def integrity_failures(summaries):
             bad.append("%.1f%% of the frames with a wrong seq byte" % (100.0 * s["share_of_frames_with_wrong_seq"]))
         if s["gaps_over_25ms"]:
             bad.append("%d arrival gap(s) over %g ms (max %.1f ms)" % (s["gaps_over_25ms"], GAP_MAX_MS, s["max_gap_ms"]))
+        if s.get("gaps_ge_35ms"):
+            bad.append("%d gap(s) of %g ms or more (a dropped unit in a catch-up tick; max %.1f ms)" % (
+                s["gaps_ge_35ms"], GAP_CATCHUP_MS, s["max_gap_ms"]))
         if s["sync_errors"]:
             bad.append("%d frame(s) with a wrong sync pattern" % s["sync_errors"])
         if s["missing_end_bit"]:
             bad.append("%d stream(s) whose last packet has no end bit" % s["missing_end_bit"])
+        if s.get("aux_errors"):
+            bad.append("%d packet(s) with a wrong %s" % (s["aux_errors"], (s.get("aux_name") or "counter").replace("_", " ")))
+        if s.get("aux_vs_forward_errors"):
+            bad.append("%d packet(s) whose %s differs from the forward copy's" % (
+                s["aux_vs_forward_errors"], (s.get("aux_name") or "counter").replace("_", " ")))
         if bad:
             out.append("%s: %s" % (names[key], "; ".join(bad)))
     return out
+
+
+def parse_kinds(text):
+    """(kinds, unknown) of a comma list of E9 kinds (DVT_ECHO_INTEGRITY_KINDS): the known names in KINDS order,
+    each once, and the names that are not kinds, in the order given. A blank text means every kind."""
+    names = [n.strip().lower() for n in (text or "").split(",") if n.strip()]
+    if not names:
+        return list(KINDS), []
+    return [k for k in KINDS if k in names], [n for n in dict.fromkeys(names) if n not in KINDS]
+
+
+# ---------------------------------------------------------------- the XLX peer of the rendered config (E9, kind xlx)
+
+TESTER_HOSTS = ("tester",)      # a peer row naming the tester by host name
+
+
+def xlx_peer_rows(text):
+    """[{"callsign", "host", "modules"}] of the [[edges.xlx.peer]] rows of a rendered TOML (empty when none;
+    ValueError for a text that is not TOML)."""
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError("not TOML: %s" % exc) from exc
+    rows = (((data.get("edges") or {}).get("xlx") or {}).get("peer")) or []
+    return [{"callsign": str(r.get("callsign", "")), "host": str(r.get("host", "")), "modules": str(r.get("modules", ""))}
+            for r in rows if isinstance(r, dict)]
+
+
+def xlx_mode(rows, tester_ip, module):
+    """How E9 can watch the XLX peer for `module`: ("tester", row) when a peer row that serves the module names the
+    tester (its address or the host name `tester`): the tester plays that peer (XlxPeer) and judges the
+    interlink wire; else ("reflector", row) for another row that serves it (the rig's xlxd-peer-sut): a
+    D-STAR client on that peer reflector judges what the peer re-encodes; else (None, None)."""
+    serving = [r for r in rows if module in r["modules"]]
+    for row in serving:
+        if row["host"] == tester_ip or row["host"] in TESTER_HOSTS:
+            return "tester", row
+    return ("reflector", serving[0]) if serving else (None, None)

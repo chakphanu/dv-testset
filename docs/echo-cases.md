@@ -32,6 +32,7 @@ Snippets (`rig/config/dv-router/`, merged key by key after the template; unit-te
 | `echo-short.toml` | `[echo] max_seconds = 5` (after `echo.toml`): E3 then needs no live edit |
 | `echo-off.toml` | `[echo] modules = { E = false }` (after `echo.toml`): the service runs, module E accepts nothing |
 | `echo-peers.toml` | `[echo] modules = { E = true, M = true }` (after `echo.toml`): echo on module M for the M17 peer part of E5 |
+| `xlx-peer-tester.toml` | `[[edges.xlx.peer]]` XLX996 at `<TESTER_IP>` on `DE`: the tester plays the XLX peer itself (the xlx kind of E9, the interlink wire); instead of or next to `xlx-peer.toml` |
 | `echo-usrp-peer.toml` | `[[edges.usrp.endpoint]]` module E, peer `<TESTER_IP>:32003`, bind `<OWN_IP>:34003`: a STATIC USRP peer (origin class 2) for the negative case of E5b |
 
 ## Editing the live config (E3, E7)
@@ -72,52 +73,99 @@ talker and a second client of the same kind on module E (both timed by a drain t
 | E8 | `test_e8_two_nodes_not_reachable` | skip with the reason below |
 | T | `test_zz_telemetry_counts_the_overs` | `dv_echo_overs_total{room, result}` moves by the overs the cases made: `played` within [made, made + unsure], `truncated` exactly, `short` at least (needs `DVT_RIG_CONTROL=1`; the hub refreshes every 10 s, the case polls up to 40 s and then waits one more period) |
 
-## E9 D-STAR echo return integrity (`cases/test_echo_dstar_integrity.py`)
+## E9 Echo return integrity, five kinds (`cases/test_echo_dstar_integrity.py`)
 
-Regression case for two defects the owner's production voice test found in the echo RETURN path for a D-STAR
-(DExtra) sender, while the forward copy to another DExtra listener is bit exact:
+Regression case for the defects the owner's production voice test found in the echo RETURN path of a D-STAR
+(DExtra) sender, while the forward copy to another DExtra listener is bit exact, now run for five kinds of client
+and peer on module E (pytest ids `dextra`, `dplus`, `dcs`, `g3`, `xlx`):
 
-- **A** the echo loses exactly one 20 ms frame in about 2 of 5 echoes (arrival gap 40 ms);
-- **B** the seq byte of the echo stream is wrong (about 3 to 5 percent of the frames carry seq == n mod 21; the
-  forward copy is 100 percent right); the slow data sync pattern is on the right frames; the echo header RPT2 is
-  the node callsign + module (`N0CALL B` in the voice test) where the forward copy has the reflector name
-  (`XLX345 G`). On the rig the names differ, so the case only records the pair.
+- **A** the echo loses exactly one 20 ms frame in about 2 of 5 echoes (arrival gap 40 ms: a tick that should have
+  emitted two units emitted one, "no dropped unit in a catch-up tick");
+- **B** the seq byte of the echo stream is wrong (about 95 percent of the frames on every image before the fix;
+  the forward copy is 100 percent right); the slow data sync pattern was on the right frames;
+- **C** the echo header: the node callsign + module (`N0CALL B` in the voice test) instead of the live rule below.
 
-One run: a DExtra sender S (`N0CALL`, fresh stream id) and a second DExtra listener L (`N0TEST`) link to module E;
-S sends a header, 330 PRNG AMBE frames (6.6 s, 20 ms from a monotonic clock) and the end packet. L records the
-forward copy during the over and the echo about 1 s after it; S records the echo that returns to it. A receive
-thread per client (`DstarTap` in `cases/echo_support.py`) stamps every datagram with `time.monotonic()` at recv and
-keeps the raw bytes. The streams are split by a hole longer than 0.4 s (`echo.dstar_streams`). Each of the three
-streams (forward copy, echo to L, echo to S) is judged by `echo.integrity`:
+One run of a kind: a sender S and a listener L link to module E; S sends a header, 330 PRNG AMBE frames (6.6 s,
+20 ms from a monotonic clock) and the end packet; L records the forward copy during the over and the echo about 1 s
+after it; S records the echo that returns to it. A receive thread per client (`Tap` and its kinds in
+`cases/echo_support.py`) stamps every datagram with `time.monotonic()` at recv and keeps the raw bytes. The streams
+are split by a hole longer than 0.4 s (`echo.dstar_streams`, streams of fewer than 10 voice packets, a DPlus link
+join, are not overs).
+
+| Kind | Sender -> listener | Streams judged | Layout judged (`echo.voice_view`) |
+|------|--------------------|----------------|-----------------------------------|
+| `dextra` | DExtra -> DExtra | forward copy, echo to L, echo to S | 27 B DSVT; seq byte at 14 |
+| `dplus` | DPlus -> DPlus | the same three | 29 B (`1d 80` + DSVT) and the 32 B last packet; seq byte at 14 / 16 |
+| `dcs` | DCS -> DCS | the same three | 100 B packet starting `0001`; seq byte at 45 (mod 21, 0x40 last) AND the DCS frame counter (u24 at 58), which must equal the packet position. DCS has no header packet: the first voice packet carries the header fields |
+| `g3` | G3 terminal -> DExtra | forward copy and echo to L as a DExtra client hears them; echo to the terminal (`G3Tap`, UDP 40000 of the tester, presence first) | G2 framing = DSVT as DExtra; the G3 voice frame has no counter of its own beyond the seq byte |
+| `xlx` | DExtra -> XLX peer | forward copy and echo as the PEER receives them (the sender's own echo is the `dextra` kind) | 27 / 45 / 53 B DSVT (revision of the announced version, default 2.6.1 = 53 B); byte 14 is xlxd's "packet id" and is judged as the seq byte; a revision 2 / 3 frame also carries the DMR packet id (byte 27, 0..5) and sub id (byte 28, 1..3) |
+
+Checks per stream (`echo.integrity`, `kind=`), all kinds:
 
 | Check | Rule |
 |-------|------|
 | frames | every frame sent is heard, byte for byte (matched by payload, so a lost frame is found, not only counted); none extra |
-| gaps | no arrival gap above `GAP_MAX_MS` = 25 ms between consecutive packets (the max is recorded) |
+| gaps | no arrival gap above `GAP_MAX_MS` = 25 ms between consecutive packets. The summary has the largest gap (`max_gap_ms`), the count of gaps above 25 ms (`gaps_over_25ms`) and, separately, the count of gaps of 35 ms or more (`gaps_ge_35ms`, a subset: the dropped unit of a catch-up tick is a 40 ms gap) |
 | seq | seq byte of the packet at position n (0-based) = n mod 21, the last packet with 0x40 on top; the share of wrong packets is recorded |
-| sync | slow data `55 2d 16` on positions mod 21 == 0 and on no other packet |
-| header | recorded (RPT1 / RPT2 / MY / UR of forward copy and echo, `echo.txt`); asserted only: an echo header is present and MY is the sender's callsign |
+| sync | slow data `55 2d 16` on positions mod 21 == 0 and on no other packet (the last packet is not judged) |
+| own counter | `dcs`: frame counter == position. `xlx` (revision 2 / 3): the DMR packet id / sub id advance one step per packet (id 0..5 x sub id 1..3, wrapping) from the first packet's values, and the echo's sequence equals the forward copy's (`echo.aux_vs_forward`: the echo follows the live copy's rule). The last packet is not judged. A frame lost in the middle shows here too, as a receiver would see it |
 
 The forward copy is the control and is judged the same way: if it fails, that is a different defect (the live relay)
-and the message says so. Runs are separate overs; the next over starts 3 s after the end of the echo (the floor is busy
-during the replay).
+and the message says so. Position is counted in the stream as heard, so a lost frame also shows as wrong seq / sync from
+there on if the SUT keeps the original counters; the lost-frame count and the gaps tell A from B.
+
+**Header rule (C), all kinds** (`echo.header_failures(sent, forward_header, echo_header)`, from DV-Router): the echo returns
+the talker's flags (3 bytes), RPT1, UR, MY and suffix (MY2) exactly as the sender sent them, and its RPT2 is the live
+rule, i.e. the same RPT2 the forward (live) copy of the over carries (reflector name + room module, `XRF999 E`), so that
+ircDDBGateway-style listeners accept it. `sent` is the header packet the tester put on the wire (`Tap.sent_header`; for
+DCS its first voice packet); `echo.header_record` carries `flags` (hex), `rpt1`, `rpt2`, `ur`, `my`, `suffix`. Every
+value of every run (sent, forward, echo to L, echo to S) is in the JSON and `echo.txt`.
+
+Needs `echo.toml` (skips without it, like `cases/test_echo.py`). Per-kind skip: a client that does not link or
+answer (no such edge in this rig config) skips that kind with the reason; naming the kind in `DVT_ECHO_INTEGRITY_KINDS`
+makes it a failure instead (the `dextra` kind always fails). Knobs: `DVT_ECHO_INTEGRITY_RUNS` (10),
+`DVT_ECHO_INTEGRITY_FRAMES` (330), `DVT_ECHO_INTEGRITY_JITTER_MS` / `_STALL_PCT` (sender timer errors, default 0),
+`DVT_ECHO_IMAGE_TAG` (image name in the JSON, default `XLXD_SUT_IMAGE`), `DVT_ECHO_INTEGRITY_KINDS` (comma list of
+`dextra,dplus,dcs,g3,xlx`, default all), `DVT_ECHO_INTEGRITY_XLX_VERSION` (version the tester announces as XLX peer,
+default `2.6.1` = revision 3).
 
 ```sh
-DVT_ECHO_INTEGRITY_RUNS=10 XLXD_SUT_IMAGE=<image> DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-router DVT_SUT_LAUNCH=native \
-  DVT_SUT_CONFIG=<template path> DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/echo.toml \
-  scripts/run.sh -m rig -- cases/test_echo_dstar_integrity.py
+# the four client kinds
+DVT_ECHO_INTEGRITY_RUNS=10 DVT_ECHO_INTEGRITY_KINDS=dextra,dplus,dcs,g3 XLXD_SUT_IMAGE=<image> DVT_SUT_PROFILE=dvrouter \
+  DVT_SUT_NAME=dv-router DVT_SUT_LAUNCH=native DVT_SUT_CONFIG=<template path> \
+  DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/echo.toml scripts/run.sh -m rig -- cases/test_echo_dstar_integrity.py
+
+# the xlx kind, interlink wire (the tester plays the XLX peer XLX996; no xlxd peer container needed, still name the profile)
+DVT_ECHO_INTEGRITY_KINDS=xlx XLXD_SUT_IMAGE=<image> DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-router DVT_SUT_LAUNCH=native \
+  DVT_SUT_CONFIG=<template path> DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/echo.toml:rig/config/dv-router/xlx-peer-tester.toml \
+  scripts/run.sh -m rig --profile interlink -- cases/test_echo_dstar_integrity.py
+
+# the xlx kind through the rig's xlxd peer XLX998 (a DExtra client on xlxd-peer-sut judges what the peer re-encodes)
+DVT_ECHO_INTEGRITY_KINDS=xlx ... DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/echo.toml:rig/config/dv-router/xlx-peer.toml \
+  scripts/run.sh -m rig --profile interlink -- cases/test_echo_dstar_integrity.py
 ```
 
-About 3 to 4 minutes for 10 runs (6.6 s over + 1 s delay + 6.6 s echo + 3 s quiet + 5 s link and unlink). The case writes
-`out/<run>/echo-integrity.json` and prints one line before it asserts, so a failing image still gives its numbers: the
-image tag (`XLXD_SUT_IMAGE`), `runs`, and for each of `forward`, `echo_listener`, `echo_sender`:
-`echoes_with_lost_frame`, `lost_frames_total`, `share_of_frames_with_wrong_seq`, `max_gap_ms`, `gaps_over_25ms`
-(a count), `sync_errors`, plus `extra_frames_total`, `missing_end_bit`, `empty_streams`, the headers of every run and the
-per-run `integrity` dicts (first wrong seq bytes, gap positions). Assertions at the end: zero lost frames, zero wrong seq,
-no gap over 25 ms, no sync error, an end bit on the last packet, all for the forward copy and both echo returns. The
-seq rule is by position in the stream as heard, so a lost frame also shows as wrong seq / sync from there on if the SUT
-keeps the original counters; the lost-frame count and the gap tell A from B. Needs `echo.toml` (skips without it, like
-`cases/test_echo.py`). Pure judge and unit tests: `dvtest/echo.py` / `cases/unit/test_echo_lib.py`.
+`xlx-peer-tester.toml` adds the row `XLX996` at `<TESTER_IP>` on `DE`. The case reads the rendered config: a peer row that
+serves module E and names the tester selects the wire mode (the tester links as that peer with `xlx.XlxPeer`, UDP 10002
+on the tester, and keeps the link for the whole test); else a row that serves E (the rig's `xlx-peer.toml`) selects
+the peer-reflector mode and needs `--profile interlink` (`DVT_INTERLINK=on`); with neither the kind skips and says so.
+In the peer-reflector mode xlxd writes the seq byte of its own DExtra output, so the DMR packet id of the interlink wire is
+not judged there. With both snippets the tester row wins. The `g3` kind needs the SUT's G3 edge (UDP 12346 / 40000); the
+forward copy of a G3 over is judged as a DExtra listener hears it (no second G3 terminal is used, so the relay
+`g3-term2` is not needed).
+
+About 3 to 4 minutes per kind for 10 runs (6.6 s over + 1 s delay + 6.6 s echo + 3 s quiet + link and unlink). The case
+writes `out/<run>/echo-integrity.json` (one dict per kind, merged over the tests of the run) and prints one line per
+kind before it asserts, so a failing image still gives its numbers: `kind`, the image tag, `runs`, `note`, and for each of
+`forward`, `echo_listener`, `echo_sender` (not for `xlx`): `echoes_with_lost_frame`, `lost_frames_total`,
+`share_of_frames_with_wrong_seq`, `max_gap_ms`, `gaps_over_25ms`, `gaps_ge_35ms`, `sync_errors`, `aux_name` /
+`aux_errors` / `aux_vs_forward_errors`, plus `extra_frames_total`, `missing_end_bit`, `empty_streams`, `header_failures`,
+the headers of every run and the per-run `integrity` dicts (first wrong seq bytes, gap positions). Assertions at the end:
+zero lost frames, zero wrong seq, no gap above 25 ms (so none of 35 ms or more), no sync error, an end bit on the last
+packet, the own counter, and the header rule, for the forward copy and every echo return. Pure judges and unit tests:
+`dvtest/echo.py` / `cases/unit/test_echo_lib.py`. The judges were exercised with a throwaway localhost UDP fake of the
+five edges (clean, and with a dropped unit, a random seq byte, a wrong DCS counter, a wrong DMR id and a wrong echo MY);
+no run against a real DV-Router image has been made for the four new kinds yet.
 
 ## What could not be reached, and why
 

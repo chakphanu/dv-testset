@@ -317,6 +317,7 @@ another launch mode the variable draws a warning. Snippets in
 | `xlx-peer.toml` | `[[edges.xlx.peer]]` XLX998 at `<NET>.12` on modules `DE` |
 | `xlx-peer-host.toml` | the same peer named by HOST NAME (`xlxd-peer-sut`, resolved by the rig network DNS), for SANSIO4; `xlx-peer-host-bad.toml` adds a second row `no-such-peer.example.invalid` that never resolves (must stay pending, no start-up failure). Use one of the three XLX peer snippets, never two |
 | `xlx-peer2.toml` / `xlx-peer2-host.toml` | the second XLX peer XLX997 (`xlxd-peer2-sut`, `<NET>.14`) by IP / by host name, for `test_interlink_no_xlx_transit` (it needs two XLX peers); add next to `xlx-peer.toml` / `xlx-peer-host*.toml` |
+| `xlx-peer-tester.toml` | `[[edges.xlx.peer]]` XLX996 at `<TESTER_IP>` on modules `DE`: the tester plays the peer (`dvtest.proto.xlx.XlxPeer`), used by the xlx kind of E9 (`docs/echo-cases.md`) and by P19; use it instead of `xlx-peer.toml`, or next to it |
 | `nxdn-peer-host.toml` / `-bad.toml` | the NXDN probe row of the rig (the tester as NXDN reflector: UDP 41411, TG 31673, module I) named by host name `tester`; `-bad` adds a row `no-such-peer.example.invalid`. For P19 `cases/test_edge_relink.py -k nxdn`, profile `nxdn` |
 | `p25-peer-host.toml` / `-bad.toml` | the rig's P25Reflector `p25-sut` (id 31672, UDP 41000, module G) named by host name; `-bad` adds an unresolvable row. For P19 `-k p25`, profile `p25` |
 | `web.toml` | the web service, a persistent state dir and the WebRTC edge; added by `--profile web` itself (next section) |

@@ -8,7 +8,7 @@ import pytest
 
 from dvtest import clients, echo, sut_config
 from dvtest.audio import signals
-from dvtest.proto import dextra, dmr, m17, ysf
+from dvtest.proto import dcs, dextra, dmr, dplus, m17, xlx, ysf
 
 pytestmark = pytest.mark.unit
 
@@ -86,12 +86,13 @@ def test_usrp_peer_snippet_adds_a_static_endpoint_row():
     assert echo.echo_settings(out)["modules"] == {"E": True}
 
 
-@pytest.mark.parametrize("name", ["echo.toml", "echo-short.toml", "echo-off.toml", "echo-peers.toml", "echo-usrp-peer.toml"])
+@pytest.mark.parametrize("name", ["echo.toml", "echo-short.toml", "echo-off.toml", "echo-peers.toml", "echo-usrp-peer.toml",
+                                  "xlx-peer-tester.toml"])
 def test_snippets_are_ascii_and_licensed(name):
     text = snippet(name)
     text.encode("ascii")
     assert text.startswith("# SPDX-License-Identifier: MIT")
-    if name != "echo-usrp-peer.toml":                 # the peer row uses the address tokens
+    if name not in ("echo-usrp-peer.toml", "xlx-peer-tester.toml"):     # the peer rows use the address tokens
         assert "<" not in text.replace("<=", "")      # no tokens: nothing to substitute
     tomllib.loads(text)
 
@@ -488,9 +489,10 @@ def test_integrity_empty_stream_loses_everything():
     assert "no stream" in echo.integrity_failures({"echo_sender": summary})[0]
 
 
-def test_header_record_names_the_four_fields():
+def test_header_record_names_the_fields():
     head = dextra.header(SID, "N0CALL", "E", reflector="XLX345")
-    assert echo.header_record(head) == {"rpt1": "N0CALL E", "rpt2": "XLX345 E", "my": "N0CALL", "ur": "CQCQCQ"}
+    assert echo.header_record(head) == {"rpt1": "N0CALL E", "rpt2": "XLX345 E", "my": "N0CALL", "ur": "CQCQCQ",
+                                        "flags": "000000", "suffix": ""}
     other = dextra.header_packet(SID, my="N0CALL", rpt2="N0CALL B", rpt1="N0CALL E")
     assert echo.header_record(other)["rpt2"] == "N0CALL B"
     got = echo.integrity(sent_frames(5), stream(sent_frames(5)), header=head)
@@ -513,3 +515,252 @@ def test_dstar_streams_split_forward_and_echo_and_skip_keepalives():
     judged = echo.integrity(frames, [d for _, d in got[1]["voice"]], [t for t, _ in got[1]["voice"]], got[1]["header"])
     assert judged["lost"] == 0 and judged["header"]["my"] == "N0CALL"
     assert echo.dstar_streams([]) == []
+
+
+# ---------------------------------------------------------------- E9: the five kinds (dextra, dplus, dcs, g3, xlx)
+
+HDR_FIELDS = dict(my="N0CALL", rpt1="N0CALL E", rpt2="XRF999 E", ur="CQCQCQ", suffix=b"    ", flags=b"\x00\x00\x00")
+
+
+def kind_header(kind, sid=SID, **over):
+    """The header packet a client of `kind` sends (dcs: its first voice packet)."""
+    f = dict(HDR_FIELDS, **over)
+    if kind in ("dextra", "g3", "xlx"):
+        return dextra.header_packet(sid, **f)
+    if kind == "dplus":
+        return b"\x3a\x80" + dextra.header_packet(sid, **f)
+    return dcs.voice_packet(sid, 0, bytes(9), **f)
+
+
+def kind_stream(kind, frames, sid=SID, seq=None, counter=None, pids=None, drop=(), end_bit=True):
+    """Voice packets of a stream of `kind` as the SUT should send it. `drop`: sent indexes left out; `seq`
+    (position -> seq byte), `counter` (position -> DCS frame counter) and `pids` (position -> (id, sub id))
+    override the right values."""
+    kept = [f for i, f in enumerate(frames) if i not in set(drop)]
+    n = len(kept)
+    out = []
+    for pos, frame in enumerate(kept):
+        want = pos % 21 if seq is None else seq(pos)
+        slow = dextra.SYNC_DATA if pos % 21 == 0 else dextra.SLOW_DATA
+        if kind in ("dextra", "g3"):
+            out.append(dextra.voice_packet(sid, want, frame, slow))
+        elif kind == "dplus":
+            out.append(b"\x1d\x80" + dextra.voice_packet(sid, want, frame, slow))
+        elif kind == "dcs":
+            out.append(dcs.voice_packet(sid, want, frame, slow, counter=pos if counter is None else counter(pos), **HDR_FIELDS))
+        else:
+            pid, sub = ((pos // 3) % 6, pos % 3 + 1) if pids is None else pids(pos)
+            packet = bytearray(xlx.voice(sid, pos, frame, slow=slow, revision=3, dmr_pid=pid, dmr_subid=sub))
+            packet[14] = want
+            out.append(bytes(packet))
+    last = (n % 21) | (0x40 if end_bit else 0)
+    if kind in ("dextra", "g3"):
+        out.append(dextra.voice_packet(sid, last, dextra.END_PATTERN[:9], b"\x00\x00\x00"))
+    elif kind == "dplus":
+        tail = bytearray(dplus.end_frame(sid, n))
+        tail[16] = last
+        out.append(bytes(tail))
+    elif kind == "dcs":
+        out.append(dcs.voice_packet(sid, last, bytes(9), counter=n, **HDR_FIELDS))
+    else:
+        out.append(xlx.voice(sid, n, xlx.END_AMBE, last=end_bit, slow=xlx.END_SLOW, revision=3))
+    return out
+
+
+KIND_FRAMES = sent_frames(100)
+
+
+@pytest.mark.parametrize("kind", echo.KINDS)
+def test_kind_clean_stream_passes_every_check(kind):
+    pkts = kind_stream(kind, KIND_FRAMES)
+    got = echo.integrity(KIND_FRAMES, pkts, clock(len(pkts)), kind_header(kind), kind=kind)
+    assert got["kind"] == kind and got["lost"] == 0 and got["extra"] == 0 and got["frames_heard"] == 100
+    assert got["seq_ok_share"] == 1.0 and got["last_frame_has_end_bit"] and got["sync_missing"] == [] and got["sync_extra"] == []
+    assert got["gaps_over_25ms"] == [] and got["gaps_ge_35ms"] == [] and got["aux_bad_count"] == 0
+    assert got["aux_name"] == {"dcs": "frame_counter", "xlx": "dmr_packet_id"}.get(kind)
+    assert got["aux_checked"] == (100 if got["aux_name"] else 0)
+    assert got["header"]["my"] == "N0CALL" and got["header"]["rpt2"] == "XRF999 E"
+    summary = echo.summarize("echo_listener", [got])
+    assert echo.integrity_failures({"echo_listener": summary}) == []
+
+
+@pytest.mark.parametrize("kind", echo.KINDS)
+def test_kind_one_dropped_unit_is_a_lost_frame_and_a_40_ms_gap(kind):
+    pkts = kind_stream(kind, KIND_FRAMES, drop={50})
+    got = echo.integrity(KIND_FRAMES, pkts, clock(len(pkts), jitter={50: 0.020}), kind=kind)
+    assert got["lost"] == 1 and got["lost_indexes"] == [50] and got["frames_heard"] == 99
+    assert got["gaps_over_25ms"] == [(50, pytest.approx(40.0, abs=0.2))] and got["gaps_ge_35ms"] == got["gaps_over_25ms"]
+    summary = echo.summarize("echo_sender", [got])
+    msg = echo.integrity_failures({"echo_sender": summary})[0]
+    assert "1 lost frame" in msg and "1 gap(s) of 35 ms or more" in msg and "max 40.0 ms" in msg
+
+
+@pytest.mark.parametrize("kind", echo.KINDS)
+def test_kind_wrong_seq_bytes_are_found(kind):
+    rng = random.Random(3)
+    pkts = kind_stream(kind, KIND_FRAMES, seq=lambda pos: rng.randrange(21))
+    got = echo.integrity(KIND_FRAMES, pkts, clock(len(pkts)), kind=kind)
+    assert got["seq_ok_share"] < 0.2 and got["seq_bad_count"] > 80 and got["lost"] == 0
+    assert got["aux_bad_count"] == 0                   # the seq byte is not the protocol's own counter
+    assert "wrong seq byte" in echo.integrity_failures({"echo_listener": echo.summarize("echo_listener", [got])})[0]
+
+
+@pytest.mark.parametrize("kind", echo.KINDS)
+def test_kind_missing_end_bit(kind):
+    got = echo.integrity(KIND_FRAMES, kind_stream(kind, KIND_FRAMES, end_bit=False), kind=kind)
+    assert got["last_frame_has_end_bit"] is False
+    assert echo.summarize("forward", [got])["missing_end_bit"] == 1
+
+
+def test_gap_counters_split_at_35_ms():
+    frames = KIND_FRAMES[:10]
+    pkts = kind_stream("dextra", frames)
+    # 10, 16 and 20 ms late on top of the 20 ms step: gaps of 30, 36 and 40 ms
+    got = echo.integrity(frames, pkts, clock(len(pkts), jitter={2: 0.010, 5: 0.016, 8: 0.020}))
+    assert [p for p, _ in got["gaps_over_25ms"]] == [2, 5, 8] and [p for p, _ in got["gaps_ge_35ms"]] == [5, 8]
+    summary = echo.summarize("echo_listener", [got])
+    assert summary["gaps_over_25ms"] == 3 and summary["gaps_ge_35ms"] == 2 and summary["max_gap_ms"] == pytest.approx(40.0, abs=0.2)
+    msgs = echo.integrity_failures({"echo_listener": summary})
+    assert "3 arrival gap(s) over 25 ms" in msgs[0] and "2 gap(s) of 35 ms or more" in msgs[0]
+
+
+def test_dcs_frame_counter_must_equal_the_position():
+    pkts = kind_stream("dcs", KIND_FRAMES, counter=lambda pos: pos + 1 if pos >= 40 else pos)
+    got = echo.integrity(KIND_FRAMES, pkts, kind="dcs")
+    assert got["aux_bad_count"] == 60 and got["aux_bad"][0] == (40, 41, 40) and got["seq_bad_count"] == 0
+    msg = echo.integrity_failures({"echo_sender": echo.summarize("echo_sender", [got])})[0]
+    assert "60 packet(s) with a wrong frame counter" in msg
+    pkts = kind_stream("dcs", KIND_FRAMES, drop={10})                    # a dropped unit with the counters renumbered: only gap and payload tell
+    assert echo.integrity(KIND_FRAMES, pkts, kind="dcs")["aux_bad_count"] == 0
+
+
+def test_xlx_dmr_ids_must_advance_one_step_per_packet():
+    got = echo.integrity(KIND_FRAMES, kind_stream("xlx", KIND_FRAMES), kind="xlx")
+    assert got["aux_seq"][:7] == [(0, 1), (0, 2), (0, 3), (1, 1), (1, 2), (1, 3), (2, 1)] and got["aux_seq"][18] == (0, 1)
+    bad = kind_stream("xlx", KIND_FRAMES, pids=lambda pos: ((pos // 3) % 6, pos % 3 + 1) if pos != 30 else (5, 1))
+    got = echo.integrity(KIND_FRAMES, bad, kind="xlx")
+    assert got["aux_bad"][0] == (30, (5, 1), (4, 1)) and got["aux_bad_count"] == 1
+    assert got["seq_bad_count"] == 0
+    # a stream that starts at another step is consistent with itself (the rule is the advance, not the start)
+    shifted = echo.integrity(KIND_FRAMES, kind_stream("xlx", KIND_FRAMES, pids=lambda pos: (((pos + 7) // 3) % 6, (pos + 7) % 3 + 1)), kind="xlx")
+    assert shifted["aux_bad_count"] == 0 and shifted["aux_seq"][0] == (2, 2)
+    invalid = echo.integrity(KIND_FRAMES, kind_stream("xlx", KIND_FRAMES, pids=lambda pos: (0, 0)), kind="xlx")
+    assert invalid["aux_bad_count"] > 90
+    # a revision 1 peer (27 byte frames) has only the seq byte (xlxd's packet id)
+    rev1 = [xlx.voice(SID, i, f, revision=1) for i, f in enumerate(KIND_FRAMES)] + [xlx.voice(SID, 100, xlx.END_AMBE, last=True, revision=1)]
+    got = echo.integrity(KIND_FRAMES, rev1, kind="xlx")
+    assert got["aux_name"] is None and got["seq_ok_share"] == 1.0 and got["lost"] == 0
+
+
+def test_aux_vs_forward_compares_the_sequences_position_by_position():
+    fwd = echo.integrity(KIND_FRAMES, kind_stream("xlx", KIND_FRAMES), kind="xlx")
+    same = echo.integrity(KIND_FRAMES, kind_stream("xlx", KIND_FRAMES), kind="xlx")
+    assert echo.aux_vs_forward(fwd, same) == {"compared": 100, "differ": 0, "first": []}
+    other = echo.integrity(KIND_FRAMES, kind_stream("xlx", KIND_FRAMES, pids=lambda pos: (((pos + 3) // 3) % 6, pos % 3 + 1)), kind="xlx")
+    got = echo.aux_vs_forward(fwd, other)
+    assert got["differ"] == 100 and got["first"][0] == (0, (0, 1), (1, 1)) and other["aux_bad_count"] == 0
+    short = echo.integrity(KIND_FRAMES, kind_stream("xlx", KIND_FRAMES, drop={99}), kind="xlx")
+    assert echo.aux_vs_forward(fwd, short)["differ"] == 1
+    none = echo.integrity(KIND_FRAMES, kind_stream("dextra", KIND_FRAMES), kind="dextra")
+    assert echo.aux_vs_forward(fwd, none) is None and echo.aux_vs_forward(none, fwd) is None
+    other["aux_vs_forward"] = got
+    summary = echo.summarize("echo_listener", [other])
+    assert summary["aux_vs_forward_errors"] == 100 and summary["aux_name"] == "dmr_packet_id"
+    assert "differs from the forward copy" in echo.integrity_failures({"echo_listener": summary})[0]
+
+
+def test_voice_view_per_kind_and_non_stream_packets():
+    f = KIND_FRAMES[0]
+    assert echo.voice_view("dextra", dextra.voice_packet(SID, 3, f))["counter"] == 3
+    assert echo.voice_view("dplus", b"\x1d\x80" + dextra.voice_packet(SID, 3, f))["ambe"] == f
+    last = echo.voice_view("dplus", dplus.last_voice(SID, 5))
+    assert last["last"] and last["counter"] == (5 | 0x40) and last["stream_id"] == SID
+    view = echo.voice_view("dcs", dcs.voice_packet(SID, 7, f, counter=1234, **HDR_FIELDS))
+    assert view["counter"] == 7 and view["frame_counter"] == 1234 and view["ambe"] == f and view["stream_id"] == SID
+    view = echo.voice_view("xlx", xlx.voice(SID, 4, f, revision=3))
+    assert (view["pid"], view["subid"]) == (1, 2) and view["counter"] == 4
+    assert "pid" not in echo.voice_view("xlx", xlx.voice(SID, 4, f, revision=1))
+    for kind, junk in (("dextra", b"XRF000 \x20\x00"), ("dplus", dplus.KEEPALIVE), ("dcs", bytes(22)),
+                       ("xlx", xlx.keepalive("XLX999")), ("g3", b"PING")):
+        assert echo.voice_view(kind, junk) is None and echo.header_view(kind, junk) is None
+    assert echo.voice_view("dextra", dextra.header(SID, "N0CALL", "E")) is None
+    with pytest.raises(ValueError):
+        echo.voice_view("m17", b"x")
+
+
+def test_header_views_and_records_per_kind():
+    for kind in echo.KINDS:
+        rec = echo.header_record(kind_header(kind))
+        assert rec == {"flags": "000000", "rpt1": "N0CALL E", "rpt2": "XRF999 E", "my": "N0CALL", "ur": "CQCQCQ", "suffix": ""}, kind
+        assert echo.header_view(kind, kind_header(kind))["stream_id"] == SID
+    odd = echo.header_record(kind_header("dplus", flags=b"\x01\x02\x03", suffix=b"AB  "))
+    assert odd["flags"] == "010203" and odd["suffix"] == "AB"
+
+
+def test_dstar_streams_per_kind_skip_other_packets_and_dcs_header_is_the_first_voice_packet():
+    frames = sent_frames(4)
+    for kind in ("dplus", "dcs", "g3", "xlx"):
+        fwd = ([kind_header(kind, 1)] if kind != "dcs" else []) + kind_stream(kind, frames, sid=1)
+        rep = ([kind_header(kind, 2)] if kind != "dcs" else []) + kind_stream(kind, frames, sid=2)
+        items = [(10.0, b"\x03\x60\x00" if kind == "dplus" else bytes(9))]
+        items += [(10.1 + 0.02 * i, d) for i, d in enumerate(fwd)] + [(11.4 + 0.02 * i, d) for i, d in enumerate(rep)]
+        got = echo.dstar_streams(items, kind=kind)
+        assert len(got) == 2 and got[0]["sids"] == [1] and got[1]["sids"] == [2], kind
+        assert len(got[0]["voice"]) == 5 and len(got[1]["voice"]) == 5
+        assert echo.header_record(got[1]["header"])["my"] == "N0CALL", kind
+        if kind == "dcs":
+            assert got[1]["header"] == got[1]["voice"][0][1]
+        judged = echo.integrity(frames, [d for _, d in got[1]["voice"]], [t for t, _ in got[1]["voice"]], got[1]["header"], kind=kind)
+        assert judged["lost"] == 0 and judged["header"]["rpt2"] == "XRF999 E", kind
+
+
+def test_header_failures_rule():
+    sent = echo.header_record(kind_header("dextra", rpt2="XLX999 E"))
+    live = echo.header_record(kind_header("dextra", rpt2="XRF999 E"))
+    assert echo.header_failures(sent, live, dict(live)) == []              # the echo repeats the live RPT2, not the sent one
+    assert echo.header_failures(sent, live, None) == ["no echo header"]
+    for key, value in (("flags", "400000"), ("rpt1", "N0CALL B"), ("ur", "CQCQCQ B"), ("my", "N0TEST"), ("suffix", "ABCD")):
+        msgs = echo.header_failures(sent, live, dict(live, **{key: value}))
+        assert len(msgs) == 1 and msgs[0].startswith("echo %s is" % key.upper()), (key, msgs)
+    node = dict(live, rpt2="N0CALL B")                                       # the node callsign + module of the voice test
+    assert echo.header_failures(sent, live, node) == ["echo RPT2 is 'N0CALL B', the forward copy carries 'XRF999 E'"]
+    assert "no forward header" in echo.header_failures(sent, None, dict(live))[0]
+    assert "sender sent is unknown" in echo.header_failures(None, live, dict(live))[0]
+    assert len(echo.header_failures(sent, live, dict(live, my="X", rpt2="Y"))) == 2
+
+
+def test_parse_kinds():
+    assert echo.parse_kinds("") == (list(echo.KINDS), []) and echo.parse_kinds(None) == (list(echo.KINDS), [])
+    assert echo.parse_kinds(" xlx, dextra ,xlx") == (["dextra", "xlx"], [])
+    assert echo.parse_kinds("dcs,bogus,Bogus,G3") == (["dcs", "g3"], ["bogus"])
+
+
+def test_xlx_peer_rows_and_mode():
+    text = rendered("echo.toml") + """
+[[edges.xlx.peer]]
+callsign = "XLX998"
+host = "172.30.0.12"
+modules = "DE"
+
+[[edges.xlx.peer]]
+callsign = "XLX996"
+host = "172.30.0.30"
+modules = "D"
+"""
+    rows = echo.xlx_peer_rows(text)
+    assert [r["callsign"] for r in rows] == ["XLX998", "XLX996"] and rows[0]["modules"] == "DE"
+    assert echo.xlx_peer_rows(rendered("echo.toml")) == []
+    assert echo.xlx_mode(rows, "172.30.0.30", "E")[0] == "reflector"          # the tester row does not serve E
+    assert echo.xlx_mode(rows, "172.30.0.30", "D")[0] == "tester" and echo.xlx_mode(rows, "172.30.0.30", "D")[1]["callsign"] == "XLX996"
+    assert echo.xlx_mode(rows, "172.30.0.30", "F") == (None, None) and echo.xlx_mode([], "172.30.0.30", "E") == (None, None)
+    assert echo.xlx_mode([{"callsign": "X", "host": "tester", "modules": "E"}], "10.0.0.1", "E")[0] == "tester"
+    with pytest.raises(ValueError):
+        echo.xlx_peer_rows("not = [toml")
+
+
+def test_xlx_peer_tester_snippet_names_the_tester():
+    rows = echo.xlx_peer_rows(rendered("echo.toml", "xlx-peer-tester.toml"))
+    assert rows == [{"callsign": "XLX996", "host": "172.30.0.30", "modules": "DE"}]
+    assert echo.xlx_mode(rows, "172.30.0.30", "E")[0] == "tester"
+    both = echo.xlx_peer_rows(rendered("echo.toml", "xlx-peer.toml", "xlx-peer-tester.toml"))
+    assert echo.xlx_mode(both, "172.30.0.30", "E")[1]["callsign"] == "XLX996"

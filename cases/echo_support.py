@@ -2,7 +2,8 @@
 """Rig helpers of cases/test_echo.py: a talker and a listener on a module with their packets
 timed by a background drain, the live edit of the rendered dv-router.toml, a minimal dynamic
 USRP client and the notes file. The pure part (events, comparison, TOML editing) is
-dvtest/echo.py, unit-tested offline."""
+dvtest/echo.py, unit-tested offline. The taps at the end of the E9 section (Tap and its kinds) are the
+timed clients of cases/test_echo_dstar_integrity.py."""
 import os
 import socket
 import random
@@ -13,7 +14,7 @@ from pathlib import Path
 from dvtest import clients, echo
 from dvtest.audio import signals
 from dvtest.net import pace
-from dvtest.proto import dextra, usrp
+from dvtest.proto import dextra, dplus, g3, usrp
 
 MODULE = "E"
 TALK_GAP = 0.020
@@ -153,30 +154,33 @@ def wait_for_over(scene, after_t, who="listener", timeout=6.0):
     return None
 
 
-# ---------------------------------------------------------------- a timed raw D-STAR tap (E9)
+# ---------------------------------------------------------------- timed raw taps of the five E9 kinds
 
-class DstarTap(threading.Thread):
-    """A DExtra client linked to `module` whose receive thread stamps every datagram with time.monotonic()
-    at recv and keeps the raw bytes: .items = [(t, datagram)]. Keepalives of the reflector are answered
-    from the thread. send_over() paces a header and voice packets on a monotonic clock. The thread owns
-    the socket after the link; close() stops it, then unlinks."""
+class Tap(threading.Thread):
+    """A client of one E9 kind linked to `module` whose receive thread stamps every datagram with
+    time.monotonic() at recv and keeps the raw bytes: .items = [(t, datagram)]. Keepalives of the reflector are
+    answered from the thread (the client's responder). send_over() paces the packets of one over on a
+    monotonic clock. The thread owns the socket after the link; close() stops it, then unlinks.
+
+    Subclasses set `kind` (the dvtest.echo.KINDS name the stream is judged as) and implement _open() (make the
+    client, link it, set .sock / .udp / .callsign) and _packets(frames, stream_id, reflector) -> (lead, voice,
+    first): `lead` packets sent at once (a header), then `settle` seconds, then `voice` paced 20 ms apart
+    (the last one is the end packet); `first` is the packet that carries the header fields (the header, or
+    for DCS the first voice packet)."""
+
+    kind = ""
 
     def __init__(self, ip, module=MODULE, index=0):
         super().__init__(daemon=True)
-        self.dc = clients.make("dstar", module, index)
-        if not self.dc.link(ip):
-            self.dc.close()
-            raise AssertionError("dstar client %d did not link to %s (module %s)" % (index, ip, module))
-        self.dc.client.inbox.clear()
-        self.dc.client.inbox_times.clear()
+        self.ip, self.module, self.index = ip, module, index
         self.items = []
         self.halt = threading.Event()
-        self.callsign = self.dc.callsign.decode("ascii").strip()
+        self.sent_header = None
+        self._open()
         self.start()
 
     def run(self):
-        udp = self.dc.client
-        sock = udp.sock
+        sock = self.sock
         sock.settimeout(0.02)
         while not self.halt.is_set():
             try:
@@ -187,7 +191,7 @@ class DstarTap(threading.Thread):
                 return
             stamp = time.monotonic()
             self.items.append((stamp, data))
-            reply = udp.responder(data, addr) if udp.responder else None
+            reply = self.responder(data, addr) if self.responder else None
             if reply is not None:
                 try:
                     sock.sendto(reply, addr)
@@ -197,16 +201,19 @@ class DstarTap(threading.Thread):
     def snapshot(self):
         return list(self.items)
 
+    def _send(self, packet):
+        raise NotImplementedError
+
     def send_over(self, frames, stream_id, reflector="XLX999", settle=0.3, jitter_ms=0.0, seed=1, stall_pct=0.0):
-        """Header, `settle` seconds, then the 9 byte frames one per 20 ms (sync pattern on frame 0 of each
-        superframe, as DstarClient.talk) and the end packet; returns the monotonic time of the last packet."""
-        dest = self.dc.dest
-        send = self.dc.client.send
-        send(dest, self.dc.header(stream_id, reflector))
-        time.sleep(settle)
-        packets = [dextra.voice(stream_id, i, f, False, dextra.SYNC_DATA if i % 21 == 0 else dextra.SLOW_DATA)
-                   for i, f in enumerate(frames)]
-        packets.append(dextra.voice(stream_id, len(frames), b"\x00" * 9, True))
+        """Header (not for DCS), `settle` seconds, then the 9 byte frames one per 20 ms (sync pattern on frame 0 of
+        each superframe, as the protocol client's talk) and the end packet; returns the monotonic time of
+        the last packet. The header packet is kept in .sent_header."""
+        lead, packets, first = self._packets(frames, stream_id, reflector)
+        self.sent_header = first
+        for packet in lead:
+            self._send(packet)
+        if lead:
+            time.sleep(settle)
         start = time.monotonic()
         rng = random.Random(seed)
         for i, packet in enumerate(packets):
@@ -219,16 +226,124 @@ class DstarTap(threading.Thread):
                     time.sleep(wait)
             else:
                 pace(start, i, TALK_GAP)
-            send(dest, packet)
+            self._send(packet)
         return time.monotonic()
 
     def close(self):
         self.halt.set()
         self.join(1.0)
+        self._close()
+
+    def _close(self):
         try:
             clients.close(self.dc)
         except Exception:
             pass
+
+
+class DstarTap(Tap):
+    """DExtra client (kind dextra)."""
+
+    kind = "dextra"
+    proto = "dstar"
+
+    def _open(self):
+        self.dc = clients.make(self.proto, self.module, self.index)
+        if not self.dc.link(self.ip):
+            self.dc.close()
+            raise LinkError("%s client %d did not link to %s (module %s)" % (self.kind, self.index, self.ip, self.module))
+        self.dc.client.inbox.clear()
+        self.dc.client.inbox_times.clear()
+        self.callsign = self.dc.callsign.decode("ascii").strip()
+        self.sock = self.dc.client.sock
+        self.responder = self.dc.client.responder
+
+    def _send(self, packet):
+        self.dc.client.send(self.dc.dest, packet)
+
+    def _packets(self, frames, stream_id, reflector):
+        header = self.dc.header(stream_id, reflector)
+        voice = [dextra.voice(stream_id, i, f, False, dextra.SYNC_DATA if i % 21 == 0 else dextra.SLOW_DATA)
+                 for i, f in enumerate(frames)]
+        voice.append(dextra.voice(stream_id, len(frames), b"\x00" * 9, True))
+        return [header], voice, header
+
+
+class DplusTap(DstarTap):
+    """DPlus client (kind dplus): connect, login, join the module with an empty stream (DplusClient.link)."""
+
+    kind = "dplus"
+    proto = "dplus"
+
+    def _packets(self, frames, stream_id, reflector):
+        header = self.dc.header(stream_id, reflector)
+        voice = [dplus.voice(stream_id, i, f, dextra.SYNC_DATA if i % 21 == 0 else dextra.SLOW_DATA)
+                 for i, f in enumerate(frames)]
+        voice.append(dplus.last_voice(stream_id, len(frames)))
+        return [header], voice, header
+
+
+class DcsTap(DstarTap):
+    """DCS client (kind dcs): no header packet, the first voice packet opens the stream (so no settle gap)."""
+
+    kind = "dcs"
+    proto = "dcs"
+
+    def _packets(self, frames, stream_id, reflector):
+        packets = self.dc.packets(frames, stream_id, reflector)
+        return [], packets, packets[0]
+
+
+class G3Tap(Tap):
+    """Icom G3 terminal (kind g3): UDP 40000 of the tester, presence, then DSVT in the G2 framing (g3.stream).
+    The terminal hears a module once it has talked on it; the SUT sends to IP:40000 only."""
+
+    kind = "g3"
+
+    def _open(self):
+        self.term = g3.Terminal("%s T" % clients.CALLSIGNS[self.index])
+        self.callsign = clients.CALLSIGNS[self.index]
+        self.dest = (self.ip, g3.DV_PORT)
+        try:
+            if self.term.presence(self.ip) is None:
+                raise LinkError("g3 terminal got no presence reply from %s" % self.ip)
+        except Exception:
+            self.term.close()
+            raise
+        self.sock = self.term.sock
+        self.responder = None
+
+    def _send(self, packet):
+        self.sock.sendto(packet, self.dest)
+
+    def _packets(self, frames, stream_id, reflector):
+        rpt2 = (reflector + " " * 7)[:7] + self.module
+        packets = g3.stream(stream_id, frames, self.callsign, rpt2)
+        return packets[:1], packets[1:], packets[0]
+
+    def _close(self):
+        self.term.close()
+
+
+class LinkError(AssertionError):
+    """A tap could not be linked (the edge of that kind is not there, or does not answer)."""
+
+
+class XlxListener:
+    """The tester as an XLX interlink peer (xlx.XlxPeer, one for the whole test) seen from one run: .snapshot()
+    gives the packets of the SUT's address since this object was made (the rx thread of XlxPeer stamps them
+    at recv). It is the listener of kind xlx; the sender is a local DExtra client."""
+
+    kind = "xlx"
+
+    def __init__(self, peer, ip):
+        self.peer, self.ip, self.since = peer, ip, time.monotonic()
+
+    def snapshot(self):
+        return self.peer.packets(self.ip, self.since)
+
+    def close(self):
+        pass
 
 
 def warm_up(ip, delay, budget=60.0, frames=60):

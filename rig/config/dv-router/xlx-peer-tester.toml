@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/rig.md): an XLX interlink peer row that names the
+# TESTER (<TESTER_IP>, XLX996 on modules DE), so that the tester plays the peer itself (dvtest.proto.xlx.XlxPeer,
+# UDP 10002) and sees the interlink wire as the SUT writes it. Used by the xlx kind of the E9 case
+# (cases/test_echo_dstar_integrity.py, docs/echo-cases.md) and by P19 (cases/test_edge_relink.py, XLX996).
+# Use it instead of xlx-peer.toml (the rig's xlxd peer XLX998), or next to it: with both rows the E9 case
+# prefers this one. The modules must be served by [node] rooms.
+[[edges.xlx.peer]]
+callsign = "XLX996"
+host = "<TESTER_IP>"
+modules = "DE"
