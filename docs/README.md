@@ -10,6 +10,7 @@
 | [web-nat-cases.md](web-nat-cases.md) | web unit stage 4: NAT behaviour of the browser WebRTC path (NAT router, coturn, direct/TURN/blackhole), findings, gaps |
 | [web-k22-cases.md](web-k22-cases.md) | web unit: K22 / K22b cases (RTC circuit identity, revoke, guest lease, edge and hub kills), findings, gaps |
 | [echo-cases.md](echo-cases.md) | DV-Router built-in echo (ECHO1 / ECHO1c): cases E1 to E9 (E9: D-STAR echo return integrity), snippets, live config edit, what could not be reached, findings |
+| [config-load-cases.md](config-load-cases.md) | DV-Router COMPAT1 config-load cases (`-m cfgload`, host side): an old key / shape must fail `config check` with a clear error; table, how to run, findings |
 | [stream-registry-cases.md](stream-registry-cases.md) | DV-Router open-stream registry (LEAK2): loop refusal, 1 s refresh, 5 s expiry after a controller kill, controller restart (L1 to L4) |
 | [ipsc-phase0.md](ipsc-phase0.md) | IPSC1 phase 0 (offline): IPSC message table with sources, simulated MOTOTRBO peer plan, hardware-risk list, compose profile sketch |
 | [testlist.md](testlist.md) | what has to be verified, the case that verifies it, and the gaps |

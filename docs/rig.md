@@ -397,9 +397,12 @@ snippets in `rig/config/dv-router/` keep the keys of the older images; the renam
 | web operations (`api_web.web_ops()` / `web_keys()`, `cases/test_web_api.py`) | `PUT /api/v1/auth/password` is gone: 47 audience operations, 51 with the four root probes (`POST` stays) | 48 / 52 |
 | `dv_edge_data_total` (`cases/test_data_ident.py`, `metrics.edge_data_family()`) | removed; no successor name is known yet, so the edge counter is read as 0 and the records say "n/a" (nothing asserted it). Set `metrics.EDGE_DATA_SUCCESSOR` when DV-Router names the new family | read as before |
 
-Offline check of any rendered TOML: `dv-router config check FILE` (no network, no writes). The rig has no hook for it yet:
-`scripts/run.sh` has no config-check call, and `dvtest.tools.config_check` (above) still starts `dv-router --config FILE` in a throw-away
-container and reads the validation lines. Use `config check` by hand on a file from `out/<run>/xlxd-config/` when an image has it.
+Offline check of any rendered TOML: `dv-router config check FILE` (no network, no writes; exit 0 valid, 2 invalid on wip-488b89d, one
+`FILE:LINE:COL: KEY: MESSAGE` line per error). `python3 -m dvtest.tools.config_check --gen compat1` (or `--mode check`) runs it in the same
+throw-away container as before (`dvtest.tools.config_check.judge_check` reads it; the older `--config FILE` start check stays for
+`c165c93`, `71ab207`, `c2465de`, and an image without the subcommand answers with a usage text and is reported as "no `config check`").
+The rig itself has no hook for it: `scripts/run.sh` has no config-check call. The "old key must fail with a clear error" cases are
+`cases/test_config_load.py` (`-m cfgload`, host side, not `-m rig`): see [config-load-cases.md](config-load-cases.md).
 
 Three host-state traps that DV-Router named for rig / dev hosts that keep a state directory across images (none is produced by the rig:
 `grep` of `rig/`, `dvtest/` and `scripts/` finds no `limits` row, no managed header and no `accounts.jsonl` writer; the rig's `sut-state/`
