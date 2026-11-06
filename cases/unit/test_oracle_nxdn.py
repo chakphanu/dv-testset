@@ -205,3 +205,121 @@ def test_main_writes_record_and_exit_status(tmp_path, capsys):
     capsys.readouterr()
     assert oracle.main(["--case", "c", "--user-data", user.hex()]) == 2
     assert json.loads(capsys.readouterr().out)["verdict"] == "no-output"
+
+
+# ------------------------------------------------------------------ NXDNGateway container run (pure parts)
+
+def _capture(*cases):
+    """Entry script stdout for (name, [aprs lines]) pairs, as mosquitto_sub prints it."""
+    out = ["noise before the first marker"]
+    for name, lines in cases:
+        out.append("dvt/case\tbegin %s" % name)
+        for line in lines:
+            out.append("aprs-gateway/aprs\t" + line.rstrip("\r\n") + "\r")
+            out.append("")                      # the payload's own line end plus the one of -F
+    out.append("dvt/case\tend")
+    return "\n".join(out) + "\n"
+
+
+def test_gateway_cases_table():
+    cases = oracle.gateway_cases()
+    rows = len(l3.KNOWN_POSITIONS)
+    assert len(cases) == 3 * rows + rows + 2 + rows
+    assert len({c["name"] for c in cases}) == len(cases)
+    assert all(" " not in c["name"] and "\t" not in c["name"] for c in cases)
+    kinds = {}
+    for case in cases:
+        kinds.setdefault(case["kind"], []).append(case)
+    assert {k: len(v) for k, v in kinds.items()} == {
+        "kenwood-full": 3 * rows, "kenwood-short": rows, "kenwood-nofix-full": 1,
+        "kenwood-nofix-short": 1, "icom": rows}
+    base = next(c for c in cases if c["name"] == "dsdfme.base-c90-s55.kenwood-full")
+    assert base["user_data"] == l3.kenwood_full(base["fix"], DSDFME)
+    assert next(c for c in cases if c["kind"] == "icom")["user_data"][0] == 0x06
+    assert oracle.gateway_cases([("only", FIX)])[0]["name"] == "gateway.only.kenwood-full"
+
+
+def test_gateway_input_lines():
+    cases = oracle.gateway_cases([("only", FIX)])
+    lines = oracle.gateway_input(cases).splitlines()
+    expected = sum(len(l3.data_call_packets(oracle.GATEWAY_SRC_ID, oracle.GATEWAY_DST_TG, c["user_data"]))
+                   for c in cases)
+    assert len(lines) == expected
+    for line in lines:
+        name, hexa = line.split(" ")
+        assert name in {c["name"] for c in cases}
+        assert len(bytes.fromhex(hexa)) == oracle.ICOM_SIZE
+    first = bytes.fromhex(lines[0].split(" ")[1])
+    assert first[:4] == b"ICOM" and first[40] == 0x90      # LICH of a data frame
+    # one case after the other, no interleaving
+    names = [line.split(" ")[0] for line in lines]
+    assert names == sorted(names, key=lambda n: [c["name"] for c in cases].index(n))
+
+
+def test_split_gateway_capture():
+    text = _capture(("a", [GW_LINE]), ("b", []), ("c", [GW_LINE, GW_LINE]))
+    got = oracle.split_gateway_capture(text)
+    assert got["order"] == ["a", "b", "c"] and got["complete"] is True
+    assert len(got["cases"]["a"]) == 1 and got["cases"]["b"] == [] and len(got["cases"]["c"]) == 2
+    assert oracle.parse_gateway_line(got["cases"]["a"][0])["course"] == 90
+    cut = oracle.split_gateway_capture(text.rsplit("dvt/case\tend", 1)[0])
+    assert cut["complete"] is False
+    assert oracle.split_gateway_capture("") == {"cases": {}, "order": [], "complete": False}
+
+
+def test_gateway_docker_argv(tmp_path):
+    argv = oracle.gateway_docker_argv(str(tmp_path / "p.txt"), "dvt-nxdngw-1", env={})
+    assert argv[:2] == ["docker", "run"] and "--rm" in argv
+    assert argv[argv.index("--network") + 1] == "none"
+    assert argv[argv.index("--memory") + 1] == argv[argv.index("--memory-swap") + 1]
+    assert "--cpus" in argv and "--pids-limit" in argv and "--read-only" in argv
+    assert argv[argv.index("--cap-drop") + 1] == "ALL"
+    assert argv[-3:] == [oracle.GATEWAY_IMAGE, "run", "/in/packets.txt"]
+    assert any(word.endswith(":/in/packets.txt:ro") for word in argv)
+
+
+def test_gateway_records_from_capture():
+    cases = oracle.gateway_cases([("base", FIX)])
+    lines = {
+        "gateway.base.kenwood-full": [GW_LINE],
+        "dsdfme.base.kenwood-full": ["N0CALL>APDPRS,NXDN*,qAR,N0GW:!1345.37N/10030.00Er211/130 Kenwood NEXEDGE via MMDVM\r\n"],
+        "lon-both.base.kenwood-full": [GW_LINE],
+        "gateway.base.kenwood-short": ["N0CALL>APDPRS,NXDN*,qAR,N0GW:!1345.37N/10030.10Er Kenwood NEXEDGE via MMDVM\r\n"],
+        "icom.base.icom": ["N0CALL>APDPRS,NXDN*,qAR,N0GW:!1345.38N/10030.11Er090/055 Icom IDAS via MMDVM\r\n"],
+    }
+    capture = oracle.split_gateway_capture(_capture(*[(c["name"], lines.get(c["name"], [])) for c in cases]))
+    records = {r["case"]: r for r in oracle.gateway_records(cases, capture)}
+    assert len(records) == len(cases)
+    gw = records["gateway.base.kenwood-full"]
+    assert gw["verdict"] == "no-output-dsdfme" and gw["gateway"]["prediction_ok"] is True
+    assert all(f["gateway_matches_input"] for f in gw["fields"])
+    dsd = records["dsdfme.base.kenwood-full"]
+    assert dsd["gateway"]["prediction_ok"] is True
+    assert [f["field"] for f in dsd["fields"] if not f["gateway_matches_input"]] == [
+        "longitude_fraction", "course", "speed"]
+    assert records["gateway.base.kenwood-short"]["kind"] == "kenwood-short"
+    icom = records["icom.base.icom"]
+    assert icom["mismatches"] == ["latitude_fraction", "longitude_fraction"]      # rounded, not truncated
+    assert icom["input"]["intended"]["latitude_fraction"] == 37 and icom["gateway"]["normalized"]["latitude_fraction"] == 38
+    assert all(r["gateway_lines"] is not None for r in records.values())
+
+
+def test_gateway_records_no_fix_and_missing_output():
+    cases = oracle.gateway_cases([])                   # only the two no-fix rows
+    assert [c["kind"] for c in cases] == ["kenwood-nofix-full", "kenwood-nofix-short"]
+    capture = oracle.split_gateway_capture(_capture(*[(c["name"], []) for c in cases]))
+    assert [r["verdict"] for r in oracle.gateway_records(cases, capture)] == ["no-output-gateway"] * 2
+    missing = oracle.gateway_records(oracle.gateway_cases([("base", FIX)]),
+                                     oracle.split_gateway_capture(""))
+    assert all(r["verdict"] in ("no-output", "no-output-gateway") and r["gateway_lines"] is None
+               for r in missing)
+    assert {r["verdict"] for r in missing if r["kind"] == "kenwood-full"} == {"no-output"}
+
+
+def test_gateway_reading_of_speed_nibble_over_9():
+    """GW prints the whole part of the speed only: a low nibble over 9 in byte 25
+    (what the dsd-fme layout writes) must not be folded into the whole part."""
+    user = bytearray(l3.kenwood_full(GpsFix(l3.BASE_LAT, l3.BASE_LON, 12.3, 1.0), DSDFME))
+    assert user[25] == 10 and user[26] == 0
+    predicted = oracle.predict(bytes(user))["gateway"]
+    assert predicted["speed"] == 0 and predicted["course"] == 196

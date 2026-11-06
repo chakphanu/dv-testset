@@ -308,9 +308,11 @@ def parse_kenwood_fields(data, layout=GATEWAY):
             whole = ((data[25] & 0xF0) << 2) | (data[26] & 0x3F)
             tenth = data[25] & 0x0F
             speed_raw = None if (whole == 0x3FF or tenth == 0x0F) else whole * 10 + tenth
+            speed_whole = None if speed_raw is None else whole      # what GW prints (a tenths nibble over 9 is not folded in)
         else:
             speed_raw = ((data[26] & 0x3F) << 8) | data[25]
             speed_raw = None if speed_raw == 0x3FFF else speed_raw
+            speed_whole = None
         speed = None if speed_raw is None else speed_raw / 10.0
         elevation = (data[28] << 8) | data[27]
         if elevation & 0x8000:
@@ -318,6 +320,8 @@ def parse_kenwood_fields(data, layout=GATEWAY):
         packed = ((data[5] & 1) << 10) | (data[4] << 2) | (data[3] >> 6)
         date = (data[18] << 8) | data[17]
         raw.update({"course_tenths": course, "speed_tenths": speed_raw})
+        if layout.speed == "gw":
+            raw["speed_whole"] = speed_whole
         fields = {"course": course / 10.0, "speed": speed if speed is not None else 0.0,
                   "elevation": elevation, "hour": packed >> 6, "minute": packed & 0x3F,
                   "year": 2000 + (date >> 9), "month": (date >> 5) & 0x0F, "day": (date & 0x1F) + 1}

@@ -28,11 +28,14 @@ number (truncated).
 """
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
 from decimal import ROUND_HALF_UP, Decimal
 
+from . import limits
 from .proto import nxdn, nxdn_l3
 
 SCHEMA = "dvt-nxdn-gps-compare/1"
@@ -144,6 +147,8 @@ def normalize_fields(info):
     lat, lat_f = _coordinate(raw["lat_hem"], raw["lat_degmin"], raw["lat_fraction"] // 100, "N", "S")
     lon, lon_f = _coordinate(raw["lon_hem"], raw["lon_degmin"], raw["lon_fraction"] // 100, "E", "W")
     speed = raw.get("speed_tenths")
+    if "speed_whole" in raw:                    # gateway reading: the whole part only
+        speed = None if raw["speed_whole"] is None else raw["speed_whole"] * 10
     return {"latitude": lat, "latitude_fraction": lat_f, "longitude": lon, "longitude_fraction": lon_f,
             "course": raw["course_tenths"] // 10 if "course_tenths" in raw else None,
             "speed": speed // 10 if speed is not None else None}
@@ -288,6 +293,188 @@ def run_command(argv, *, stdin=None, timeout=60, env=None, cwd=None):
             "stderr": done.stderr.decode("utf-8", "replace")}
 
 
+# ------------------------------------------------------------------ NXDNGateway container run
+
+# rig/Dockerfile.nxdngw + rig/nxdngw-entry.sh: one throw-away container with
+# --network none, a broker and the gateway on loopback. The entry script reads
+# lines "NAME HEX" (one ICOM packet each), publishes "begin NAME" markers on
+# the topic dvt/case between the cases and prints "TOPIC<TAB>PAYLOAD" lines.
+GATEWAY_IMAGE = "dvt-nxdngw:local"
+GATEWAY_SRC_ID = 1001            # the entry script maps it to N0CALL
+GATEWAY_DST_TG = 31672
+GATEWAY_RUN_TIMEOUT = 180
+GATEWAY_RECORD_SCHEMA = "dvt-nxdn-gps-gateway/1"
+APRS_TOPIC = "aprs-gateway/aprs"
+CASE_TOPIC = "dvt/case"
+
+
+def gateway_cases(positions=None):
+    """Cases of the gateway oracle: a list of dicts {name, kind, layout,
+    row, fix, user_data}. kind is kenwood-full (every layout the code
+    offers), kenwood-short, kenwood-nofix-full / -short or icom (NMEA form).
+    Names are NAME.ROW.KIND words without blanks."""
+    positions = nxdn_l3.KNOWN_POSITIONS if positions is None else positions
+    cases = []
+
+    def add(layout, row, kind, fix, user):
+        cases.append({"name": "%s.%s.%s" % (layout, row, kind), "kind": kind, "layout": layout,
+                      "row": row, "fix": fix, "user_data": user})
+
+    for layout in ("gateway", "dsdfme", "lon-both"):
+        for row, fix in positions:
+            add(layout, row, "kenwood-full", fix, nxdn_l3.kenwood_full(fix, nxdn_l3.LAYOUTS[layout]))
+    for row, fix in positions:
+        add("gateway", row, "kenwood-short", fix, nxdn_l3.kenwood_short(fix))
+    add("gateway", "nofix", "kenwood-nofix-full", None, nxdn_l3.kenwood_no_fix("full"))
+    add("gateway", "nofix", "kenwood-nofix-short", None, nxdn_l3.kenwood_no_fix("short"))
+    for row, fix in positions:
+        add("icom", row, "icom", fix, nxdn_l3.icom_user_data(fix))
+    return cases
+
+
+def gateway_input(cases, src=GATEWAY_SRC_ID, dst=GATEWAY_DST_TG):
+    """Text for rig/nxdngw-entry.sh: per case the five ICOM packets of the
+    data call (header, blocks, TX_REL), one "NAME HEX" line each."""
+    lines = []
+    for case in cases:
+        packets = nxdn_l3.data_call_packets(src, dst, case["user_data"])
+        for packet in icom_packets(packets):
+            lines.append("%s %s" % (case["name"], packet.hex()))
+    return "\n".join(lines) + "\n"
+
+
+def split_gateway_capture(text):
+    """{'cases': {name: [APRS payload lines]}, 'order': [names], 'complete':
+    bool} from the entry script's stdout. Lines before the first marker are
+    ignored; 'complete' means the final 'end' marker was seen."""
+    cases, order, current, complete = {}, [], None, False
+    for raw in text.split("\n"):
+        line = raw.rstrip("\r")
+        if not line:
+            continue
+        topic, _, payload = line.partition("\t")
+        if topic == CASE_TOPIC:
+            if payload.startswith("begin "):
+                current = payload[6:].strip()
+                if current not in cases:
+                    cases[current] = []
+                    order.append(current)
+            elif payload.strip() == "end":
+                current, complete = None, True
+        elif topic == APRS_TOPIC and current is not None:
+            cases[current].append(payload.rstrip("\r"))
+    return {"cases": cases, "order": order, "complete": complete}
+
+
+def gateway_docker_argv(input_path, name, image=GATEWAY_IMAGE, env=None):
+    """docker run words: no network, the repository's resource limits, a
+    read-only root with a small tmpfs, no capabilities, the packet file
+    mounted read-only. `name` is the container name (for the timeout kill)."""
+    return (["docker", "run", "--rm", "--name", name, "--network", "none"]
+            + limits.docker_run_args(env)
+            + ["--read-only", "--tmpfs", "/tmp:rw,size=16m", "--cap-drop", "ALL",
+               "--security-opt", "no-new-privileges",
+               "-v", "%s:/in/packets.txt:ro" % input_path, image, "run", "/in/packets.txt"])
+
+
+def run_gateway(cases, image=GATEWAY_IMAGE, timeout=GATEWAY_RUN_TIMEOUT, workdir=None):
+    """Run the container once for all cases; returns {capture, stderr,
+    returncode, timed_out}. A timed-out container is removed by name."""
+    with tempfile.TemporaryDirectory(prefix="dvt-nxdngw-", dir=workdir) as tmp:
+        os.chmod(tmp, 0o755)
+        path = os.path.join(tmp, "packets.txt")
+        with open(path, "w", encoding="ascii") as handle:
+            handle.write(gateway_input(cases))
+        os.chmod(path, 0o644)
+        name = "dvt-nxdngw-%d" % os.getpid()
+        done = run_command(gateway_docker_argv(path, name, image), timeout=timeout)
+        if done["timed_out"]:
+            run_command(["docker", "rm", "-f", name], timeout=30)
+    return {"capture": done["stdout"], "stderr": done["stderr"], "returncode": done["returncode"],
+            "timed_out": done["timed_out"]}
+
+
+def icom_record(case, gateway_text):
+    """Record for an Icom NMEA input: the printed line, the reduced values and
+    the values of the encoded fix (fraction truncated to 1/100 minute, as for
+    the Kenwood rows, so a rounding in the gateway's Icom branch shows up)."""
+    fix = case["fix"]
+    parsed = parse_gateway_line(gateway_text)
+    normalized = normalize_gateway(parsed) if parsed else None
+    lat_neg, lat_dm, lat_frac = nxdn_l3.to_degmin(fix.latitude)
+    lon_neg, lon_dm, lon_frac = nxdn_l3.to_degmin(fix.longitude)
+    intended = {"latitude": "%s%d" % ("S" if lat_neg else "N", lat_dm), "latitude_fraction": lat_frac // 100,
+                "longitude": "%s%d" % ("W" if lon_neg else "E", lon_dm), "longitude_fraction": lon_frac // 100,
+                "course": int(nxdn_l3.course_tenths(fix.course) // 10), "speed": int(fix.speed)}
+    fields = [{"field": name, "gateway": None if normalized is None else normalized[name],
+               "input": intended[name],
+               "gateway_matches_input": normalized is not None and normalized[name] == intended[name]}
+              for name in FIELDS]
+    return {"schema": GATEWAY_RECORD_SCHEMA, "case": case["name"], "layout": "icom", "kind": "icom",
+            "verdict": "no-output-gateway" if normalized is None else "output",
+            "input": {"user_data_hex": case["user_data"].hex(), "intended": intended},
+            "gateway": {"output": parsed, "normalized": normalized},
+            "fields": fields,
+            "mismatches": [f["field"] for f in fields if not f["gateway_matches_input"]]}
+
+
+def gateway_records(cases, capture):
+    """One JSON-able record per case from the split capture (see
+    split_gateway_capture). Kenwood rows with a fix use build_record (the
+    dsd-fme side is empty); a row without a printed line gets the verdict
+    no-output-gateway, which for the no-fix rows is the expected result."""
+    records = []
+    for case in cases:
+        lines = capture["cases"].get(case["name"])
+        text = "\n".join(lines or [])
+        if case["kind"] == "icom":
+            record = icom_record(case, text)
+        elif case["kind"].startswith("kenwood-nofix"):
+            parsed = parse_gateway_line(text)
+            record = {"schema": GATEWAY_RECORD_SCHEMA, "case": case["name"], "layout": case["layout"],
+                      "kind": case["kind"], "verdict": "no-output-gateway" if parsed is None else "output",
+                      "input": {"user_data_hex": case["user_data"].hex()},
+                      "gateway": {"output": parsed, "lines": lines}}
+        else:
+            record = build_record(case["name"], case["user_data"], gateway_text=text, layout=case["layout"])
+            record["kind"] = case["kind"]
+        record["gateway_lines"] = lines
+        records.append(record)
+    return records
+
+
+def gateway_main(argv):
+    """Run NXDNGateway in its container for every table row and write the
+    records:
+
+      python3 -m dvtest.oracle_nxdn gateway --out vectors/nxdn_gps/gateway-run.jsonl
+
+    One JSON object per line (schema dvt-nxdn-gps-gateway/1); needs docker and
+    the image dvt-nxdngw:local (rig/Dockerfile.nxdngw). Exit status 0 = every
+    case produced its report (or, for the no-fix rows, none), 1 = otherwise."""
+    parser = argparse.ArgumentParser(prog="oracle_nxdn gateway", description=gateway_main.__doc__.splitlines()[0])
+    parser.add_argument("--image", default=GATEWAY_IMAGE)
+    parser.add_argument("--timeout", type=int, default=GATEWAY_RUN_TIMEOUT)
+    parser.add_argument("--out", required=True, help="JSON lines file for the records")
+    parser.add_argument("--capture-out", help="also write the raw capture text here")
+    args = parser.parse_args(argv)
+    cases = gateway_cases()
+    run = run_gateway(cases, image=args.image, timeout=args.timeout)
+    if args.capture_out:
+        with open(args.capture_out, "w", encoding="utf-8") as handle:
+            handle.write(run["capture"])
+    capture = split_gateway_capture(run["capture"])
+    records = gateway_records(cases, capture)
+    with open(args.out, "w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
+    bad = [r["case"] for r in records
+           if (not r["gateway_lines"]) != r["kind"].startswith("kenwood-nofix")]
+    sys.stderr.write("gateway oracle: %d cases, %d without the expected outcome, complete=%s, rc=%s\n"
+                     % (len(records), len(bad), capture["complete"], run["returncode"]))
+    return 0 if capture["complete"] and not bad else 1
+
+
 # ------------------------------------------------------------------ command line
 
 def main(argv=None):
@@ -296,7 +483,13 @@ def main(argv=None):
       python3 -m dvtest.oracle_nxdn --case base-c90-s55 --user-data HEX \\
           --layout gateway --gateway-out gw.txt --dsdfme-log dsd.txt --out rec.json
 
-    Exit status 0 = agree, 1 = disagree, 2 = a decoder gave no report."""
+    Exit status 0 = agree, 1 = disagree, 2 = a decoder gave no report.
+
+    `python3 -m dvtest.oracle_nxdn gateway ...` runs the NXDNGateway container
+    over the whole table (gateway_main)."""
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv and argv[0] == "gateway":
+        return gateway_main(argv[1:])
     parser = argparse.ArgumentParser(description=main.__doc__.splitlines()[0])
     parser.add_argument("--case", required=True)
     parser.add_argument("--user-data", required=True, help="hex of the Kenwood user data (no CRC)")

@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: MIT
+# NXDNGateway (g4klx/NXDNClients, GPL-2.0) as the oracle for the Kenwood GPS
+# payload (DP14b, docs/nxdn-gps-cases.md). A separate image: the GPL program runs
+# as a process, dv-testset itself stays MIT and copies none of its code.
+# Built and run once; results in docs/nxdn-gps-cases.md and vectors/nxdn_gps/
+#
+# Source is the named build context "src" (fetched by scripts/pre-fetch-nxdngw.sh at
+# NXDNGW_REPO @ NXDNGW_COMMIT of .env.example): .cache/nxdngw
+# Build by hand, inside scripts/contained.sh --name build, never while the rig runs:
+#   docker build -f rig/Dockerfile.nxdngw --build-arg NXDNGW_BASE_IMAGE=$NXDNGW_BASE_IMAGE \
+#     --build-arg MAKE_JOBS=$DVT_BUILD_JOBS --build-context src=.cache/nxdngw \
+#     -t dvt-nxdngw:local rig
+#
+# Build choices:
+#  * only the NXDNGateway directory is copied in; the Makefile finds no ../.git
+#    and writes a zero git id into the version header;
+#  * nlohmann-json3-dev is header-only (Log.h includes it): build stage only;
+#  * built without gpsd (the Makefile default); the only link libraries are
+#    pthread and libmosquitto (the gateway publishes its APRS line over MQTT);
+#  * the final image holds the stripped binary, a mosquitto broker on 127.0.0.1
+#    (the gateway refuses to start without one) and mosquitto_sub / mosquitto_pub;
+#    nxdngw-entry.sh writes the ini and the id file, feeds the ICOM packets that
+#    dvtest.oracle_nxdn builds to the gateway over loopback UDP and prints the
+#    captured topics. No audio, hosts or voice files are installed.
+#  * run it with --network none (loopback only), see dvtest.oracle_nxdn.
+ARG NXDNGW_BASE_IMAGE
+FROM ${NXDNGW_BASE_IMAGE} AS build
+ARG MAKE_JOBS=4
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        g++ make libc6-dev libmosquitto-dev nlohmann-json3-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=src NXDNGateway/ /src/
+RUN make -C /src -j"${MAKE_JOBS}" NXDNGateway \
+    && strip --strip-unneeded /src/NXDNGateway \
+    && test -x /src/NXDNGateway
+
+FROM ${NXDNGW_BASE_IMAGE}
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libmosquitto1 mosquitto mosquitto-clients \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10002 --home-dir /nonexistent --shell /usr/sbin/nologin nxdngw
+COPY --from=build /src/NXDNGateway /usr/local/bin/NXDNGateway
+COPY nxdngw-entry.sh /nxdngw/entry.sh
+RUN chmod 755 /nxdngw/entry.sh
+USER nxdngw
+WORKDIR /tmp
+ENTRYPOINT ["/nxdngw/entry.sh"]
