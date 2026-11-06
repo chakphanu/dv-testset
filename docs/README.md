@@ -13,6 +13,7 @@
 | [config-load-cases.md](config-load-cases.md) | DV-Router COMPAT1 config-load cases (`-m cfgload`, host side): an old key / shape must fail `config check` with a clear error; table, how to run, findings |
 | [stream-registry-cases.md](stream-registry-cases.md) | DV-Router open-stream registry (LEAK2): loop refusal, 1 s refresh, 5 s expiry after a controller kill, controller restart (L1 to L4) |
 | [ipsc-phase0.md](ipsc-phase0.md) | IPSC1 phase 0 (offline): IPSC message table with sources, simulated MOTOTRBO peer plan, hardware-risk list, compose profile sketch |
+| [nxdn-gps-cases.md](nxdn-gps-cases.md) | NXDN GPS / data calls (DP14b offline): layer 3 generator and parser, Kenwood FULL / SHORT layouts (NXDNGateway vs dsd-fme readings), two-decoder oracle record, planned rig cases NXG1 to NXG7, UNVERIFIED Docker recipe, open questions |
 | [testlist.md](testlist.md) | what has to be verified, the case that verifies it, and the gaps |
 | [protocols/ambed.md](protocols/ambed.md) | AMBEd transcoder link: legacy and extended open, CAPS, data packets, flows, timing |
 | [ambed-fake.md](ambed-fake.md) | fake extended AMBEd transcoder with a bit-exact transform: protocol, modes, control JSON, K table |
