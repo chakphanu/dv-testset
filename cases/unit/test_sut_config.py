@@ -547,10 +547,10 @@ def _web_admin(gen):
     return tomllib.loads(out)
 
 
-def test_compat1_renames_the_totp_keys_of_the_snippets():
+def test_compat1_drops_the_old_totp_true_keys_of_the_snippets():
     cfg = _web_admin("compat1")
-    assert cfg["web"]["totp_required"] is True and "operator_totp" not in cfg["web"]
-    assert cfg["admin"]["totp_required"] is True and "totp" not in cfg["admin"]
+    assert "totp_required" not in cfg["web"] and "operator_totp" not in cfg["web"]          # old `= true` is dropped: optional TOTP by default
+    assert "totp_required" not in cfg["admin"] and "totp" not in cfg["admin"]
     assert cfg["web"]["enable"] is True and cfg["admin"]["bind"] == "0.0.0.0:8080"          # the rest is untouched
 
 
@@ -575,6 +575,7 @@ def test_compat1_adapt_text_drops_an_old_key_when_the_new_one_is_there_and_keeps
     out = sut_config.adapt_text(text, "compat1")
     cfg = tomllib.loads(out)
     assert cfg == {"web": {"totp_required": True}, "admin": {"totp_required": False}, "node": {"totp": 1}}
+    assert tomllib.loads(sut_config.adapt_text("[web]\noperator_totp = true\n[admin]\ntotp = true # c\n", "compat1")) == {"web": {}, "admin": {}}
     assert sut_config.adapt_text(text, "c2465de") == text and sut_config.adapt_text(text, "71ab207") == text
     assert sut_config.adapt_text("[admin]\ntotp = false # c\n", "compat1") == "[admin]\ntotp_required = false # c\n"
 

@@ -390,7 +390,7 @@ snippets in `rig/config/dv-router/` keep the keys of the older images; the renam
 
 | What | compat1 | older gens |
 |------|---------|------------|
-| `web.toml` `[web] operator_totp`, `admin.toml` `[admin] totp` | rendered as `totp_required` (the old keys are errors; a line whose `totp_required` is already in the table, e.g. from `totp-required.toml`, is dropped, never repeated) | old keys (warnings since TOTP1) |
+| `web.toml` `[web] operator_totp`, `admin.toml` `[admin] totp` | `= true` is DROPPED (the old key meant "totp on", it never forced enrolment; the compat1 default is optional TOTP and `totp-required.toml` sets `totp_required = true` when a run wants it mandatory: renaming `= true` to `totp_required = true` made the TOTP1 optional cases fail with totp `enrol` on the first compat1 run); any other value is rendered as `totp_required` with the value kept; a line whose `totp_required` is already in the table is dropped, never repeated | old keys (warnings since TOTP1) |
 | `[[edges.xlx.peer]]` rows (`xlx-peer*.toml`, `xlx-peer-host*.toml`, `xlx-peer-tester.toml`, and the template's own rows) | `kind = "xlx"` added as the first key of a row that has no `kind` | no `kind` (unknown key there) |
 | `DV_<EDGE>_NO_RADIO_ID` written by `scripts/run.sh` | `DV_DMRHB_*` only (the `hb=` case lists `c2465de` and `compat1`); no `DV_MMDVM_*` name is written | `DV_MMDVM_*` before c2465de |
 | `[edges.mmdvm]` | renamed to `edges.dmrhb` as on c2465de | as before |

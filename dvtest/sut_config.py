@@ -127,8 +127,10 @@ _XLX_PEER_HEADER = re.compile(r"^\s*\[\[\s*edges\.xlx\.peer\s*\]\]\s*(#.*)?$")
 
 def adapt_text(text, gen):
     """One TOML text (the template or one extra) in the key dialect of generation `gen`, BEFORE the extras are merged. Before compat1:
-    unchanged. compat1: `[web] operator_totp` and `[admin] totp` become `totp_required` (the old keys are errors there); a line whose
-    new key is already in the same table is dropped instead, so no key is repeated. The values are kept."""
+    unchanged. compat1: `[web] operator_totp` and `[admin] totp` are errors there. `= true` (the old "totp on" posture, which did not force
+    enrolment) is dropped: the new default is optional TOTP, and totp-required.toml sets `totp_required = true` when a run wants it
+    mandatory. Any other value becomes `totp_required` with the value kept; a line whose new key is already in the same table is dropped
+    instead, so no key is repeated."""
     if not gen_at_least(gen, COMPAT1):
         return text
     parts = _split_tables(text)
@@ -144,6 +146,8 @@ def adapt_text(text, gen):
             new = KEY_RENAMES.get((name, m.group(1))) if m else None
             if new is None:
                 out.append(line)
+            elif line[m.end(1):].lstrip(" \t=").lower().startswith("true"):
+                pass        # old `= true` meant "totp available" (the c165c93 default posture), NOT "required": the new default is optional, so no key
             elif new not in have:
                 have.add(new)
                 out.append(line[:m.start(1)] + new + line[m.end(1):])
