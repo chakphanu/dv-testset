@@ -534,7 +534,7 @@ def test_e5c_m17_peer_over_is_not_replayed(echo_rig, target, request):
         scene.until(end + echo_rig.delay + 3.0 + 1.5)
         local = [o for o in scene.overs("listener") if o.start > end + 0.05]
         assert len(local) == 1, "control: a local M17 over on M was replayed %d times (echo off for M?)" % len(local)
-        TALLY["played"] += 1
+        TALLY["played_m"] += 1                              # room m of dv_echo_overs_total, not room e (E7 compares both)
         # the over from the peer (origin class 2)
         frames = echo.make_frames("m17", FRAMES_E1, "e5c-peer")
         packets = m17.voice_packets(frames, 0x5A5A, "N0PEER")
@@ -676,6 +676,10 @@ def test_e7_telemetry_counts_the_overs(echo_rig, target):
     if got["short"] > TALLY["short"]:
         note(target, "telemetry", "FINDING", "result=short moved by %d, the cases made %d short overs (DMR / YSF link joins "
              "are empty streams; dv-router: not intended, a follow-up counts only streams with a voice unit; not asserted)" % (got["short"], TALLY["short"]))
+    if TALLY["played_m"]:
+        m_played = echo.echo_overs(text or "", "M", "played")
+        note(target, "telemetry", "RECORD", "room m: result=played %d, the cases made %d" % (m_played, TALLY["played_m"]))
+        assert m_played >= TALLY["played_m"], "room m: result=played is %d, the cases made %d" % (m_played, TALLY["played_m"])
     assert metrics_mod.families(text or "") >= {"dv_echo_overs_total"}
 
 
