@@ -169,6 +169,7 @@ class Tap(threading.Thread):
     for DCS the first voice packet)."""
 
     kind = ""
+    reflector = "XLX999"            # name of the reflector in RPT2 of the sender's header (the kind's own reflector, see the subclasses)
 
     def __init__(self, ip, module=MODULE, index=0):
         super().__init__(daemon=True)
@@ -204,10 +205,11 @@ class Tap(threading.Thread):
     def _send(self, packet):
         raise NotImplementedError
 
-    def send_over(self, frames, stream_id, reflector="XLX999", settle=0.3, jitter_ms=0.0, seed=1, stall_pct=0.0):
+    def send_over(self, frames, stream_id, reflector=None, settle=0.3, jitter_ms=0.0, seed=1, stall_pct=0.0):
         """Header (not for DCS), `settle` seconds, then the 9 byte frames one per 20 ms (sync pattern on frame 0 of
         each superframe, as the protocol client's talk) and the end packet; returns the monotonic time of
         the last packet. The header packet is kept in .sent_header."""
+        reflector = reflector or self.reflector                   # a realistic sender: RPT2 = the reflector it is linked to + the module
         lead, packets, first = self._packets(frames, stream_id, reflector)
         self.sent_header = first
         for packet in lead:
@@ -245,6 +247,7 @@ class DstarTap(Tap):
     """DExtra client (kind dextra)."""
 
     kind = "dextra"
+    reflector = "XRF999"
     proto = "dstar"
 
     def _open(self):
@@ -273,6 +276,7 @@ class DplusTap(DstarTap):
     """DPlus client (kind dplus): connect, login, join the module with an empty stream (DplusClient.link)."""
 
     kind = "dplus"
+    reflector = "REF999"
     proto = "dplus"
 
     def _packets(self, frames, stream_id, reflector):
@@ -287,6 +291,7 @@ class DcsTap(DstarTap):
     """DCS client (kind dcs): no header packet, the first voice packet opens the stream (so no settle gap)."""
 
     kind = "dcs"
+    reflector = "DCS999"
     proto = "dcs"
 
     def _packets(self, frames, stream_id, reflector):

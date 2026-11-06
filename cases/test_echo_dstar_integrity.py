@@ -300,8 +300,11 @@ def test_e9_dstar_echo_return_integrity(e9_rig, target, kind):
     for number, hdr in enumerate(headers):
         for key in keys[1:]:
             from_fwd, rpt2_fwd = echo.header_policy(kind, key)
+            ref = echo.ECHO_REFLECTOR.get(kind)
+            want = ("%s %s" % (ref, MODULE)) if ref and key != "forward" and rpt2_fwd else None
             header_msgs += ["%s run %d: %s" % (key, number + 1, m) for m in echo.header_failures(
-                hdr["sent"], hdr["forward"], hdr[key], suffix_from_forward=from_fwd, rpt2_vs_forward=rpt2_fwd)]
+                hdr["sent"], hdr["forward"], hdr[key], suffix_from_forward=from_fwd, rpt2_vs_forward=rpt2_fwd,
+                want_rpt2=want, live_unchanged=(key == "echo_listener" and bool(ref)))]
             if not rpt2_fwd:
                 header_found += ["%s run %d: %s" % (key, number + 1, m) for m in echo.header_notes(hdr["forward"], hdr[key])]
     if header_found:

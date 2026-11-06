@@ -428,6 +428,9 @@ def header_record(packet):
     return out
 
 
+ECHO_REFLECTOR = {"dextra": "XRF999", "dplus": "REF999", "dcs": "DCS999"}      # RPT2 name of a same-protocol sender / of the echo (rig reflector number 999)
+
+
 def header_policy(kind, stream):
     """(suffix_from_forward, rpt2_vs_forward) for the header rule of one echo stream. DExtra and DCS: the full rule (suffix as sent,
     RPT2 as the forward copy). On DCS the echo RPT2 is the reflector name + module ('DCS999 E'), which is what ircDDBGateway needs
@@ -442,13 +445,15 @@ def header_policy(kind, stream):
     return False, True
 
 
-def header_failures(sent, forward_header, echo_header, suffix_from_forward=False, rpt2_vs_forward=True):
+def header_failures(sent, forward_header, echo_header, suffix_from_forward=False, rpt2_vs_forward=True, want_rpt2=None, live_unchanged=False):
     """The echo header rule (DV-Router): the echo returns the talker's flags (3 bytes), RPT1, UR, MY and
     suffix exactly as sent, and its RPT2 follows the live rule, i.e. is the RPT2 the forward (live) copy of
     the same over carries (reflector name + room module, `XRF999 E`), so that ircDDBGateway style listeners
     accept it. All three arguments are header_record() dicts (None: not heard). `suffix_from_forward`: the
     suffix is compared with the forward copy's instead of the sent one; `rpt2_vs_forward` False: RPT2 is not
-    asserted (see header_policy). Returns the messages, empty when the rule holds."""
+    asserted (see header_policy). `want_rpt2`: the echo RPT2 must be this string (reflector name + module of the listener's edge, e.g.
+    'DCS999 E'). `live_unchanged`: the same-protocol live copy carries the sender's RPT2 unchanged (the fast path; a realistic sender
+    sets RPT2 to the reflector it is linked to). Returns the messages, empty when the rule holds."""
     if echo_header is None:
         return ["no echo header"]
     out = []
@@ -462,6 +467,10 @@ def header_failures(sent, forward_header, echo_header, suffix_from_forward=False
                 continue
             if echo_header.get(key) != sent.get(key):
                 out.append("echo %s is %r, the sender sent %r" % (key.upper(), echo_header.get(key), sent.get(key)))
+    if live_unchanged and sent is not None and forward_header is not None and forward_header.get("rpt2") != sent.get("rpt2"):
+        out.append("the live copy carries RPT2 %r, the sender sent %r (same-protocol copies are unchanged)" % (forward_header.get("rpt2"), sent.get("rpt2")))
+    if want_rpt2 is not None and echo_header.get("rpt2") != want_rpt2:
+        out.append("echo RPT2 is %r, the reflector + module of this edge is %r" % (echo_header.get("rpt2"), want_rpt2))
     if not rpt2_vs_forward:
         return out
     if forward_header is None:

@@ -792,3 +792,16 @@ def test_header_rule_dplus_suffix_follows_the_live_copy_and_dcs_rpt2_is_strict()
     assert echo.header_failures(sent, dcs_fwd, dcs_echo, rpt2_vs_forward=False) == []
     assert echo.header_notes(dcs_fwd, dcs_echo) == ["echo RPT2 is 'DCS999 E', the live copy carries 'XLX999 E'"]
     assert echo.header_notes(dcs_fwd, dcs_fwd) == []
+
+
+def test_header_rule_realistic_sender_live_copy_unchanged_and_echo_names_the_reflector():
+    sent = _hdr(rpt2="DCS999 E")
+    live = _hdr(rpt2="DCS999 E")
+    echo_ok = _hdr(rpt2="DCS999 E")
+    assert echo.header_failures(sent, live, echo_ok, want_rpt2="DCS999 E", live_unchanged=True) == []
+    rewritten = _hdr(rpt2="XLX999 E")
+    assert echo.header_failures(sent, rewritten, echo_ok, live_unchanged=True)[0].startswith("the live copy carries RPT2 'XLX999 E'")
+    bad_echo = _hdr(rpt2="XLX999 E")
+    msgs = echo.header_failures(sent, live, bad_echo, want_rpt2="DCS999 E", live_unchanged=True)
+    assert any("the reflector + module of this edge is 'DCS999 E'" in m for m in msgs)
+    assert echo.ECHO_REFLECTOR == {"dextra": "XRF999", "dplus": "REF999", "dcs": "DCS999"}
