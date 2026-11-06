@@ -296,17 +296,23 @@ def test_e9_dstar_echo_return_integrity(e9_rig, target, kind):
     keys = stream_keys(results[0])
     summaries = {key: echo.summarize(key, [r[key] for r in results]) for key in keys}
     headers = [{"sent": r["sent_header"], **{k: r[k]["header"] for k in keys}} for r in results]
-    header_msgs = []
+    header_msgs, header_found = [], []
     for number, hdr in enumerate(headers):
         for key in keys[1:]:
-            header_msgs += ["%s run %d: %s" % (key, number + 1, m) for m in echo.header_failures(hdr["sent"], hdr["forward"], hdr[key])]
+            from_fwd, rpt2_fwd = echo.header_policy(kind, key)
+            header_msgs += ["%s run %d: %s" % (key, number + 1, m) for m in echo.header_failures(
+                hdr["sent"], hdr["forward"], hdr[key], suffix_from_forward=from_fwd, rpt2_vs_forward=rpt2_fwd)]
+            if not rpt2_fwd:
+                header_found += ["%s run %d: %s" % (key, number + 1, m) for m in echo.header_notes(hdr["forward"], hdr[key])]
+    if header_found:
+        note(target, CASE, "FINDING", "%s header: %s (and %d more); not asserted for this kind" % (kind, header_found[0], len(header_found) - 1))
     n_frames = env_int("DVT_ECHO_INTEGRITY_FRAMES", RUN_FRAMES, 25)
     summary = {"kind": kind, "note": kind_rig.note,
                "image": os.environ.get("DVT_ECHO_IMAGE_TAG") or os.environ.get("XLXD_SUT_IMAGE", ""), "runs": n_runs,
                "frames_per_run": n_frames, "jitter_ms": env_int("DVT_ECHO_INTEGRITY_JITTER_MS", 0, 0),
                "stall_pct": env_int("DVT_ECHO_INTEGRITY_STALL_PCT", 0, 0),
                "gap_limit_ms": echo.GAP_MAX_MS, "catchup_gap_ms": echo.GAP_CATCHUP_MS, **summaries,
-               "header_failures": header_msgs, "headers": headers,
+               "header_failures": header_msgs, "header_findings": header_found, "headers": headers,
                "per_run": [{k: {f: v for f, v in r[k].items() if f not in ("sync_frames", "aux_seq")} for k in keys}
                            for r in results]}
     write_json(target, kind, summary)

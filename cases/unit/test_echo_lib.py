@@ -764,3 +764,30 @@ def test_xlx_peer_tester_snippet_names_the_tester():
     assert echo.xlx_mode(rows, "172.30.0.30", "E")[0] == "tester"
     both = echo.xlx_peer_rows(rendered("echo.toml", "xlx-peer.toml", "xlx-peer-tester.toml"))
     assert echo.xlx_mode(both, "172.30.0.30", "E")[1]["callsign"] == "XLX996"
+
+
+def _hdr(**kw):
+    base = {"flags": "000000", "my": "N0CALL", "rpt1": "N0CALL E", "rpt2": "XRF999 E", "suffix": "", "ur": "CQCQCQ"}
+    base.update(kw)
+    return base
+
+
+def test_header_policy_per_kind():
+    assert echo.header_policy("dextra", "echo_listener") == (False, True)
+    assert echo.header_policy("dplus", "echo_listener") == (True, True)
+    assert echo.header_policy("dcs", "echo_sender") == (False, False)
+    assert echo.header_policy("g3", "echo_sender") == (False, False)
+    assert echo.header_policy("g3", "echo_listener") == (False, True)
+
+
+def test_header_rule_dplus_suffix_follows_the_live_copy_and_dcs_rpt2_is_a_finding():
+    sent = _hdr(rpt2="XLX999 E")
+    fwd = _hdr(rpt2="REF999 E", suffix="DPLS")
+    echo_h = _hdr(rpt2="REF999 E", suffix="DPLS")
+    assert echo.header_failures(sent, fwd, echo_h) != []                                   # strict: suffix differs from the sent one
+    assert echo.header_failures(sent, fwd, echo_h, suffix_from_forward=True) == []
+    assert echo.header_failures(sent, fwd, _hdr(rpt2="REF999 E", suffix="XXXX"), suffix_from_forward=True) != []
+    dcs_fwd, dcs_echo = _hdr(rpt2="XLX999 E"), _hdr(rpt2="DCS999 E")
+    assert echo.header_failures(sent, dcs_fwd, dcs_echo, rpt2_vs_forward=False) == []
+    assert echo.header_notes(dcs_fwd, dcs_echo) == ["echo RPT2 is 'DCS999 E', the live copy carries 'XLX999 E'"]
+    assert echo.header_notes(dcs_fwd, dcs_fwd) == []

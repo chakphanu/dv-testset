@@ -428,12 +428,28 @@ def header_record(packet):
     return out
 
 
-def header_failures(sent, forward_header, echo_header):
+def header_policy(kind, stream):
+    """(suffix_from_forward, rpt2_vs_forward) for the header rule of one echo stream. DExtra: the full rule (suffix as sent, RPT2 as the
+    forward copy). DPlus: the DPlus edge stamps its own suffix (DPLS) on every header it emits, live copy and echo alike, so the echo
+    suffix is compared with the forward copy's. DCS: the live copy carries the sender's RPT2 unchanged while the echo names the reflector
+    (DCS999 E): recorded as a finding, not asserted (DV-Router's call). G3: the sender's own echo return is G3 egress and the forward
+    copy the tester has is a DExtra listener's, so RPT2 is not comparable there (the DExtra-side listener stream still is)."""
+    if kind == "dplus":
+        return True, True
+    if kind == "dcs":
+        return False, False
+    if kind == "g3" and stream == "echo_sender":
+        return False, False
+    return False, True
+
+
+def header_failures(sent, forward_header, echo_header, suffix_from_forward=False, rpt2_vs_forward=True):
     """The echo header rule (DV-Router): the echo returns the talker's flags (3 bytes), RPT1, UR, MY and
     suffix exactly as sent, and its RPT2 follows the live rule, i.e. is the RPT2 the forward (live) copy of
     the same over carries (reflector name + room module, `XRF999 E`), so that ircDDBGateway style listeners
-    accept it. All three arguments are header_record() dicts (None: not heard). Returns the messages, empty
-    when the rule holds."""
+    accept it. All three arguments are header_record() dicts (None: not heard). `suffix_from_forward`: the
+    suffix is compared with the forward copy's instead of the sent one; `rpt2_vs_forward` False: RPT2 is not
+    asserted (see header_policy). Returns the messages, empty when the rule holds."""
     if echo_header is None:
         return ["no echo header"]
     out = []
@@ -441,13 +457,26 @@ def header_failures(sent, forward_header, echo_header):
         out.append("the header the sender sent is unknown")
     else:
         for key in HEADER_KEYS:
+            if key == "suffix" and suffix_from_forward and forward_header is not None:
+                if echo_header.get(key) != forward_header.get(key):
+                    out.append("echo SUFFIX is %r, the forward copy carries %r" % (echo_header.get(key), forward_header.get(key)))
+                continue
             if echo_header.get(key) != sent.get(key):
                 out.append("echo %s is %r, the sender sent %r" % (key.upper(), echo_header.get(key), sent.get(key)))
+    if not rpt2_vs_forward:
+        return out
     if forward_header is None:
         out.append("no forward header to compare RPT2 with")
     elif echo_header.get("rpt2") != forward_header.get("rpt2"):
         out.append("echo RPT2 is %r, the forward copy carries %r" % (echo_header.get("rpt2"), forward_header.get("rpt2")))
     return out
+
+
+def header_notes(forward_header, echo_header):
+    """Differences of RPT2 between the forward copy and the echo that header_policy does not assert (recorded as findings)."""
+    if forward_header is None or echo_header is None or echo_header.get("rpt2") == forward_header.get("rpt2"):
+        return []
+    return ["echo RPT2 is %r, the live copy carries %r" % (echo_header.get("rpt2"), forward_header.get("rpt2"))]
 
 
 def _dmr_ids_want(pos, base_pos, base_k):
