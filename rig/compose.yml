@@ -399,6 +399,8 @@ services:
       DVT_SOAK_WALL_CAP_S: ${DVT_SOAK_WALL_CAP_S:-}
       # E9 D-STAR echo return integrity (cases/test_echo_dstar_integrity.py): overs, frames per over, sender pacing jitter, image tag for the summary
       DVT_ECHO_INTEGRITY_RUNS: ${DVT_ECHO_INTEGRITY_RUNS:-}
+      DVT_ECHO_INTEGRITY_KINDS: ${DVT_ECHO_INTEGRITY_KINDS:-}
+      DVT_ECHO_INTEGRITY_XLX_VERSION: ${DVT_ECHO_INTEGRITY_XLX_VERSION:-}
       DVT_ECHO_INTEGRITY_FRAMES: ${DVT_ECHO_INTEGRITY_FRAMES:-}
       DVT_ECHO_INTEGRITY_JITTER_MS: ${DVT_ECHO_INTEGRITY_JITTER_MS:-}
       DVT_ECHO_INTEGRITY_STALL_PCT: ${DVT_ECHO_INTEGRITY_STALL_PCT:-}
