@@ -236,7 +236,22 @@ Re-derived from the source; 25 of the 62 changed (`git diff` of `streams.json`):
 - A CRC-failed LoRa packet, RSSI / SNR, TX (the adapter writes `prefix + TNC2 + LF` or `u16 length + prefix + AX.25`, `tcp.rs:177-189`; not generated here) and real chip behaviour are outside what a byte source can say.
 - What the worker does AFTER admission (dedupe, gating, access lists) is not modelled: "accept" here means the edge delivers the line and the TNC2 parser does not refuse it.
 
-## Open questions for the DV-Router lead
+## Answers of the DV-Router lead (2026-11-07) and what stays pending
+
+1. **Valid TNC2, invalid AX.25**: ANSWERED. LoRa APRS on air is a TNC2 text line after the `3C FF 01` prefix, not AX.25 (data.md:1651); raw text lines are
+   format 8 `aprs-tnc2` (data.md:652, 701), so the worker applies APRS-IS TNC2 rules on the text path by design. The expectations of this file (SSID 16, 7 character call,
+   9 digipeaters, empty information accepted) stay. Only a path that renders to AX.25 RF must narrow; LoRa TX is refused today.
+2. **Where a line is refused**: ANSWERED. Framing errors are edge modem counters (`dv_edge_modem_total{port,result=bad_frame}`); content rejections are worker counters
+   (`dv_pkt_reject_total{reason}`).
+3. **Kind label of `dv_edge_raw_total` for text lines** (`shell.rs:344` fixed kind 9): PENDING. data.md:2099 says the kind is the format name, so a text line admitted as format 8
+   should count under `aprs-tnc2`; status.md:347 predates DP11d. Recorded by the lead as a finding for the follow-up unit DATAV3 (fix code or docs). Expectation here: per data.md,
+   `aprs-tnc2` (pending).
+4. **Per-channel versus global bad frames** (`tcp.rs:425` versus `tcp.rs:397`): PENDING. The lead checks which counter `dv_edge_modem_total{result="bad_frame"}` reflects in DATAV3.
+5. **Serial binary gaps**: later, low priority (after SvxLink, ipsc2hbp, ircDDBGateway).
+6. **Rig service**: not wanted yet; unit-level vectors first. The `lora_gw` vectors are consumed in DATAV3 after DATAV2 merges.
+7. **Firmware**: still open (re-read the iGate firmware sources at a pinned commit to turn `plan-firmware` into a verified fact).
+
+### Original questions (kept for the record)
 
 1. **Valid TNC2, invalid AX.25**: you said such lines are rejected by the parser. The code I read accepts SSID 16, a seven character call, nine to 32 digipeaters and an empty
    information field on the text path (`core_rf.rs:128-142`, `tnc2.rs:37-108`; the AX.25 limits apply only to the binary path). Is the TNC2 parser (APRS-IS rules) the intended
