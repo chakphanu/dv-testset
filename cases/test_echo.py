@@ -121,6 +121,27 @@ def echo_rig(rig, target):
     return EchoRig(target.xlxd_sut, cfg, delay, settings["max_seconds"], settings["modules"], control, base)
 
 
+@pytest.fixture(autouse=True)
+def counter_trace(request):
+    """DVT_ECHO_DEBUG_COUNTERS=1: after every case wait one telemetry period and note the delta of dv_echo_overs_total against
+    the start of the module and the tally of the cases so far (root-cause hunting for E7: which over lacks its count)."""
+    yield
+    if os.environ.get("DVT_ECHO_DEBUG_COUNTERS") != "1" or "echo_rig" not in request.fixturenames:
+        return
+    try:
+        rig = request.getfixturevalue("echo_rig")
+        target = request.getfixturevalue("target")
+        if rig.control is None:
+            return
+        time.sleep(11.0)
+        text = hub_text(rig.control) or ""
+        got = {k: v - rig.base[k] for k, v in results(text).items()}
+        fam = [ln for ln in text.splitlines() if ln.startswith(("dv_echo", "dv_edge_drops_total", "dv_edge_x_")) or "capture_tick" in ln]
+        note(target, "trace", "RECORD", "after %s: delta %s, tally %s, families %s" % (request.node.name, got, dict(TALLY), fam))
+    except Exception as exc:                                  # noqa: BLE001 - debugging aid only
+        print("counter trace failed: %s" % exc)
+
+
 def need_cfg(echo_rig, what):
     cfg = echo_rig.cfg
     if cfg is None:
