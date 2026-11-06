@@ -29,8 +29,9 @@ Layers (all pure, no sockets):
   decoders         Decoder (policy "accumulate" or "reset" at a sync frame; both behaviours exist
                    in the two oracles of docs/dstar-slowdata-cases.md)
   packet loss      packet_loss_rewrite ([STD6] 6.6 table)
-  DV-Router unit   split_units, unit66 (3 byte presence bitmap + 21 x 3 raw bytes), DvrUnitDecoder
-                   (model of the DV-Router lead's statements: fixed frame pairs per unit)
+  DV-Router unit   split_units, unit66 (3 byte little endian presence bitmap + 21 x 3 raw bytes),
+                   DvrUnitDecoder (a model of crates/lib/pkt/src/dstar.rs of the DV-Router work tree,
+                   read line by line: fixed frame pairs per unit, byte level GPS state machine)
   carriers         over_datagrams (DSVT header + voice frames + last frame, DExtra/DPlus bytes)
 """
 from .proto import dextra
@@ -39,9 +40,11 @@ from .proto import dextra
 
 NIBBLE_POLICIES = ("strict", "ignore", "dvrouter")
 UNIT66_BYTES = 3 + 3 * 21               # presence bitmap + 21 x 3 raw slow data bytes
-DVR_MAX_DPRS = 300                      # D-PRS: '$$CRC' to the CR, INCLUDING the CR (DV-Router lead)
-DVR_MAX_NMEA = 83                       # NMEA: 82 bytes before the LF delimiter, i.e. 83 with the LF
-                                        # (reading A of docs/dstar-slowdata-cases.md, an inference)
+# DV-Router limits, read from dstar.rs of the work tree (docs/dstar-slowdata-cases.md, "Stage 1c")
+DVR_MAX_DPRS = 300                      # D-PRS: '$$CRC' to the CR, INCLUDING the CR (dstar.rs:15, 57-61, 80)
+DVR_MAX_NMEA = 82                       # NMEA stored line, the terminator (CR or LF) NOT counted (dstar.rs:20, 62-66):
+                                        # with CR LF 84 bytes are accepted today and 85 are rejected
+DVR_MAX_NMEA_DP5F = 80                  # DP5f (planned by the DV-Router lead): NMEA 0183, 82 including CR LF
 
 SYNC = b"\x55\x2d\x16"                  # data field of frame 0 (never scrambled)
 FRAMES = 21                             # frames per superframe
@@ -441,8 +444,9 @@ class Decoder:
     nibble decides how the low nibble of a 0x3x block (simple data, D-PRS, NMEA) is used:
       "strict"    1..5 valid bytes, 0 and 6..15 drop the block (the default, the standard)
       "ignore"    every 0x3x block adds 5 bytes, the nibble is not read (DStarGateway's collectors)
-      "dvrouter"  0x30..0x35 valid, 0 means 5, 0x36..0x3F drop the block (statement of the
-                  DV-Router lead, UNVERIFIED by any oracle)"""
+      "dvrouter"  0x30..0x35 valid, 0 means 5, 0x36..0x3F drop the block (dstar.rs:181-185 and 205 of
+                  the DV-Router work tree, VERIFIED by reading; no oracle runs it; DvrUnitDecoder is the
+                  full model, this policy only serves the library level Decoder)"""
 
     def __init__(self, sync="accumulate", max_dprs=300, max_nmea=82, nibble="strict"):
         if sync not in ("accumulate", "reset"):
@@ -594,78 +598,221 @@ def split_units(frames):
 
 
 def unit66(unit):
-    """The 66 byte unit DV-Router's decoder is fed once per superframe (statement of the DV-Router
-    lead): a 3 byte presence bitmap, then 21 x 3 raw slow data bytes as received (frame 0 included,
-    still the sync pattern, others still scrambled); an absent frame is 3 zero bytes.
-    ASSUMPTION of this generator (the lead builds the unit from the 'seq hex6' lines himself): the
-    bitmap is a 24 bit big-endian number, MSB first over frames 0..20: frame f is bit (23 - f), so
-    frame 0 is bit 7 of byte 0, frame 7 bit 0 of byte 0, frame 8 bit 7 of byte 1, frame 16 bit 7 of
-    byte 2, frame 20 bit 3 of byte 2; the 3 spare bits (2..0 of byte 2) are zero."""
+    """The 66 byte unit DV-Router's decoder is fed once per superframe (dstar.rs:122-141): a 3 byte
+    present bitmap, then 21 x 3 raw slow data bytes as received (frame 0 included, still the sync
+    pattern, the others still scrambled); an absent frame is 3 zero bytes.
+    The bitmap is a LITTLE endian 24 bit number, LSB first (dstar.rs:136, VERIFIED): bit i is frame i,
+    so frame 0 is bit 0 (mask 0x01) of byte 0, frame 8 is bit 0 of byte 1, frame 16 is bit 0 of byte 2,
+    frame 20 is bit 4 (mask 0x10) of byte 2; the top 3 bits of byte 2 are spare and must be zero
+    (dstar.rs:132). A complete unit starts ff ff 1f 55 2d 16."""
     mask = 0
     body = b""
     for f in range(FRAMES):
         if f in unit:
             if len(unit[f]) != 3:
                 raise ValueError("a slow data field is 3 bytes")
-            mask |= 1 << (23 - f)
+            mask |= 1 << f
             body += bytes(unit[f])
         else:
             body += b"\x00\x00\x00"
-    return mask.to_bytes(3, "big") + body
+    return mask.to_bytes(3, "little") + body
 
 
 def parse_unit66(raw):
     """Inverse of unit66: {seq: wire3} of the present frames. Raises on a wrong length or on spare
-    bits that are set."""
+    bits that are set (DV-Router answers those with a reject, see DvrUnitDecoder.feed_raw)."""
     raw = bytes(raw)
     if len(raw) != UNIT66_BYTES:
         raise ValueError("a unit is %d bytes" % UNIT66_BYTES)
-    mask = int.from_bytes(raw[:3], "big")
-    if mask & 0x7:
+    mask = int.from_bytes(raw[:3], "little")
+    if mask & 0xE00000:
         raise ValueError("spare bits of the bitmap are set")
-    return {f: raw[3 + 3 * f:6 + 3 * f] for f in range(FRAMES) if mask & (1 << (23 - f))}
+    return {f: raw[3 + 3 * f:6 + 3 * f] for f in range(FRAMES) if mask & (1 << f)}
 
 
 class DvrUnitDecoder:
-    """Model of the DV-Router lead's statements about its decoder (UNVERIFIED by any oracle except
-    where the corpus says the MMDVMHost / DStarGateway result agrees):
-      * one 66 byte unit (a superframe) per feed_unit() call;
-      * the text segments are cleared at the start of every unit (the DP5f decision: reset at every
-        sync like MMDVMHost, DStarSlowData.cpp:173-181);
-      * blocks are the fixed frame pairs (1,2) (3,4) ... (19,20) of the unit: a block that
-        straddles a sync cannot form, an offset pairing is not resynced;
-      * a pair with a missing frame skips that block and resets the GPS line buffer only (text
-        segments and the other state are kept);
-      * length nibble of 0x3x blocks: 0x30..0x35 (0 means 5), 0x36..0x3F dropped;
-      * D-PRS limit 300 bytes including the CR, NMEA limit 82 bytes before the delimiter;
-      * header resend, fast data, squelch and filler are passed through opaque: no events.
-    Events are those of Decoder; header, squelch and fast events are suppressed."""
+    """Model of crates/lib/pkt/src/dstar.rs of the DV-Router work tree (read-only, facts only, no code
+    copied). Every rule carries its line; VERIFIED = the line was read for this model.
+      * one 66 byte unit per feed_raw() call; length != 66: reset + TooShort / Size (122-130); spare
+        bits (byte 2 & 0xe0) set: reset + Invalid (132-135); bitmap bit 0 set and frame 0 not
+        55 2d 16: reset + Invalid (138-141);
+      * blocks are the frame pairs (1,2) .. (19,20); both bits must be set, else the block is skipped
+        and the GPS line reset (text kept) (144-151); the unscrambler is 70 4f 93 (155);
+      * 0x40..0x43: text segment (low 2 bits), 5 bytes & 0x7f; the segments and the mask persist
+        across units (161-167: no clear at a unit start), a complete set is handed out (at most one
+        text per unit, 173-175) and clears the mask (170-172);
+      * 0x30..0x35: n valid bytes (0 means 5) (183-184), each byte one at a time: CR or LF ends the
+        line (186-187), others are pushed (199); every other header byte, 0x36..0x3F included, is
+        ignored and does NOT touch the GPS line (205);
+      * the line: mode nmea (stored 82 bytes max, 62-66) turns into D-PRS (300 bytes max, 57-61) when the
+        second byte is '$' too (50-54); a push past the limit gives Size, the mode becomes discard and
+        everything up to the next CR or LF is dropped (200, 72-75); a D-PRS line must end in CR, an LF
+        gives Invalid (77-79) and the CR needs a slot of the 300 (80); every error resets the line (195);
+      * a line error is reported only when the unit produced no item (208-212): text is an item;
+      * NMEA content (dstar_nmea.rs:21-34, 107-113): $GPRMC / $GPGGA need '*' and two UPPER case hex
+        digits equal to the XOR of the bytes between '$' and '*', else Crc (position.rs:167-178 for the
+        digits); every other sentence is ignored without a check; the 29 byte station ID line
+        (dstar_nmea.rs:110-148) and the D-PRS fields after the CRC (dstar_dprs.rs:34-147) are NOT
+        modelled (they depend on the stream's source callsign);
+      * D-PRS CRC (dstar_dprs.rs:15-33): '$$CRC' + 4 UPPER case hex digits + ',' (else Invalid / Crc), the
+        CRC-16/X.25 of the rest INCLUDING the CR must match (else Crc).
+    dp5f=True models the rules the DV-Router lead plans for DP5f (not in the code read): the NMEA limit
+    becomes the NMEA 0183 one (80 content bytes, 82 with CR LF) and the text segments are cleared at
+    the start of every unit (MMDVMHost's reset at a sync).
+    Events: text {kind, text, seq}, dprs {kind, line, crc, crc_ok, seq} (CRC valid), nmea {kind,
+    sentence, checksum_ok, seq} (RMC / GGA valid); seq = the second frame of the block."""
 
-    OPAQUE = ("header", "squelch", "fast")
+    def __init__(self, dp5f=False, max_dprs=DVR_MAX_DPRS, max_nmea=None):
+        self.dp5f = dp5f
+        self.max_dprs = max_dprs
+        self.max_nmea = max_nmea if max_nmea is not None else (DVR_MAX_NMEA_DP5F if dp5f else DVR_MAX_NMEA)
+        self.last = None
+        self.reset()
 
-    def __init__(self, max_dprs=DVR_MAX_DPRS, max_nmea=DVR_MAX_NMEA):
-        self._dec = Decoder("reset", max_dprs=max_dprs, max_nmea=max_nmea, nibble="dvrouter")
+    def reset(self):
+        self._reset_gps()
+        self._text = bytearray(b" " * TEXT_LEN)
+        self._mask = 0
+
+    def _reset_gps(self):
+        self._mode = "nmea"
+        self._buf = bytearray()
+
+    def _push(self, byte):
+        """None or the Reject name (dstar.rs:49-69)."""
+        if self._mode == "nmea" and self._buf == b"$" and byte == 0x24:
+            self._mode = "dprs"
+            self._buf = bytearray(b"$")
+        if self._mode == "discard":
+            return None
+        limit = self.max_dprs if self._mode == "dprs" else self.max_nmea
+        if len(self._buf) >= limit:
+            return "Size"
+        self._buf.append(byte)
+        return None
+
+    @staticmethod
+    def _hex_upper(digits):
+        """position.rs:167-178: 1..4 digits 0-9 A-F, else None (the caller says Crc)."""
+        if not 1 <= len(digits) <= 4 or any(not (48 <= b <= 57 or 65 <= b <= 70) for b in digits):
+            return None
+        return int(digits, 16)
+
+    def _finish(self, delimiter, seq):
+        """(event or None, Reject name or None) of a CR / LF (dstar.rs:70-113). The caller resets the
+        line on an error."""
+        mode, buf = self._mode, bytes(self._buf)
+        if mode == "discard":
+            self._reset_gps()
+            return None, None
+        if mode == "dprs":
+            if delimiter != 0x0D:
+                return None, "Invalid"
+            if len(buf) >= self.max_dprs:
+                return None, "Size"
+            line = buf + b"\r"
+            self._reset_gps()
+            if len(line) < 12 or line[:5] != b"$$CRC" or line[9:10] != b",":
+                return None, "Invalid"
+            want = self._hex_upper(line[5:9])
+            if want is None or crc16_x25(line[10:]) != want:
+                return None, "Crc"
+            return {"kind": "dprs", "seq": seq, "line": line[10:], "crc": line[5:9].decode("ascii"),
+                    "crc_ok": True}, None
+        if not buf:
+            return None, None
+        self._buf = bytearray()
+        if buf.startswith((b"$GPRMC", b"$GPGGA")):
+            star = buf.find(b"*")
+            suffix = buf[star + 1:] if star >= 0 else b""
+            xor = 0
+            for b in buf[1:star] if star >= 0 else b"":
+                xor ^= b
+            if star < 0 or len(suffix) != 2 or self._hex_upper(suffix) != xor:
+                return None, "Crc"
+            return {"kind": "nmea", "seq": seq, "sentence": buf.decode("latin-1"), "checksum_ok": True}, None
+        return None, None                   # other sentences / the ID line: not an event of this model
+
+    def feed_raw(self, raw):
+        """One unit of 66 raw bytes. Returns {"events": [...], "outcome": "parsed" or "reject:<Name>",
+        "reject": Name or None} (dstar.rs:116-214)."""
+        raw = bytes(raw)
+        self.last = None
+
+        def rejected(name):
+            self.reset()
+            self.last = {"events": [], "outcome": "reject:" + name, "reject": name}
+            return self.last
+        if len(raw) != UNIT66_BYTES:
+            return rejected("TooShort" if len(raw) < UNIT66_BYTES else "Size")
+        if raw[2] & 0xE0:
+            return rejected("Invalid")
+        mask = int.from_bytes(raw[:3], "little")
+        if mask & 1 and raw[3:6] != SYNC:
+            return rejected("Invalid")
+        if self.dp5f:
+            self._text = bytearray(b" " * TEXT_LEN)
+            self._mask = 0
+        events = []
+        items = 0
+        error = None
+        for first in range(1, FRAMES, 2):
+            if mask & (3 << first) != (3 << first):
+                self._reset_gps()
+                continue
+            seq = first + 1
+            start = 3 + first * 3
+            dec = bytes(b ^ SCRAMBLE3[i % 3] for i, b in enumerate(raw[start:start + 6]))
+            head = dec[0]
+            if 0x40 <= head <= 0x43:
+                seg = head & 3
+                self._text[seg * 5:seg * 5 + 5] = bytes(b & 0x7F for b in dec[1:])
+                self._mask |= 1 << seg
+                if self._mask == 15:
+                    self._mask = 0
+                    if not items:
+                        items += 1
+                        events.append({"kind": "text", "text": bytes(self._text).decode("ascii"), "seq": seq})
+            elif 0x30 <= head <= 0x35:
+                n = (head & 15) or 5
+                for byte in dec[1:1 + n]:
+                    if byte in (0x0D, 0x0A):
+                        event, err = self._finish(byte, seq)
+                        if err:
+                            self._reset_gps()
+                            error = error or err
+                        elif event:
+                            events.append(event)
+                    else:
+                        err = self._push(byte)
+                        if err:
+                            self._mode = "discard"
+                            error = error or err
+        if not items and error:             # Outcome::Reject carries no items at all (dstar.rs:208-212)
+            self.last = {"events": [], "outcome": "reject:" + error, "reject": error}
+            return self.last
+        self.last = {"events": events, "outcome": "parsed", "reject": None}
+        return self.last
 
     def feed_unit(self, unit):
-        """unit: {seq: wire3} (split_units) or the 66 raw bytes."""
-        if isinstance(unit, (bytes, bytearray)):
-            unit = parse_unit66(unit)
-        dec = self._dec
-        dec._start()
-        events = []
-        for first in range(1, FRAMES, 2):
-            a, b = unit.get(first), unit.get(first + 1)
-            if a is None or b is None:
-                dec._buf = bytearray()
-                continue
-            events += [e for e in dec._block(first + 1, xor3(a) + xor3(b)) if e["kind"] not in self.OPAQUE]
-        return events
+        """unit: {seq: wire3} (split_units) or the 66 raw bytes. Returns the events; the full result
+        (outcome) is in self.last."""
+        raw = bytes(unit) if isinstance(unit, (bytes, bytearray)) else unit66(unit)
+        return self.feed_raw(raw)["events"]
 
     def feed_frames(self, frames):
         events = []
         for unit in split_units(frames):
             events += self.feed_unit(unit)
         return events
+
+    def outcomes(self, frames):
+        """The result of every unit of an over: [{"events", "outcome", "reject"}]."""
+        out = []
+        for unit in split_units(frames):
+            self.feed_unit(unit)
+            out.append(self.last)
+        return out
 
 
 # ------------------------------------------------------------------ carriers

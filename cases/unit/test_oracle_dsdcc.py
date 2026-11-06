@@ -130,3 +130,16 @@ def test_dsdcc_findings_the_doc_relies_on():
     # NMEA, squelch, fast data and filler change nothing visible
     for case in ("nmea-gga", "nmea-rmc", "squelch-only", "fast-data-superframe", "filler-only"):
         assert len(rows[case]["states"]) == 1, case
+
+
+def test_new_cases_of_stage_1c_are_recorded_and_the_text_view_is_recomputed_without_docker():
+    rows = _by_name()
+    for case in ("nmea-reject-bad-checksum", "nmea-reject-no-star", "nmea-term-lf-only", "nmea-term-cr-only", "dprs-term-lf"):
+        assert len(rows[case]["states"]) == 1 and not rows[case]["locator_valid_shape_shown"], case      # nothing visible
+    corpus = os.path.join(ROOT, "vectors", "dstar_sd", "corpus.json")
+    again = dsd.build(corpus, only=set(), existing=_vec("dsdcc.json")["cases"])           # no case runs: no Docker
+    assert again == _vec("dsdcc.json")["cases"]
+    with pytest.raises(ValueError):
+        dsd.build(corpus, only=set(), existing=[])
+    # "expected" is the DP5f decision (reset at a sync), not what the code accumulates today
+    assert rows["text-slot8-split"]["expected_texts_shown"] == [] and rows["text-slot8-split"]["lenient_texts_shown"] == [True]

@@ -30,7 +30,7 @@ from .proto import dextra
 
 IMAGE = "dvt-dstarsd:local"
 RUN_TIMEOUT = 120
-SCHEMA = "dvt-dstar-sd-corpus/2"
+SCHEMA = "dvt-dstar-sd-corpus/3"
 
 CALL = "N0CALL"
 TEXT = "N0CALL: CQ DE N0CALL"             # 20 characters
@@ -106,8 +106,36 @@ def _render_blocks(blocks, first_slot=0, superframes=None):
 
 UNIT66_DOC = ("unit66_hex: one string per superframe unit (a new unit starts when the frame number does not increase): "
               "3 byte presence bitmap + 21 x 3 raw slow data bytes as received (frame 0 included, others scrambled; "
-              "an absent frame is 3 zero bytes). Bitmap bit order is the generator's ASSUMPTION: 24 bit big-endian, "
-              "MSB first over frames 0..20, frame f = bit (23 - f), the 3 spare low bits zero.")
+              "an absent frame is 3 zero bytes). Bitmap (DV-Router dstar.rs:132-136, VERIFIED): little endian, "
+              "bitmap = b0 | b1 << 8 | b2 << 16, LSB first, bit i = frame i (frame 0 = mask 0x01 of byte 0, frame 8 = "
+              "bit 0 of byte 1, frame 20 = mask 0x10 of byte 2); the top 3 bits of byte 2 are spare and must be zero. "
+              "A complete unit starts ffff1f 552d16.")
+
+MODEL_LIMITS = ("The DV-Router model (dvtest.dstar_sd.DvrUnitDecoder) follows crates/lib/pkt/src/dstar.rs line by line. It does "
+                "NOT model what happens after the line level checks: the field parsing of a valid $GPRMC / $GPGGA "
+                "(position, time, date), the 29 byte station ID line (dstar_nmea.rs:107-148), the D-PRS source binding "
+                "and position fields (dstar_dprs.rs:34-147), the blank-text rule of the status item. A valid RMC / GGA "
+                "gives no item of its own in DV-Router; `gps` lists the lines that passed the line level checks "
+                "(dprs = valid CRC, nmea = valid RMC / GGA checksum) and only their presence and frame number are "
+                "meaningful. `outcome` is per unit: parsed, or reject:<Reject name> (dstar.rs:116-121, 208-212: a line "
+                "error is reported only when the unit produced no text item).")
+
+RULES = {
+    "unit-size": "dstar.rs:123-130 (length != 66: state reset; < 66 TooShort, > 66 Size)",
+    "unit-spare": "dstar.rs:131-135 (input[2] & 0xe0 != 0: state reset, Invalid)",
+    "unit-bitmap": "dstar.rs:136 (bitmap = b0 | b1 << 8 | b2 << 16, bit i = frame i)",
+    "unit-sync": "dstar.rs:137-141 (bit 0 set and frame 0 != 55 2d 16: state reset, Invalid)",
+    "pair-hole": "dstar.rs:144-151 (pair bits (3 << frame) both set, else the GPS line is reset and the block skipped)",
+    "unscramble": "dstar.rs:152-156 (XOR 70 4f 93 repeating over the 6 bytes)",
+    "text": "dstar.rs:157-180 (0x40..0x43, 5 bytes & 0x7f, state.text persists across units, one text item per unit)",
+    "gps-bytes": "dstar.rs:181-204 (0x30..0x35, n = low nibble, 0 means 5; CR or LF finish, other bytes push)",
+    "opaque": "dstar.rs:205 (every other header byte is ignored, the GPS line is NOT reset)",
+    "push-limits": "dstar.rs:49-69 with 15, 57-66 (NMEA 82, D-PRS 300 bytes; overflow: Size, mode discard)",
+    "finish": "dstar.rs:70-113 (discard to the next CR or LF; D-PRS needs CR else Invalid and a slot for it; NMEA len 0: nothing)",
+    "error-report": "dstar.rs:194-197, 208-212 (a line error resets the line; reported only when no item)",
+    "nmea-crc": "dstar_nmea.rs:21-34 (RMC / GGA: no '*', suffix != 2 digits or XOR mismatch: Crc), 107-113 (other sentences ignored), position.rs:167-178 (upper case hex only)",
+    "dprs-crc": "dstar_dprs.rs:15-33 (prefix / comma: Invalid; hex or CRC mismatch, CRC covers the CR: Crc)",
+}
 
 
 def corpus():
@@ -241,6 +269,20 @@ def corpus():
     add("fast-length-max", "mini-header 0x9C (28 bytes), the largest valid length", _render_blocks([sd.block(0x9C, b"abcde")]))
     add("fast-length-invalid", "mini-header 0x9D: above the 28 bytes a block can hold", _render_blocks([sd.block(0x9D, b"abcde")]))
     add("filler-only", "20 filler data fields (66 66 66 on the wire 16 29 F5)", sd.render([], start=1, frames=21))
+
+    # ---- stage 1c, the DV-Router source contract (dstar.rs): line terminators and checksum rejects
+    rmc_bad = RMC[:RMC.index("*") + 1] + ("00" if not RMC.endswith("00\r\n") else "FF") + "\r\n"
+    gga_nostar = GGA[:GGA.index("*")] + "\r\n"
+    add("nmea-reject-bad-checksum", "RMC whose two checksum digits are wrong (the body is intact): DV-Router counts a Crc reject, DStarGateway is silent",
+        _render_blocks(sd.simple_data_blocks(rmc_bad.encode())))
+    add("nmea-reject-no-star", "GGA without '*' and checksum digits: DV-Router counts a Crc reject (no '*' is a Crc), DStarGateway is silent",
+        _render_blocks(sd.simple_data_blocks(gga_nostar.encode())))
+    add("nmea-term-lf-only", "GGA ending in LF alone: DV-Router ends a line at CR or LF",
+        _render_blocks(sd.simple_data_blocks(GGA.rstrip("\r\n").encode() + b"\n")))
+    add("nmea-term-cr-only", "GGA ending in CR alone: DV-Router ends the line at the CR, DStarGateway waits for an LF that never comes",
+        _render_blocks(sd.simple_data_blocks(GGA.rstrip("\r\n").encode() + b"\r")))
+    add("dprs-term-lf", "D-PRS line (CRC over the string) ended by an LF instead of a CR: DV-Router needs the CR (Invalid)",
+        _render_blocks(sd.simple_data_blocks(sd.dprs_line(DPRS_PAYLOAD, cr=False) + b"\n")))
     return cases
 
 
@@ -367,22 +409,33 @@ def ours_dgw_view(frames):
     return out
 
 
-def ours_dvrouter_view(frames):
-    """What the DV-Router unit model (dvtest.dstar_sd.DvrUnitDecoder: reset at every unit, fixed
-    frame pairs, length nibble 0x30..0x35, limits 300 / 82) says, in the oracles' event terms:
-    text, gpsa, nmea:<ID>. Header, squelch and fast data are opaque (no events)."""
+def _model_events(events):
+    """Events of dvtest.dstar_sd.DvrUnitDecoder in the oracles' terms: text, gpsa (valid CRC), nmea:<ID>
+    (valid RMC / GGA checksum). Header, squelch and fast data are opaque (no events)."""
     out = []
-    dec = sd.DvrUnitDecoder()
-    for unit in sd.split_units(frames):
-        for ev in dec.feed_unit(unit):
-            seq = ev["seq"]
-            if ev["kind"] == "text":
-                out.append({"kind": "text", "seq": seq, "hex": ev["text"].encode("ascii").hex()})
-            elif ev["kind"] == "dprs" and ev["crc_ok"]:
-                out.append({"kind": "gpsa", "seq": seq, "hex": ev["line"].hex()})
-            elif ev["kind"] == "nmea" and ev["checksum_ok"]:
-                out.append({"kind": "nmea:" + nmea_id(ev["sentence"]), "seq": seq,
-                            "hex": dgw_nmea_line(ev["sentence"]).encode("ascii").hex()})
+    for ev in events:
+        seq = ev["seq"]
+        if ev["kind"] == "text":
+            out.append({"kind": "text", "seq": seq, "hex": ev["text"].encode("ascii").hex()})
+        elif ev["kind"] == "dprs" and ev["crc_ok"]:
+            out.append({"kind": "gpsa", "seq": seq, "hex": ev["line"].hex()})
+        elif ev["kind"] == "nmea" and ev["checksum_ok"]:
+            out.append({"kind": "nmea:" + nmea_id(ev["sentence"]), "seq": seq,
+                        "hex": dgw_nmea_line(ev["sentence"]).encode("ascii").hex()})
+    return out
+
+
+def dvrouter_results(frames, dp5f=False):
+    """[{"events", "outcome", "reject"}] per unit of an over from the DV-Router unit model."""
+    return sd.DvrUnitDecoder(dp5f=dp5f).outcomes(frames)
+
+
+def ours_dvrouter_view(frames, dp5f=False):
+    """What the DV-Router unit model (dvtest.dstar_sd.DvrUnitDecoder, a reading of dstar.rs) says, in the
+    oracles' event terms: text, gpsa, nmea:<ID>. dp5f=True is the rule set the DV-Router lead plans for DP5f."""
+    out = []
+    for res in dvrouter_results(frames, dp5f):
+        out += _model_events(res["events"])
     return out
 
 
@@ -390,33 +443,52 @@ def _norm(events):
     return [(e["kind"], e["seq"], e["hex"]) for e in events]
 
 
-# Cases whose DV-Router expectation is NOT an oracle result but the lead's statement (UNVERIFIED by
-# any oracle): the length nibble (item 5 of the lead's answers) and the missing frame of a pair
-# (item 7). Everything else: text = MMDVMHost, GPS = DStarGateway's collectors (see expected_dvrouter).
-LEAD_STATEMENT_CASES = frozenset([
-    "nmea-nibble-0x36", "nmea-nibble-0x3f", "nmea-nibble-0x30", "nmea-nibble-low", "nmea-nibble-short-block",
-    "pair-hole-text-once", "pair-hole-text-twice", "pair-hole-nmea-then-ok"])
+# Basis of every expectation of this revision: the model of dstar.rs, VERIFIED by reading the lines
+# (RULES). The oracles are cross-checks (cases/unit/test_dstar_sd_dvrouter.py), not the source of a value.
+BASIS = "dvrouter-source"
+BASIS_DP5F = "lead-statement-unverified"
+DP5F_RULE = ("DP5f as stated by the DV-Router lead (NOT in the code read): NMEA 0183 line limit, 82 including CR LF = 80 content "
+             "bytes; text segments cleared at the start of every unit (MMDVMHost's reset at a sync)")
 
 # Named, documented differences between DV-Router's expectation and DStarGateway's result (the
 # lenient alternative). They are differences by design, not failures.
 NAMED_DIFFERENCES = {
-    "DIFF-NIBBLE": "DV-Router reads the length nibble of 0x3x blocks (0x30..0x35, 0 means 5, 0x36..0x3F dropped), "
-                   "DStarGateway ignores it and adds 5 bytes per block",
-    "DIFF-GPS-LIMIT": "DV-Router limits a D-PRS sentence to 300 bytes including the CR and an NMEA line to 82 bytes "
-                      "before the delimiter, DStarGateway has no limit",
+    "DIFF-NIBBLE": "DV-Router reads the length nibble of 0x3x blocks (0x30..0x35, 0 means 5, 0x36..0x3F ignored, the "
+                   "sentence then fails its checksum: Crc), DStarGateway ignores it and adds 5 bytes per block",
+    "DIFF-GPS-LIMIT": "DV-Router stores at most 300 bytes of a D-PRS line including the CR and 82 bytes of an NMEA line "
+                      "without its terminator (a longer line: Size); DStarGateway has no limit",
     "DIFF-PAIR-HOLE": "DV-Router pairs fixed frames (1,2)..(19,20) of a unit, a hole skips one block; the oracles pair "
                       "the frames they receive in turn, so a lost frame shifts their pairing until the next sync",
+    "DIFF-ONE-TEXT-PER-UNIT": "DV-Router hands out at most one text item per unit (dstar.rs:173-175), the oracles one per "
+                              "complete set of four blocks",
+    "DIFF-NMEA-DELIM": "DV-Router ends an NMEA line at the first CR or LF (dstar.rs:186-187), DStarGateway at the LF: the frame "
+                       "number differs when the CR is the last byte of a block",
+    "DIFF-NMEA-TYPES": "DV-Router checks and uses only $GPRMC and $GPGGA, every other sentence is ignored (dstar_nmea.rs:107-113); "
+                       "DStarGateway collects six types",
+    "DIFF-CRC-REJECT": "a bad checksum / CRC is a Reject::Crc of the unit in DV-Router (counted as a worker parse reject, reason "
+                       "crc); DStarGateway is silent",
+    "DIFF-TERMINATOR": "DV-Router accepts CR or LF as the end of an NMEA line and needs the CR for D-PRS (LF: Invalid); "
+                       "DStarGateway ends NMEA at LF and D-PRS at CR",
 }
 CASE_DIFFERENCES = {
+    "text-dvrouter-twice": "DIFF-ONE-TEXT-PER-UNIT",
     "nmea-nibble-0x36": "DIFF-NIBBLE", "nmea-nibble-0x3f": "DIFF-NIBBLE", "nmea-nibble-low": "DIFF-NIBBLE",
     "nmea-nibble-short-block": "DIFF-NIBBLE",
-    "dprs-len-301": "DIFF-GPS-LIMIT", "nmea-len-84": "DIFF-GPS-LIMIT", "nmea-len-85": "DIFF-GPS-LIMIT",
-    "pair-hole-text-twice": "DIFF-PAIR-HOLE",
+    "dprs-len-301": "DIFF-GPS-LIMIT", "nmea-len-85": "DIFF-GPS-LIMIT",
+    "pair-hole-text-twice": "DIFF-PAIR-HOLE", "text-lost-frame": "DIFF-PAIR-HOLE",
+    "dprs-bad-crc": "DIFF-CRC-REJECT", "dprs-crc-without-cr": "DIFF-CRC-REJECT", "nmea-bad-checksum": "DIFF-CRC-REJECT",
+    "nmea-reject-bad-checksum": "DIFF-CRC-REJECT", "nmea-reject-no-star": "DIFF-CRC-REJECT",
+    "nmea-gga": "DIFF-NMEA-DELIM", "nmea-gga-rmc-free": "DIFF-NMEA-DELIM", "nmea-len-81": "DIFF-NMEA-DELIM",
+    "nmea-text-interleave": "DIFF-NMEA-DELIM", "nmea-nibble-0x30": "DIFF-NMEA-DELIM",
+    "nmea-six-types": "DIFF-NMEA-TYPES",
+    "nmea-term-cr-only": "DIFF-TERMINATOR", "dprs-term-lf": "DIFF-TERMINATOR",
 }
-# DStarGateway emits these, the stated DV-Router limit rejects them
-LIMIT_CASES = frozenset(["dprs-len-301", "nmea-len-84", "nmea-len-85"])
-# NMEA limit reading A (82 bytes before the LF) is an inference; reading B (82 before CR LF) would accept 84 too
-LIMIT_READING_CASES = frozenset(["nmea-len-83", "nmea-len-84"])
+# Cases whose model result rests on something the model does not follow to the end (see MODEL_LIMITS)
+UNMODELLED = {
+    "nmea-gga-rmc-free": "the 29 byte free-form line takes the station ID line path (dstar_nmea.rs:107-148): Invalid unless 29 "
+                         "bytes, Source / Spoof from the stream's callsign, Crc without '*'; not modelled, so the unit may "
+                         "really be a reject",
+}
 
 
 def split_text_gps(events):
@@ -424,26 +496,39 @@ def split_text_gps(events):
     return [e for e in events if e[0] == "text"], [e for e in events if e[0] != "text" and e[0] != "block" and e[0] != "header"]
 
 
-def expected_dvrouter(name, mmdvm_events, dgw_events, model_events):
-    """DV-Router's expectation of one case, as {"basis", "text", "gps", ...}: two lists of [kind, seq, hex]
-    in the oracles' terms, each in time order (the frame number restarts every superframe, so the two
-    lists are not merged). basis "oracle": text events are MMDVMHost's (the DP5f decision: reset at every
-    sync), GPS events (gpsa, nmea:*) are DStarGateway's collectors' minus the lines the DV-Router limit
-    rejects; MMDVMHost has no GPS decoder, DStarGateway's text is only the lenient alternative.
-    basis "lead-statement-unverified": the events are the unit model's (text and GPS), taken from the DV-Router lead's
-    statement and checked by no oracle. Header resend, squelch and fast data are opaque (no events)."""
-    if name in LEAD_STATEMENT_CASES:
-        text, gps = split_text_gps(_norm(model_events))
-        basis = "lead-statement-unverified"
+def _expectation(frames, dp5f):
+    """{"text", "gps", "outcome"} of the unit model: two lists of [kind, seq, hex] in time order (the frame number
+    restarts every superframe, so the two lists are not merged) and one outcome string per unit."""
+    results = dvrouter_results(frames, dp5f)
+    events = []
+    for res in results:
+        events += _model_events(res["events"])
+    text, gps = split_text_gps(_norm(events))
+    return {"text": text, "gps": gps, "outcome": [r["outcome"] for r in results]}
+
+
+def expected_dvrouter(name, mmdvm_events, dgw_events, model_events, frames=None):
+    """DV-Router's CURRENT behaviour for one case, as {"basis", "text", "gps", "outcome"} (+ "unmodelled"): the
+    unit model of dstar.rs (basis "dvrouter-source"; every rule VERIFIED by reading, RULES). With `frames` the
+    outcome per unit is included; without, only text and gps of `model_events`. The two oracle arguments are
+    kept for the callers: the oracles are cross-checks in the tests, not the source of a value."""
+    if frames is not None:
+        out = dict(basis=BASIS, **_expectation(frames, False))
     else:
-        text = [e for e in _norm(mmdvm_events) if e[0] == "text"]
-        gps = [] if name in LIMIT_CASES else split_text_gps(_norm(dgw_events))[1]
-        basis = "oracle"
-    out = {"basis": basis, "text": text, "gps": gps}
-    if name in LIMIT_READING_CASES:
-        out["limit_reading"] = "reading A (82 bytes before the LF delimiter) assumed; under reading B (before CR LF) the " \
-                               "84 byte sentence is accepted too: open question to the DV-Router lead"
+        text, gps = split_text_gps(_norm(model_events))
+        out = {"basis": BASIS, "text": text, "gps": gps}
+    if name in UNMODELLED:
+        out["unmodelled"] = UNMODELLED[name]
     return out
+
+
+def expected_dvrouter_after_dp5f(name, frames):
+    """The expectation under the DP5f rules the DV-Router lead plans (DP5F_RULE), or None when it equals the
+    current one. basis "lead-statement-unverified": the code read does not implement it yet."""
+    cur, new = _expectation(frames, False), _expectation(frames, True)
+    if cur == new:
+        return None
+    return dict(basis=BASIS_DP5F, rule=DP5F_RULE, **new)
 
 
 def compare(name, frames, mmdvm_events, dgw_events):
@@ -470,12 +555,17 @@ def compare(name, frames, mmdvm_events, dgw_events):
     # reading of the lead's statements and must reproduce the expectation
     model = ours_dvrouter_view(frames)
     rec["unit66_hex"] = [sd.unit66(u).hex() for u in sd.split_units(frames)]
-    rec["expected_dvrouter"] = expected_dvrouter(name, mmdvm_events, dgw_events, model)
+    rec["expected_dvrouter"] = expected_dvrouter(name, mmdvm_events, dgw_events, model, frames)
+    after = expected_dvrouter_after_dp5f(name, frames)
+    if after is not None:
+        rec["expected_dvrouter_after_dp5f"] = after
     rec["lenient_alternative"] = rec["dgw"]
     rec["ours_dvrouter"] = _norm(model)
     exp = rec["expected_dvrouter"]
     rec["dvrouter_match"] = split_text_gps(rec["ours_dvrouter"]) == (exp["text"], exp["gps"])
-    rec["lenient_differs"] = split_text_gps(rec["lenient_alternative"]) != (exp["text"], exp["gps"])
+    # DStarGateway never rejects a unit: the outcome counts as a difference too
+    rec["lenient_differs"] = (split_text_gps(rec["lenient_alternative"]) != (exp["text"], exp["gps"])
+                              or any(o != "parsed" for o in exp["outcome"]))
     if name in CASE_DIFFERENCES:
         rec["named_difference"] = CASE_DIFFERENCES[name]
     return rec
@@ -492,6 +582,92 @@ def pins(path=None):
             if sep and key.startswith("DSTARSD_"):
                 out[key] = value
     return out
+
+
+# ------------------------------------------------------------------ unit level rejects (dstar.rs:122-141)
+
+def _unit_of(blocks, first_slot=0):
+    """The raw 66 byte unit of one superframe holding `blocks` from `first_slot` (the sync frame included)."""
+    units = sd.split_units(_render_blocks(blocks, first_slot, 1))
+    assert len(units) == 1
+    return sd.unit66(units[0])
+
+
+def _hexes(*units):
+    return [bytes(u).hex() for u in units]
+
+
+def unit_vectors():
+    """The unit level vectors of the DV-Router decoder, expected outcomes stated by hand from the rules of
+    dstar.rs (RULES), NOT taken from the model (the tests compare the two): bad spare bits, a wrong frame 0
+    pattern, 65 / 67 byte units, the old MSB first bitmap, and sequences that show the state reset of a reject.
+    Each: name, note, rule, unit_hex (a list: units fed in order, any length), expected_dvrouter {outcome, text,
+    gps}. Reject names are the Rust ones (Reject::TooShort, Size, Invalid)."""
+    tb = sd.text_blocks(TEXT)
+    ok = _unit_of(tb)                                       # a valid unit holding the whole message
+    part_a = _unit_of(tb[:3])                               # blocks 0..2: no text yet
+    part_b = _unit_of([None, None, None, tb[3]])            # block 3 in slot 3 (frames 7, 8)
+    with_spare = lambda mask: bytes([ok[0], ok[1], ok[2] | mask]) + ok[3:]
+    wrong_sync = lambda three: ok[:3] + three + ok[6:]
+    text_ev = [["text", 8, _text_hex()]]
+    one = lambda out, text=None: {"outcome": out, "text": text or [], "gps": []}
+    vectors = [
+        ("unit-valid", "the complete unit of a message (ffff1f 552d16 ...)", "unit-bitmap", _hexes(ok), one(["parsed"], text_ev)),
+        ("unit-65-bytes", "one byte short", "unit-size", _hexes(ok[:-1]), one(["reject:TooShort"])),
+        ("unit-67-bytes", "one byte too long", "unit-size", _hexes(ok + b"\x00"), one(["reject:Size"])),
+        ("unit-empty", "no bytes at all", "unit-size", _hexes(b""), one(["reject:TooShort"])),
+        ("unit-132-bytes", "two units glued together", "unit-size", _hexes(ok + ok), one(["reject:Size"])),
+        ("unit-spare-bit-5", "byte 2 bit 5 (0x20) set", "unit-spare", _hexes(with_spare(0x20)), one(["reject:Invalid"])),
+        ("unit-spare-bit-6", "byte 2 bit 6 (0x40) set", "unit-spare", _hexes(with_spare(0x40)), one(["reject:Invalid"])),
+        ("unit-spare-bit-7", "byte 2 bit 7 (0x80) set", "unit-spare", _hexes(with_spare(0x80)), one(["reject:Invalid"])),
+        ("unit-old-msb-first-bitmap", "the retired MSB first layout of a complete unit (fffff8): byte 2 has spare bits set",
+         "unit-spare", _hexes(bytes.fromhex("fffff8") + ok[3:]), one(["reject:Invalid"])),
+        ("unit-frame0-wrong-last-byte", "bit 0 set, frame 0 = 55 2d 17", "unit-sync", _hexes(wrong_sync(b"\x55\x2d\x17")), one(["reject:Invalid"])),
+        ("unit-frame0-zero", "bit 0 set, frame 0 = 00 00 00 (an absent frame marked present)", "unit-sync",
+         _hexes(wrong_sync(b"\x00\x00\x00")), one(["reject:Invalid"])),
+        ("unit-frame0-scrambled", "bit 0 set, frame 0 = the sync XORed with the scrambler", "unit-sync",
+         _hexes(wrong_sync(sd.xor3(sd.SYNC))), one(["reject:Invalid"])),
+        ("unit-frame0-absent-garbage", "bit 0 CLEAR, frame 0 bytes are garbage: not checked, the unit decodes", "unit-sync",
+         _hexes(bytes([ok[0] & 0xFE]) + ok[1:3] + b"\xff\xff\xff" + ok[6:]), one(["parsed"], text_ev)),
+        ("unit-bitmap-empty", "bitmap 000000: no frame present, nothing to decode", "unit-bitmap",
+         _hexes(bytes(66)), one(["parsed"])),
+        ("unit-frame20-only", "bitmap 000010: only frame 20 (bit 4 of byte 2) present, no pair complete", "unit-bitmap",
+         _hexes(bytes.fromhex("000010") + bytes(60) + b"\xaa\xbb\xcc"), one(["parsed"])),
+        ("seq-reset-after-invalid", "blocks 0..2, a unit with a spare bit set, block 3: the Invalid unit resets the text "
+         "segments, so block 3 alone makes no text", "unit-spare", _hexes(part_a, with_spare(0x20), part_b),
+         one(["parsed", "reject:Invalid", "parsed"])),
+        ("seq-reset-after-too-short", "blocks 0..2, a 65 byte unit, block 3: the TooShort unit resets the text segments",
+         "unit-size", _hexes(part_a, ok[:-1], part_b), one(["parsed", "reject:TooShort", "parsed"])),
+        ("seq-reset-after-wrong-sync", "blocks 0..2, a unit with a wrong frame 0, block 3", "unit-sync",
+         _hexes(part_a, wrong_sync(b"\x55\x2d\x17"), part_b), one(["parsed", "reject:Invalid", "parsed"])),
+        ("seq-no-reset-without-reject", "the same without the bad unit in between: the segments persist across units "
+         "today, the text completes at frame 8 of the second unit (DP5f: it would not)", "text", _hexes(part_a, part_b),
+         one(["parsed", "parsed"], text_ev)),
+    ]
+    out = []
+    for name, note, rule, units, exp in vectors:
+        rec = {"name": name, "note": note, "rule": RULES[rule], "unit_hex": units,
+               "expected_dvrouter": dict(exp, basis=BASIS)}
+        if name == "seq-no-reset-without-reject":
+            rec["expected_dvrouter_after_dp5f"] = {"basis": BASIS_DP5F, "rule": DP5F_RULE, "outcome": ["parsed", "parsed"],
+                                                   "text": [], "gps": []}
+        out.append(rec)
+    return out
+
+
+def _text_hex():
+    return TEXT.encode("ascii").hex()
+
+
+def unit_vector_model_outcomes(rec, dp5f=False):
+    """What the unit model says about one unit vector: [outcome] and the text events (for the tests)."""
+    dec = sd.DvrUnitDecoder(dp5f=dp5f)
+    outs, text = [], []
+    for h in rec["unit_hex"]:
+        res = dec.feed_raw(bytes.fromhex(h))
+        outs.append(res["outcome"])
+        text += [["text", e["seq"], e["text"].encode("ascii").hex()] for e in res["events"] if e["kind"] == "text"]
+    return outs, text
 
 
 def build_records(image=IMAGE):
@@ -516,7 +692,9 @@ def main(argv=None):
         return 0
     records = build_records()
     doc = {"schema": SCHEMA, "image": IMAGE, "pins": pins(), "named_differences": NAMED_DIFFERENCES,
-           "unit66": UNIT66_DOC, "cases": records}
+           "unit66": UNIT66_DOC, "dvrouter_source": {"file": "crates/lib/pkt/src/dstar.rs", "rules": RULES,
+                                                     "model_limits": MODEL_LIMITS, "dp5f": DP5F_RULE},
+           "cases": records, "unit_vectors": unit_vectors()}
     with open(args.out, "w") as fh:
         json.dump(doc, fh, indent=1)
         fh.write("\n")

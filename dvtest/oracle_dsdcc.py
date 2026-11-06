@@ -163,7 +163,10 @@ def text_view(rec, st):
     character states it showed, and whether each text the DV-Router expectation (MMDVMHost) and the
     lenient result (DStarGateway) names was shown at some time."""
     shown = [s["text"] for s in st]
-    want = [bytes.fromhex(e[2]).decode("latin-1") for e in rec["expected_dvrouter"]["text"]]
+    # the DP5f decision (reset at every sync) is the reference of "expected": the expectation of the
+    # current DV-Router code (which accumulates, dstar.rs:161-167) is the lenient column of this table
+    exp = rec.get("expected_dvrouter_after_dp5f") or rec["expected_dvrouter"]
+    want = [bytes.fromhex(e[2]).decode("latin-1") for e in exp["text"]]
     lenient = [bytes.fromhex(e[2]).decode("latin-1") for e in rec["lenient_alternative"] if e[0] == "text"]
     return {
         "expected_texts_shown": [t in shown for t in want],
@@ -172,17 +175,27 @@ def text_view(rec, st):
     }
 
 
-def build(corpus_path, image=IMAGE):
+def build(corpus_path, image=IMAGE, only=None, existing=None):
+    """One row per corpus case. With `only` (a set of case names) and `existing` (the rows of a previous
+    dsdcc.json), DSDcc runs only for the named cases; the other rows keep their recorded states and only the
+    text view is recomputed from them (no Docker for those)."""
     with open(corpus_path) as fh:
         doc = json.load(fh)
+    old = {r["case"]: r for r in (existing or [])}
     out = []
     for rec in doc["cases"]:
         frames = [(int(f.split()[0]), bytes.fromhex(f.split()[1])) for f in rec["frames"]]
         if not modulable(frames):
             out.append({"case": rec["case"], "skipped": "a frame is missing: no RF equivalent"})
             continue
-        st = run_case(frames, image)
-        row = {"case": rec["case"], "states": st}
+        if only is not None and rec["case"] not in only:
+            if rec["case"] not in old or "states" not in old[rec["case"]]:
+                raise ValueError("no recorded row for %s: run it with --only" % rec["case"])
+            row = {"case": rec["case"], "states": old[rec["case"]]["states"]}
+            st = row["states"]
+        else:
+            st = run_case(frames, image)
+            row = {"case": rec["case"], "states": st}
         row.update(text_view(rec, st))
         row["locator_valid_shape_shown"] = any(s["header_flags"] & 32 for s in st)
         row["header_decoded"] = any(s["header_flags"] & 15 == 15 for s in st)
@@ -208,11 +221,18 @@ def main(argv=None):
     ap.add_argument("path", nargs="?", default=None)
     ap.add_argument("--corpus", default="vectors/dstar_sd/corpus.json")
     ap.add_argument("--out", default="vectors/dstar_sd/dsdcc.json")
+    ap.add_argument("--only", default=None,
+                    help="comma separated case names: run DSDcc only for these, keep the recorded rows of the others in --out")
     args = ap.parse_args(argv)
     if args.action == "recording":
         print(json.dumps(run_recording(args.path), indent=1))
         return 0
-    rows = build(args.corpus)
+    only = existing = None
+    if args.only:
+        only = set(args.only.split(","))
+        with open(args.out) as fh:
+            existing = json.load(fh)["cases"]
+    rows = build(args.corpus, only=only, existing=existing)
     doc = {"schema": SCHEMA, "image": IMAGE, "pins": pins(), "cases": rows}
     with open(args.out, "w") as fh:
         json.dump(doc, fh, indent=1)

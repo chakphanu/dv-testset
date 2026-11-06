@@ -1,5 +1,5 @@
 {
- "schema": "dvt-dstar-sd-corpus/2",
+ "schema": "dvt-dstar-sd-corpus/3",
  "image": "dvt-dstarsd:local",
  "pins": {
   "DSTARSD_MMDVM_REPO": "https://github.com/g4klx/MMDVMHost",
@@ -9,11 +9,37 @@
   "DSTARSD_BASE_IMAGE": "debian:bookworm-slim"
  },
  "named_differences": {
-  "DIFF-NIBBLE": "DV-Router reads the length nibble of 0x3x blocks (0x30..0x35, 0 means 5, 0x36..0x3F dropped), DStarGateway ignores it and adds 5 bytes per block",
-  "DIFF-GPS-LIMIT": "DV-Router limits a D-PRS sentence to 300 bytes including the CR and an NMEA line to 82 bytes before the delimiter, DStarGateway has no limit",
-  "DIFF-PAIR-HOLE": "DV-Router pairs fixed frames (1,2)..(19,20) of a unit, a hole skips one block; the oracles pair the frames they receive in turn, so a lost frame shifts their pairing until the next sync"
+  "DIFF-NIBBLE": "DV-Router reads the length nibble of 0x3x blocks (0x30..0x35, 0 means 5, 0x36..0x3F ignored, the sentence then fails its checksum: Crc), DStarGateway ignores it and adds 5 bytes per block",
+  "DIFF-GPS-LIMIT": "DV-Router stores at most 300 bytes of a D-PRS line including the CR and 82 bytes of an NMEA line without its terminator (a longer line: Size); DStarGateway has no limit",
+  "DIFF-PAIR-HOLE": "DV-Router pairs fixed frames (1,2)..(19,20) of a unit, a hole skips one block; the oracles pair the frames they receive in turn, so a lost frame shifts their pairing until the next sync",
+  "DIFF-ONE-TEXT-PER-UNIT": "DV-Router hands out at most one text item per unit (dstar.rs:173-175), the oracles one per complete set of four blocks",
+  "DIFF-NMEA-DELIM": "DV-Router ends an NMEA line at the first CR or LF (dstar.rs:186-187), DStarGateway at the LF: the frame number differs when the CR is the last byte of a block",
+  "DIFF-NMEA-TYPES": "DV-Router checks and uses only $GPRMC and $GPGGA, every other sentence is ignored (dstar_nmea.rs:107-113); DStarGateway collects six types",
+  "DIFF-CRC-REJECT": "a bad checksum / CRC is a Reject::Crc of the unit in DV-Router (counted as a worker parse reject, reason crc); DStarGateway is silent",
+  "DIFF-TERMINATOR": "DV-Router accepts CR or LF as the end of an NMEA line and needs the CR for D-PRS (LF: Invalid); DStarGateway ends NMEA at LF and D-PRS at CR"
  },
- "unit66": "unit66_hex: one string per superframe unit (a new unit starts when the frame number does not increase): 3 byte presence bitmap + 21 x 3 raw slow data bytes as received (frame 0 included, others scrambled; an absent frame is 3 zero bytes). Bitmap bit order is the generator's ASSUMPTION: 24 bit big-endian, MSB first over frames 0..20, frame f = bit (23 - f), the 3 spare low bits zero.",
+ "unit66": "unit66_hex: one string per superframe unit (a new unit starts when the frame number does not increase): 3 byte presence bitmap + 21 x 3 raw slow data bytes as received (frame 0 included, others scrambled; an absent frame is 3 zero bytes). Bitmap (DV-Router dstar.rs:132-136, VERIFIED): little endian, bitmap = b0 | b1 << 8 | b2 << 16, LSB first, bit i = frame i (frame 0 = mask 0x01 of byte 0, frame 8 = bit 0 of byte 1, frame 20 = mask 0x10 of byte 2); the top 3 bits of byte 2 are spare and must be zero. A complete unit starts ffff1f 552d16.",
+ "dvrouter_source": {
+  "file": "crates/lib/pkt/src/dstar.rs",
+  "rules": {
+   "unit-size": "dstar.rs:123-130 (length != 66: state reset; < 66 TooShort, > 66 Size)",
+   "unit-spare": "dstar.rs:131-135 (input[2] & 0xe0 != 0: state reset, Invalid)",
+   "unit-bitmap": "dstar.rs:136 (bitmap = b0 | b1 << 8 | b2 << 16, bit i = frame i)",
+   "unit-sync": "dstar.rs:137-141 (bit 0 set and frame 0 != 55 2d 16: state reset, Invalid)",
+   "pair-hole": "dstar.rs:144-151 (pair bits (3 << frame) both set, else the GPS line is reset and the block skipped)",
+   "unscramble": "dstar.rs:152-156 (XOR 70 4f 93 repeating over the 6 bytes)",
+   "text": "dstar.rs:157-180 (0x40..0x43, 5 bytes & 0x7f, state.text persists across units, one text item per unit)",
+   "gps-bytes": "dstar.rs:181-204 (0x30..0x35, n = low nibble, 0 means 5; CR or LF finish, other bytes push)",
+   "opaque": "dstar.rs:205 (every other header byte is ignored, the GPS line is NOT reset)",
+   "push-limits": "dstar.rs:49-69 with 15, 57-66 (NMEA 82, D-PRS 300 bytes; overflow: Size, mode discard)",
+   "finish": "dstar.rs:70-113 (discard to the next CR or LF; D-PRS needs CR else Invalid and a slot for it; NMEA len 0: nothing)",
+   "error-report": "dstar.rs:194-197, 208-212 (a line error resets the line; reported only when no item)",
+   "nmea-crc": "dstar_nmea.rs:21-34 (RMC / GGA: no '*', suffix != 2 digits or XOR mismatch: Crc), 107-113 (other sentences ignored), position.rs:167-178 (upper case hex only)",
+   "dprs-crc": "dstar_dprs.rs:15-33 (prefix / comma: Invalid; hex or CRC mismatch, CRC covers the CR: Crc)"
+  },
+  "model_limits": "The DV-Router model (dvtest.dstar_sd.DvrUnitDecoder) follows crates/lib/pkt/src/dstar.rs line by line. It does NOT model what happens after the line level checks: the field parsing of a valid $GPRMC / $GPGGA (position, time, date), the 29 byte station ID line (dstar_nmea.rs:107-148), the D-PRS source binding and position fields (dstar_dprs.rs:34-147), the blank-text rule of the status item. A valid RMC / GGA gives no item of its own in DV-Router; `gps` lists the lines that passed the line level checks (dprs = valid CRC, nmea = valid RMC / GGA checksum) and only their presence and frame number are meaningful. `outcome` is per unit: parsed, or reject:<Reject name> (dstar.rs:116-121, 208-212: a line error is reported only when the unit produced no text item).",
+  "dp5f": "DP5f as stated by the DV-Router lead (NOT in the code read): NMEA 0183 line limit, 82 including CR LF = 80 content bytes; text segments cleared at the start of every unit (MMDVMHost's reset at a sync)"
+ },
  "cases": [
   {
    "case": "text-aligned",
@@ -172,10 +198,10 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d163001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d163001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [
      [
       "text",
@@ -183,7 +209,10 @@
       "4e3043414c4c3a204351204445204e3043414c4c"
      ]
     ],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed"
+    ]
    },
    "lenient_alternative": [
     [
@@ -380,23 +409,21 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d163001a3330edf3103a9500cc2326fd7356fdd337fd03103df3001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f5"
+    "ffff1f552d163001a3330edf3103a9500cc2326fd7356fdd337fd03103df3001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [
      [
       "text",
       8,
       "4e3043414c4c3a204351204445204e3043414c4c"
-     ],
-     [
-      "text",
-      16,
-      "4e3043414c4c3a204351204445204e3043414c4c"
      ]
     ],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed"
+    ]
    },
    "lenient_alternative": [
     [
@@ -415,15 +442,11 @@
      "text",
      8,
      "4e3043414c4c3a204351204445204e3043414c4c"
-    ],
-    [
-     "text",
-     16,
-     "4e3043414c4c3a204351204445204e3043414c4c"
     ]
    ],
    "dvrouter_match": true,
-   "lenient_differs": false,
+   "lenient_differs": true,
+   "named_difference": "DIFF-ONE-TEXT-PER-UNIT",
    "note": "the 4 blocks twice, then filler: what DV-Router renders (dvtest.slowdata.encode_text_over)"
   },
   {
@@ -583,10 +606,10 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d161629f51629f53001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d161629f51629f53001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [
      [
       "text",
@@ -594,7 +617,10 @@
       "4e3043414c4c3a204351204445204e3043414c4c"
      ]
     ],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed"
+    ]
    },
    "lenient_alternative": [
     [
@@ -771,10 +797,10 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d161629f51629f51629f51629f51629f51629f53001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d161629f51629f51629f51629f51629f51629f53001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [
      [
       "text",
@@ -782,7 +808,10 @@
       "4e3043414c4c3a204351204445204e3043414c4c"
      ]
     ],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed"
+    ]
    },
    "lenient_alternative": [
     [
@@ -959,10 +988,10 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d161629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f53001a3330edf3103a9500cc2326fd7356fdd337fd03103df"
+    "ffff1f552d161629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f53001a3330edf3103a9500cc2326fd7356fdd337fd03103df"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [
      [
       "text",
@@ -970,7 +999,10 @@
       "4e3043414c4c3a204351204445204e3043414c4c"
      ]
     ],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed"
+    ]
    },
    "lenient_alternative": [
     [
@@ -1258,13 +1290,33 @@
    "dgw_match": true,
    "text_agree": false,
    "unit66_hex": [
-    "fffff8552d161629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f53001a3330edf3103a9500cc2",
-    "fffff8552d16326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d161629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f53001a3330edf3103a9500cc2",
+    "ffff1f552d16326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
+    "text": [
+     [
+      "text",
+      4,
+      "4e3043414c4c3a204351204445204e3043414c4c"
+     ]
+    ],
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "parsed"
+    ]
+   },
+   "expected_dvrouter_after_dp5f": {
+    "basis": "lead-statement-unverified",
+    "rule": "DP5f as stated by the DV-Router lead (NOT in the code read): NMEA 0183 line limit, 82 including CR LF = 80 content bytes; text segments cleared at the start of every unit (MMDVMHost's reset at a sync)",
     "text": [],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "parsed"
+    ]
    },
    "lenient_alternative": [
     [
@@ -1273,9 +1325,15 @@
      "4e3043414c4c3a204351204445204e3043414c4c"
     ]
    ],
-   "ours_dvrouter": [],
+   "ours_dvrouter": [
+    [
+     "text",
+     4,
+     "4e3043414c4c3a204351204445204e3043414c4c"
+    ]
+   ],
    "dvrouter_match": true,
-   "lenient_differs": true,
+   "lenient_differs": false,
    "note": "blocks 0,1 in slots 8,9; blocks 2,3 in slots 0,1 of the next superframe (cross-superframe)"
   },
   {
@@ -1546,13 +1604,33 @@
    "dgw_match": true,
    "text_agree": false,
    "unit66_hex": [
-    "fffff8552d161629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f53001a3330edf",
-    "fffff8552d163103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d161629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f53001a3330edf",
+    "ffff1f552d163103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
+    "text": [
+     [
+      "text",
+      6,
+      "4e3043414c4c3a204351204445204e3043414c4c"
+     ]
+    ],
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "parsed"
+    ]
+   },
+   "expected_dvrouter_after_dp5f": {
+    "basis": "lead-statement-unverified",
+    "rule": "DP5f as stated by the DV-Router lead (NOT in the code read): NMEA 0183 line limit, 82 including CR LF = 80 content bytes; text segments cleared at the start of every unit (MMDVMHost's reset at a sync)",
     "text": [],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "parsed"
+    ]
    },
    "lenient_alternative": [
     [
@@ -1561,9 +1639,15 @@
      "4e3043414c4c3a204351204445204e3043414c4c"
     ]
    ],
-   "ours_dvrouter": [],
+   "ours_dvrouter": [
+    [
+     "text",
+     6,
+     "4e3043414c4c3a204351204445204e3043414c4c"
+    ]
+   ],
    "dvrouter_match": true,
-   "lenient_differs": true,
+   "lenient_differs": false,
    "note": "block 0 in slot 9; blocks 1..3 in the next superframe"
   },
   {
@@ -1701,12 +1785,15 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d161629f53001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d161629f53001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed"
+    ]
    },
    "lenient_alternative": [],
    "ours_dvrouter": [],
@@ -1982,13 +2069,33 @@
    "dgw_match": true,
    "text_agree": false,
    "unit66_hex": [
-    "fffff8552d163001a3330edf3103a9500cc21629f51629f5337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5",
-    "fffff8552d16326fd7356fdd1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d163001a3330edf3103a9500cc21629f51629f5337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5",
+    "ffff1f552d16326fd7356fdd1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
+    "text": [
+     [
+      "text",
+      2,
+      "4e3043414c4c3a204351204445204e3043414c4c"
+     ]
+    ],
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "parsed"
+    ]
+   },
+   "expected_dvrouter_after_dp5f": {
+    "basis": "lead-statement-unverified",
+    "rule": "DP5f as stated by the DV-Router lead (NOT in the code read): NMEA 0183 line limit, 82 including CR LF = 80 content bytes; text segments cleared at the start of every unit (MMDVMHost's reset at a sync)",
     "text": [],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "parsed"
+    ]
    },
    "lenient_alternative": [
     [
@@ -1997,9 +2104,15 @@
      "4e3043414c4c3a204351204445204e3043414c4c"
     ]
    ],
-   "ours_dvrouter": [],
+   "ours_dvrouter": [
+    [
+     "text",
+     2,
+     "4e3043414c4c3a204351204445204e3043414c4c"
+    ]
+   ],
    "dvrouter_match": true,
-   "lenient_differs": true,
+   "lenient_differs": false,
    "note": "sf1: blocks 0,1,3; sf2: block 2 (a late segment completes the message)"
   },
   {
@@ -2258,13 +2371,17 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d163001a3330edf3103a9500cc21629f51629f5337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5",
-    "fffff8552d161629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d163001a3330edf3103a9500cc21629f51629f5337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5",
+    "ffff1f552d161629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "parsed"
+    ]
    },
    "lenient_alternative": [],
    "ours_dvrouter": [],
@@ -2570,11 +2687,11 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d163001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5",
-    "fffff8552d163001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d163001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5",
+    "ffff1f552d163001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [
      [
       "text",
@@ -2587,7 +2704,11 @@
       "4e3043414c4c3a204351204445204e3043414c4c"
      ]
     ],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "parsed"
+    ]
    },
    "lenient_alternative": [
     [
@@ -3026,12 +3147,34 @@
    "dgw_match": true,
    "text_agree": false,
    "unit66_hex": [
-    "fffff8552d163001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5",
-    "fffff8552d163001a3240ac0311ba95007d61629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5",
-    "fffff8552d163203df3f6fc43300c13c0bbd1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d163001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5",
+    "ffff1f552d163001a3240ac0311ba95007d61629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5",
+    "ffff1f552d163203df3f6fc43300c13c0bbd1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
+    "text": [
+     [
+      "text",
+      8,
+      "4e3043414c4c3a204351204445204e3043414c4c"
+     ],
+     [
+      "text",
+      4,
+      "4e30544553543a2048454c4c4f20574f524c442e"
+     ]
+    ],
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "parsed",
+     "parsed"
+    ]
+   },
+   "expected_dvrouter_after_dp5f": {
+    "basis": "lead-statement-unverified",
+    "rule": "DP5f as stated by the DV-Router lead (NOT in the code read): NMEA 0183 line limit, 82 including CR LF = 80 content bytes; text segments cleared at the start of every unit (MMDVMHost's reset at a sync)",
     "text": [
      [
       "text",
@@ -3039,7 +3182,12 @@
       "4e3043414c4c3a204351204445204e3043414c4c"
      ]
     ],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "parsed",
+     "parsed"
+    ]
    },
    "lenient_alternative": [
     [
@@ -3058,10 +3206,15 @@
      "text",
      8,
      "4e3043414c4c3a204351204445204e3043414c4c"
+    ],
+    [
+     "text",
+     4,
+     "4e30544553543a2048454c4c4f20574f524c442e"
     ]
    ],
    "dvrouter_match": true,
-   "lenient_differs": true,
+   "lenient_differs": false,
    "note": "A complete in sf1; B blocks 0,1 in sf2 and 2,3 in sf3"
   },
   {
@@ -3332,13 +3485,33 @@
    "dgw_match": true,
    "text_agree": false,
    "unit66_hex": [
-    "fffff8552d163001a3330edf3103a9500cc2326fd7356fdd1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5",
-    "fffff8552d163300c13c0bbd1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d163001a3330edf3103a9500cc2326fd7356fdd1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5",
+    "ffff1f552d163300c13c0bbd1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
+    "text": [
+     [
+      "text",
+      2,
+      "4e3043414c4c3a204351204445204e4f524c442e"
+     ]
+    ],
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "parsed"
+    ]
+   },
+   "expected_dvrouter_after_dp5f": {
+    "basis": "lead-statement-unverified",
+    "rule": "DP5f as stated by the DV-Router lead (NOT in the code read): NMEA 0183 line limit, 82 including CR LF = 80 content bytes; text segments cleared at the start of every unit (MMDVMHost's reset at a sync)",
     "text": [],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "parsed"
+    ]
    },
    "lenient_alternative": [
     [
@@ -3347,9 +3520,15 @@
      "4e3043414c4c3a204351204445204e4f524c442e"
     ]
    ],
-   "ours_dvrouter": [],
+   "ours_dvrouter": [
+    [
+     "text",
+     2,
+     "4e3043414c4c3a204351204445204e4f524c442e"
+    ]
+   ],
    "dvrouter_match": true,
-   "lenient_differs": true,
+   "lenient_differs": false,
    "note": "sf1: A0 A1 A2; sf2: B3: no message id in the blocks, so old slots mix with new ones"
   },
   {
@@ -3509,10 +3688,10 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16308123b38e5f318329d08c4232ef57b5ef5d33ff50b1835f1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d16308123b38e5f318329d08c4232ef57b5ef5d33ff50b1835f1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [
      [
       "text",
@@ -3520,7 +3699,10 @@
       "4e3043414c4c3a204351204445204e3043414c4c"
      ]
     ],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed"
+    ]
    },
    "lenient_alternative": [
     [
@@ -3807,11 +3989,27 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "f7fff8552d163001a3330edf3103a9000000326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5",
-    "fffff8552d163001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "efff1f552d163001a3330edf3103a9000000326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5",
+    "ffff1f552d163001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
+    "text": [
+     [
+      "text",
+      4,
+      "4e3043414c4c3a204351204445204e3043414c4c"
+     ]
+    ],
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "parsed"
+    ]
+   },
+   "expected_dvrouter_after_dp5f": {
+    "basis": "lead-statement-unverified",
+    "rule": "DP5f as stated by the DV-Router lead (NOT in the code read): NMEA 0183 line limit, 82 including CR LF = 80 content bytes; text segments cleared at the start of every unit (MMDVMHost's reset at a sync)",
     "text": [
      [
       "text",
@@ -3819,7 +4017,11 @@
       "4e3043414c4c3a204351204445204e3043414c4c"
      ]
     ],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "parsed"
+    ]
    },
    "lenient_alternative": [
     [
@@ -3831,12 +4033,13 @@
    "ours_dvrouter": [
     [
      "text",
-     8,
+     4,
      "4e3043414c4c3a204351204445204e3043414c4c"
     ]
    ],
    "dvrouter_match": true,
-   "lenient_differs": false,
+   "lenient_differs": true,
+   "named_difference": "DIFF-PAIR-HOLE",
    "note": "frame 4 of sf1 never arrives (text in sf1 and sf2): the pair phase is wrong until the next sync"
   },
   {
@@ -4116,11 +4319,11 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d161629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5",
-    "7ffff80000003001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d161629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5",
+    "feff1f0000003001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [
      [
       "text",
@@ -4128,7 +4331,11 @@
       "4e3043414c4c3a204351204445204e3043414c4c"
      ]
     ],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "parsed"
+    ]
    },
    "lenient_alternative": [
     [
@@ -4293,12 +4500,15 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16254f937017df2517aa4976b3250ddd400cd22503df500dd0251ed0210cc2256fb33e7fd0250edf3c6fb3256fb3506f81219af51629f51629f51629f5"
+    "ffff1f552d16254f937017df2517aa4976b3250ddd400cd22503df500dd0251ed0210cc2256fb33e7fd0250edf3c6fb3256fb3506f81219af51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed"
+    ]
    },
    "lenient_alternative": [],
    "ours_dvrouter": [],
@@ -4451,12 +4661,15 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16b2568a1629f5254f937017df2517aa4976b3250ddd400cd22503df500dd0251ed0210cc2256fb33e7fd0250edf3c6fb3256fb3506f81219af51629f5"
+    "ffff1f552d16b2568a1629f5254f937017df2517aa4976b3250ddd400cd22503df500dd0251ed0210cc2256fb33e7fd0250edf3c6fb3256fb3506f81219af51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed"
+    ]
    },
    "lenient_alternative": [],
    "ours_dvrouter": [],
@@ -4720,13 +4933,17 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d161629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5254f937017df2517aa4976b3250ddd400cd22503df500dd0251ed0210cc2",
-    "fffff8552d16256fb33e7fd0250edf3c6fb3256fb3506f81219af51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d161629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5254f937017df2517aa4976b3250ddd400cd22503df500dd0251ed0210cc2",
+    "ffff1f552d16256fb33e7fd0250edf3c6fb3256fb3506f81219af51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "parsed"
+    ]
    },
    "lenient_alternative": [],
    "ours_dvrouter": [],
@@ -5010,13 +5227,17 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16254f937017df2517aa4976b3250ddd400cd22503df500dd0251ed0210cc2256fb33e7fd0250edf3c6fb3256fb3506f81219af51629f51629f51629f5",
-    "fffff8552d16254f937017df2517aa4976b3250ddd400cd22503df500dd0251ed0210cc2256fb33e7fd0250edf3c6fb3256fb3506f81219af51629f51629f51629f5"
+    "ffff1f552d16254f937017df2517aa4976b3250ddd400cd22503df500dd0251ed0210cc2256fb33e7fd0250edf3c6fb3256fb3506f81219af51629f51629f51629f5",
+    "ffff1f552d16254f937017df2517aa4976b3250ddd400cd22503df500dd0251ed0210cc2256fb33e7fd0250edf3c6fb3256fb3506f81219af51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "parsed"
+    ]
    },
    "lenient_alternative": [],
    "ours_dvrouter": [],
@@ -5159,12 +5380,15 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16256fb35017df2517aa4976b3250ddd400cd22503df500dd0251ed0210cc2256fb33e7fd0250edf3c6fb3250ed6506fb52134f51629f51629f51629f5"
+    "ffff1f552d16256fb35017df2517aa4976b3250ddd400cd22503df500dd0251ed0210cc2256fb33e7fd0250edf3c6fb3250ed6506fb52134f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed"
+    ]
    },
    "lenient_alternative": [],
    "ours_dvrouter": [],
@@ -5307,12 +5531,15 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16254f937017df2517aa4976b3250ddd410cd22503df500dd0251ed0210cc2256fb33e7fd0250edf3c6fb3256fb3506f81219af51629f51629f51629f5"
+    "ffff1f552d16254f937017df2517aa4976b3250ddd410cd22503df500dd0251ed0210cc2256fb33e7fd0250edf3c6fb3256fb3506f81219af51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed"
+    ]
    },
    "lenient_alternative": [],
    "ours_dvrouter": [],
@@ -5588,11 +5815,11 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16456bb7331dd0457cd6367dbf4501a3330edf4503ad311fda457dab4263d7451cc7311db94575bc427ea2457da04427a3457fa34061a3457fdd5f7fa3",
-    "fffff8552d16457fa34061a3457fd65d7fa14578bc407fa34560dd400cd24503df502ee7456ffb1f22f64142f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d16456bb7331dd0457cd6367dbf4501a3330edf4503ad311fda457dab4263d7451cc7311db94575bc427ea2457da04427a3457fa34061a3457fdd5f7fa3",
+    "ffff1f552d16457fa34061a3457fd65d7fa14578bc407fa34560dd400cd24503df502ee7456ffb1f22f64142f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
     "gps": [
      [
@@ -5600,6 +5827,10 @@
       14,
       "4e3043414c4c3e4150493238322c44535441522a3a2f32313132333468303030302e30304e2f30303030302e3030452d3032372f3030302f4e3043414c4c20617420686f6d650d"
      ]
+    ],
+    "outcome": [
+     "parsed",
+     "parsed"
     ]
    },
    "lenient_alternative": [
@@ -5888,11 +6119,11 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d161629f51629f51629f51629f51629f51629f5456bb7331dd0457cd6367dbf4501a3330edf4503ad311fda457dab4263d7451cc7311db94575bc427ea2",
-    "fffff8552d16457da04427a3457fa34061a3457fdd5f7fa3457fa34061a3457fd65d7fa14578bc407fa34560dd400cd24503df502ee7456ffb1f22f64142f51629f5"
+    "ffff1f552d161629f51629f51629f51629f51629f51629f5456bb7331dd0457cd6367dbf4501a3330edf4503ad311fda457dab4263d7451cc7311db94575bc427ea2",
+    "ffff1f552d16457da04427a3457fa34061a3457fdd5f7fa3457fa34061a3457fd65d7fa14578bc407fa34560dd400cd24503df502ee7456ffb1f22f64142f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
     "gps": [
      [
@@ -5900,6 +6131,10 @@
       20,
       "4e3043414c4c3e4150493238322c44535441522a3a2f32313132333468303030302e30304e2f30303030302e3030452d3032372f3030302f4e3043414c4c20617420686f6d650d"
      ]
+    ],
+    "outcome": [
+     "parsed",
+     "parsed"
     ]
    },
    "lenient_alternative": [
@@ -6176,18 +6411,23 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16456bb7331dd0457cd6367dbf4501a3330edf4503ad311fda457cab4263d7451cc7311db94575bc427ea2457da04427a3457fa34061a3457fdd5f7fa3",
-    "fffff8552d16457fa34061a3457fd65d7fa14578bc407fa34560dd400cd24503df502ee7456ffb1f22f64142f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d16456bb7331dd0457cd6367dbf4501a3330edf4503ad311fda457cab4263d7451cc7311db94575bc427ea2457da04427a3457fa34061a3457fdd5f7fa3",
+    "ffff1f552d16457fa34061a3457fd65d7fa14578bc407fa34560dd400cd24503df502ee7456ffb1f22f64142f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "reject:Crc"
+    ]
    },
    "lenient_alternative": [],
    "ours_dvrouter": [],
    "dvrouter_match": true,
-   "lenient_differs": false,
+   "lenient_differs": true,
+   "named_difference": "DIFF-CRC-REJECT",
    "note": "one bit of the string flipped after the CRC was computed"
   },
   {
@@ -6639,12 +6879,12 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d163001a3330edf456bb7331dd03103a9500cc2457cd6367dbf326fd7356fdd4501a3330edf337fd03103df4503ad311fda457dab4263d7451cc7311db9",
-    "fffff8552d163001a3330edf4575bc427ea23103a9500cc2457da04427a3326fd7356fdd457fa34061a3337fd03103df457fdd5f7fa3457fa34061a3457fd65d7fa1",
-    "fffff8552d163001a3330edf4578bc407fa33103a9500cc24560dd400cd2326fd7356fdd4503df502ee7337fd03103df456ffb1f22f64142f51629f51629f51629f5"
+    "ffff1f552d163001a3330edf456bb7331dd03103a9500cc2457cd6367dbf326fd7356fdd4501a3330edf337fd03103df4503ad311fda457dab4263d7451cc7311db9",
+    "ffff1f552d163001a3330edf4575bc427ea23103a9500cc2457da04427a3326fd7356fdd457fa34061a3337fd03103df457fdd5f7fa3457fa34061a3457fd65d7fa1",
+    "ffff1f552d163001a3330edf4578bc407fa33103a9500cc24560dd400cd2326fd7356fdd4503df502ee7337fd03103df456ffb1f22f64142f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [
      [
       "text",
@@ -6668,6 +6908,11 @@
       18,
       "4e3043414c4c3e4150493238322c44535441522a3a2f32313132333468303030302e30304e2f30303030302e3030452d3032372f3030302f4e3043414c4c20617420686f6d650d"
      ]
+    ],
+    "outcome": [
+     "parsed",
+     "parsed",
+     "parsed"
     ]
    },
    "lenient_alternative": [
@@ -6974,18 +7219,23 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16456bb7331dd0450ca5447abf4501a3330edf4503ad311fda457dab4263d7451cc7311db94575bc427ea2457da04427a3457fa34061a3457fdd5f7fa3",
-    "fffff8552d16457fa34061a3457fd65d7fa14578bc407fa34560dd400cd24503df502ee7456ffb1f22f64142f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d16456bb7331dd0450ca5447abf4501a3330edf4503ad311fda457dab4263d7451cc7311db94575bc427ea2457da04427a3457fa34061a3457fdd5f7fa3",
+    "ffff1f552d16457fa34061a3457fd65d7fa14578bc407fa34560dd400cd24503df502ee7456ffb1f22f64142f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "reject:Crc"
+    ]
    },
    "lenient_alternative": [],
    "ours_dvrouter": [],
    "dvrouter_match": true,
-   "lenient_differs": false,
+   "lenient_differs": true,
+   "named_difference": "DIFF-CRC-REJECT",
    "note": "the CRC computed over the string WITHOUT the final CR (the oracle must refuse it)"
   },
   {
@@ -7508,13 +7758,13 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16456bb7331dd0457cd6367dbf4501a3330edf4503ad311fda457dab4263d7451cc7311db94575bc427ea2457da04427a3457fa34061a3457fdd5f7fa3",
-    "fffff8552d16457fa34061a3457fd65d7fa14578bc407fa34560dd400cd24503df502ee7456ffb1f22f64142f51629f5456bb7331dd0450da6400cbf4501a3330edf",
-    "fffff8552d164503ad311fda457dab4263d7451cc7311db94575bc427ea2457da04427a3457fa34061a3457fdd5f7fa3457fa34061a3457fd65d7fa14578bc407fa3",
-    "fffff8552d164560dd400cd24503df502ee7456fe41f3df84142f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d16456bb7331dd0457cd6367dbf4501a3330edf4503ad311fda457dab4263d7451cc7311db94575bc427ea2457da04427a3457fa34061a3457fdd5f7fa3",
+    "ffff1f552d16457fa34061a3457fd65d7fa14578bc407fa34560dd400cd24503df502ee7456ffb1f22f64142f51629f5456bb7331dd0450da6400cbf4501a3330edf",
+    "ffff1f552d164503ad311fda457dab4263d7451cc7311db94575bc427ea2457da04427a3457fa34061a3457fdd5f7fa3457fa34061a3457fd65d7fa14578bc407fa3",
+    "ffff1f552d164560dd400cd24503df502ee7456fe41f3df84142f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
     "gps": [
      [
@@ -7527,6 +7777,12 @@
       8,
       "4e3043414c4c3e4150493238322c44535441522a3a2f32313132333468303030302e30304e2f30303030302e3030452d3032372f3030302f4e3043414c4c20617420776f726b0d"
      ]
+    ],
+    "outcome": [
+     "parsed",
+     "parsed",
+     "parsed",
+     "parsed"
     ]
    },
    "lenient_alternative": [
@@ -7966,12 +8222,12 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16456bb7331dd0457cd6367dbf4501a3330edf4503ad311fda457dab4263d7451cc7311db94575bc427ea2457da04427a3457fa34061a3457fdd5f7fa3",
-    "fffff8552d16457fa34061a3457fd65d7fa14578bc407fa34560dd400cd24503df502ee7456ffb1f22f64142f51629f51629f51629f51629f51629f51629f51629f5",
-    "fffff8552d163001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d16456bb7331dd0457cd6367dbf4501a3330edf4503ad311fda457dab4263d7451cc7311db94575bc427ea2457da04427a3457fa34061a3457fdd5f7fa3",
+    "ffff1f552d16457fa34061a3457fd65d7fa14578bc407fa34560dd400cd24503df502ee7456ffb1f22f64142f51629f51629f51629f51629f51629f51629f51629f5",
+    "ffff1f552d163001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [
      [
       "text",
@@ -7985,6 +8241,11 @@
       14,
       "4e3043414c4c3e4150493238322c44535441522a3a2f32313132333468303030302e30304e2f30303030302e3030452d3032372f3030302f4e3043414c4c20617420686f6d650d"
      ]
+    ],
+    "outcome": [
+     "parsed",
+     "parsed",
+     "parsed"
     ]
    },
    "lenient_alternative": [
@@ -8767,15 +9028,15 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16456bb7331dd0457ea1437fbf4501a3330edf4503ad311fda457dab4263d7451cc7311db94575bc427ea2457da04427a3457fa34061a3457fdd5f7fa3",
-    "fffff8552d16457fa34061a3457fd65d7fa14578bc407fa34560dd400cd24503df502ee7456ffb1f22f64537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb",
-    "fffff8552d164537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb",
-    "fffff8552d164537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb",
-    "fffff8552d164537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb",
-    "fffff8552d164537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4437eb0842f5"
+    "ffff1f552d16456bb7331dd0457ea1437fbf4501a3330edf4503ad311fda457dab4263d7451cc7311db94575bc427ea2457da04427a3457fa34061a3457fdd5f7fa3",
+    "ffff1f552d16457fa34061a3457fd65d7fa14578bc407fa34560dd400cd24503df502ee7456ffb1f22f64537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb",
+    "ffff1f552d164537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb",
+    "ffff1f552d164537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb",
+    "ffff1f552d164537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb",
+    "ffff1f552d164537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4437eb0842f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
     "gps": [
      [
@@ -8783,6 +9044,14 @@
       20,
       "4e3043414c4c3e4150493238322c44535441522a3a2f32313132333468303030302e30304e2f30303030302e3030452d3032372f3030302f4e3043414c4c20617420686f6d6578787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878780d"
      ]
+    ],
+    "outcome": [
+     "parsed",
+     "parsed",
+     "parsed",
+     "parsed",
+     "parsed",
+     "parsed"
     ]
    },
    "lenient_alternative": [
@@ -9555,15 +9824,15 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16456bb7331dd04576a7477fbf4501a3330edf4503ad311fda457dab4263d7451cc7311db94575bc427ea2457da04427a3457fa34061a3457fdd5f7fa3",
-    "fffff8552d16457fa34061a3457fd65d7fa14578bc407fa34560dd400cd24503df502ee7456ffb1f22f64537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb",
-    "fffff8552d164537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb",
-    "fffff8552d164537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb",
-    "fffff8552d164537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb",
-    "fffff8552d164537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb08379e"
+    "ffff1f552d16456bb7331dd04576a7477fbf4501a3330edf4503ad311fda457dab4263d7451cc7311db94575bc427ea2457da04427a3457fa34061a3457fdd5f7fa3",
+    "ffff1f552d16457fa34061a3457fd65d7fa14578bc407fa34560dd400cd24503df502ee7456ffb1f22f64537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb",
+    "ffff1f552d164537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb",
+    "ffff1f552d164537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb",
+    "ffff1f552d164537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb",
+    "ffff1f552d164537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb08379e"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
     "gps": [
      [
@@ -9571,6 +9840,14 @@
       20,
       "4e3043414c4c3e4150493238322c44535441522a3a2f32313132333468303030302e30304e2f30303030302e3030452d3032372f3030302f4e3043414c4c20617420686f6d657878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878780d"
      ]
+    ],
+    "outcome": [
+     "parsed",
+     "parsed",
+     "parsed",
+     "parsed",
+     "parsed",
+     "parsed"
     ]
    },
    "lenient_alternative": [
@@ -10464,18 +10741,27 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16456bb7331dd0450ba5367dbf4501a3330edf4503ad311fda457dab4263d7451cc7311db94575bc427ea2457da04427a3457fa34061a3457fdd5f7fa3",
-    "fffff8552d16457fa34061a3457fd65d7fa14578bc407fa34560dd400cd24503df502ee7456ffb1f22f64537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb",
-    "fffff8552d164537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb",
-    "fffff8552d164537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb",
-    "fffff8552d164537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb",
-    "fffff8552d164537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb",
-    "fffff8552d164142f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d16456bb7331dd0450ba5367dbf4501a3330edf4503ad311fda457dab4263d7451cc7311db94575bc427ea2457da04427a3457fa34061a3457fdd5f7fa3",
+    "ffff1f552d16457fa34061a3457fd65d7fa14578bc407fa34560dd400cd24503df502ee7456ffb1f22f64537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb",
+    "ffff1f552d164537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb",
+    "ffff1f552d164537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb",
+    "ffff1f552d164537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb",
+    "ffff1f552d164537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb4537eb0837eb",
+    "ffff1f552d164142f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "parsed",
+     "parsed",
+     "parsed",
+     "parsed",
+     "parsed",
+     "reject:Size"
+    ]
    },
    "lenient_alternative": [
     [
@@ -10758,18 +11044,22 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16456bd42008d4450ebf427ea2457da04461a3457fbf407fa3457fbd407fa3457fa35c01bf457fa3407fa34561a3407fa34563d65c7ebf457fa65c7ebd",
-    "fffff8552d16457fbf417dbd457fbf3d63a34561a35c02bf4563b9450c9e4145f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d16456bd42008d4450ebf427ea2457da04461a3457fbf407fa3457fbd407fa3457fa35c01bf457fa3407fa34561a3407fa34563d65c7ebf457fa65c7ebd",
+    "ffff1f552d16457fbf417dbd457fbf3d63a34561a35c02bf4563b9450c9e4145f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
     "gps": [
      [
       "nmea:GPGGA",
-      10,
+      8,
       "4e3043414c4c2d353e47505333302c44535441522a3a2447504747412c3231313233342e30302c303030302e30303030302c4e2c30303030302e303030302c452c312c30352c312e302c31322e302c4d2c302e302c4d2c2c2a3563"
      ]
+    ],
+    "outcome": [
+     "parsed",
+     "parsed"
     ]
    },
    "lenient_alternative": [
@@ -10782,12 +11072,13 @@
    "ours_dvrouter": [
     [
      "nmea:GPGGA",
-     10,
+     8,
      "4e3043414c4c2d353e47505333302c44535441522a3a2447504747412c3231313233342e30302c303030302e30303030302c4e2c30303030302e303030302c452c312c30352c312e302c31322e302c4d2c302e302c4d2c2c2a3563"
     ]
    ],
    "dvrouter_match": true,
-   "lenient_differs": false,
+   "lenient_differs": true,
+   "named_difference": "DIFF-NMEA-DELIM",
    "note": "$GPGGA with its checksum"
   },
   {
@@ -11058,11 +11349,11 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16456bd4201dde450cbf427ea2457da04461a3457fbf3163a3457fa34061a3457fa3407fbf4501bf407fa3457fa35e7fa3457fa3407fbf450abf407fa3",
-    "fffff8552d164561a35c7fa3457fbd4063a34579a2417da54563bf5c0eb94479d17d45f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d16456bd4201dde450cbf427ea2457da04461a3457fbf3163a3457fa34061a3457fa3407fbf4501bf407fa3457fa35e7fa3457fa3407fbf450abf407fa3",
+    "ffff1f552d164561a35c7fa3457fbd4063a34579a2417da54563bf5c0eb94479d17d45f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
     "gps": [
      [
@@ -11070,6 +11361,10 @@
       10,
       "4e3043414c4c2d353e47505333302c44535441522a3a244750524d432c3231313233342e30302c412c303030302e30303030302c4e2c30303030302e3030303030302c452c3030302e302c3030302e302c3036313132362c2c2c412a3662"
      ]
+    ],
+    "outcome": [
+     "parsed",
+     "parsed"
     ]
    },
    "lenient_alternative": [
@@ -11346,18 +11641,23 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16456bd42008d4450ebf427ea2457da04461a3457fbf407fa3457fbd407fa3457fa35c01bf457fa3407fa34561a3407fa34563d65c7ebf457fa65c7ebd",
-    "fffff8552d16457fbf417cbd457fbf3d63a34561a35c02bf4563b9450c9e4145f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d16456bd42008d4450ebf427ea2457da04461a3457fbf407fa3457fbd407fa3457fa35c01bf457fa3407fa34561a3407fa34563d65c7ebf457fa65c7ebd",
+    "ffff1f552d16457fbf417cbd457fbf3d63a34561a35c02bf4563b9450c9e4145f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "reject:Crc"
+    ]
    },
    "lenient_alternative": [],
    "ours_dvrouter": [],
    "dvrouter_match": true,
-   "lenient_differs": false,
+   "lenient_differs": true,
+   "named_difference": "DIFF-CRC-REJECT",
    "note": "$GPGGA with one field changed after the checksum was computed"
   },
   {
@@ -11880,18 +12180,18 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16456bd42008d4450ebf427ea2457da04461a3457fbf407fa3457fbd407fa3457fa35c01bf457fa3407fa34561a3407fa34563d65c7ebf457fa65c7ebd",
-    "fffff8552d16457fbf417dbd457fbf3d63a34561a35c02bf4563b9450c9e4145f51629f5456bd4201dde450cbf427ea2457da04461a3457fbf3163a3457fa34061a3",
-    "fffff8552d16457fa3407fbf4501bf407fa3457fa35e7fa3457fa3407fbf450abf407fa34561a35c7fa3457fbd4063a34579a2417da54563bf5c0eb94479d17d45f5",
-    "fffff8552d164501a3330edf4503b35063c7450ac0246fde450ac0230ed4450ab3506fb3456fb3506f9e4145f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d16456bd42008d4450ebf427ea2457da04461a3457fbf407fa3457fbd407fa3457fa35c01bf457fa3407fa34561a3407fa34563d65c7ebf457fa65c7ebd",
+    "ffff1f552d16457fbf417dbd457fbf3d63a34561a35c02bf4563b9450c9e4145f51629f5456bd4201dde450cbf427ea2457da04461a3457fbf3163a3457fa34061a3",
+    "ffff1f552d16457fa3407fbf4501bf407fa3457fa35e7fa3457fa3407fbf450abf407fa34561a35c7fa3457fbd4063a34579a2417da54563bf5c0eb94479d17d45f5",
+    "ffff1f552d164501a3330edf4503b35063c7450ac0246fde450ac0230ed4450ab3506fb3456fb3506f9e4145f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
     "gps": [
      [
       "nmea:GPGGA",
-      10,
+      8,
       "4e3043414c4c2d353e47505333302c44535441522a3a2447504747412c3231313233342e30302c303030302e30303030302c4e2c30303030302e303030302c452c312c30352c312e302c31322e302c4d2c302e302c4d2c2c2a3563"
      ],
      [
@@ -11899,7 +12199,14 @@
       20,
       "4e3043414c4c2d353e47505333302c44535441522a3a244750524d432c3231313233342e30302c412c303030302e30303030302c4e2c30303030302e3030303030302c452c3030302e302c3030302e302c3036313132362c2c2c412a3662"
      ]
-    ]
+    ],
+    "outcome": [
+     "parsed",
+     "parsed",
+     "parsed",
+     "parsed"
+    ],
+    "unmodelled": "the 29 byte free-form line takes the station ID line path (dstar_nmea.rs:107-148): Invalid unless 29 bytes, Source / Spoof from the stream's callsign, Crc without '*'; not modelled, so the unit may really be a reject"
    },
    "lenient_alternative": [
     [
@@ -11916,7 +12223,7 @@
    "ours_dvrouter": [
     [
      "nmea:GPGGA",
-     10,
+     8,
      "4e3043414c4c2d353e47505333302c44535441522a3a2447504747412c3231313233342e30302c303030302e30303030302c4e2c30303030302e303030302c452c312c30352c312e302c31322e302c4d2c302e302c4d2c2c2a3563"
     ],
     [
@@ -11926,7 +12233,8 @@
     ]
    ],
    "dvrouter_match": true,
-   "lenient_differs": false,
+   "lenient_differs": true,
+   "named_difference": "DIFF-NMEA-DELIM",
    "note": "GGA, RMC and the free-form line one after the other ([SLOW]: three sets)"
   },
   {
@@ -12973,49 +13281,39 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16456bd42008d4450ebf427ea2457da04461a3457fbf407fa3457fbd407fa3457fa35c01bf457fa3407fa34561a3407fa34563d65c7ebf457fa65c7ebd",
-    "fffff8552d16457fbf417dbd457fbf3d63a34561a35c02bf4563b9450c9e4145f51629f5456bd42008df4503bf407fa3457fbd407fbf4501bf407fa3457fa35e7fa3",
-    "fffff8552d164563d65c7da2457ea1437bbd457fa35c0ebf450eb9460a9e4145f51629f5456bd42019c74508bf4278bd457fbf2463bf4502bf4061a34563dd5c7fbd",
-    "fffff8552d16457fbf3b63d24565a0484299456bd4201dde450cbf427ea2457da04461a3457fbf3163a3457fa34061a3457fa3407fbf4501bf407fa3457fa35e7fa3",
-    "fffff8552d16457fa3407fbf450abf407fa34561a35c7fa3457fbd4063a34579a2417da54563bf5c0eb94479d17d45f5456bd42008c0450ebf3163a04563a34463a3",
-    "fffff8552d16457abf4076bf457ea15c63bf4563bf5c63bf4563a25e77bf457ebd4063a24561a65a7ca64242991629f5456bd42008c04519bf4163a24563a34463a3",
-    "fffff8552d16457bbf447fbf457fab4363a7457fbf407abf457ca35c7ea1457fbf437abf457faa5c7da34563a1457fbf457ca35c7ea14563a54063a0457fa35c7cab",
-    "fffff8552d164565a44342991629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d16456bd42008d4450ebf427ea2457da04461a3457fbf407fa3457fbd407fa3457fa35c01bf457fa3407fa34561a3407fa34563d65c7ebf457fa65c7ebd",
+    "ffff1f552d16457fbf417dbd457fbf3d63a34561a35c02bf4563b9450c9e4145f51629f5456bd42008df4503bf407fa3457fbd407fbf4501bf407fa3457fa35e7fa3",
+    "ffff1f552d164563d65c7da2457ea1437bbd457fa35c0ebf450eb9460a9e4145f51629f5456bd42019c74508bf4278bd457fbf2463bf4502bf4061a34563dd5c7fbd",
+    "ffff1f552d16457fbf3b63d24565a0484299456bd4201dde450cbf427ea2457da04461a3457fbf3163a3457fa34061a3457fa3407fbf4501bf407fa3457fa35e7fa3",
+    "ffff1f552d16457fa3407fbf450abf407fa34561a35c7fa3457fbd4063a34579a2417da54563bf5c0eb94479d17d45f5456bd42008c0450ebf3163a04563a34463a3",
+    "ffff1f552d16457abf4076bf457ea15c63bf4563bf5c63bf4563a25e77bf457ebd4063a24561a65a7ca64242991629f5456bd42008c04519bf4163a24563a34463a3",
+    "ffff1f552d16457bbf447fbf457fab4363a7457fbf407abf457ca35c7ea1457fbf437abf457faa5c7da34563a1457fbf457ca35c7ea14563a54063a0457fa35c7cab",
+    "ffff1f552d164565a44342991629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
     "gps": [
      [
       "nmea:GPGGA",
-      10,
+      8,
       "4e3043414c4c2d353e47505333302c44535441522a3a2447504747412c3231313233342e30302c303030302e30303030302c4e2c30303030302e303030302c452c312c30352c312e302c31322e302c4d2c302e302c4d2c2c2a3563"
-     ],
-     [
-      "nmea:GPGLL",
-      10,
-      "4e3043414c4c2d353e47505333302c44535441522a3a244750474c4c2c303030302e30302c4e2c30303030302e30302c452c3231313233342e30302c412c412a3665"
-     ],
-     [
-      "nmea:GPVTG",
-      4,
-      "4e3043414c4c2d353e47505333302c44535441522a3a2447505654472c32372e302c542c2c4d2c302e302c4e2c302e302c4b2c412a3338"
      ],
      [
       "nmea:GPRMC",
       14,
       "4e3043414c4c2d353e47505333302c44535441522a3a244750524d432c3231313233342e30302c412c303030302e30303030302c4e2c30303030302e3030303030302c452c3030302e302c3030302e302c3036313132362c2c2c412a3662"
-     ],
-     [
-      "nmea:GPGSA",
-      14,
-      "4e3043414c4c2d353e47505333302c44535441522a3a2447504753412c412c332c30342c30352c30392c31322c2c2c2c2c2c2c2c2c312e382c312e302c312e352a3335"
-     ],
-     [
-      "nmea:GPGSV",
-      2,
-      "4e3043414c4c2d353e47505333302c44535441522a3a2447504753562c312c312c30342c30342c34302c3038332c34302c30352c33302c3132302c33352c30392c32302c3235302c33302c31322c36302c3330302c33382a3733"
      ]
+    ],
+    "outcome": [
+     "parsed",
+     "parsed",
+     "parsed",
+     "parsed",
+     "parsed",
+     "parsed",
+     "parsed",
+     "parsed"
     ]
    },
    "lenient_alternative": [
@@ -13053,37 +13351,18 @@
    "ours_dvrouter": [
     [
      "nmea:GPGGA",
-     10,
+     8,
      "4e3043414c4c2d353e47505333302c44535441522a3a2447504747412c3231313233342e30302c303030302e30303030302c4e2c30303030302e303030302c452c312c30352c312e302c31322e302c4d2c302e302c4d2c2c2a3563"
-    ],
-    [
-     "nmea:GPGLL",
-     10,
-     "4e3043414c4c2d353e47505333302c44535441522a3a244750474c4c2c303030302e30302c4e2c30303030302e30302c452c3231313233342e30302c412c412a3665"
-    ],
-    [
-     "nmea:GPVTG",
-     4,
-     "4e3043414c4c2d353e47505333302c44535441522a3a2447505654472c32372e302c542c2c4d2c302e302c4e2c302e302c4b2c412a3338"
     ],
     [
      "nmea:GPRMC",
      14,
      "4e3043414c4c2d353e47505333302c44535441522a3a244750524d432c3231313233342e30302c412c303030302e30303030302c4e2c30303030302e3030303030302c452c3030302e302c3030302e302c3036313132362c2c2c412a3662"
-    ],
-    [
-     "nmea:GPGSA",
-     14,
-     "4e3043414c4c2d353e47505333302c44535441522a3a2447504753412c412c332c30342c30352c30392c31322c2c2c2c2c2c2c2c2c312e382c312e302c312e352a3335"
-    ],
-    [
-     "nmea:GPGSV",
-     2,
-     "4e3043414c4c2d353e47505333302c44535441522a3a2447504753562c312c312c30342c30342c34302c3038332c34302c30352c33302c3132302c33352c30392c32302c3235302c33302c31322c36302c3330302c33382a3733"
     ]
    ],
    "dvrouter_match": true,
-   "lenient_differs": false,
+   "lenient_differs": true,
+   "named_difference": "DIFF-NMEA-TYPES",
    "note": "GGA, GLL, VTG, RMC, GSA, GSV one after the other (the six DStarGateway collects)"
   },
   {
@@ -13354,11 +13633,11 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16456bd42008d4450ebf427ea2457da04461a3457fbf407fa3457fbd407fbf4501bf407fa3457fa35e7fa34563d65c7ebf457fa65c7ebd457fbf417dbd",
-    "fffff8552d16457fbf3d63a34561a35c02bf4563a3407fa3457fa3407fa3457fa3407fa3457fa35a79d04242991629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d16456bd42008d4450ebf427ea2457da04461a3457fbf407fa3457fbd407fbf4501bf407fa3457fa35e7fa34563d65c7ebf457fa65c7ebd457fbf417dbd",
+    "ffff1f552d16457fbf3d63a34561a35c02bf4563a3407fa3457fa3407fa3457fa3407fa3457fa35a79d04242991629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
     "gps": [
      [
@@ -13366,6 +13645,10 @@
       14,
       "4e3043414c4c2d353e47505333302c44535441522a3a2447504747412c3231313233342e30302c303030302e30302c4e2c30303030302e30302c452c312c30352c312e302c31322e302c4d2c302e302c4d2c2c303030303030303030303030303030302a3663"
      ]
+    ],
+    "outcome": [
+     "parsed",
+     "parsed"
     ]
    },
    "lenient_alternative": [
@@ -13654,11 +13937,11 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16456bd42008d4450ebf427ea2457da04461a3457fbf407fa3457fbd407fbf4501bf407fa3457fa35e7fa34563d65c7ebf457fa65c7ebd457fbf417dbd",
-    "fffff8552d16457fbf3d63a34561a35c02bf4563a3407fa3457fa3407fa3457fa3407fa3457fa34065a6430c9e7a29f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d16456bd42008d4450ebf427ea2457da04461a3457fbf407fa3457fbd407fbf4501bf407fa3457fa35e7fa34563d65c7ebf457fa65c7ebd457fbf417dbd",
+    "ffff1f552d16457fbf3d63a34561a35c02bf4563a3407fa3457fa3407fa3457fa3407fa3457fa34065a6430c9e7a29f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
     "gps": [
      [
@@ -13667,7 +13950,20 @@
       "4e3043414c4c2d353e47505333302c44535441522a3a2447504747412c3231313233342e30302c303030302e30302c4e2c30303030302e30302c452c312c30352c312e302c31322e302c4d2c302e302c4d2c2c30303030303030303030303030303030302a3563"
      ]
     ],
-    "limit_reading": "reading A (82 bytes before the LF delimiter) assumed; under reading B (before CR LF) the 84 byte sentence is accepted too: open question to the DV-Router lead"
+    "outcome": [
+     "parsed",
+     "parsed"
+    ]
+   },
+   "expected_dvrouter_after_dp5f": {
+    "basis": "lead-statement-unverified",
+    "rule": "DP5f as stated by the DV-Router lead (NOT in the code read): NMEA 0183 line limit, 82 including CR LF = 80 content bytes; text segments cleared at the start of every unit (MMDVMHost's reset at a sync)",
+    "text": [],
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "reject:Size"
+    ]
    },
    "lenient_alternative": [
     [
@@ -13955,11 +14251,11 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16456bd42008d4450ebf427ea2457da04461a3457fbf407fa3457fbd407fbf4501bf407fa3457fa35e7fa34563d65c7ebf457fa65c7ebd457fbf417dbd",
-    "fffff8552d16457fbf3d63a34561a35c02bf4563a3407fa3457fa3407fa3457fa3407fa34565a53342991629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d16456bd42008d4450ebf427ea2457da04461a3457fbf407fa3457fbd407fbf4501bf407fa3457fa35e7fa34563d65c7ebf457fa65c7ebd457fbf417dbd",
+    "ffff1f552d16457fbf3d63a34561a35c02bf4563a3407fa3457fa3407fa3457fa3407fa34565a53342991629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
     "gps": [
      [
@@ -13967,6 +14263,10 @@
       12,
       "4e3043414c4c2d353e47505333302c44535441522a3a2447504747412c3231313233342e30302c303030302e30302c4e2c30303030302e30302c452c312c30352c312e302c31322e302c4d2c302e302c4d2c2c30303030303030303030303030302a3663"
      ]
+    ],
+    "outcome": [
+     "parsed",
+     "parsed"
     ]
    },
    "lenient_alternative": [
@@ -14255,18 +14555,22 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16456bd42008d4450ebf427ea2457da04461a3457fbf407fa3457fbd407fbf4501bf407fa3457fa35e7fa34563d65c7ebf457fa65c7ebd457fbf417dbd",
-    "fffff8552d16457fbf3d63a34561a35c02bf4563a3407fa3457fa3407fa3457fa3407fa3457fb9450c9e4145f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d16456bd42008d4450ebf427ea2457da04461a3457fbf407fa3457fbd407fbf4501bf407fa3457fa35e7fa34563d65c7ebf457fa65c7ebd457fbf417dbd",
+    "ffff1f552d16457fbf3d63a34561a35c02bf4563a3407fa3457fa3407fa3457fa3407fa3457fb9450c9e4145f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
     "gps": [
      [
       "nmea:GPGGA",
-      14,
+      12,
       "4e3043414c4c2d353e47505333302c44535441522a3a2447504747412c3231313233342e30302c303030302e30302c4e2c30303030302e30302c452c312c30352c312e302c31322e302c4d2c302e302c4d2c2c3030303030303030303030303030302a3563"
      ]
+    ],
+    "outcome": [
+     "parsed",
+     "parsed"
     ]
    },
    "lenient_alternative": [
@@ -14279,12 +14583,13 @@
    "ours_dvrouter": [
     [
      "nmea:GPGGA",
-     14,
+     12,
      "4e3043414c4c2d353e47505333302c44535441522a3a2447504747412c3231313233342e30302c303030302e30302c4e2c30303030302e30302c452c312c30352c312e302c31322e302c4d2c302e302c4d2c2c3030303030303030303030303030302a3563"
     ]
    ],
    "dvrouter_match": true,
-   "lenient_differs": false,
+   "lenient_differs": true,
+   "named_difference": "DIFF-NMEA-DELIM",
    "note": "the same with 81 bytes including CR LF (line body 79)"
   },
   {
@@ -14555,14 +14860,33 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16456bd42008d4450ebf427ea2457da04461a3457fbf407fa3457fbd407fbf4501bf407fa3457fa35e7fa34563d65c7ebf457fa65c7ebd457fbf417dbd",
-    "fffff8552d16457fbf3d63a34561a35c02bf4563a3407fa3457fa3407fa3457fa3407fa3457fa3407fb94479d07d45f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d16456bd42008d4450ebf427ea2457da04461a3457fbf407fa3457fbd407fbf4501bf407fa3457fa35e7fa34563d65c7ebf457fa65c7ebd457fbf417dbd",
+    "ffff1f552d16457fbf3d63a34561a35c02bf4563a3407fa3457fa3407fa3457fa3407fa3457fa3407fb94479d07d45f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
+    "text": [],
+    "gps": [
+     [
+      "nmea:GPGGA",
+      14,
+      "4e3043414c4c2d353e47505333302c44535441522a3a2447504747412c3231313233342e30302c303030302e30302c4e2c30303030302e30302c452c312c30352c312e302c31322e302c4d2c302e302c4d2c2c3030303030303030303030303030303030302a3663"
+     ]
+    ],
+    "outcome": [
+     "parsed",
+     "parsed"
+    ]
+   },
+   "expected_dvrouter_after_dp5f": {
+    "basis": "lead-statement-unverified",
+    "rule": "DP5f as stated by the DV-Router lead (NOT in the code read): NMEA 0183 line limit, 82 including CR LF = 80 content bytes; text segments cleared at the start of every unit (MMDVMHost's reset at a sync)",
     "text": [],
     "gps": [],
-    "limit_reading": "reading A (82 bytes before the LF delimiter) assumed; under reading B (before CR LF) the 84 byte sentence is accepted too: open question to the DV-Router lead"
+    "outcome": [
+     "parsed",
+     "reject:Size"
+    ]
    },
    "lenient_alternative": [
     [
@@ -14571,10 +14895,15 @@
      "4e3043414c4c2d353e47505333302c44535441522a3a2447504747412c3231313233342e30302c303030302e30302c4e2c30303030302e30302c452c312c30352c312e302c31322e302c4d2c302e302c4d2c2c3030303030303030303030303030303030302a3663"
     ]
    ],
-   "ours_dvrouter": [],
+   "ours_dvrouter": [
+    [
+     "nmea:GPGGA",
+     14,
+     "4e3043414c4c2d353e47505333302c44535441522a3a2447504747412c3231313233342e30302c303030302e30302c4e2c30303030302e30302c452c312c30352c312e302c31322e302c4d2c302e302c4d2c2c3030303030303030303030303030303030302a3663"
+    ]
+   ],
    "dvrouter_match": true,
-   "lenient_differs": true,
-   "named_difference": "DIFF-GPS-LIMIT",
+   "lenient_differs": false,
    "note": "the same with 84 bytes including CR LF (line body 82, one over the 83 of reading A)"
   },
   {
@@ -14845,13 +15174,17 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16456bd42008d4450ebf427ea2457da04461a3457fbf407fa3457fbd407fbf4501bf407fa3457fa35e7fa34563d65c7ebf457fa65c7ebd457fbf417dbd",
-    "fffff8552d16457fbf3d63a34561a35c02bf4563a3407fa3457fa3407fa3457fa3407fa3457fa3407fa34565a63342991629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d16456bd42008d4450ebf427ea2457da04461a3457fbf407fa3457fbd407fbf4501bf407fa3457fa35e7fa34563d65c7ebf457fa65c7ebd457fbf417dbd",
+    "ffff1f552d16457fbf3d63a34561a35c02bf4563a3407fa3457fa3407fa3457fa3407fa3457fa3407fa34565a63342991629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "reject:Size"
+    ]
    },
    "lenient_alternative": [
     [
@@ -15315,12 +15648,12 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d163001a3330edf456bd42008d43103a9500cc2450ebf427ea2326fd7356fdd457da04461a3337fd03103df457fbf407fa3457fbd407fa3457fa35c01bf",
-    "fffff8552d163001a3330edf457fa3407fa33103a9500cc24561a3407fa3326fd7356fdd4563d65c7ebf337fd03103df457fa65c7ebd457fbf417dbd457fbf3d63a3",
-    "fffff8552d163001a3330edf4561a35c02bf3103a9500cc24563b9450c9e326fd7356fdd4145f51629f5337fd03103df1629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d163001a3330edf456bd42008d43103a9500cc2450ebf427ea2326fd7356fdd457da04461a3337fd03103df457fbf407fa3457fbd407fa3457fa35c01bf",
+    "ffff1f552d163001a3330edf457fa3407fa33103a9500cc24561a3407fa3326fd7356fdd4563d65c7ebf337fd03103df457fa65c7ebd457fbf417dbd457fbf3d63a3",
+    "ffff1f552d163001a3330edf4561a35c02bf3103a9500cc24563b9450c9e326fd7356fdd4145f51629f5337fd03103df1629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [
      [
       "text",
@@ -15341,9 +15674,14 @@
     "gps": [
      [
       "nmea:GPGGA",
-      12,
+      8,
       "4e3043414c4c2d353e47505333302c44535441522a3a2447504747412c3231313233342e30302c303030302e30303030302c4e2c30303030302e303030302c452c312c30352c312e302c31322e302c4d2c302e302c4d2c2c2a3563"
      ]
+    ],
+    "outcome": [
+     "parsed",
+     "parsed",
+     "parsed"
     ]
    },
    "lenient_alternative": [
@@ -15381,7 +15719,7 @@
     ],
     [
      "nmea:GPGGA",
-     12,
+     8,
      "4e3043414c4c2d353e47505333302c44535441522a3a2447504747412c3231313233342e30302c303030302e30303030302c4e2c30303030302e303030302c452c312c30352c312e302c31322e302c4d2c302e302c4d2c2c2a3563"
     ],
     [
@@ -15391,7 +15729,8 @@
     ]
    ],
    "dvrouter_match": true,
-   "lenient_differs": false,
+   "lenient_differs": true,
+   "named_difference": "DIFF-NMEA-DELIM",
    "note": "Text + GPS pattern T G T G T G T G G G (from [SLOW]) carrying the GGA"
   },
   {
@@ -15662,13 +16001,17 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16456bd42008d4450ebf427ea2457da04461a3467fbf407fa3457fbd407fa3457fa35c01bf457fa3407fa34561a3407fa34563d65c7ebf457fa65c7ebd",
-    "fffff8552d16457fbf417dbd457fbf3d63a34561a35c02bf4563b9450c9e4145f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d16456bd42008d4450ebf427ea2457da04461a3467fbf407fa3457fbd407fa3457fa35c01bf457fa3407fa34561a3407fa34563d65c7ebf457fa65c7ebd",
+    "ffff1f552d16457fbf417dbd457fbf3d63a34561a35c02bf4563b9450c9e4145f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "lead-statement-unverified",
+    "basis": "dvrouter-source",
     "text": [],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "reject:Crc"
+    ]
    },
    "lenient_alternative": [
     [
@@ -15951,13 +16294,17 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16456bd42008d4450ebf427ea2457da04461a34f7fbf407fa3457fbd407fa3457fa35c01bf457fa3407fa34561a3407fa34563d65c7ebf457fa65c7ebd",
-    "fffff8552d16457fbf417dbd457fbf3d63a34561a35c02bf4563b9450c9e4145f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d16456bd42008d4450ebf427ea2457da04461a34f7fbf407fa3457fbd407fa3457fa35c01bf457fa3407fa34561a3407fa34563d65c7ebf457fa65c7ebd",
+    "ffff1f552d16457fbf417dbd457fbf3d63a34561a35c02bf4563b9450c9e4145f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "lead-statement-unverified",
+    "basis": "dvrouter-source",
     "text": [],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "reject:Crc"
+    ]
    },
    "lenient_alternative": [
     [
@@ -16240,18 +16587,22 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16456bd42008d4450ebf427ea2457da04461a3407fbf407fa3457fbd407fa3457fa35c01bf457fa3407fa34561a3407fa34563d65c7ebf457fa65c7ebd",
-    "fffff8552d16457fbf417dbd457fbf3d63a34561a35c02bf4563b9450c9e4145f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d16456bd42008d4450ebf427ea2457da04461a3407fbf407fa3457fbd407fa3457fa35c01bf457fa3407fa34561a3407fa34563d65c7ebf457fa65c7ebd",
+    "ffff1f552d16457fbf417dbd457fbf3d63a34561a35c02bf4563b9450c9e4145f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "lead-statement-unverified",
+    "basis": "dvrouter-source",
     "text": [],
     "gps": [
      [
       "nmea:GPGGA",
-      10,
+      8,
       "4e3043414c4c2d353e47505333302c44535441522a3a2447504747412c3231313233342e30302c303030302e30303030302c4e2c30303030302e303030302c452c312c30352c312e302c31322e302c4d2c302e302c4d2c2c2a3563"
      ]
+    ],
+    "outcome": [
+     "parsed",
+     "parsed"
     ]
    },
    "lenient_alternative": [
@@ -16264,12 +16615,13 @@
    "ours_dvrouter": [
     [
      "nmea:GPGGA",
-     10,
+     8,
      "4e3043414c4c2d353e47505333302c44535441522a3a2447504747412c3231313233342e30302c303030302e30303030302c4e2c30303030302e303030302c452c312c30352c312e302c31322e302c4d2c302e302c4d2c2c2a3563"
     ]
    ],
    "dvrouter_match": true,
-   "lenient_differs": false,
+   "lenient_differs": true,
+   "named_difference": "DIFF-NMEA-DELIM",
    "note": "GGA with the length nibble of block 3 set to 0 (0x30, full block): DV-Router reads n = 0 as 5"
   },
   {
@@ -16540,13 +16892,17 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16456bd42008d4450ebf427ea2437da04461a3457fbf407fa3457fbd407fa3457fa35c01bf457fa3407fa34561a3407fa34563d65c7ebf457fa65c7ebd",
-    "fffff8552d16457fbf417dbd457fbf3d63a34561a35c02bf4563b9450c9e4145f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d16456bd42008d4450ebf427ea2437da04461a3457fbf407fa3457fbd407fa3457fa35c01bf457fa3407fa34561a3407fa34563d65c7ebf457fa65c7ebd",
+    "ffff1f552d16457fbf417dbd457fbf3d63a34561a35c02bf4563b9450c9e4145f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "lead-statement-unverified",
+    "basis": "dvrouter-source",
     "text": [],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "reject:Crc"
+    ]
    },
    "lenient_alternative": [
     [
@@ -16829,11 +17185,11 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16456bd42008d4450ebf427ea2457da04461a3437fbf4029f5457fa34061a3457fa3407fbf4501bf407fa3457fa35e7fa3437fa35c29f5450abf4163a3",
-    "fffff8552d16457abf4161a34563a24261a34563de5c7fbd437fbf3d29f54563bf5a7ad04242991629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d16456bd42008d4450ebf427ea2457da04461a3437fbf4029f5457fa34061a3457fa3407fbf4501bf407fa3457fa35e7fa3437fa35c29f5450abf4163a3",
+    "ffff1f552d16457abf4161a34563a24261a34563de5c7fbd437fbf3d29f54563bf5a7ad04242991629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "lead-statement-unverified",
+    "basis": "dvrouter-source",
     "text": [],
     "gps": [
      [
@@ -16841,6 +17197,10 @@
       12,
       "4e3043414c4c2d353e47505333302c44535441522a3a2447504747412c3231313233342e30302c303030302e30303030302c4e2c30303030302e303030302c452c312c30352c312e302c31322e302c4d2c302e302c4d2c2c2a3563"
      ]
+    ],
+    "outcome": [
+     "parsed",
+     "parsed"
     ]
    },
    "lenient_alternative": [
@@ -17107,13 +17467,17 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fdfff8552d163001a3330edf3103a9500cc2326fd7000000337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5",
-    "fffff8552d161629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "bfff1f552d163001a3330edf3103a9500cc2326fd7000000337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5",
+    "ffff1f552d161629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "lead-statement-unverified",
+    "basis": "dvrouter-source",
     "text": [],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "parsed"
+    ]
    },
    "lenient_alternative": [],
    "ours_dvrouter": [],
@@ -17366,11 +17730,11 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "f7fff8552d163001a3330edf3103a9000000326fd7356fdd337fd03103df3001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f5",
-    "fffff8552d161629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "efff1f552d163001a3330edf3103a9000000326fd7356fdd337fd03103df3001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f5",
+    "ffff1f552d161629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "lead-statement-unverified",
+    "basis": "dvrouter-source",
     "text": [
      [
       "text",
@@ -17378,7 +17742,11 @@
       "4e3043414c4c3a204351204445204e3043414c4c"
      ]
     ],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "parsed"
+    ]
    },
    "lenient_alternative": [],
    "ours_dvrouter": [
@@ -17771,12 +18139,12 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fdfff8552d16456bd42008d4450ebf427ea2457da0000000457fbf407fa3457fbd407fa3457fa35c01bf457fa3407fa34561a3407fa34563d65c7ebf457fa65c7ebd",
-    "fffff8552d16457fbf417dbd457fbf3d63a34561a35c02bf4563b9450c9e4145f51629f5456bd4201dde450cbf427ea2457da04461a3457fbf3163a3457fa34061a3",
-    "fffff8552d16457fa3407fbf4501bf407fa3457fa35e7fa3457fa3407fbf450abf407fa34561a35c7fa3457fbd4063a34579a2417da54563bf5c0eb94479d17d45f5"
+    "bfff1f552d16456bd42008d4450ebf427ea2457da0000000457fbf407fa3457fbd407fa3457fa35c01bf457fa3407fa34561a3407fa34563d65c7ebf457fa65c7ebd",
+    "ffff1f552d16457fbf417dbd457fbf3d63a34561a35c02bf4563b9450c9e4145f51629f5456bd4201dde450cbf427ea2457da04461a3457fbf3163a3457fa34061a3",
+    "ffff1f552d16457fa3407fbf4501bf407fa3457fa35e7fa3457fa3407fbf450abf407fa34561a35c7fa3457fbd4063a34579a2417da54563bf5c0eb94479d17d45f5"
    ],
    "expected_dvrouter": {
-    "basis": "lead-statement-unverified",
+    "basis": "dvrouter-source",
     "text": [],
     "gps": [
      [
@@ -17784,6 +18152,11 @@
       20,
       "4e3043414c4c2d353e47505333302c44535441522a3a244750524d432c3231313233342e30302c412c303030302e30303030302c4e2c30303030302e3030303030302c452c3030302e302c3030302e302c3036313132362c2c2c412a3662"
      ]
+    ],
+    "outcome": [
+     "parsed",
+     "parsed",
+     "parsed"
     ]
    },
    "lenient_alternative": [
@@ -17939,12 +18312,15 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16b2568a1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d16b2568a1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed"
+    ]
    },
    "lenient_alternative": [],
    "ours_dvrouter": [],
@@ -18087,12 +18463,15 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16b2568b1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d16b2568b1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed"
+    ]
    },
    "lenient_alternative": [],
    "ours_dvrouter": [],
@@ -18235,12 +18614,15 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16ec4e9b504085e48a5f509c49e41ecb5010f5e4927750a461e426e35038ede4ba6f504c99e4ce1b50c005e442875054b1e4d63350e83de46abf507ca9"
+    "ffff1f552d16ec4e9b504085e48a5f509c49e41ecb5010f5e4927750a461e426e35038ede4ba6f504c99e4ce1b50c005e442875054b1e4d63350e83de46abf507ca9"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed"
+    ]
    },
    "lenient_alternative": [],
    "ours_dvrouter": [],
@@ -18383,12 +18765,15 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16ec2ef1132bf61629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d16ec2ef1132bf61629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed"
+    ]
    },
    "lenient_alternative": [],
    "ours_dvrouter": [],
@@ -18531,12 +18916,15 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d16ed2ef1132bf61629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d16ed2ef1132bf61629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed"
+    ]
    },
    "lenient_alternative": [],
    "ours_dvrouter": [],
@@ -18679,18 +19067,1785 @@
    "dgw_match": true,
    "text_agree": true,
    "unit66_hex": [
-    "fffff8552d161629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+    "ffff1f552d161629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
    ],
    "expected_dvrouter": {
-    "basis": "oracle",
+    "basis": "dvrouter-source",
     "text": [],
-    "gps": []
+    "gps": [],
+    "outcome": [
+     "parsed"
+    ]
    },
    "lenient_alternative": [],
    "ours_dvrouter": [],
    "dvrouter_match": true,
    "lenient_differs": false,
    "note": "20 filler data fields (66 66 66 on the wire 16 29 F5)"
+  },
+  {
+   "case": "nmea-reject-bad-checksum",
+   "frames": [
+    "0 552d16",
+    "1 456bd4",
+    "2 201dde",
+    "3 450cbf",
+    "4 427ea2",
+    "5 457da0",
+    "6 4461a3",
+    "7 457fbf",
+    "8 3163a3",
+    "9 457fa3",
+    "10 4061a3",
+    "11 457fa3",
+    "12 407fbf",
+    "13 4501bf",
+    "14 407fa3",
+    "15 457fa3",
+    "16 5e7fa3",
+    "17 457fa3",
+    "18 407fbf",
+    "19 450abf",
+    "20 407fa3",
+    "0 552d16",
+    "1 4561a3",
+    "2 5c7fa3",
+    "3 457fbd",
+    "4 4063a3",
+    "5 4579a2",
+    "6 417da5",
+    "7 4563bf",
+    "8 5c0eb9",
+    "9 447fa3",
+    "10 7d45f5",
+    "11 1629f5",
+    "12 1629f5",
+    "13 1629f5",
+    "14 1629f5",
+    "15 1629f5",
+    "16 1629f5",
+    "17 1629f5",
+    "18 1629f5",
+    "19 1629f5",
+    "20 1629f5"
+   ],
+   "mmdvm": [
+    [
+     "block",
+     2,
+     "35"
+    ],
+    [
+     "block",
+     4,
+     "35"
+    ],
+    [
+     "block",
+     6,
+     "35"
+    ],
+    [
+     "block",
+     8,
+     "35"
+    ],
+    [
+     "block",
+     10,
+     "35"
+    ],
+    [
+     "block",
+     12,
+     "35"
+    ],
+    [
+     "block",
+     14,
+     "35"
+    ],
+    [
+     "block",
+     16,
+     "35"
+    ],
+    [
+     "block",
+     18,
+     "35"
+    ],
+    [
+     "block",
+     20,
+     "35"
+    ],
+    [
+     "block",
+     2,
+     "35"
+    ],
+    [
+     "block",
+     4,
+     "35"
+    ],
+    [
+     "block",
+     6,
+     "35"
+    ],
+    [
+     "block",
+     8,
+     "35"
+    ],
+    [
+     "block",
+     10,
+     "34"
+    ],
+    [
+     "block",
+     12,
+     "66"
+    ],
+    [
+     "block",
+     14,
+     "66"
+    ],
+    [
+     "block",
+     16,
+     "66"
+    ],
+    [
+     "block",
+     18,
+     "66"
+    ],
+    [
+     "block",
+     20,
+     "66"
+    ]
+   ],
+   "dgw": [],
+   "ours_reset": [
+    [
+     "block",
+     2,
+     "35"
+    ],
+    [
+     "block",
+     4,
+     "35"
+    ],
+    [
+     "block",
+     6,
+     "35"
+    ],
+    [
+     "block",
+     8,
+     "35"
+    ],
+    [
+     "block",
+     10,
+     "35"
+    ],
+    [
+     "block",
+     12,
+     "35"
+    ],
+    [
+     "block",
+     14,
+     "35"
+    ],
+    [
+     "block",
+     16,
+     "35"
+    ],
+    [
+     "block",
+     18,
+     "35"
+    ],
+    [
+     "block",
+     20,
+     "35"
+    ],
+    [
+     "block",
+     2,
+     "35"
+    ],
+    [
+     "block",
+     4,
+     "35"
+    ],
+    [
+     "block",
+     6,
+     "35"
+    ],
+    [
+     "block",
+     8,
+     "35"
+    ],
+    [
+     "block",
+     10,
+     "34"
+    ],
+    [
+     "block",
+     12,
+     "66"
+    ],
+    [
+     "block",
+     14,
+     "66"
+    ],
+    [
+     "block",
+     16,
+     "66"
+    ],
+    [
+     "block",
+     18,
+     "66"
+    ],
+    [
+     "block",
+     20,
+     "66"
+    ]
+   ],
+   "ours_accumulate": [],
+   "mmdvm_match": true,
+   "dgw_match": true,
+   "text_agree": true,
+   "unit66_hex": [
+    "ffff1f552d16456bd4201dde450cbf427ea2457da04461a3457fbf3163a3457fa34061a3457fa3407fbf4501bf407fa3457fa35e7fa3457fa3407fbf450abf407fa3",
+    "ffff1f552d164561a35c7fa3457fbd4063a34579a2417da54563bf5c0eb9447fa37d45f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+   ],
+   "expected_dvrouter": {
+    "basis": "dvrouter-source",
+    "text": [],
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "reject:Crc"
+    ]
+   },
+   "lenient_alternative": [],
+   "ours_dvrouter": [],
+   "dvrouter_match": true,
+   "lenient_differs": true,
+   "named_difference": "DIFF-CRC-REJECT",
+   "note": "RMC whose two checksum digits are wrong (the body is intact): DV-Router counts a Crc reject, DStarGateway is silent"
+  },
+  {
+   "case": "nmea-reject-no-star",
+   "frames": [
+    "0 552d16",
+    "1 456bd4",
+    "2 2008d4",
+    "3 450ebf",
+    "4 427ea2",
+    "5 457da0",
+    "6 4461a3",
+    "7 457fbf",
+    "8 407fa3",
+    "9 457fbd",
+    "10 407fa3",
+    "11 457fa3",
+    "12 5c01bf",
+    "13 457fa3",
+    "14 407fa3",
+    "15 4561a3",
+    "16 407fa3",
+    "17 4563d6",
+    "18 5c7ebf",
+    "19 457fa6",
+    "20 5c7ebd",
+    "0 552d16",
+    "1 457fbf",
+    "2 417dbd",
+    "3 457fbf",
+    "4 3d63a3",
+    "5 4561a3",
+    "6 5c02bf",
+    "7 43639e",
+    "8 7a29f5",
+    "9 1629f5",
+    "10 1629f5",
+    "11 1629f5",
+    "12 1629f5",
+    "13 1629f5",
+    "14 1629f5",
+    "15 1629f5",
+    "16 1629f5",
+    "17 1629f5",
+    "18 1629f5",
+    "19 1629f5",
+    "20 1629f5"
+   ],
+   "mmdvm": [
+    [
+     "block",
+     2,
+     "35"
+    ],
+    [
+     "block",
+     4,
+     "35"
+    ],
+    [
+     "block",
+     6,
+     "35"
+    ],
+    [
+     "block",
+     8,
+     "35"
+    ],
+    [
+     "block",
+     10,
+     "35"
+    ],
+    [
+     "block",
+     12,
+     "35"
+    ],
+    [
+     "block",
+     14,
+     "35"
+    ],
+    [
+     "block",
+     16,
+     "35"
+    ],
+    [
+     "block",
+     18,
+     "35"
+    ],
+    [
+     "block",
+     20,
+     "35"
+    ],
+    [
+     "block",
+     2,
+     "35"
+    ],
+    [
+     "block",
+     4,
+     "35"
+    ],
+    [
+     "block",
+     6,
+     "35"
+    ],
+    [
+     "block",
+     8,
+     "33"
+    ],
+    [
+     "block",
+     10,
+     "66"
+    ],
+    [
+     "block",
+     12,
+     "66"
+    ],
+    [
+     "block",
+     14,
+     "66"
+    ],
+    [
+     "block",
+     16,
+     "66"
+    ],
+    [
+     "block",
+     18,
+     "66"
+    ],
+    [
+     "block",
+     20,
+     "66"
+    ]
+   ],
+   "dgw": [],
+   "ours_reset": [
+    [
+     "block",
+     2,
+     "35"
+    ],
+    [
+     "block",
+     4,
+     "35"
+    ],
+    [
+     "block",
+     6,
+     "35"
+    ],
+    [
+     "block",
+     8,
+     "35"
+    ],
+    [
+     "block",
+     10,
+     "35"
+    ],
+    [
+     "block",
+     12,
+     "35"
+    ],
+    [
+     "block",
+     14,
+     "35"
+    ],
+    [
+     "block",
+     16,
+     "35"
+    ],
+    [
+     "block",
+     18,
+     "35"
+    ],
+    [
+     "block",
+     20,
+     "35"
+    ],
+    [
+     "block",
+     2,
+     "35"
+    ],
+    [
+     "block",
+     4,
+     "35"
+    ],
+    [
+     "block",
+     6,
+     "35"
+    ],
+    [
+     "block",
+     8,
+     "33"
+    ],
+    [
+     "block",
+     10,
+     "66"
+    ],
+    [
+     "block",
+     12,
+     "66"
+    ],
+    [
+     "block",
+     14,
+     "66"
+    ],
+    [
+     "block",
+     16,
+     "66"
+    ],
+    [
+     "block",
+     18,
+     "66"
+    ],
+    [
+     "block",
+     20,
+     "66"
+    ]
+   ],
+   "ours_accumulate": [],
+   "mmdvm_match": true,
+   "dgw_match": true,
+   "text_agree": true,
+   "unit66_hex": [
+    "ffff1f552d16456bd42008d4450ebf427ea2457da04461a3457fbf407fa3457fbd407fa3457fa35c01bf457fa3407fa34561a3407fa34563d65c7ebf457fa65c7ebd",
+    "ffff1f552d16457fbf417dbd457fbf3d63a34561a35c02bf43639e7a29f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+   ],
+   "expected_dvrouter": {
+    "basis": "dvrouter-source",
+    "text": [],
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "reject:Crc"
+    ]
+   },
+   "lenient_alternative": [],
+   "ours_dvrouter": [],
+   "dvrouter_match": true,
+   "lenient_differs": true,
+   "named_difference": "DIFF-CRC-REJECT",
+   "note": "GGA without '*' and checksum digits: DV-Router counts a Crc reject (no '*' is a Crc), DStarGateway is silent"
+  },
+  {
+   "case": "nmea-term-lf-only",
+   "frames": [
+    "0 552d16",
+    "1 456bd4",
+    "2 2008d4",
+    "3 450ebf",
+    "4 427ea2",
+    "5 457da0",
+    "6 4461a3",
+    "7 457fbf",
+    "8 407fa3",
+    "9 457fbd",
+    "10 407fa3",
+    "11 457fa3",
+    "12 5c01bf",
+    "13 457fa3",
+    "14 407fa3",
+    "15 4561a3",
+    "16 407fa3",
+    "17 4563d6",
+    "18 5c7ebf",
+    "19 457fa6",
+    "20 5c7ebd",
+    "0 552d16",
+    "1 457fbf",
+    "2 417dbd",
+    "3 457fbf",
+    "4 3d63a3",
+    "5 4561a3",
+    "6 5c02bf",
+    "7 4563b9",
+    "8 450c99",
+    "9 1629f5",
+    "10 1629f5",
+    "11 1629f5",
+    "12 1629f5",
+    "13 1629f5",
+    "14 1629f5",
+    "15 1629f5",
+    "16 1629f5",
+    "17 1629f5",
+    "18 1629f5",
+    "19 1629f5",
+    "20 1629f5"
+   ],
+   "mmdvm": [
+    [
+     "block",
+     2,
+     "35"
+    ],
+    [
+     "block",
+     4,
+     "35"
+    ],
+    [
+     "block",
+     6,
+     "35"
+    ],
+    [
+     "block",
+     8,
+     "35"
+    ],
+    [
+     "block",
+     10,
+     "35"
+    ],
+    [
+     "block",
+     12,
+     "35"
+    ],
+    [
+     "block",
+     14,
+     "35"
+    ],
+    [
+     "block",
+     16,
+     "35"
+    ],
+    [
+     "block",
+     18,
+     "35"
+    ],
+    [
+     "block",
+     20,
+     "35"
+    ],
+    [
+     "block",
+     2,
+     "35"
+    ],
+    [
+     "block",
+     4,
+     "35"
+    ],
+    [
+     "block",
+     6,
+     "35"
+    ],
+    [
+     "block",
+     8,
+     "35"
+    ],
+    [
+     "block",
+     10,
+     "66"
+    ],
+    [
+     "block",
+     12,
+     "66"
+    ],
+    [
+     "block",
+     14,
+     "66"
+    ],
+    [
+     "block",
+     16,
+     "66"
+    ],
+    [
+     "block",
+     18,
+     "66"
+    ],
+    [
+     "block",
+     20,
+     "66"
+    ]
+   ],
+   "dgw": [
+    [
+     "nmea:GPGGA",
+     8,
+     "4e3043414c4c2d353e47505333302c44535441522a3a2447504747412c3231313233342e30302c303030302e30303030302c4e2c30303030302e303030302c452c312c30352c312e302c31322e302c4d2c302e302c4d2c2c2a3563"
+    ]
+   ],
+   "ours_reset": [
+    [
+     "block",
+     2,
+     "35"
+    ],
+    [
+     "block",
+     4,
+     "35"
+    ],
+    [
+     "block",
+     6,
+     "35"
+    ],
+    [
+     "block",
+     8,
+     "35"
+    ],
+    [
+     "block",
+     10,
+     "35"
+    ],
+    [
+     "block",
+     12,
+     "35"
+    ],
+    [
+     "block",
+     14,
+     "35"
+    ],
+    [
+     "block",
+     16,
+     "35"
+    ],
+    [
+     "block",
+     18,
+     "35"
+    ],
+    [
+     "block",
+     20,
+     "35"
+    ],
+    [
+     "block",
+     2,
+     "35"
+    ],
+    [
+     "block",
+     4,
+     "35"
+    ],
+    [
+     "block",
+     6,
+     "35"
+    ],
+    [
+     "block",
+     8,
+     "35"
+    ],
+    [
+     "block",
+     10,
+     "66"
+    ],
+    [
+     "block",
+     12,
+     "66"
+    ],
+    [
+     "block",
+     14,
+     "66"
+    ],
+    [
+     "block",
+     16,
+     "66"
+    ],
+    [
+     "block",
+     18,
+     "66"
+    ],
+    [
+     "block",
+     20,
+     "66"
+    ]
+   ],
+   "ours_accumulate": [
+    [
+     "nmea:GPGGA",
+     8,
+     "4e3043414c4c2d353e47505333302c44535441522a3a2447504747412c3231313233342e30302c303030302e30303030302c4e2c30303030302e303030302c452c312c30352c312e302c31322e302c4d2c302e302c4d2c2c2a3563"
+    ]
+   ],
+   "mmdvm_match": true,
+   "dgw_match": true,
+   "text_agree": true,
+   "unit66_hex": [
+    "ffff1f552d16456bd42008d4450ebf427ea2457da04461a3457fbf407fa3457fbd407fa3457fa35c01bf457fa3407fa34561a3407fa34563d65c7ebf457fa65c7ebd",
+    "ffff1f552d16457fbf417dbd457fbf3d63a34561a35c02bf4563b9450c991629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+   ],
+   "expected_dvrouter": {
+    "basis": "dvrouter-source",
+    "text": [],
+    "gps": [
+     [
+      "nmea:GPGGA",
+      8,
+      "4e3043414c4c2d353e47505333302c44535441522a3a2447504747412c3231313233342e30302c303030302e30303030302c4e2c30303030302e303030302c452c312c30352c312e302c31322e302c4d2c302e302c4d2c2c2a3563"
+     ]
+    ],
+    "outcome": [
+     "parsed",
+     "parsed"
+    ]
+   },
+   "lenient_alternative": [
+    [
+     "nmea:GPGGA",
+     8,
+     "4e3043414c4c2d353e47505333302c44535441522a3a2447504747412c3231313233342e30302c303030302e30303030302c4e2c30303030302e303030302c452c312c30352c312e302c31322e302c4d2c302e302c4d2c2c2a3563"
+    ]
+   ],
+   "ours_dvrouter": [
+    [
+     "nmea:GPGGA",
+     8,
+     "4e3043414c4c2d353e47505333302c44535441522a3a2447504747412c3231313233342e30302c303030302e30303030302c4e2c30303030302e303030302c452c312c30352c312e302c31322e302c4d2c302e302c4d2c2c2a3563"
+    ]
+   ],
+   "dvrouter_match": true,
+   "lenient_differs": false,
+   "note": "GGA ending in LF alone: DV-Router ends a line at CR or LF"
+  },
+  {
+   "case": "nmea-term-cr-only",
+   "frames": [
+    "0 552d16",
+    "1 456bd4",
+    "2 2008d4",
+    "3 450ebf",
+    "4 427ea2",
+    "5 457da0",
+    "6 4461a3",
+    "7 457fbf",
+    "8 407fa3",
+    "9 457fbd",
+    "10 407fa3",
+    "11 457fa3",
+    "12 5c01bf",
+    "13 457fa3",
+    "14 407fa3",
+    "15 4561a3",
+    "16 407fa3",
+    "17 4563d6",
+    "18 5c7ebf",
+    "19 457fa6",
+    "20 5c7ebd",
+    "0 552d16",
+    "1 457fbf",
+    "2 417dbd",
+    "3 457fbf",
+    "4 3d63a3",
+    "5 4561a3",
+    "6 5c02bf",
+    "7 4563b9",
+    "8 450c9e",
+    "9 1629f5",
+    "10 1629f5",
+    "11 1629f5",
+    "12 1629f5",
+    "13 1629f5",
+    "14 1629f5",
+    "15 1629f5",
+    "16 1629f5",
+    "17 1629f5",
+    "18 1629f5",
+    "19 1629f5",
+    "20 1629f5"
+   ],
+   "mmdvm": [
+    [
+     "block",
+     2,
+     "35"
+    ],
+    [
+     "block",
+     4,
+     "35"
+    ],
+    [
+     "block",
+     6,
+     "35"
+    ],
+    [
+     "block",
+     8,
+     "35"
+    ],
+    [
+     "block",
+     10,
+     "35"
+    ],
+    [
+     "block",
+     12,
+     "35"
+    ],
+    [
+     "block",
+     14,
+     "35"
+    ],
+    [
+     "block",
+     16,
+     "35"
+    ],
+    [
+     "block",
+     18,
+     "35"
+    ],
+    [
+     "block",
+     20,
+     "35"
+    ],
+    [
+     "block",
+     2,
+     "35"
+    ],
+    [
+     "block",
+     4,
+     "35"
+    ],
+    [
+     "block",
+     6,
+     "35"
+    ],
+    [
+     "block",
+     8,
+     "35"
+    ],
+    [
+     "block",
+     10,
+     "66"
+    ],
+    [
+     "block",
+     12,
+     "66"
+    ],
+    [
+     "block",
+     14,
+     "66"
+    ],
+    [
+     "block",
+     16,
+     "66"
+    ],
+    [
+     "block",
+     18,
+     "66"
+    ],
+    [
+     "block",
+     20,
+     "66"
+    ]
+   ],
+   "dgw": [],
+   "ours_reset": [
+    [
+     "block",
+     2,
+     "35"
+    ],
+    [
+     "block",
+     4,
+     "35"
+    ],
+    [
+     "block",
+     6,
+     "35"
+    ],
+    [
+     "block",
+     8,
+     "35"
+    ],
+    [
+     "block",
+     10,
+     "35"
+    ],
+    [
+     "block",
+     12,
+     "35"
+    ],
+    [
+     "block",
+     14,
+     "35"
+    ],
+    [
+     "block",
+     16,
+     "35"
+    ],
+    [
+     "block",
+     18,
+     "35"
+    ],
+    [
+     "block",
+     20,
+     "35"
+    ],
+    [
+     "block",
+     2,
+     "35"
+    ],
+    [
+     "block",
+     4,
+     "35"
+    ],
+    [
+     "block",
+     6,
+     "35"
+    ],
+    [
+     "block",
+     8,
+     "35"
+    ],
+    [
+     "block",
+     10,
+     "66"
+    ],
+    [
+     "block",
+     12,
+     "66"
+    ],
+    [
+     "block",
+     14,
+     "66"
+    ],
+    [
+     "block",
+     16,
+     "66"
+    ],
+    [
+     "block",
+     18,
+     "66"
+    ],
+    [
+     "block",
+     20,
+     "66"
+    ]
+   ],
+   "ours_accumulate": [],
+   "mmdvm_match": true,
+   "dgw_match": true,
+   "text_agree": true,
+   "unit66_hex": [
+    "ffff1f552d16456bd42008d4450ebf427ea2457da04461a3457fbf407fa3457fbd407fa3457fa35c01bf457fa3407fa34561a3407fa34563d65c7ebf457fa65c7ebd",
+    "ffff1f552d16457fbf417dbd457fbf3d63a34561a35c02bf4563b9450c9e1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+   ],
+   "expected_dvrouter": {
+    "basis": "dvrouter-source",
+    "text": [],
+    "gps": [
+     [
+      "nmea:GPGGA",
+      8,
+      "4e3043414c4c2d353e47505333302c44535441522a3a2447504747412c3231313233342e30302c303030302e30303030302c4e2c30303030302e303030302c452c312c30352c312e302c31322e302c4d2c302e302c4d2c2c2a3563"
+     ]
+    ],
+    "outcome": [
+     "parsed",
+     "parsed"
+    ]
+   },
+   "lenient_alternative": [],
+   "ours_dvrouter": [
+    [
+     "nmea:GPGGA",
+     8,
+     "4e3043414c4c2d353e47505333302c44535441522a3a2447504747412c3231313233342e30302c303030302e30303030302c4e2c30303030302e303030302c452c312c30352c312e302c31322e302c4d2c302e302c4d2c2c2a3563"
+    ]
+   ],
+   "dvrouter_match": true,
+   "lenient_differs": true,
+   "named_difference": "DIFF-TERMINATOR",
+   "note": "GGA ending in CR alone: DV-Router ends the line at the CR, DStarGateway waits for an LF that never comes"
+  },
+  {
+   "case": "dprs-term-lf",
+   "frames": [
+    "0 552d16",
+    "1 456bb7",
+    "2 331dd0",
+    "3 450ca5",
+    "4 447abf",
+    "5 4501a3",
+    "6 330edf",
+    "7 4503ad",
+    "8 311fda",
+    "9 457dab",
+    "10 4263d7",
+    "11 451cc7",
+    "12 311db9",
+    "13 4575bc",
+    "14 427ea2",
+    "15 457da0",
+    "16 4427a3",
+    "17 457fa3",
+    "18 4061a3",
+    "19 457fdd",
+    "20 5f7fa3",
+    "0 552d16",
+    "1 457fa3",
+    "2 4061a3",
+    "3 457fd6",
+    "4 5d7fa1",
+    "5 4578bc",
+    "6 407fa3",
+    "7 4560dd",
+    "8 400cd2",
+    "9 4503df",
+    "10 502ee7",
+    "11 456ffb",
+    "12 1f22f6",
+    "13 4145f5",
+    "14 1629f5",
+    "15 1629f5",
+    "16 1629f5",
+    "17 1629f5",
+    "18 1629f5",
+    "19 1629f5",
+    "20 1629f5"
+   ],
+   "mmdvm": [
+    [
+     "block",
+     2,
+     "35"
+    ],
+    [
+     "block",
+     4,
+     "35"
+    ],
+    [
+     "block",
+     6,
+     "35"
+    ],
+    [
+     "block",
+     8,
+     "35"
+    ],
+    [
+     "block",
+     10,
+     "35"
+    ],
+    [
+     "block",
+     12,
+     "35"
+    ],
+    [
+     "block",
+     14,
+     "35"
+    ],
+    [
+     "block",
+     16,
+     "35"
+    ],
+    [
+     "block",
+     18,
+     "35"
+    ],
+    [
+     "block",
+     20,
+     "35"
+    ],
+    [
+     "block",
+     2,
+     "35"
+    ],
+    [
+     "block",
+     4,
+     "35"
+    ],
+    [
+     "block",
+     6,
+     "35"
+    ],
+    [
+     "block",
+     8,
+     "35"
+    ],
+    [
+     "block",
+     10,
+     "35"
+    ],
+    [
+     "block",
+     12,
+     "35"
+    ],
+    [
+     "block",
+     14,
+     "31"
+    ],
+    [
+     "block",
+     16,
+     "66"
+    ],
+    [
+     "block",
+     18,
+     "66"
+    ],
+    [
+     "block",
+     20,
+     "66"
+    ]
+   ],
+   "dgw": [],
+   "ours_reset": [
+    [
+     "block",
+     2,
+     "35"
+    ],
+    [
+     "block",
+     4,
+     "35"
+    ],
+    [
+     "block",
+     6,
+     "35"
+    ],
+    [
+     "block",
+     8,
+     "35"
+    ],
+    [
+     "block",
+     10,
+     "35"
+    ],
+    [
+     "block",
+     12,
+     "35"
+    ],
+    [
+     "block",
+     14,
+     "35"
+    ],
+    [
+     "block",
+     16,
+     "35"
+    ],
+    [
+     "block",
+     18,
+     "35"
+    ],
+    [
+     "block",
+     20,
+     "35"
+    ],
+    [
+     "block",
+     2,
+     "35"
+    ],
+    [
+     "block",
+     4,
+     "35"
+    ],
+    [
+     "block",
+     6,
+     "35"
+    ],
+    [
+     "block",
+     8,
+     "35"
+    ],
+    [
+     "block",
+     10,
+     "35"
+    ],
+    [
+     "block",
+     12,
+     "35"
+    ],
+    [
+     "block",
+     14,
+     "31"
+    ],
+    [
+     "block",
+     16,
+     "66"
+    ],
+    [
+     "block",
+     18,
+     "66"
+    ],
+    [
+     "block",
+     20,
+     "66"
+    ]
+   ],
+   "ours_accumulate": [],
+   "mmdvm_match": true,
+   "dgw_match": true,
+   "text_agree": true,
+   "unit66_hex": [
+    "ffff1f552d16456bb7331dd0450ca5447abf4501a3330edf4503ad311fda457dab4263d7451cc7311db94575bc427ea2457da04427a3457fa34061a3457fdd5f7fa3",
+    "ffff1f552d16457fa34061a3457fd65d7fa14578bc407fa34560dd400cd24503df502ee7456ffb1f22f64145f51629f51629f51629f51629f51629f51629f51629f5"
+   ],
+   "expected_dvrouter": {
+    "basis": "dvrouter-source",
+    "text": [],
+    "gps": [],
+    "outcome": [
+     "parsed",
+     "reject:Invalid"
+    ]
+   },
+   "lenient_alternative": [],
+   "ours_dvrouter": [],
+   "dvrouter_match": true,
+   "lenient_differs": true,
+   "named_difference": "DIFF-TERMINATOR",
+   "note": "D-PRS line (CRC over the string) ended by an LF instead of a CR: DV-Router needs the CR (Invalid)"
+  }
+ ],
+ "unit_vectors": [
+  {
+   "name": "unit-valid",
+   "note": "the complete unit of a message (ffff1f 552d16 ...)",
+   "rule": "dstar.rs:136 (bitmap = b0 | b1 << 8 | b2 << 16, bit i = frame i)",
+   "unit_hex": [
+    "ffff1f552d163001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+   ],
+   "expected_dvrouter": {
+    "outcome": [
+     "parsed"
+    ],
+    "text": [
+     [
+      "text",
+      8,
+      "4e3043414c4c3a204351204445204e3043414c4c"
+     ]
+    ],
+    "gps": [],
+    "basis": "dvrouter-source"
+   }
+  },
+  {
+   "name": "unit-65-bytes",
+   "note": "one byte short",
+   "rule": "dstar.rs:123-130 (length != 66: state reset; < 66 TooShort, > 66 Size)",
+   "unit_hex": [
+    "ffff1f552d163001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629"
+   ],
+   "expected_dvrouter": {
+    "outcome": [
+     "reject:TooShort"
+    ],
+    "text": [],
+    "gps": [],
+    "basis": "dvrouter-source"
+   }
+  },
+  {
+   "name": "unit-67-bytes",
+   "note": "one byte too long",
+   "rule": "dstar.rs:123-130 (length != 66: state reset; < 66 TooShort, > 66 Size)",
+   "unit_hex": [
+    "ffff1f552d163001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f500"
+   ],
+   "expected_dvrouter": {
+    "outcome": [
+     "reject:Size"
+    ],
+    "text": [],
+    "gps": [],
+    "basis": "dvrouter-source"
+   }
+  },
+  {
+   "name": "unit-empty",
+   "note": "no bytes at all",
+   "rule": "dstar.rs:123-130 (length != 66: state reset; < 66 TooShort, > 66 Size)",
+   "unit_hex": [
+    ""
+   ],
+   "expected_dvrouter": {
+    "outcome": [
+     "reject:TooShort"
+    ],
+    "text": [],
+    "gps": [],
+    "basis": "dvrouter-source"
+   }
+  },
+  {
+   "name": "unit-132-bytes",
+   "note": "two units glued together",
+   "rule": "dstar.rs:123-130 (length != 66: state reset; < 66 TooShort, > 66 Size)",
+   "unit_hex": [
+    "ffff1f552d163001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5ffff1f552d163001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+   ],
+   "expected_dvrouter": {
+    "outcome": [
+     "reject:Size"
+    ],
+    "text": [],
+    "gps": [],
+    "basis": "dvrouter-source"
+   }
+  },
+  {
+   "name": "unit-spare-bit-5",
+   "note": "byte 2 bit 5 (0x20) set",
+   "rule": "dstar.rs:131-135 (input[2] & 0xe0 != 0: state reset, Invalid)",
+   "unit_hex": [
+    "ffff3f552d163001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+   ],
+   "expected_dvrouter": {
+    "outcome": [
+     "reject:Invalid"
+    ],
+    "text": [],
+    "gps": [],
+    "basis": "dvrouter-source"
+   }
+  },
+  {
+   "name": "unit-spare-bit-6",
+   "note": "byte 2 bit 6 (0x40) set",
+   "rule": "dstar.rs:131-135 (input[2] & 0xe0 != 0: state reset, Invalid)",
+   "unit_hex": [
+    "ffff5f552d163001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+   ],
+   "expected_dvrouter": {
+    "outcome": [
+     "reject:Invalid"
+    ],
+    "text": [],
+    "gps": [],
+    "basis": "dvrouter-source"
+   }
+  },
+  {
+   "name": "unit-spare-bit-7",
+   "note": "byte 2 bit 7 (0x80) set",
+   "rule": "dstar.rs:131-135 (input[2] & 0xe0 != 0: state reset, Invalid)",
+   "unit_hex": [
+    "ffff9f552d163001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+   ],
+   "expected_dvrouter": {
+    "outcome": [
+     "reject:Invalid"
+    ],
+    "text": [],
+    "gps": [],
+    "basis": "dvrouter-source"
+   }
+  },
+  {
+   "name": "unit-old-msb-first-bitmap",
+   "note": "the retired MSB first layout of a complete unit (fffff8): byte 2 has spare bits set",
+   "rule": "dstar.rs:131-135 (input[2] & 0xe0 != 0: state reset, Invalid)",
+   "unit_hex": [
+    "fffff8552d163001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+   ],
+   "expected_dvrouter": {
+    "outcome": [
+     "reject:Invalid"
+    ],
+    "text": [],
+    "gps": [],
+    "basis": "dvrouter-source"
+   }
+  },
+  {
+   "name": "unit-frame0-wrong-last-byte",
+   "note": "bit 0 set, frame 0 = 55 2d 17",
+   "rule": "dstar.rs:137-141 (bit 0 set and frame 0 != 55 2d 16: state reset, Invalid)",
+   "unit_hex": [
+    "ffff1f552d173001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+   ],
+   "expected_dvrouter": {
+    "outcome": [
+     "reject:Invalid"
+    ],
+    "text": [],
+    "gps": [],
+    "basis": "dvrouter-source"
+   }
+  },
+  {
+   "name": "unit-frame0-zero",
+   "note": "bit 0 set, frame 0 = 00 00 00 (an absent frame marked present)",
+   "rule": "dstar.rs:137-141 (bit 0 set and frame 0 != 55 2d 16: state reset, Invalid)",
+   "unit_hex": [
+    "ffff1f0000003001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+   ],
+   "expected_dvrouter": {
+    "outcome": [
+     "reject:Invalid"
+    ],
+    "text": [],
+    "gps": [],
+    "basis": "dvrouter-source"
+   }
+  },
+  {
+   "name": "unit-frame0-scrambled",
+   "note": "bit 0 set, frame 0 = the sync XORed with the scrambler",
+   "rule": "dstar.rs:137-141 (bit 0 set and frame 0 != 55 2d 16: state reset, Invalid)",
+   "unit_hex": [
+    "ffff1f2562853001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+   ],
+   "expected_dvrouter": {
+    "outcome": [
+     "reject:Invalid"
+    ],
+    "text": [],
+    "gps": [],
+    "basis": "dvrouter-source"
+   }
+  },
+  {
+   "name": "unit-frame0-absent-garbage",
+   "note": "bit 0 CLEAR, frame 0 bytes are garbage: not checked, the unit decodes",
+   "rule": "dstar.rs:137-141 (bit 0 set and frame 0 != 55 2d 16: state reset, Invalid)",
+   "unit_hex": [
+    "feff1fffffff3001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+   ],
+   "expected_dvrouter": {
+    "outcome": [
+     "parsed"
+    ],
+    "text": [
+     [
+      "text",
+      8,
+      "4e3043414c4c3a204351204445204e3043414c4c"
+     ]
+    ],
+    "gps": [],
+    "basis": "dvrouter-source"
+   }
+  },
+  {
+   "name": "unit-bitmap-empty",
+   "note": "bitmap 000000: no frame present, nothing to decode",
+   "rule": "dstar.rs:136 (bitmap = b0 | b1 << 8 | b2 << 16, bit i = frame i)",
+   "unit_hex": [
+    "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+   ],
+   "expected_dvrouter": {
+    "outcome": [
+     "parsed"
+    ],
+    "text": [],
+    "gps": [],
+    "basis": "dvrouter-source"
+   }
+  },
+  {
+   "name": "unit-frame20-only",
+   "note": "bitmap 000010: only frame 20 (bit 4 of byte 2) present, no pair complete",
+   "rule": "dstar.rs:136 (bitmap = b0 | b1 << 8 | b2 << 16, bit i = frame i)",
+   "unit_hex": [
+    "000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000aabbcc"
+   ],
+   "expected_dvrouter": {
+    "outcome": [
+     "parsed"
+    ],
+    "text": [],
+    "gps": [],
+    "basis": "dvrouter-source"
+   }
+  },
+  {
+   "name": "seq-reset-after-invalid",
+   "note": "blocks 0..2, a unit with a spare bit set, block 3: the Invalid unit resets the text segments, so block 3 alone makes no text",
+   "rule": "dstar.rs:131-135 (input[2] & 0xe0 != 0: state reset, Invalid)",
+   "unit_hex": [
+    "ffff1f552d163001a3330edf3103a9500cc2326fd7356fdd1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5",
+    "ffff3f552d163001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5",
+    "ffff1f552d161629f51629f51629f51629f51629f51629f5337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+   ],
+   "expected_dvrouter": {
+    "outcome": [
+     "parsed",
+     "reject:Invalid",
+     "parsed"
+    ],
+    "text": [],
+    "gps": [],
+    "basis": "dvrouter-source"
+   }
+  },
+  {
+   "name": "seq-reset-after-too-short",
+   "note": "blocks 0..2, a 65 byte unit, block 3: the TooShort unit resets the text segments",
+   "rule": "dstar.rs:123-130 (length != 66: state reset; < 66 TooShort, > 66 Size)",
+   "unit_hex": [
+    "ffff1f552d163001a3330edf3103a9500cc2326fd7356fdd1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5",
+    "ffff1f552d163001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629",
+    "ffff1f552d161629f51629f51629f51629f51629f51629f5337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+   ],
+   "expected_dvrouter": {
+    "outcome": [
+     "parsed",
+     "reject:TooShort",
+     "parsed"
+    ],
+    "text": [],
+    "gps": [],
+    "basis": "dvrouter-source"
+   }
+  },
+  {
+   "name": "seq-reset-after-wrong-sync",
+   "note": "blocks 0..2, a unit with a wrong frame 0, block 3",
+   "rule": "dstar.rs:137-141 (bit 0 set and frame 0 != 55 2d 16: state reset, Invalid)",
+   "unit_hex": [
+    "ffff1f552d163001a3330edf3103a9500cc2326fd7356fdd1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5",
+    "ffff1f552d173001a3330edf3103a9500cc2326fd7356fdd337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5",
+    "ffff1f552d161629f51629f51629f51629f51629f51629f5337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+   ],
+   "expected_dvrouter": {
+    "outcome": [
+     "parsed",
+     "reject:Invalid",
+     "parsed"
+    ],
+    "text": [],
+    "gps": [],
+    "basis": "dvrouter-source"
+   }
+  },
+  {
+   "name": "seq-no-reset-without-reject",
+   "note": "the same without the bad unit in between: the segments persist across units today, the text completes at frame 8 of the second unit (DP5f: it would not)",
+   "rule": "dstar.rs:157-180 (0x40..0x43, 5 bytes & 0x7f, state.text persists across units, one text item per unit)",
+   "unit_hex": [
+    "ffff1f552d163001a3330edf3103a9500cc2326fd7356fdd1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5",
+    "ffff1f552d161629f51629f51629f51629f51629f51629f5337fd03103df1629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f51629f5"
+   ],
+   "expected_dvrouter": {
+    "outcome": [
+     "parsed",
+     "parsed"
+    ],
+    "text": [
+     [
+      "text",
+      8,
+      "4e3043414c4c3a204351204445204e3043414c4c"
+     ]
+    ],
+    "gps": [],
+    "basis": "dvrouter-source"
+   },
+   "expected_dvrouter_after_dp5f": {
+    "basis": "lead-statement-unverified",
+    "rule": "DP5f as stated by the DV-Router lead (NOT in the code read): NMEA 0183 line limit, 82 including CR LF = 80 content bytes; text segments cleared at the start of every unit (MMDVMHost's reset at a sync)",
+    "outcome": [
+     "parsed",
+     "parsed"
+    ],
+    "text": [],
+    "gps": []
+   }
   }
  ]
 }
