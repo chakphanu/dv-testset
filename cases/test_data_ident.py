@@ -112,7 +112,10 @@ def snapshot(samples):
     edge.<result> (dv_edge_data_total; metrics.edge_data_family(): 0 on compat1, which removed it), each also as .all (any result)."""
     snap = {"room.all": metrics.total(samples, "dv_room_data_total"),
             "pkt.all": metrics.total(samples, "dv_pkt_items_total"),
-            "edge.all": metrics.edge_total(samples)}
+            "edge.all": metrics.edge_total(samples),
+            # compat1 successors of dv_edge_data_total: recorded only (their labels are not asserted); 0 on older images
+            "edge_raw.all": metrics.total(samples, "dv_edge_raw_total"),
+            "edge_render.all": metrics.total(samples, "dv_edge_render_total")}
     for result in RESULTS:
         snap["room." + result] = metrics.total(samples, "dv_room_data_total", result=result)
         snap["edge." + result] = metrics.edge_total(samples, result=result)
@@ -205,7 +208,7 @@ def hub(rig, target, rig_control):
     yield helper
     try:
         for line in helper.text().splitlines():
-            if line.startswith(("dv_room_data_total", "dv_pkt_items_total") + ((metrics.edge_data_family(),) if metrics.edge_data_family() else ())) \
+            if line.startswith(("dv_room_data_total", "dv_pkt_items_total", "dv_edge_raw_total", "dv_edge_render_total") + ((metrics.edge_data_family(),) if metrics.edge_data_family() else ())) \
                     and line.rsplit(" ", 1)[-1] not in ("0", "0.0"):
                 note(target, "hub", "RECORD", "end of run: " + line)
     except Exception:                                    # the SUT may be gone; not a case failure
