@@ -36,13 +36,13 @@ output formats and facts, cited by file and line of the pinned commit.
 
 | Path | What |
 |------|------|
-| `dvtest/ax25.py` | address field, UI frames, TNC2 text (`<0xHH>` escapes), CRC-16/X-25 FCS, bit stuffing, bits on the air, KISS encode and a streaming KISS decoder |
-| `dvtest/airtime.py` | LoRa time on air (exact fractions + integer microsecond path), the anchor table, `python3 -m dvtest.airtime` writes `vectors/airtime/anchors.json` |
+| `dvtest/ax25.py` | address field, UI frames, TNC2 text (`<0xHH>` escapes), CRC-16/X-25 FCS, bit stuffing, bits on the air, KISS encode and a streaming KISS decoder; the model of the DV-Router lead's statements (`mask_cr_bits`, `dvrouter_accepts_frame`, `DvrouterKiss`, `dvrouter_startup_params`) |
+| `dvtest/airtime.py` | LoRa time on air (exact fractions + integer microsecond path), the anchor table, `python3 -m dvtest.airtime` writes `vectors/airtime/anchors.json`; the DV-Router AFSK airtime upper bound (`afsk_upper_bound_ms`) |
 | `dvtest/oracle_direwolf.py` | case tables (17 + 2 RX lines, 29 TX byte strings, 4 kissutil lines), debug-log parsers, record builders, the thin `docker run` call, `python3 -m dvtest.oracle_direwolf run` |
 | `dvtest/aprs_cases.py`, `dvtest/oracle_aprs.py` | 76 spec-derived APRS information strings (one group per APRS type) with their small encoders (compressed, Mic-E); the `aprs` job, the `decode_aprs` output parser and the record builder, `python3 -m dvtest.oracle_aprs run` |
 | `rig/Dockerfile.direwolf`, `rig/direwolf-entry.py`, `scripts/pre-fetch-direwolf.sh`, `.env.example` (`DIREWOLF_*`) | the image `dvt-direwolf:local`, its driver (ours, Python) and the one-time source fetch |
 | `vectors/direwolf/rx_frames.json`, `kiss_tx.json`, `aprs_decode.json`, `vectors/airtime/anchors.json` | the vectors (JSON text only, no audio) |
-| `cases/unit/test_ax25.py`, `test_airtime.py`, `test_oracle_direwolf.py`, `test_oracle_aprs.py` | unit tests; the first and the last also read the Dire Wolf vectors |
+| `cases/unit/test_ax25.py`, `test_airtime.py`, `test_oracle_direwolf.py`, `test_oracle_aprs.py`, `test_dvr_differences.py` | unit tests; the first and the last also read the Dire Wolf vectors |
 
 ## Dire Wolf image: build and run (VERIFIED, 2026-11-06)
 
@@ -235,6 +235,96 @@ third party (one level). The wanted oracle is Dire Wolf's own APRS decoder, `dec
 - Time values, the ambiguity level, the Mic-E message code number (only its word), the raw
   message-capable flag (`!` versus `=`) and the third-party header are not in the output.
 
+## Documented differences: Dire Wolf versus DV-Router
+
+These are DIFFERENCES to know when a Dire Wolf vector meets DV-Router, not failures of either.
+Dire Wolf's side is read from the vectors (V) or its source (S). DV-Router's side is what the
+DV-Router lead STATED (L): nothing was run against DV-Router. The lead's statements are restated
+as a small model in `dvtest/ax25.py` (`dvrouter_accepts_frame`, `DvrouterKiss`, `mask_cr_bits`,
+`dvrouter_startup_params`) and compared with the committed Dire Wolf vectors by
+`cases/unit/test_dvr_differences.py`. A restatement is not DV-Router: where the model needed a
+fact the lead did not give, the model says so ("UNVERIFIED" in its docstring) and the
+question is listed below.
+
+### Frame size and type
+
+| | Dire Wolf | DV-Router (L) | Consequence |
+|---|---|---|---|
+| Frame length | 15 to 2123 bytes (S ax25_pad.h; V: 14 refused, 15 taken) | 16 to 1100 bytes | **15 bytes** (two addresses + control, no PID): taken by Dire Wolf (V `frame-15-control-only`, kissutil prints `N0CALL-7>APRS:`), refused by DV-Router |
+| KISS data limit | 2048 bytes FEND to FEND, i.e. frames up to 2045 bytes through the KISS port (V `info-2029` taken, `info-2030` refused; S `MAX_KISS_LEN`) | 1100 bytes, over: discard up to the next FEND | **1101 to 2123 bytes**: taken by Dire Wolf (V: a 2045 byte frame), refused by DV-Router. Frames of 2046 to 2123 bytes cannot even be sent to Dire Wolf over KISS (its buffer); a 2123 byte frame once killed the process (M, not a vector) |
+| Frame type | the KISS port passes any frame of 15 to 2123 bytes to the radio; the control / PID is not looked at there (not tested with a non-UI control byte) | UI frames only: control 0x03, PID 0xF0 | non-UI frames: DV-Router refuses; Dire Wolf behaviour not shown |
+
+So a vector longer than 1100 bytes or shorter than 16 can be used to check that DV-Router
+REFUSES; do not use it as an accept case. `test_frame_windows` and `test_only_ui_frames_with_pid_f0`
+pin the window and the type rule in the model.
+
+### Command / response bits and SSID
+
+| | Dire Wolf | DV-Router (L) |
+|---|---|---|
+| Transmit | C/R = 1 on BOTH destination and source SSID byte (`e0` / `ee`; SSID 9 source = `f2`, or `f3` when last) (V, 17 of 17) | C/R = 1 on the destination (`APZDVR-0` = `0xE0`), C/R = 0 on the source (`0x72`, `0x73` when it is the last address), reserved bits `0x60` set |
+| Receive | | masks the SSID with `& 0x0f` and ignores C/R; bit 7 of a digipeater byte is the has-been-repeated flag (H) |
+
+Comparisons between the two must **mask bit 7 of the destination and source SSID bytes**
+(`ax25.mask_cr_bits`): the two encodings of the same text differ in exactly the source bit 7
+(`from_tnc2(text, cr_dest=True, cr_src=False)` is the DV-Router form). Do NOT mask a
+digipeater byte (its bit 7 is data). Tested with the 17 frames in `test_cr_bits_dire_wolf_versus_dv_router`.
+
+### KISS receive decoder (DV-Router's, as stated) against Dire Wolf's (V)
+
+| Input | Dire Wolf | DV-Router (L) | Same? |
+|---|---|---|---|
+| bytes before the first FEND | `41 42 C0 ...`: logged "Rejected Noise", the frame is taken; a string with no FEND at all is all noise (V `garbage-before`, `no-leading-fend`) | dropped | same |
+| bad escape `DB 41` | `KISS protocol error. Found 0x41 after FESC.`; both bytes dropped, the frame is kept (V `bad-escape`, `bad-escape-then-good`) | both bytes dropped, the frame is kept, counted | same |
+| unescaped FEND inside a frame | closes it at that point (18 bytes taken) (V `fend-in-info`) | closes it | same for the first part |
+| bytes after that closing FEND, before the next FEND | "Rejected Noise" (the closing FEND does not open a frame) (V `fend-in-info`, `truncated-then-frame`) | not stated; the model treats the FEND as also opening the next frame | **OPEN**: with the model a frame without its closing FEND followed by a complete frame gives TWO accepted frames, Dire Wolf gives one |
+| `C0 C0` | nothing (V `frame-empty`) | nothing | same |
+| command nibble 1 to 6, byte `FF` | Dire Wolf is the TNC: it APPLIES them (logs `KISS protocol set TXDELAY = 30...`, `Return` ignored) and does not copy them (V `param-*`, `cmd-return`) | ignored (DV-Router is the host side) | different roles, not a conflict |
+| command nibble 7 | `KISS Invalid command 7` (V `cmd-unknown-7`) | not stated (model: ignored, counted separately) | **OPEN** |
+| port nibble 1 on a one-channel TNC | "Invalid transmit channel 1", frame not transmitted but copied (V `data-port1`) | not stated | **OPEN** |
+| data over the limit | 2049 bytes FEND to FEND: "KISS frame should end with FEND.", refused (V `info-2030`; its copy holds stale memory and is not stored) | over 1100: discard to the next FEND | different limits (above) |
+
+Comparison run over the 28 non-volatile cases of `kiss_tx.json` (`info-2030` is left out, its
+copy holds stale memory): the model and Dire Wolf take the same AX.25 frames in 25 cases and
+differ in exactly three (`frame-15-control-only`, `info-2029`,
+`truncated-then-frame`), the three rows above (`test_model_and_dire_wolf_take_the_same_frames_except_the_documented_ones`).
+
+### Start-up parameter frames
+
+On every (re)connect DV-Router sends, per channel, in this order and never SetHardware or Return:
+
+    C0 01 1E C0  C0 02 3F C0  C0 03 0A C0  C0 04 03 C0  C0 05 00 C0
+    TXDELAY 30   P 63         SlotTime 10  TXtail 3     FullDuplex 0   (10 ms units: 300 ms, 100 ms, 30 ms)
+
+(`ax25.dvrouter_startup_params(port)` builds exactly these bytes.) Dire Wolf logs each one as
+`KISS protocol set <name> = <value>, chan <n>`, does not copy it to other clients and does not
+answer (V; the vectors use TXtail 5, the other four values equal DV-Router's). Dire Wolf answers
+only SetHardware, which DV-Router never sends.
+
+### Airtime is an upper bound in DV-Router
+
+DV-Router's AFSK airtime is deliberately `ceil((len + 4) * 8 * 6 / 5 / bps) + TXDELAY + TXtail`:
+`len + 4` = frame + 2 FCS bytes + 2 flags, `6/5` = the worst-case bit stuffing, then the KISS
+TXDELAY / TXtail. The exact stuffed bit counts of this item (`ax25.air_bits`, from Dire Wolf's
+audio length, 17 of 17) are therefore a **lower** bound for it. `airtime.afsk_upper_bound_ms(len,
+bps, txdelay_ms, txtail_ms)` computes the bound (default 1200 bps, 300 ms, 30 ms; the unit of the
+`ceil` is ASSUMED to be 1 ms) and `afsk_exact_frame_ms(frame)` the exact frame time. Examples at
+1200 bps: the 47 byte frame is exact 341.667 ms, bound 408 ms (+ 330 ms); the 17 byte frame
+exact 141.667 ms, bound 168 ms. Unit tests (`test_airtime.py`): bound >= exact for all 17 frames,
+for 300 random frames and for all-0xFF frames (the worst case, where it loses under 2%), and
+bound <= `(len + 4) * 8 * 6 / 5 / bps` plus 1 ms.
+
+LoRa airtime anchors: the four `external` rows are ACCEPTED AS QUOTED by the DV-Router lead
+(the two source pages were still not re-read here).
+
+### Questions this section leaves open
+
+- After an unescaped FEND closes a frame, does the next byte start a new frame (shared-FEND
+  convention, the model) or is it dropped until another FEND (Dire Wolf)?
+- Does the 1100 byte KISS limit count the type byte, the escaped bytes or the unescaped data?
+- What happens on a command nibble 7 to 14 and on a port nibble other than 0 from the TNC?
+- What is the unit of the `ceil` in the airtime bound (1 s, 1 ms, 1 us)?
+
 ## Not verified
 
 - Nothing has run against DV-Router. No DV-Router adapter, edge or config was touched.
@@ -273,17 +363,15 @@ encoder output to `dw_ax25_hex`, adapter output to `dw_kiss_hex`).
 2. **DP9 expected values**: ANSWERED by the DV-Router lead (DP9 = the "APRS core" of dv-lib-pkt)
    and delivered in the APRS stage below. Still open: which decoded fields DV-Router compares
    exactly and which with a tolerance (see "Comparing with decode_aprs").
-3. **Command/response bits**: Dire Wolf's text encoder sets bit 7 on both destination and
-   source (`e0` / `ee`...). AX.25 v2.2 commands have destination 1 and source 0. Which does
-   DV-Router emit and should tests compare bytes exactly or mask bit 7 of both SSID bytes?
-4. **Error behaviour to copy or not**: what should the adapter do on noise before the first FEND,
-   a bad escape (Dire Wolf keeps the frame, drops the byte), an unescaped FEND inside a frame,
-   frames outside 15..2123 bytes, KISS messages over 2048 bytes? The vectors show Dire Wolf's
-   choice only.
-5. **Parameter frames**: does the adapter send TXDELAY/P/SlotTime/TXtail/FullDuplex at start,
-   and does it expect any answer (Dire Wolf answers only SetHardware, and only that one)?
-6. **Airtime**: accept the four `external` anchors as quoted from the research note, or have
-   someone re-read the two source pages (and add the RadioLib `calculateTimeOnAir` cross-check
-   the plan mentions, about half a day)? Is AFSK time on air used anywhere in DV-Router?
+3. **Command/response bits**: ANSWERED: DV-Router emits C/R 1 on the destination and 0 on the
+   source; comparisons mask bit 7 of both SSID bytes (section "Documented differences").
+4. **Error behaviour to copy or not**: ANSWERED by the lead's statements (section "Documented
+   differences": noise before the first FEND dropped, bad escape drops both bytes and keeps the
+   frame, an unescaped FEND closes the frame, window 16..1100, limit 1100); four details are
+   still open and listed at the end of that section.
+5. **Parameter frames**: ANSWERED: it sends TXDELAY/P/SlotTime/TXtail/FullDuplex per channel on
+   every (re)connect, in that order, never SetHardware or Return (section "Documented differences").
+6. **Airtime**: ANSWERED: the four `external` anchors are accepted as quoted; the AFSK airtime in
+   DV-Router is an upper bound (section "Documented differences"). Still open: the unit of its `ceil`.
 7. **Scope split**: `dvt-lora-gw` (scripted TNC2 source with and without the `3C FF 01` prefix,
    CRLF, bad prefix, overlong lines) is the other half of plan row 2 and is not done here.

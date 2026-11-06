@@ -167,6 +167,43 @@ def anchor_rows():
     return rows
 
 
+# ------------------------------------------------------------------ AFSK upper bound (DV-Router)
+
+# KISS parameters DV-Router sends on every (re)connect, as stated by the DV-Router lead
+# (docs/direwolf-cases.md, "Documented differences"): TXDELAY 30 and TXtail 3 in units of 10 ms.
+DVR_TXDELAY_MS = 300
+DVR_TXTAIL_MS = 30
+STUFFING_NUM, STUFFING_DEN = 6, 5           # the 6/5 allowance for HDLC bit stuffing
+
+
+def afsk_upper_bound_bits(frame_len):
+    """DV-Router's deliberate upper bound for the bits of one AX.25 frame on the air:
+    (len + 4) * 8 * 6 / 5 as an exact Fraction. len + 4 is the frame plus two FCS bytes plus
+    two flag octets; 6/5 allows one stuffed zero per five bits, the worst case."""
+    if frame_len < 0:
+        raise ValueError("frame_len must not be negative")
+    return Fraction((frame_len + 4) * 8 * STUFFING_NUM, STUFFING_DEN)
+
+
+def afsk_upper_bound_ms(frame_len, bps=1200, txdelay_ms=DVR_TXDELAY_MS, txtail_ms=DVR_TXTAIL_MS, granule_ms=1):
+    """The upper bound as an int number of milliseconds: ceil(bits / bps) rounded up to a
+    multiple of `granule_ms` (the granularity of DV-Router's ceil is an ASSUMPTION: one
+    millisecond), plus TXDELAY and TXtail. The exact stuffed bit count of
+    dvtest.ax25.air_bits(frame) is a LOWER bound of the first term."""
+    if bps <= 0 or granule_ms <= 0:
+        raise ValueError("bps and granule_ms must be positive")
+    ms_exact = afsk_upper_bound_bits(frame_len) * 1000 / bps
+    granules = -(-ms_exact // granule_ms)                  # ceil of a Fraction
+    return int(granules) * granule_ms + txdelay_ms + txtail_ms
+
+
+def afsk_exact_frame_ms(frame, bps=1200):
+    """Exact time of one frame (opening flag, stuffed frame + FCS, closing flag) at `bps` as a
+    Fraction of milliseconds: the lower bound that afsk_upper_bound_ms must not undercut."""
+    from . import ax25
+    return Fraction(ax25.air_bits(frame) * 1000, bps)
+
+
 def main(argv=None):
     """python3 -m dvtest.airtime [--out vectors/airtime/anchors.json]: write the
     anchor table (regenerated, no container)."""

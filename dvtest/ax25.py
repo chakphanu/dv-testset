@@ -297,3 +297,142 @@ class KissDecoder:
 def kiss_decode(stream):
     """All complete frames of a byte string (see KissDecoder)."""
     return KissDecoder().feed(stream)
+
+
+# ------------------------------------------------------------------ DV-Router model (statements of its lead)
+#
+# Everything below models what the DV-Router lead STATED about its KISS / AX.25 adapter
+# (docs/direwolf-cases.md, "Documented differences"). Nothing here was run against DV-Router:
+# it is a checkable restatement, so a test can show where Dire Wolf's vectors agree or differ.
+
+DVR_MIN_FRAME = 16            # two addresses + control + PID, UI frames only
+DVR_MAX_FRAME = 1100          # also the KISS data limit
+DW_MIN_FRAME = 15             # Dire Wolf: 14 refused, 15 accepted (vectors/direwolf/kiss_tx.json)
+DW_MAX_FRAME = 2123           # Dire Wolf, ax25_pad.h
+DVR_PARAMS = ((CMD_TXDELAY, 0x1E), (CMD_P, 0x3F), (CMD_SLOTTIME, 0x0A), (CMD_TXTAIL, 0x03), (CMD_FULLDUPLEX, 0x00))
+
+
+def mask_cr_bits(frame):
+    """The frame with bit 7 (command/response) of the destination and the source SSID byte
+    cleared: the form in which a Dire Wolf frame (e0 / ee) and a DV-Router frame (e0 / 72)
+    compare equal. A digipeater byte's bit 7 is the has-been-repeated flag and is NOT masked."""
+    if len(frame) < 14:
+        raise ValueError("frame shorter than two addresses")
+    out = bytearray(frame)
+    out[6] &= 0x7F
+    out[13] &= 0x7F
+    return bytes(out)
+
+
+def dvrouter_startup_params(port=0):
+    """The KISS frames DV-Router sends per channel on every (re)connect, in this order:
+    TXDELAY 0x1E, P 0x3F, SlotTime 0x0A, TXtail 0x03, FullDuplex 0x00; never SetHardware or
+    Return. For port 0 this is C0 01 1E C0 C0 02 3F C0 C0 03 0A C0 C0 04 03 C0 C0 05 00 C0."""
+    return b"".join(kiss_encode(port, cmd, bytes([val])) for cmd, val in DVR_PARAMS)
+
+
+def dvrouter_accepts_frame(frame):
+    """True when the lead's rule accepts an AX.25 frame: 16..1100 bytes and a UI frame
+    (control 0x03, PID 0xF0). The control / PID position is after the address field
+    (extension bit), so digipeaters are allowed."""
+    if not DVR_MIN_FRAME <= len(frame) <= DVR_MAX_FRAME:
+        return False
+    pos = 0
+    while True:
+        if pos + 7 > len(frame):
+            return False
+        last = frame[pos + 6] & 1
+        pos += 7
+        if last:
+            break
+    return pos + 2 <= len(frame) and frame[pos] == CONTROL_UI and frame[pos + 1] == PID_NO_L3
+
+
+def dw_accepts_len(length):
+    """Dire Wolf's frame length window (ax25_pad.h): 15..2123 bytes."""
+    return DW_MIN_FRAME <= length <= DW_MAX_FRAME
+
+
+class DvrouterKiss:
+    """The lead's description of DV-Router's KISS receive decoder, as a streaming model:
+
+    * bytes before the first FEND are dropped (`dropped_noise`);
+    * FESC TFEND is FEND and FESC TFESC is FESC; FESC followed by any other byte drops BOTH
+      bytes, keeps the frame and counts it (`bad_escapes`);
+    * an unescaped FEND inside a frame closes it; FEND FEND emits nothing;
+    * the command nibble of the type byte: 0 is data; 1 to 6 and the byte 0xFF are ignored
+      (`ignored_commands`); 7 to 14 are NOT SPECIFIED by the lead (treated as ignored and
+      counted in `unspecified_commands`);
+    * a data frame over `max_data` bytes is discarded up to the next FEND (`overlong`). Whether
+      the limit counts the type byte or the unescaped length is not stated: this model counts
+      the unescaped bytes after the type byte (UNVERIFIED).
+
+    feed() returns the data frames as (port, bytes); the AX.25 acceptance rule
+    (dvrouter_accepts_frame) is a second step, applied by the caller."""
+
+    def __init__(self, max_data=DVR_MAX_FRAME):
+        self.max_data = max_data
+        self._buf = None                  # None: before the first FEND
+        self._esc = False
+        self._discard = False
+        self.dropped_noise = 0
+        self.bad_escapes = 0
+        self.ignored_commands = 0
+        self.unspecified_commands = 0
+        self.overlong = 0
+
+    def feed(self, data):
+        frames = []
+        for b in data:
+            if self._buf is None:
+                if b == FEND:
+                    self._buf = bytearray()
+                else:
+                    self.dropped_noise += 1
+                continue
+            if self._discard:
+                if b == FEND:
+                    self._discard = False
+                    self._esc = False
+                    self._buf = bytearray()
+                continue
+            if self._esc:
+                self._esc = False
+                if b == TFEND:
+                    self._append(FEND)
+                elif b == TFESC:
+                    self._append(FESC)
+                elif b == FEND:
+                    self.bad_escapes += 1
+                    self._close(frames)
+                else:
+                    self.bad_escapes += 1          # both bytes dropped, the frame goes on
+                continue
+            if b == FEND:
+                self._close(frames)
+            elif b == FESC:
+                self._esc = True
+            else:
+                self._append(b)
+        return frames
+
+    def _append(self, b):
+        self._buf.append(b)
+        if len(self._buf) - 1 > self.max_data:
+            self.overlong += 1
+            self._buf = bytearray()
+            self._discard = True
+
+    def _close(self, frames):
+        buf, self._buf = self._buf, bytearray()
+        if not buf:
+            return
+        t = buf[0]
+        cmd = t & 0x0F
+        if t == 0xFF or 1 <= cmd <= 6:
+            self.ignored_commands += 1
+        elif cmd == 0:
+            frames.append((t >> 4, bytes(buf[1:])))
+        else:
+            self.unspecified_commands += 1
+            self.ignored_commands += 1

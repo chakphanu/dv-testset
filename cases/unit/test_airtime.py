@@ -106,3 +106,72 @@ def test_lora_aprs_rows_use_prefix_plus_line_length():
     for i, line in enumerate(a.LORA_APRS_LINES, start=1):
         assert rows["aprs-%d-sf12" % i]["payload_bytes"] == 3 + len(line)
     assert rows["aprs-3-sf12"]["computed_ms"] == "2793.472"
+
+
+# ------------------------------------------------------------------ AFSK upper bound (DV-Router)
+
+import random                                            # noqa: E402
+
+from dvtest import ax25                                  # noqa: E402
+
+RX_VEC = os.path.join(os.path.dirname(__file__), "..", "..", "vectors", "direwolf", "rx_frames.json")
+
+
+def _rx_frames():
+    if not os.path.exists(RX_VEC):
+        pytest.skip("rx_frames.json not generated")
+    with open(RX_VEC, encoding="ascii") as fh:
+        recs = json.load(fh)["records"]
+    frames = [bytes.fromhex(r["dw_ax25_hex"]) for r in recs if r["dw_generated"] and not r["case"].startswith("neg-")]
+    assert len(frames) == 17
+    return frames
+
+
+def test_upper_bound_formula_small_values():
+    # 47-byte frame: (47 + 4) * 8 * 6 / 5 = 489.6 bits; at 1200 bps 408 ms; + 300 + 30
+    assert a.afsk_upper_bound_bits(47) == Fraction(2448, 5)
+    assert a.afsk_upper_bound_ms(47) == 408 + 300 + 30
+    assert a.afsk_upper_bound_ms(47, txdelay_ms=0, txtail_ms=0) == 408
+    # the ceil: 17-byte frame, 201.6 bits = 168 ms exactly
+    assert a.afsk_upper_bound_ms(17, txdelay_ms=0, txtail_ms=0) == 168
+    # a coarser granule rounds up
+    assert a.afsk_upper_bound_ms(47, txdelay_ms=0, txtail_ms=0, granule_ms=100) == 500
+    with pytest.raises(ValueError):
+        a.afsk_upper_bound_ms(10, bps=0)
+    with pytest.raises(ValueError):
+        a.afsk_upper_bound_bits(-1)
+
+
+def test_upper_bound_is_above_exact_bits_for_all_17_frames():
+    for frame in _rx_frames():
+        exact_bits = ax25.air_bits(frame)
+        upper_bits = a.afsk_upper_bound_bits(len(frame))
+        assert exact_bits <= upper_bits, len(frame)
+        # ... and within the 6/5 allowance: the stuffed zeros are at most one per five bits
+        assert ax25.stuffed_zeros(ax25.with_fcs(frame)) <= Fraction(8 * (len(frame) + 2), 5)
+        assert upper_bits == Fraction((len(frame) + 4) * 8 * 6, 5)
+        # in time, with no TXDELAY / TXtail: exact <= upper < exact + 1 ms + the unused part of the allowance
+        exact_ms = a.afsk_exact_frame_ms(frame)
+        upper_ms = a.afsk_upper_bound_ms(len(frame), txdelay_ms=0, txtail_ms=0)
+        assert exact_ms <= upper_ms
+        assert upper_ms <= Fraction(len(frame) + 4, 1) * 8 * 6 / 5 * 1000 / 1200 + 1
+        # and TXDELAY + TXtail only add
+        assert a.afsk_upper_bound_ms(len(frame)) == upper_ms + a.DVR_TXDELAY_MS + a.DVR_TXTAIL_MS
+
+
+def test_upper_bound_holds_for_worst_case_and_random_frames():
+    rng = random.Random(20261107)
+    frames = [ax25.from_tnc2("N0CALL>APRS:" + "<0xff>" * n) for n in (0, 1, 10, 100, 500)]
+    frames += [ax25.from_tnc2("N0CALL>APRS:") + bytes(rng.randrange(256) for _ in range(rng.randrange(0, 300)))
+               for _ in range(300)]
+    for frame in frames:
+        assert ax25.air_bits(frame) <= a.afsk_upper_bound_bits(len(frame))
+        assert a.afsk_exact_frame_ms(frame) <= a.afsk_upper_bound_ms(len(frame), txdelay_ms=0, txtail_ms=0)
+
+
+def test_upper_bound_is_tight_enough_for_all_ones():
+    # a frame of 0xFF is about the worst case for stuffing: the bound loses less than 2% there
+    frame = ax25.from_tnc2("N0CALL>APRS:" + "<0xff>" * 400)
+    exact = ax25.air_bits(frame)
+    upper = a.afsk_upper_bound_bits(len(frame))
+    assert exact <= upper < exact * Fraction(102, 100)
