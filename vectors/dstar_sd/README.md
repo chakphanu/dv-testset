@@ -3,7 +3,7 @@
 
 JSON text only: no audio, no frame dumps. Reading and results: `docs/dstar-slowdata-cases.md`.
 
-- `corpus.json` (schema `dvt-dstar-sd-corpus/1`), written by
+- `corpus.json` (schema `dvt-dstar-sd-corpus/2`, 56 cases), written by
   `python3 -m dvtest.oracle_dstar_sd run --out vectors/dstar_sd/corpus.json` from the image
   `dvt-dstarsd:local` (`rig/Dockerfile.dstarsd`, pins `DSTARSD_*` in `.env.example`). Per case:
   `frames` ("seq hex6": the 21 frames of each superframe as they go on the wire, frame 0 = sync,
@@ -15,3 +15,9 @@ JSON text only: no audio, no frame dumps. Reading and results: `docs/dstar-slowd
 - `published_structure.json`: the block layout (types and byte counts, no content) of the
   real-radio hex tables of G4KLX's slow data note, which `cases/unit/test_dstar_sd.py` reproduces
   with synthetic strings of the same length. The dumps themselves are not copied (personal data).
+- DV-Router fields (stage 1b, `docs/dstar-slowdata-cases.md`): `unit66_hex` (one 66 byte unit per superframe:
+  3 byte presence bitmap, MSB first over frames 0..20, plus 21 x 3 raw bytes; the bit order is the
+  generator's assumption), `expected_dvrouter` (`basis`, `text`, `gps`; the text is MMDVMHost's: reset at every
+  sync), `lenient_alternative` (DStarGateway's events), `ours_dvrouter` (unit model), `named_difference`
+  (key into the top-level `named_differences`). Cases with basis `lead-statement-unverified` rest on the
+  DV-Router lead's statements and no oracle.

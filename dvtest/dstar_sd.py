@@ -29,11 +29,19 @@ Layers (all pure, no sockets):
   decoders         Decoder (policy "accumulate" or "reset" at a sync frame; both behaviours exist
                    in the two oracles of docs/dstar-slowdata-cases.md)
   packet loss      packet_loss_rewrite ([STD6] 6.6 table)
+  DV-Router unit   split_units, unit66 (3 byte presence bitmap + 21 x 3 raw bytes), DvrUnitDecoder
+                   (model of the DV-Router lead's statements: fixed frame pairs per unit)
   carriers         over_datagrams (DSVT header + voice frames + last frame, DExtra/DPlus bytes)
 """
 from .proto import dextra
 
 # ------------------------------------------------------------------ constants
+
+NIBBLE_POLICIES = ("strict", "ignore", "dvrouter")
+UNIT66_BYTES = 3 + 3 * 21               # presence bitmap + 21 x 3 raw slow data bytes
+DVR_MAX_DPRS = 300                      # D-PRS: '$$CRC' to the CR, INCLUDING the CR (DV-Router lead)
+DVR_MAX_NMEA = 83                       # NMEA: 82 bytes before the LF delimiter, i.e. 83 with the LF
+                                        # (reading A of docs/dstar-slowdata-cases.md, an inference)
 
 SYNC = b"\x55\x2d\x16"                  # data field of frame 0 (never scrambled)
 FRAMES = 21                             # frames per superframe
@@ -428,12 +436,21 @@ class Decoder:
       nmea      sentence (str), checksum_ok
       squelch   code (hex digits as str) or None when the two bytes differ
       fast      length (1..28) or None when the type is above 0x9C
-    `blocks` lists (seq, type byte) of every completed block, in order."""
+    `blocks` lists (seq, type byte) of every completed block, in order.
 
-    def __init__(self, sync="accumulate", max_dprs=300, max_nmea=82):
+    nibble decides how the low nibble of a 0x3x block (simple data, D-PRS, NMEA) is used:
+      "strict"    1..5 valid bytes, 0 and 6..15 drop the block (the default, the standard)
+      "ignore"    every 0x3x block adds 5 bytes, the nibble is not read (DStarGateway's collectors)
+      "dvrouter"  0x30..0x35 valid, 0 means 5, 0x36..0x3F drop the block (statement of the
+                  DV-Router lead, UNVERIFIED by any oracle)"""
+
+    def __init__(self, sync="accumulate", max_dprs=300, max_nmea=82, nibble="strict"):
         if sync not in ("accumulate", "reset"):
             raise ValueError("sync is accumulate or reset")
+        if nibble not in NIBBLE_POLICIES:
+            raise ValueError("nibble is one of %s" % ", ".join(NIBBLE_POLICIES))
         self.sync = sync
+        self.nibble = nibble
         self.max_dprs = max_dprs
         self.max_nmea = max_nmea
         self.blocks = []
@@ -485,8 +502,8 @@ class Decoder:
                 raw = bytes(self._header[:HEADER_LEN])
                 events.append({"kind": "header", "bytes": raw, "seq": seq,
                                "crc_ok": crc16_x25(raw[:39]).to_bytes(2, "little") == raw[39:41]})
-        elif kind == T_DATA and 1 <= (mini & 0x0F) <= 5:
-            self._buf += blk[1:1 + (mini & 0x0F)]
+        elif kind == T_DATA and self._data_len(mini & 0x0F):
+            self._buf += blk[1:1 + self._data_len(mini & 0x0F)]
             events += self._sentences(seq)
         elif kind == T_SQUELCH and (mini & 0x0F) == 2:
             events.append({"kind": "squelch", "seq": seq,
@@ -498,6 +515,14 @@ class Decoder:
                 length = mini & 0x0F if mini < 0x90 else 16 + (mini & 0x0F)
             events.append({"kind": "fast", "seq": seq, "length": length})
         return events
+
+    def _data_len(self, nib):
+        """Valid payload bytes of a 0x3x block under the nibble policy; 0 = block dropped."""
+        if self.nibble == "ignore":
+            return 5
+        if self.nibble == "dvrouter":
+            return 5 if nib == 0 else nib if nib <= 5 else 0
+        return nib if 1 <= nib <= 5 else 0
 
     def _sentences(self, seq):
         events = []
@@ -550,6 +575,97 @@ class Decoder:
             except ValueError:
                 ok = False
         return {"kind": "nmea", "seq": seq, "sentence": text, "checksum_ok": ok}
+
+
+# ------------------------------------------------------------------ DV-Router unit model
+
+def split_units(frames):
+    """Frames of an over ([(seq, wire3)]) to one dict {seq: wire3} per superframe unit. A new unit
+    starts whenever the sequence number does not increase (the sync frame, or a lost sync frame:
+    the counter still wraps)."""
+    units = []
+    prev = None
+    for seq, wire in frames:
+        if prev is None or seq <= prev:
+            units.append({})
+        units[-1][seq] = bytes(wire)
+        prev = seq
+    return units
+
+
+def unit66(unit):
+    """The 66 byte unit DV-Router's decoder is fed once per superframe (statement of the DV-Router
+    lead): a 3 byte presence bitmap, then 21 x 3 raw slow data bytes as received (frame 0 included,
+    still the sync pattern, others still scrambled); an absent frame is 3 zero bytes.
+    ASSUMPTION of this generator (the lead builds the unit from the 'seq hex6' lines himself): the
+    bitmap is a 24 bit big-endian number, MSB first over frames 0..20: frame f is bit (23 - f), so
+    frame 0 is bit 7 of byte 0, frame 7 bit 0 of byte 0, frame 8 bit 7 of byte 1, frame 16 bit 7 of
+    byte 2, frame 20 bit 3 of byte 2; the 3 spare bits (2..0 of byte 2) are zero."""
+    mask = 0
+    body = b""
+    for f in range(FRAMES):
+        if f in unit:
+            if len(unit[f]) != 3:
+                raise ValueError("a slow data field is 3 bytes")
+            mask |= 1 << (23 - f)
+            body += bytes(unit[f])
+        else:
+            body += b"\x00\x00\x00"
+    return mask.to_bytes(3, "big") + body
+
+
+def parse_unit66(raw):
+    """Inverse of unit66: {seq: wire3} of the present frames. Raises on a wrong length or on spare
+    bits that are set."""
+    raw = bytes(raw)
+    if len(raw) != UNIT66_BYTES:
+        raise ValueError("a unit is %d bytes" % UNIT66_BYTES)
+    mask = int.from_bytes(raw[:3], "big")
+    if mask & 0x7:
+        raise ValueError("spare bits of the bitmap are set")
+    return {f: raw[3 + 3 * f:6 + 3 * f] for f in range(FRAMES) if mask & (1 << (23 - f))}
+
+
+class DvrUnitDecoder:
+    """Model of the DV-Router lead's statements about its decoder (UNVERIFIED by any oracle except
+    where the corpus says the MMDVMHost / DStarGateway result agrees):
+      * one 66 byte unit (a superframe) per feed_unit() call;
+      * the text segments are cleared at the start of every unit (the DP5f decision: reset at every
+        sync like MMDVMHost, DStarSlowData.cpp:173-181);
+      * blocks are the fixed frame pairs (1,2) (3,4) ... (19,20) of the unit: a block that
+        straddles a sync cannot form, an offset pairing is not resynced;
+      * a pair with a missing frame skips that block and resets the GPS line buffer only (text
+        segments and the other state are kept);
+      * length nibble of 0x3x blocks: 0x30..0x35 (0 means 5), 0x36..0x3F dropped;
+      * D-PRS limit 300 bytes including the CR, NMEA limit 82 bytes before the delimiter;
+      * header resend, fast data, squelch and filler are passed through opaque: no events.
+    Events are those of Decoder; header, squelch and fast events are suppressed."""
+
+    OPAQUE = ("header", "squelch", "fast")
+
+    def __init__(self, max_dprs=DVR_MAX_DPRS, max_nmea=DVR_MAX_NMEA):
+        self._dec = Decoder("reset", max_dprs=max_dprs, max_nmea=max_nmea, nibble="dvrouter")
+
+    def feed_unit(self, unit):
+        """unit: {seq: wire3} (split_units) or the 66 raw bytes."""
+        if isinstance(unit, (bytes, bytearray)):
+            unit = parse_unit66(unit)
+        dec = self._dec
+        dec._start()
+        events = []
+        for first in range(1, FRAMES, 2):
+            a, b = unit.get(first), unit.get(first + 1)
+            if a is None or b is None:
+                dec._buf = bytearray()
+                continue
+            events += [e for e in dec._block(first + 1, xor3(a) + xor3(b)) if e["kind"] not in self.OPAQUE]
+        return events
+
+    def feed_frames(self, frames):
+        events = []
+        for unit in split_units(frames):
+            events += self.feed_unit(unit)
+        return events
 
 
 # ------------------------------------------------------------------ carriers

@@ -30,7 +30,7 @@ from .proto import dextra
 
 IMAGE = "dvt-dstarsd:local"
 RUN_TIMEOUT = 120
-SCHEMA = "dvt-dstar-sd-corpus/1"
+SCHEMA = "dvt-dstar-sd-corpus/2"
 
 CALL = "N0CALL"
 TEXT = "N0CALL: CQ DE N0CALL"             # 20 characters
@@ -65,8 +65,35 @@ def _nmea_of_length(total):
     return sd.nmea_sentence("GPGGA,211234.00,0000.00,N,00000.00,E,1,05,1.0,12.0,M,0.0,M,," + "0" * (total - base))
 
 
+def _with_mini(blocks, index, mini):
+    """The block list with the mini-header byte of one block replaced (payload untouched)."""
+    out = list(blocks)
+    out[index] = bytes([mini]) + out[index][1:]
+    return out
+
+
+def _sized_blocks(data, sizes):
+    """Simple data blocks whose valid byte counts follow `sizes` (cycled); a block with fewer than 5
+    valid bytes carries the filler after them and says so in its length nibble (legal, [STD6] 6.1.3)."""
+    out = []
+    pos = 0
+    i = 0
+    while pos < len(data):
+        n = min(sizes[i % len(sizes)], len(data) - pos)
+        out.append(sd.block(sd.T_DATA | n, data[pos:pos + n]))
+        pos += n
+        i += 1
+    return out
+
+
 def _render_blocks(blocks, first_slot=0, superframes=None):
     return sd.render(sd.superframes_to_halves(sd.place(blocks, first_slot, superframes)))
+
+
+UNIT66_DOC = ("unit66_hex: one string per superframe unit (a new unit starts when the frame number does not increase): "
+              "3 byte presence bitmap + 21 x 3 raw slow data bytes as received (frame 0 included, others scrambled; "
+              "an absent frame is 3 zero bytes). Bitmap bit order is the generator's ASSUMPTION: 24 bit big-endian, "
+              "MSB first over frames 0..20, frame f = bit (23 - f), the 3 spare low bits zero.")
 
 
 def corpus():
@@ -137,6 +164,8 @@ def corpus():
         _render_blocks(sd.simple_data_blocks(sd.dprs_line(DPRS_PAYLOAD, crc_covers_cr=False))))
     add("dprs-two-lines", "two D-PRS lines one after the other (collector state after a valid line)",
         _render_blocks(dprs_b + sd.simple_data_blocks(sd.dprs_line(DPRS_PAYLOAD.replace("home", "work")))))
+    add("dprs-len-299", "D-PRS sentence of exactly 299 bytes ('$$CRC' to the CR), valid CRC",
+        _render_blocks(sd.simple_data_blocks(_dprs_of_length(299))))
     add("dprs-len-300", "D-PRS sentence of exactly 300 bytes ('$$CRC' to the CR), valid CRC",
         _render_blocks(sd.simple_data_blocks(_dprs_of_length(300))))
     add("dprs-len-301", "the same with 301 bytes (one over the DV-Router GPS-A buffer)",
@@ -151,8 +180,38 @@ def corpus():
     add("nmea-len-82", "NMEA sentence of 82 bytes including CR LF (the NMEA 0183 maximum), valid checksum",
         _render_blocks(sd.simple_data_blocks(_nmea_of_length(82).encode())))
     add("nmea-len-83", "the same with 83 bytes", _render_blocks(sd.simple_data_blocks(_nmea_of_length(83).encode())))
+    add("nmea-len-80", "NMEA sentence of 80 bytes including CR LF (line body 78), valid checksum: inside every reading of the DV-Router limit",
+        _render_blocks(sd.simple_data_blocks(_nmea_of_length(80).encode())))
+    add("nmea-len-81", "the same with 81 bytes including CR LF (line body 79)", _render_blocks(sd.simple_data_blocks(_nmea_of_length(81).encode())))
+    add("nmea-len-84", "the same with 84 bytes including CR LF (line body 82, one over the 83 of reading A)",
+        _render_blocks(sd.simple_data_blocks(_nmea_of_length(84).encode())))
+    add("nmea-len-85", "the same with 85 bytes including CR LF (line body 83, over the limit in every reading)",
+        _render_blocks(sd.simple_data_blocks(_nmea_of_length(85).encode())))
     add("nmea-text-interleave", "Text + GPS pattern T G T G T G T G G G (from [SLOW]) carrying the GGA",
         sd.render(sd.superframes_to_halves(sd.interleave(sd.LAYOUTS["text-gps"], {"T": ("cycle", tb), "G": ("once", gga_b)}))))
+
+    # ---- length nibble of the 0x3x blocks (named difference DIFF-NIBBLE: DV-Router reads it,
+    # DStarGateway does not), block 3 of the GGA sentence is a full block of 5 characters
+    add("nmea-nibble-0x36", "GGA with the length nibble of block 3 set to 6 (0x36, full block): DV-Router drops 0x36..0x3F",
+        _render_blocks(_with_mini(gga_b, 3, 0x36)))
+    add("nmea-nibble-0x3f", "GGA with the length nibble of block 3 set to 15 (0x3F, full block)",
+        _render_blocks(_with_mini(gga_b, 3, 0x3F)))
+    add("nmea-nibble-0x30", "GGA with the length nibble of block 3 set to 0 (0x30, full block): DV-Router reads n = 0 as 5",
+        _render_blocks(_with_mini(gga_b, 3, 0x30)))
+    # the two characters a low nibble cuts off must differ: the NMEA checksum is an XOR, equal pairs cancel
+    low = next(i for i in range(2, len(gga_b) - 1) if gga_b[i][4] != gga_b[i][5])
+    add("nmea-nibble-low", "GGA with block %d marked 0x33 although it holds 5 characters (nibble disagrees with the content): 3 are used" % low,
+        _render_blocks(_with_mini(gga_b, low, 0x33)))
+    add("nmea-nibble-short-block", "GGA in blocks of 5,5,5,3,5,... (a short block of 3 characters + 2 filler in the middle, legal): the nibble is needed",
+        _render_blocks(_sized_blocks(GGA.encode(), [5, 5, 5, 3, 5])))
+
+    # ---- fixed frame pairs of the DV-Router unit: a frame of a pair missing (holes in the presence bitmap)
+    add("pair-hole-text-once", "message in sf1 with frame 6 (second of pair 5,6) never received, sf2 filler: the block is skipped, no text",
+        _sf(sd.render(sd.superframes_to_halves([tb + [F] * 6, [F] * 10])), drop=(6,)))
+    add("pair-hole-text-twice", "the 4 blocks twice in sf1, frame 4 missing (pair 3,4, block 1 of the first copy): the second copy completes it",
+        _sf(sd.render(sd.superframes_to_halves([tb + tb + [F] * 2, [F] * 10])), drop=(4,)))
+    add("pair-hole-nmea-then-ok", "GGA then RMC (30 blocks), frame 6 missing in sf1: the GGA line is lost, the RMC after it still decodes",
+        _sf(_render_blocks(gga_b + rmc_b), drop=(6,)))
 
     # ---- squelch, fast data, filler
     add("squelch-only", "code squelch 19 in slot 0", _render_blocks([sd.squelch_block(19)]))
@@ -256,9 +315,10 @@ def _mmdvm_order(events):
 
 
 def ours_dgw_view(frames):
-    """What DStarGateway's collectors should print, according to dvtest.dstar_sd.Decoder("accumulate"):
-    text, gpsa (valid CRC only), nmea:<ID> (valid checksum only)."""
-    dec = sd.Decoder("accumulate", max_dprs=10 ** 6, max_nmea=10 ** 6)
+    """What DStarGateway's collectors should print, according to dvtest.dstar_sd.Decoder("accumulate",
+    nibble="ignore"): text, gpsa (valid CRC only), nmea:<ID> (valid checksum only). The collectors
+    add 5 bytes per 0x3x block and do not read the length nibble."""
+    dec = sd.Decoder("accumulate", max_dprs=10 ** 6, max_nmea=10 ** 6, nibble="ignore")
     out = []
     for seq, wire in frames:
         for ev in dec.feed(seq, wire):
@@ -272,8 +332,83 @@ def ours_dgw_view(frames):
     return out
 
 
+def ours_dvrouter_view(frames):
+    """What the DV-Router unit model (dvtest.dstar_sd.DvrUnitDecoder: reset at every unit, fixed
+    frame pairs, length nibble 0x30..0x35, limits 300 / 82) says, in the oracles' event terms:
+    text, gpsa, nmea:<ID>. Header, squelch and fast data are opaque (no events)."""
+    out = []
+    dec = sd.DvrUnitDecoder()
+    for unit in sd.split_units(frames):
+        for ev in dec.feed_unit(unit):
+            seq = ev["seq"]
+            if ev["kind"] == "text":
+                out.append({"kind": "text", "seq": seq, "hex": ev["text"].encode("ascii").hex()})
+            elif ev["kind"] == "dprs" and ev["crc_ok"]:
+                out.append({"kind": "gpsa", "seq": seq, "hex": ev["line"].hex()})
+            elif ev["kind"] == "nmea" and ev["checksum_ok"]:
+                out.append({"kind": "nmea:" + nmea_id(ev["sentence"]), "seq": seq,
+                            "hex": dgw_nmea_line(ev["sentence"]).encode("ascii").hex()})
+    return out
+
+
 def _norm(events):
     return [(e["kind"], e["seq"], e["hex"]) for e in events]
+
+
+# Cases whose DV-Router expectation is NOT an oracle result but the lead's statement (UNVERIFIED by
+# any oracle): the length nibble (item 5 of the lead's answers) and the missing frame of a pair
+# (item 7). Everything else: text = MMDVMHost, GPS = DStarGateway's collectors (see expected_dvrouter).
+LEAD_STATEMENT_CASES = frozenset([
+    "nmea-nibble-0x36", "nmea-nibble-0x3f", "nmea-nibble-0x30", "nmea-nibble-low", "nmea-nibble-short-block",
+    "pair-hole-text-once", "pair-hole-text-twice", "pair-hole-nmea-then-ok"])
+
+# Named, documented differences between DV-Router's expectation and DStarGateway's result (the
+# lenient alternative). They are differences by design, not failures.
+NAMED_DIFFERENCES = {
+    "DIFF-NIBBLE": "DV-Router reads the length nibble of 0x3x blocks (0x30..0x35, 0 means 5, 0x36..0x3F dropped), "
+                   "DStarGateway ignores it and adds 5 bytes per block",
+    "DIFF-GPS-LIMIT": "DV-Router limits a D-PRS sentence to 300 bytes including the CR and an NMEA line to 82 bytes "
+                      "before the delimiter, DStarGateway has no limit",
+    "DIFF-PAIR-HOLE": "DV-Router pairs fixed frames (1,2)..(19,20) of a unit, a hole skips one block; the oracles pair "
+                      "the frames they receive in turn, so a lost frame shifts their pairing until the next sync",
+}
+CASE_DIFFERENCES = {
+    "nmea-nibble-0x36": "DIFF-NIBBLE", "nmea-nibble-0x3f": "DIFF-NIBBLE", "nmea-nibble-low": "DIFF-NIBBLE",
+    "nmea-nibble-short-block": "DIFF-NIBBLE",
+    "dprs-len-301": "DIFF-GPS-LIMIT", "nmea-len-84": "DIFF-GPS-LIMIT", "nmea-len-85": "DIFF-GPS-LIMIT",
+    "pair-hole-text-twice": "DIFF-PAIR-HOLE",
+}
+# DStarGateway emits these, the stated DV-Router limit rejects them
+LIMIT_CASES = frozenset(["dprs-len-301", "nmea-len-84", "nmea-len-85"])
+# NMEA limit reading A (82 bytes before the LF) is an inference; reading B (82 before CR LF) would accept 84 too
+LIMIT_READING_CASES = frozenset(["nmea-len-83", "nmea-len-84"])
+
+
+def split_text_gps(events):
+    """([text events], [gps events: gpsa and nmea:*]) of a normalised event list."""
+    return [e for e in events if e[0] == "text"], [e for e in events if e[0] != "text" and e[0] != "block" and e[0] != "header"]
+
+
+def expected_dvrouter(name, mmdvm_events, dgw_events, model_events):
+    """DV-Router's expectation of one case, as {"basis", "text", "gps", ...}: two lists of [kind, seq, hex]
+    in the oracles' terms, each in time order (the frame number restarts every superframe, so the two
+    lists are not merged). basis "oracle": text events are MMDVMHost's (the DP5f decision: reset at every
+    sync), GPS events (gpsa, nmea:*) are DStarGateway's collectors' minus the lines the DV-Router limit
+    rejects; MMDVMHost has no GPS decoder, DStarGateway's text is only the lenient alternative.
+    basis "lead-statement-unverified": the events are the unit model's (text and GPS), taken from the DV-Router lead's
+    statement and checked by no oracle. Header resend, squelch and fast data are opaque (no events)."""
+    if name in LEAD_STATEMENT_CASES:
+        text, gps = split_text_gps(_norm(model_events))
+        basis = "lead-statement-unverified"
+    else:
+        text = [e for e in _norm(mmdvm_events) if e[0] == "text"]
+        gps = [] if name in LIMIT_CASES else split_text_gps(_norm(dgw_events))[1]
+        basis = "oracle"
+    out = {"basis": basis, "text": text, "gps": gps}
+    if name in LIMIT_READING_CASES:
+        out["limit_reading"] = "reading A (82 bytes before the LF delimiter) assumed; under reading B (before CR LF) the " \
+                               "84 byte sentence is accepted too: open question to the DV-Router lead"
+    return out
 
 
 def compare(name, frames, mmdvm_events, dgw_events):
@@ -296,6 +431,18 @@ def compare(name, frames, mmdvm_events, dgw_events):
     texts_m = [e for e in rec["mmdvm"] if e[0] == "text"]
     texts_d = [e for e in rec["dgw"] if e[0] == "text"]
     rec["text_agree"] = texts_m == texts_d
+    # DV-Router: the decision of DP5f is MMDVMHost's reset at every sync; the unit model is the generator's
+    # reading of the lead's statements and must reproduce the expectation
+    model = ours_dvrouter_view(frames)
+    rec["unit66_hex"] = [sd.unit66(u).hex() for u in sd.split_units(frames)]
+    rec["expected_dvrouter"] = expected_dvrouter(name, mmdvm_events, dgw_events, model)
+    rec["lenient_alternative"] = rec["dgw"]
+    rec["ours_dvrouter"] = _norm(model)
+    exp = rec["expected_dvrouter"]
+    rec["dvrouter_match"] = split_text_gps(rec["ours_dvrouter"]) == (exp["text"], exp["gps"])
+    rec["lenient_differs"] = split_text_gps(rec["lenient_alternative"]) != (exp["text"], exp["gps"])
+    if name in CASE_DIFFERENCES:
+        rec["named_difference"] = CASE_DIFFERENCES[name]
     return rec
 
 
@@ -333,11 +480,12 @@ def main(argv=None):
         sys.stdout.write(driver_input(corpus()))
         return 0
     records = build_records()
-    doc = {"schema": SCHEMA, "image": IMAGE, "pins": pins(), "cases": records}
+    doc = {"schema": SCHEMA, "image": IMAGE, "pins": pins(), "named_differences": NAMED_DIFFERENCES,
+           "unit66": UNIT66_DOC, "cases": records}
     with open(args.out, "w") as fh:
         json.dump(doc, fh, indent=1)
         fh.write("\n")
-    bad = [r["case"] for r in records if not (r["mmdvm_match"] and r["dgw_match"])]
+    bad = [r["case"] for r in records if not (r["mmdvm_match"] and r["dgw_match"] and r["dvrouter_match"])]
     print("cases %d, differing from our decoder: %s" % (len(records), ", ".join(bad) or "none"))
     return 0
 

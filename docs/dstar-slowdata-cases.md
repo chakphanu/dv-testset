@@ -1,6 +1,10 @@
 <!-- SPDX-License-Identifier: MIT -->
 # D-STAR slow data: spec-derived generator, parser and two independent decoders (HWFREE1 item 4, feeds DP5f)
 
+Stage 1 (the generator, the oracles, 43 cases) is extended by stage 1b (this revision, 56 cases):
+the DP5f decision, the DV-Router unit, the length nibble, the GPS limits and the frame-pair holes
+are in "Stage 1b: the DV-Router contract" below.
+
 ## Decision: what this item delivers
 
 The plan (`research-hwfree-clients.md`, part B row 5, "Item 3", sections 6A, 7, 8) asks for a
@@ -19,21 +23,22 @@ of it offline (no rig run, no DV-Router run):
    a block that straddles a sync (negative), the packet loss rewrite table, and DSVT carriers.
 2. **Two independent decoders as oracles**: MMDVMHost's `CDStarSlowData` and DStarGateway's
    `CTextCollector` / `CGPSACollector` / `CNMEASentenceCollector` are linked unmodified into two
-   small drivers and run in one throw-away image (`dvt-dstarsd:local`, 116 MB). 43 overs built
+   small drivers and run in one throw-away image (`dvt-dstarsd:local`, 116 MB). 56 overs built
    from the spec were fed to both; the verdicts are in `vectors/dstar_sd/corpus.json` and our
    decoder reproduces all of them (event by event, including frame numbers).
 3. **The answer to DP5f's factual part**, measured rather than read: MMDVMHost's receive class
    CLEARS the text segments at every sync frame, DStarGateway's collector KEEPS them. A
    conforming message never needs the difference (a message fits in one superframe), a message
    split over a sync is decoded by DStarGateway only. "Like MMDVMHost" is therefore wrong for
-   the accumulation DP5e built; which behaviour DV-Router must follow is a decision for the
-   DV-Router lead (open question 1), not for the test set.
+   the accumulation DP5e built; which behaviour DV-Router must follow was a decision for the
+   DV-Router lead: DECIDED (stage 1b): reset at every sync, like MMDVMHost.
 
 Not delivered: any rig case, a feed of these overs into a DV-Router edge (the carrier builder
 `over_datagrams` exists and round-trips through `dvtest.slowdata.overs`, nothing sends it), a
 third decoder (DSDcc on the two real `.dis` recordings, plan row 3 of section 8, is not done),
-a capture from a real Icom radio (none exists, nothing here claims one), and a decision on what
-DV-Router should do. Everything the lead has to decide is in "Open questions".
+a capture from a real Icom radio (none exists, nothing here claims one), and a verification of the DV-Router lead's statements (nibble rule, limits, frame-pair
+holes: stage 1b records them, no oracle checks them). The decisions taken and the questions left are in
+"Stage 1b" and "Open questions".
 
 Licence rule: dv-testset is MIT. MMDVMHost and DStarGateway files used are GPL-2.0-or-later and
 run only as processes in their own image; nothing of their code or text is in this repository,
@@ -47,10 +52,11 @@ their block structure is, `vectors/dstar_sd/published_structure.json`).
 | Path | What |
 |------|------|
 | `dvtest/dstar_sd.py` | scrambler (LFSR), CRC-16, NMEA checksum, `dprs_line`, block builders, `place` / `interleave` / `render` layout engine, `fast_data_superframe`, `packet_loss_rewrite`, `Decoder` (policy "accumulate" or "reset"), `over_datagrams` |
-| `dvtest/oracle_dstar_sd.py` | the 43-case corpus, driver input and output text, our views in each oracle's terms, comparison, the thin `docker run` call, `python3 -m dvtest.oracle_dstar_sd run` |
+| `dvtest/oracle_dstar_sd.py` | the 56-case corpus, driver input and output text, our views in each oracle's terms, comparison, the thin `docker run` call, `python3 -m dvtest.oracle_dstar_sd run` |
 | `rig/Dockerfile.dstarsd`, `rig/dstarsd/` (two drivers, two shims), `scripts/pre-fetch-dstarsd.sh`, `.env.example` (`DSTARSD_*`) | the image `dvt-dstarsd:local`, the drivers (ours, C++) and the one-time source fetch |
 | `vectors/dstar_sd/corpus.json`, `published_structure.json`, `README.md` | the vectors (JSON text only) |
 | `cases/unit/test_dstar_sd.py`, `cases/unit/test_oracle_dstar_sd.py` | 43 tests (35 + 8) next to the 7 existing ones of `test_slowdata.py` (untouched, passing); the first file also reads the committed corpus and the published structure |
+| `cases/unit/test_dstar_sd_dvrouter.py` | 18 tests of stage 1b: the 66 byte unit, nibble policies, the unit model, the expectation fields, the boundary, nibble and pair-hole vectors |
 | `dvtest/slowdata.py` | unchanged except a docstring pointer; `encode_text_over` equals our `text x2` layout (unit test) |
 
 ## What is read from the standard and what is derived
@@ -108,7 +114,7 @@ D-Star Slow Data" v0.2, ORC = the oracle run below.
 
 ## Facts read from the oracles
 
-V = in `vectors/dstar_sd/corpus.json` (43 cases, `mmdvm` and `dgw` columns, our decoder equal),
+V = in `vectors/dstar_sd/corpus.json` (56 cases, `mmdvm` and `dgw` columns, our decoder equal),
 S = read from the pinned source, not shown by a vector.
 
 | Fact | Status |
@@ -126,7 +132,7 @@ S = read from the pinned source, not shown by a vector.
 | DStarGateway `$$CRC` collector (D-PRS): the CRC must match the string **including the CR**; a wrong CRC, or one computed without the CR, gives nothing; 300 and 301 byte lines are both accepted (no length limit, DV-Router keeps 300 B), two lines in a row give two events | V |
 | DStarGateway NMEA collectors: `$GPGGA`, `$GPGLL`, `$GPVTG`, `$GPRMC`, `$GPGSA`, `$GPGSV` (six, `APRSCollector.cpp:38-43`); a bad checksum gives nothing; the output line is `N0CALL-5>GPS30,DSTAR*:` + the sentence with its checksum cut and recomputed as two LOWER case hex digits, no CR LF; 82 and 83 byte sentences are both accepted; a `000000.00` time stamp would be replaced by the clock (S, `NMEASentenceCollector.cpp:128-141`, not in the corpus: not reproducible) | V, S |
 | DStarGateway's `RepeaterHandler` only collects text while its stored text is empty, i.e. the FIRST message of a stream (`RepeaterHandler.cpp:798`); the corpus shows the library, not that gate | S |
-| DStarGateway's sentence collectors add 5 bytes per block and ignore the length nibble; they cut at the last CR (D-PRS) or LF (NMEA) (`SentenceCollector.cpp:34-61`). Ours honours the nibble; the two agree on every well-formed block run, a block with a wrong length nibble is NOT in the corpus | S |
+| DStarGateway's sentence collectors add 5 bytes per block and ignore the length nibble; they cut at the last CR (D-PRS) or LF (NMEA) (`SentenceCollector.cpp:34-61`). Ours honours the nibble (policy `strict`, `ignore` reproduces DStarGateway); the two agree on every well-formed block run; wrong-nibble blocks are in the corpus since stage 1b (`nmea-nibble-*`, named difference DIFF-NIBBLE) | S, V | S |
 | The GPS collectors keep their buffer across syncs (a D-PRS line is 17 blocks = two superframes, `dprs-aligned`, `dprs-slot3`) | V |
 
 ### What the two decoders say about DV-Router's behaviour (DP5e, DP5f)
@@ -136,7 +142,7 @@ S = read from the pinned source, not shown by a vector.
 | Four indexed 5-byte segments are kept across superframe units | NO: cleared at each sync | yes |
 | The first complete message is consumed and clears the mask | yes | yes |
 | Present numbered segments stay usable after missing ones | within one superframe only | across superframes |
-| "follows `MMDVMHost/DStarSlowData.cpp:112-170`" | lines 112-159 collect, **173-181 clear at the sync**: the cited lines do NOT show accumulation over a sync | DStarGateway `TextCollector.cpp:120-123` does |
+| "follows `MMDVMHost/DStarSlowData.cpp:112-170`" | lines 112-159 collect, **173-181 clear at the sync**: the cited lines do NOT show accumulation over a sync (the DV-Router data.md citation of MMDVMHost for accumulate-across-sync was WRONG; the decision below makes the code match the citation) | DStarGateway `TextCollector.cpp:120-123` does |
 
 DSDcc is said by the research note to accumulate as well (`dstar.cpp:324, :405`); not run here,
 UNVERIFIED.
@@ -163,9 +169,9 @@ UNVERIFIED.
 | Need | Where |
 |------|-------|
 | The scrambler as bytes, and its derivation | `dstar_sd.SCRAMBLER` (`70 4F 93 40 64 74 6D 30 2B`), `lfsr_bytes` |
-| Wire frames (21 per superframe, `seq hex6`) for 43 cases: aligned, offset, split, straddling, lost frame, header, D-PRS, NMEA, squelch, fast data | `vectors/dstar_sd/corpus.json` `frames` |
-| What a MMDVMHost-family and a DStarGateway-family receiver does with each | `mmdvm`, `dgw` (events `[kind, seq, hex]`), `text_agree` |
-| Boundary lines for the GPS buffers: D-PRS sentence of 300 / 301 bytes, NMEA of 82 / 83 bytes, valid CRC / checksum | cases `dprs-len-300`, `-301`, `nmea-len-82`, `-83` |
+| Wire frames (21 per superframe, `seq hex6`) for 56 cases: aligned, offset, split, straddling, lost frame, header, D-PRS, NMEA, squelch, fast data | `vectors/dstar_sd/corpus.json` `frames` |
+| What a MMDVMHost-family and a DStarGateway-family receiver does with each | `mmdvm`, `dgw` (events `[kind, seq, hex]`), `text_agree`; DV-Router: `expected_dvrouter`, `lenient_alternative`, `unit66_hex` (stage 1b) |
+| Boundary lines for the GPS buffers: D-PRS sentence of 299 / 300 / 301 bytes, NMEA of 80 .. 85 bytes including CR LF, valid CRC / checksum | cases `dprs-len-299`, `-300`, `-301`, `nmea-len-80` .. `-85` |
 | CRC rule: Icom CRC covers the CR; check values `crc16_x25("123456789") = 0x906E`, `"ABCDEF" = 0x6F5E` | `dstar_sd.crc16_x25`, test_dstar_sd |
 | Block structure of real-radio samples (lengths 71 / 74 / 31 / 81 bytes, 17 blocks for D-PRS) | `vectors/dstar_sd/published_structure.json` |
 | An over as DSVT datagrams (header, 21 voice frames with null AMBE, last frame) | `dstar_sd.over_datagrams(stream_id, frames)` |
@@ -173,35 +179,134 @@ UNVERIFIED.
 The vectors are plain JSON (`frames` are hex strings): a Rust test can feed the 3-byte fields to
 its parser and compare with `dgw` / `mmdvm`.
 
+## Stage 1b: the DV-Router contract (answers of the DV-Router lead, taken as given)
+
+Everything in this section that comes from the lead is a STATEMENT, not an oracle result. Where a
+corpus case rests on a statement only, its `expected_dvrouter.basis` is `lead-statement-unverified`;
+for the others it is `oracle`.
+
+### Decision (DP5f): reset at every sync, like MMDVMHost
+
+DV-Router RESETS the text segments at every superframe sync, as MMDVMHost does
+(`DStarSlowData.cpp:173-181`). Consequences, all in `vectors/dstar_sd/corpus.json`:
+
+- Every case carries `expected_dvrouter` (`basis`, `text`, `gps`): the text events are MMDVMHost's,
+  verbatim; the GPS events are DStarGateway's collectors' (MMDVMHost has no GPS decoder) minus the
+  lines the DV-Router limits reject. A test checks that `text` equals the `mmdvm` text events for
+  every case with basis `oracle`.
+- `text-slot8-split`, `text-slot9-split`, `text-missing-block-late` (split over a sync) and
+  `text-stale-mix` (old and new blocks mixed) must NOT emit text in DV-Router: `expected_dvrouter.text`
+  is empty. `text-two-messages-split` gives one message (MMDVMHost), not two.
+- `lenient_alternative` keeps the DStarGateway result (the same events as `dgw`), `lenient_differs`
+  says whether it differs from the expectation. Five cases differ by the sync decision alone (the
+  ones above); the other differences are named below.
+- The DV-Router `docs/design/data.md` ("Built (DP5e)") cites `MMDVMHost/DStarSlowData.cpp:112-170` for
+  accumulating segments across a sync. That citation was WRONG (the cited code clears at the sync,
+  lines 173-181; accumulation is DStarGateway's `TextCollector.cpp:120-123`). With the reset
+  decision the code and the citation agree and the DP5e accumulation is to be removed or confined
+  to one unit.
+
+### The 66 byte unit
+
+DV-Router's decoder is fed ONE unit per superframe, 66 bytes: a 3 byte present-frame bitmap, then
+21 x 3 raw slow data bytes, frame 0 included, as received (frame 0 normally still the sync pattern
+`55 2d 16`, the other frames still scrambled; an absent frame is 3 zero bytes). The corpus field is
+`unit66_hex`: a list with one 132 character hex string per unit. A new unit starts when the frame
+number does not increase (so a lost sync frame still ends the unit, `text-sync-missing`).
+
+**Bitmap bit order (the GENERATOR'S ASSUMPTION, the lead builds the unit from the `seq hex6` lines
+himself, this field is a convenience):** a 24 bit big-endian number, MSB first over frames 0..20.
+Frame f is bit (23 - f): frame 0 = bit 7 of byte 0, frame 7 = bit 0 of byte 0, frame 8 = bit 7 of
+byte 1, frame 16 = bit 7 of byte 2, frame 20 = bit 3 of byte 2; the 3 spare bits (2..0 of byte 2)
+are zero. A complete unit starts `fffff8 552d16`. `dstar_sd.unit66()` / `parse_unit66()`; the
+corpus is checked to round-trip to the `frames`.
+
+### Block pairing and holes (statement 7; UNVERIFIED by any oracle)
+
+Blocks are the fixed frame pairs (1,2) (3,4) ... (19,20) of a unit. A block that straddles a sync
+cannot form; an offset pairing is not resynced (`text-straddle`: no text). A pair with a missing
+frame skips that block and resets the GPS line buffer only (the text segments are kept until the
+next unit). The oracles do the opposite: they pair the frames they RECEIVE, so one lost frame shifts
+their pairing until the next sync. Three cases, `expected_dvrouter` from the unit model
+`dstar_sd.DvrUnitDecoder` (the generator's reading of the statement):
+
+| Case | Holes | DV-Router (statement) | MMDVMHost / DStarGateway (measured) |
+|---|---|---|---|
+| `pair-hole-text-once` | frame 6 (pair 5,6) | no text | no text |
+| `pair-hole-text-twice` | frame 4 (pair 3,4), message sent twice in the unit | text at frame 12 (the second copy fills block 1) | none (named difference DIFF-PAIR-HOLE) |
+| `pair-hole-nmea-then-ok` | frame 6 in the first unit of GGA + RMC | only the RMC | only the RMC (agree) |
+
+The existing `text-lost-frame` is the case "hole, then a complete repeat": all three give the text
+in the second superframe.
+
+### Length nibble of text and data blocks: NAMED DIFFERENCE DIFF-NIBBLE
+
+DV-Router reads the length nibble of the 0x3n data blocks: only 0x30..0x35 are valid (n = 0 means 5),
+0x36..0x3F are dropped. DStarGateway's collectors ignore the nibble and add 5 bytes per block. This is a
+documented difference, not a failure of either. Vectors (GGA sentence in simple data blocks, both
+oracle results recorded, DV-Router expectation = statement):
+
+| Case | Change | DStarGateway | DV-Router (statement) |
+|---|---|---|---|
+| `nmea-nibble-0x36`, `nmea-nibble-0x3f` | one full block (5 characters) gets 0x36 / 0x3F | sentence decoded | block dropped, checksum fails, nothing |
+| `nmea-nibble-low` | a block of 5 characters is marked 0x33 (disagrees with the content) | sentence decoded | 3 characters used, checksum fails, nothing |
+| `nmea-nibble-0x30` | a full block gets 0x30 | decoded | decoded (n = 0 means 5), agree |
+| `nmea-nibble-short-block` | blocks of 5,5,5,3,5,...: a legal short block (3 characters + 2 filler) in the middle | a GARBLED sentence (the filler `f` bytes are inside) that still passes the XOR checksum, because equal pairs cancel | the correct sentence |
+
+MMDVMHost has no GPS decoder: its column is block types only. Note for the last row: the standard allows
+a short block anywhere; DStarGateway's output there is wrong, DV-Router's is right.
+
+### GPS limits and boundaries (statements 3 and 4)
+
+- D-PRS limit: 300 bytes INCLUDING the CR; longer is rejected and the line discarded to the next
+  delimiter. Vectors `dprs-len-299`, `-300` (accepted), `-301` (rejected; DStarGateway accepts all,
+  named difference DIFF-GPS-LIMIT).
+- NMEA / ID line limit: 82 bytes NOT counting the delimiter, one byte looser than NMEA 0183 (82 including
+  CR LF). Vectors with the length of the whole sentence INCLUDING CR LF: `nmea-len-80` (line body 78),
+  `-81` (79), `-82` (80, the previous vector), `-83` (81), `-84` (82), `-85` (83). The generator reads the
+  statement as READING A: the delimiter is the LF, the CR is counted, so 83 bytes with the CR LF are
+  accepted and 84 rejected (this matches "one byte looser than 82"). Under reading B (the delimiter is
+  CR LF) 84 would be accepted and 85 rejected. `expected_dvrouter.limit_reading` marks `nmea-len-83`
+  and `nmea-len-84` as reading dependent; 80, 81, 82 are accepted and 85 rejected in both readings.
+  DStarGateway accepts all six.
+- `$$CRC` covers the trailing CR: CRC-16/X.25 (polynomial 0x8408 reflected, initial 0xFFFF, result
+  complemented). Already verified by the DStarGateway oracle (`dprs-aligned` accepted,
+  `dprs-crc-without-cr` refused) and stated by the lead.
+
+### Passed through opaque (statement 6)
+
+Fast data (0x8n / 0x9n), the radio header resend (0x5n), code squelch (0xCn) and the filler 0x66 are
+passed through by DV-Router without interpretation. No interpretation vectors are needed; the
+existing `header-*`, `squelch-*`, `fast-*` and `filler-only` cases stay in the corpus with
+`expected_dvrouter` empty (no events). MMDVMHost's header decode (`header-aligned` ...) is only the
+reference of what a decoder COULD do.
+
+### Verified and unverified in stage 1b
+
+| Item | Status |
+|---|---|
+| Text and GPS expectations of the 43 stage 1 cases, the 299 / 300 / 301 and NMEA 80 .. 85 vectors (DStarGateway result before the DV-Router limit) | VERIFIED against the oracle run of this revision (`image dvt-dstarsd:local`, same pins) |
+| Unit model reproduces `expected_dvrouter` for all 56 cases | VERIFIED (test) |
+| 66 byte layout of the unit (3 byte bitmap + 21 x 3) | statement of the lead; the bit order is the generator's assumption |
+| Reset at every sync (text) | decision of the lead; equals MMDVMHost, VERIFIED by the oracle |
+| Length nibble rule, limits 300 / 82, hole behaviour, opaque types | STATEMENT, UNVERIFIED by any oracle; the DStarGateway column shows only what it does instead |
+
 ## Open questions for the DV-Router lead
 
-1. **Which behaviour must DV-Router follow (DP5f)?** Accumulate over a sync like DStarGateway
-   (what DP5e built) or reset like MMDVMHost? Conforming radios never split a 4-block message
-   over a sync (STD6 6.3 starts it in the first four slots), so only non-conforming senders
-   differ; the cost of accumulating is the mix of old and new blocks (`text-stale-mix`). The
-   DP5e text and `docs/design/data.md` ("follows `MMDVMHost/DStarSlowData.cpp:112-170`") need the
-   citation changed to DStarGateway `TextCollector.cpp:120-123`, or the code needs the reset. The
-   test set can assert either; it needs your choice.
-2. **What does DP5f consume?** The tracker row asks for "vectors from the PDF and a spec-based
-   generator test". Is the intended consumer a Rust unit test over `corpus.json` frames
-   (cheapest), a rig case that sends these overs to a DExtra / DPlus / DCS edge (then
-   `over_datagrams` plus a case file is the next step) or both? Which expected values are
-   authoritative for the GPS side: DStarGateway's `gpsa` / `nmea` lines, or DV-Router's own
-   position decode?
-3. **GPS-A and NMEA limits**: DV-Router uses 300 B and 82 B. DStarGateway has none; cases
-   `dprs-len-300/301` and `nmea-len-82/83` are valid lines on both sides of the limit. Should
-   DV-Router drop the longer ones (and count them), as data.md says ("overlong GPS lines are
-   discarded through their delimiter")?
-4. **CRC scope**: the Icom CRC covers the final CR. Does `dv-router` compute and check it that way?
-   The standard's own example (`$$CRCEF2E,...`) does not reproduce, so the only reference is the
-   DStarGateway behaviour (and the G4KLX sample, whose CRC the research note checked by hand).
-5. **Length nibble**: DV-Router honours the 1..5 length of a 0x3n block, the DStarGateway
-   collectors do not. For well-formed senders there is no difference; do you want a vector with a
-   wrong nibble (the oracle would disagree with the standard)?
-6. **A real boundary capture** (the DP5e done-when wording "real Icom boundary capture still
-   wanted") stays open: nothing in this stage closes it. Who can record a radio through a hotspot
-   or an SDR, and should DSDcc be run over `dstar_f1zil_*.dis` with a slow data dump hook (half a
-   day, plan section 8)?
-7. **Fast data**: is DV-Router expected to carry fast data (voice fields as data) or only to pass
-   it through? If it must interpret it, the byte order needs a real decoder or a better reading of
-   STD6 7.3 first.
+1. **NMEA limit reading**: is the delimiter of the 82 byte limit the LF (reading A, 83 bytes including CR LF
+   accepted) or CR LF (reading B, 84 accepted)? Only `nmea-len-83` and `-84` depend on it.
+2. **Bitmap bit order**: the generator uses MSB first, frame 0 = bit 7 of byte 0. Is that your layout?
+   (`unit66_hex` is a convenience; the `frames` lines are the source.)
+3. **Hole and nibble expectations**: the `lead-statement-unverified` cases (`nmea-nibble-*`,
+   `pair-hole-*`) encode your statements. Does a dropped 0x36..0x3F block also reset the GPS line (the
+   corpus outcome is the same either way: no sentence)? Is a sentence with a bad checksum counted or
+   silent?
+4. **What consumes the corpus?** A Rust unit test over `unit66_hex` (cheapest) or also a rig case that sends
+   the overs (`over_datagrams` exists, nothing sends it)? The expected values to assert are in
+   `expected_dvrouter`; the GPS event `hex` is DStarGateway's APRS line format, only the presence and
+   the frame number are meaningful for DV-Router.
+5. **A real boundary capture** (the DP5e done-when wording "real Icom boundary capture still wanted")
+   stays open: nothing here closes it.
+
+Answered by the lead and recorded above: reset or accumulate (reset), CRC scope (covers the CR),
+length nibble (read, named difference), fast data (opaque), GPS limits (300 / 82).
