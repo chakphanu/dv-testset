@@ -39,9 +39,10 @@ output formats and facts, cited by file and line of the pinned commit.
 | `dvtest/ax25.py` | address field, UI frames, TNC2 text (`<0xHH>` escapes), CRC-16/X-25 FCS, bit stuffing, bits on the air, KISS encode and a streaming KISS decoder |
 | `dvtest/airtime.py` | LoRa time on air (exact fractions + integer microsecond path), the anchor table, `python3 -m dvtest.airtime` writes `vectors/airtime/anchors.json` |
 | `dvtest/oracle_direwolf.py` | case tables (17 + 2 RX lines, 29 TX byte strings, 4 kissutil lines), debug-log parsers, record builders, the thin `docker run` call, `python3 -m dvtest.oracle_direwolf run` |
+| `dvtest/aprs_cases.py`, `dvtest/oracle_aprs.py` | 76 spec-derived APRS information strings (one group per APRS type) with their small encoders (compressed, Mic-E); the `aprs` job, the `decode_aprs` output parser and the record builder, `python3 -m dvtest.oracle_aprs run` |
 | `rig/Dockerfile.direwolf`, `rig/direwolf-entry.py`, `scripts/pre-fetch-direwolf.sh`, `.env.example` (`DIREWOLF_*`) | the image `dvt-direwolf:local`, its driver (ours, Python) and the one-time source fetch |
-| `vectors/direwolf/rx_frames.json`, `kiss_tx.json`, `vectors/airtime/anchors.json` | the vectors (JSON text only, no audio) |
-| `cases/unit/test_ax25.py`, `test_airtime.py`, `test_oracle_direwolf.py` | 56 unit tests; the first one also reads the Dire Wolf vectors |
+| `vectors/direwolf/rx_frames.json`, `kiss_tx.json`, `aprs_decode.json`, `vectors/airtime/anchors.json` | the vectors (JSON text only, no audio) |
+| `cases/unit/test_ax25.py`, `test_airtime.py`, `test_oracle_direwolf.py`, `test_oracle_aprs.py` | unit tests; the first and the last also read the Dire Wolf vectors |
 
 ## Dire Wolf image: build and run (VERIFIED, 2026-11-06)
 
@@ -162,6 +163,78 @@ A typical LoRa APRS position beacon at SF12 BW125 is about 2.5 s on the air (51-
 2465.792 ms). No measured airtime (SDR, oscilloscope) exists; nothing here is a measurement.
 PL 62 and PL 64 both give 2793.472 ms (the symbol count steps in blocks of 5).
 
+## APRS decode oracle (DP9)
+
+Answer of the DV-Router lead: DP9 is the "APRS core" of `dv-lib-pkt`: field parsing of messages,
+acks, rejects, bulletins and announcements; positions plain, compressed and Mic-E, with
+timestamps; PHG / RNG / DFS / course-speed; weather; DAO; ambiguity; status; objects and items;
+third party (one level). The wanted oracle is Dire Wolf's own APRS decoder, `decode_aprs`.
+
+- `decode_aprs` was already in the image (the Dockerfile builds it as the fifth target and
+  installs it into `/usr/local/bin`); only a driver mode was added (`aprs` in
+  `rig/direwolf-entry.py`, our code), so the image content is unchanged: **180 MB on disk,
+  44.8 MB content** (one cached rebuild, no build error). Run as before: `--network none`,
+  `dvtest.limits.docker_run_args()`, `--read-only`, `--cap-drop ALL`, a timeout.
+- Input: for each case the AX.25 frame (`N0CALL-9>DEST,WIDE1-1:` plus the information bytes,
+  built by `dvtest.ax25`) as one line of hex, which `decode_aprs` reads in its raw-frame mode, so
+  the information bytes arrive exactly as written (Mic-E has control characters).
+- Cases: the 17 information fields of `rx_frames.json` (group `existing`, names `ex-<case>`) and 76
+  new strings in `dvtest/aprs_cases.py`, 93 in all, 19 groups (message, ack, reject, bulletin,
+  announcement, position, ambiguity, timestamp, compressed, mic-e, extension [PHG / RNG / DFS /
+  course-speed], weather, dao, status, object, item, third-party, negative). Two or more strings
+  per type; edge cases: ambiguity 1 to 4, compressed with course/speed, with altitude, with radio
+  range and with a blank cs pair, eight Mic-E strings (message codes M0 to M6 and Emergency,
+  custom C1, both data type indicators, longitude under 10 and over 100 and over 110 degrees,
+  status text, altitude in the comment), weather with and without position, timestamps in DHM
+  (zulu and local), HMS and MDHM (the MDHM form exists only in the positionless weather report),
+  killed object and item, third party position / message / status. Callsigns are N0CALL / N0TEST /
+  N0DEST style, the destination is `APZ000`, coordinates are invented (open sea, the equator)
+  or the specification's own examples; no real callsign, e-mail address or location of a person.
+- Output: `vectors/direwolf/aprs_decode.json` (schema `dvt-direwolf-aprs/1`). Per case: `info_hex`
+  (the raw information string), `info_text`, `frame_header`, `dw_lines` (everything `decode_aprs`
+  printed after its AX.25 dump: the authority) and `fields`, a best-effort parse of those lines
+  with normalised keys: `data_type`, `name`, `symbol` (or `symbol_and_vendor` when the vendor is
+  known), `mic_e_status`, `phg` (`power_w`, `height_ft`, `height_m`, `gain_dbi`, `directivity`),
+  `range_miles`, `message_number` / `message_from` / `message_to`, `by_station` / `of_station`
+  (ack, reject), `bulletin_id` / `bulletin_group`, `position` (`lat`, `lon` as signed decimal
+  degrees from the printed degrees and minutes, plus the printed text, `speed_kmh`, `speed_mph`,
+  `course_deg`, `alt_m`, `alt_ft`, `grid`), `weather` (`wind_mph`, `wind_dir_deg`, `gust_mph`,
+  `temp_f`, `rain_1h_in`, `rain_24h_in`, `rain_midnight_in`, `humidity_pct`, `barometer_inhg`,
+  `luminosity_wm2`, `software`), `comment`, `warnings`, `extra_lines`, `error`. Two runs give
+  byte-identical files. Dire Wolf's code and text are not in the repository, only what it printed.
+
+### Facts read from the oracle (V = in `aprs_decode.json`, checked by `test_oracle_aprs.py`)
+
+| Fact | Status |
+|------|--------|
+| The decoded position of every Mic-E string equals the latitude / longitude / speed / course / message code the string was built from (lat and lon within 0.0002 degree); the status words are `Off Duty`, `En Route`, `In Service`, `Returning`, `Committed`, `Special`, `Priority`, `Emergency` for the standard codes and `Custom-N` for custom ones. So the Mic-E encoder in `aprs_cases.py` and Dire Wolf agree | V |
+| The compressed example of APRS 1.0.1 (`!/5L!!<*e7>7P[`) decodes to 49 30.0000 N, 72 45.0002 W, 67 km/h (42 MPH), course 88; our encoder reproduces that string exactly. The 0.0002 minute is the compression resolution | V |
+| Compressed altitude 1000 ft prints as 999 ft (305 m); radio range prints as `range=20.1` for 20 miles; a blank cs pair prints position only | V |
+| Timestamps (DHM zulu / local, HMS, MDHM) are consumed but NOT printed: the output says `Position with time` or `Positionless Weather Report` and nothing of the time. A time value cannot be checked against this oracle | V |
+| Ambiguity: the blanked digits come out as zeros (`49 00.0000` for level 3 and 4) and the level is not printed: DV-Router has to be checked against the string, not against a printed level | V |
+| Weather: the wind speed is mph in both forms but the input differs in meaning: `s004` in a positionless report prints `4.0 mph`, the `/004` data extension of a position report prints `4.6 mph` (read as knots); missing fields (dots) are simply absent from the line; the software tag `wRSW` is printed quoted | V |
+| Weather with a position is a `Weather Report` whose symbol is `WEATHER Station (blue)`; without a position it is a `Positionless Weather Report` with no location line | V |
+| DAO: `!W83!` (human readable) adds 0.0080 minute to latitude and 0.0030 to longitude and the `!W83!` text is removed from the comment; base-91 `!wfe!` adds 0.0076 / 0.0075; BUT a DAO that is the whole comment (nothing in front of it) is left in the comment and not applied (`dao-base91-bare`) | V |
+| Message: the number is the text after the first `{`; the text `text {with} braces inside{77` (a brace is not allowed in the text by the specification) gives the number `with} brace`, a warning about its length, and the decoder keeps going | V |
+| Ack and reject are printed as `"<packet source>" ACKnowledged message number "N" from "<addressee>"`; a bulletin as `Bulletin with identifier "3"`, with a group as `Group Bulletin with identifier "1", group name "WX"`; an announcement (`BLNA`) is printed as a bulletin with identifier `A` (it is not told apart) | V |
+| Object and item: name in quotes, `Killed Object` / `Killed Item` for the `_` form | V |
+| Third party: one level is decoded as the inner packet (the inner message prints the inner `from` and `to`); the outer header is not printed | V |
+| Status with a Maidenhead locator (4 or 6 characters, symbol, space) prints `Grid square = JJ00AA, N 00 01.2500, E 000 02.5000` (the centre of the square) | V |
+| PHG 5132 prints `25 W height(HAAT)=20ft=6m 3dBi E`; PHG with power 0 prints nothing; `RNG0050` prints `range=50.0`; speed and course print as rounded `km/h (MPH)` and `course N` | V |
+| The 17 existing frames: only the position, status and message lines decode; the information of the others starts with a letter that is no APRS data type (`h`, `x`, `s`, `a`) and prints `ERROR!!!  Unknown APRS Data Type Indicator` (except `m...`, which is `Morse Code Data`); an empty information field prints `unprintable 0x00`; a destination of `APRS` makes it add a warning "Use of APRS in the destination field is obsolete" | V |
+| Invalid input is tolerated, not refused: a cut-off position prints the latitude and `Invalid Longitude`; a latitude with `X` prints `Invalid Latitude` and a warning; a message shorter than an addressee prints a warning and no fields | V |
+
+### Comparing with decode_aprs
+
+- The decoder prints rounded values: positions to 0.0001 minute, speed in whole km/h and mph,
+  altitude in whole metres and feet. Compare positions with a tolerance of 0.0002 degree and
+  speeds with 1 km/h; compare strings (names, message numbers, comments) exactly.
+- The comment is printed after Dire Wolf has removed what it parsed (altitude `/A=`, DAO, the PHG
+  or course/speed extension, base-91 telemetry): a comparison of the comment must take the same
+  fields out first. The raw comment is `info_text`.
+- Time values, the ambiguity level, the Mic-E message code number (only its word), the raw
+  message-capable flag (`!` versus `=`) and the third-party header are not in the output.
+
 ## Not verified
 
 - Nothing has run against DV-Router. No DV-Router adapter, edge or config was touched.
@@ -171,8 +244,8 @@ PL 62 and PL 64 both give 2793.472 ms (the symbol count steps in blocks of 5).
 - Dire Wolf is one implementation: where it differs from the AX.25 / KISS specifications (the
   c/r bits, the silently dropped ninth digipeater, the recovery from bad escapes) the vectors
   say what Dire Wolf does, not what is right.
-- The WA8LMF TNC test CD (a large real frame corpus) was not fetched; `decode_aprs` is built
-  but not run; AGW (port 8000) is switched off in the config; Bluetooth/USB/serial quirks
+- The WA8LMF TNC test CD (a large real frame corpus) was not fetched; `decode_aprs` has run
+  since the APRS stage (below); AGW (port 8000) is switched off in the config; Bluetooth/USB/serial quirks
   of real TNCs are out of reach.
 - External airtime numbers: see above.
 
@@ -197,9 +270,9 @@ encoder output to `dw_ax25_hex`, adapter output to `dw_kiss_hex`).
    cheapest consumer is a DV-Router unit test that reads the JSON. A rig case (socat pty from
    a Dire Wolf TCP port into the adapter's `device`, plan section 2a.4) needs a rig service
    and the adapter's baud/pty behaviour; is it wanted?
-2. **DP9 expected values**: if DP9 means APRS field parsing, `decode_aprs` (built) or the
-   `aprslib` parser (not installed) could give field-level expectations for the TNC2 lines;
-   which fields does DV-Router parse?
+2. **DP9 expected values**: ANSWERED by the DV-Router lead (DP9 = the "APRS core" of dv-lib-pkt)
+   and delivered in the APRS stage below. Still open: which decoded fields DV-Router compares
+   exactly and which with a tolerance (see "Comparing with decode_aprs").
 3. **Command/response bits**: Dire Wolf's text encoder sets bit 7 on both destination and
    source (`e0` / `ee`...). AX.25 v2.2 commands have destination 1 and source 0. Which does
    DV-Router emit and should tests compare bytes exactly or mask bit 7 of both SSID bytes?

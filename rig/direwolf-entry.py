@@ -26,6 +26,11 @@ Jobs (field "mode"):
       line into a KISS frame and sends it; B records the copy. Result per case:
       name, client_rx_hex (what the sending client got back from the TNC), copy_hex,
       kissutil_text, direwolf_log (the text printed while the case ran, Latin-1, one string).
+  aprs  {"cases": [{"name", "frame_hex"}]}
+      decode_aprs (the APRS decoder of Dire Wolf, standalone build) is run once per case on
+      a file holding ONE line of space separated hex bytes (an AX.25 frame without FCS;
+      the hex input path of decode_aprs keeps the information bytes exact). Result per
+      case: name, rc, output (its stdout, ANSI colour codes removed, Latin-1 text).
 """
 import json
 import os
@@ -376,7 +381,18 @@ def mode_tx(job):
     return {"cases": results}
 
 
-MODES = {"versions": mode_versions, "rx": mode_rx, "tx": mode_tx}
+def mode_aprs(job):
+    results = []
+    for i, case in enumerate(job["cases"]):
+        path = "/tmp/a%d.txt" % i
+        with open(path, "w") as fh:
+            fh.write(" ".join(case["frame_hex"][k:k + 2] for k in range(0, len(case["frame_hex"]), 2)) + "\n")
+        done = subprocess.run(["decode_aprs", path], capture_output=True, timeout=30)
+        results.append({"name": case["name"], "rc": done.returncode, "output": clean(done.stdout + done.stderr)})
+    return {"cases": results}
+
+
+MODES = {"versions": mode_versions, "rx": mode_rx, "tx": mode_tx, "aprs": mode_aprs}
 
 
 def main():

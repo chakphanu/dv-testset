@@ -1,0 +1,3348 @@
+{
+ "groups": {
+  "ack": [
+   "msg-ack",
+   "msg-ack-alnum"
+  ],
+  "ambiguity": [
+   "amb-1",
+   "amb-2",
+   "amb-3",
+   "amb-4"
+  ],
+  "announcement": [
+   "bln-announce",
+   "bln-announce-group"
+  ],
+  "bulletin": [
+   "bln-number",
+   "bln-group"
+  ],
+  "compressed": [
+   "comp-cs",
+   "comp-nocs",
+   "comp-alt",
+   "comp-range",
+   "comp-ts",
+   "comp-custom"
+  ],
+  "dao": [
+   "dao-human",
+   "dao-base91",
+   "dao-base91-bare"
+  ],
+  "existing": [
+   "ex-pos-digi",
+   "ex-status-nodigi",
+   "ex-message",
+   "ex-digi-used-first",
+   "ex-digi-used-last",
+   "ex-digi-8",
+   "ex-calls-short",
+   "ex-calls-long",
+   "ex-info-empty",
+   "ex-info-fend-fesc",
+   "ex-info-ones",
+   "ex-info-340",
+   "ex-info-tab-cr",
+   "ex-aprs-position",
+   "ex-lora-status",
+   "ex-lora-position",
+   "ex-lora-igate"
+  ],
+  "extension": [
+   "phg-5132",
+   "phg-comment",
+   "phg-zero",
+   "rng-0050",
+   "dfs-2360",
+   "cse-spd",
+   "cse-spd-zero",
+   "cse-spd-high"
+  ],
+  "item": [
+   "item-live",
+   "item-kill",
+   "item-compressed"
+  ],
+  "message": [
+   "msg-number",
+   "msg-nonumber",
+   "msg-max",
+   "msg-brace-in-text"
+  ],
+  "mic-e": [
+   "mice-offduty",
+   "mice-inservice-moving",
+   "mice-emergency",
+   "mice-custom-c1",
+   "mice-old",
+   "mice-fast",
+   "mice-status",
+   "mice-altitude"
+  ],
+  "negative": [
+   "neg-unknown-dti",
+   "neg-short-pos",
+   "neg-bad-lat",
+   "neg-short-msg",
+   "neg-empty"
+  ],
+  "object": [
+   "obj-live",
+   "obj-kill",
+   "obj-compressed",
+   "obj-hms",
+   "obj-phg"
+  ],
+  "position": [
+   "pos-plain",
+   "pos-messaging",
+   "pos-nocomment",
+   "pos-overlay",
+   "pos-south-east",
+   "pos-altitude"
+  ],
+  "reject": [
+   "msg-rej",
+   "msg-rej-alnum"
+  ],
+  "status": [
+   "status-plain",
+   "status-ts",
+   "status-grid6",
+   "status-grid4"
+  ],
+  "third-party": [
+   "tp-position",
+   "tp-message",
+   "tp-status"
+  ],
+  "timestamp": [
+   "ts-dhm-z",
+   "ts-dhm-local",
+   "ts-hms",
+   "ts-mdhm"
+  ],
+  "weather": [
+   "wx-positionless",
+   "wx-positionless-missing",
+   "wx-pos",
+   "wx-pos-negative",
+   "wx-pos-ts"
+  ]
+ },
+ "image": "dvt-direwolf:local",
+ "program": "decode_aprs (hex input)",
+ "records": [
+  {
+   "case": "ex-pos-digi",
+   "dw_lines": [
+    "N0CALL-7>APRS,WIDE1-1:!0000.00N/00000.00E>test",
+    "Position, normal car (side view)",
+    "Use of \"APRS\" in the destination field is obsolete.  You can help to improve the quality of APRS signals.",
+    "Tell the sender (N0CALL-7) to use the proper product identifier from https://github.com/aprsorg/aprs-deviceid ",
+    "N 00 00.0000, E 000 00.0000",
+    "test"
+   ],
+   "fields": {
+    "comment": "test",
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "normal car (side view)"
+    ],
+    "position": {
+     "lat": 0.0,
+     "lat_text": "N 00 00.0000",
+     "lon": 0.0,
+     "lon_text": "E 000 00.0000"
+    },
+    "symbol_and_vendor": [
+     "normal car (side view)"
+    ],
+    "warnings": [
+     "Use of \"APRS\" in the destination field is obsolete.  You can help to improve the quality of APRS signals.",
+     "Tell the sender (N0CALL-7) to use the proper product identifier from https://github.com/aprsorg/aprs-deviceid "
+    ]
+   },
+   "frame_header": "N0CALL-7>APRS,WIDE1-1",
+   "group": "existing",
+   "info_hex": "21303030302e30304e2f30303030302e3030453e74657374",
+   "info_text": "!0000.00N/00000.00E>test",
+   "note": "position with one digipeater, destination APRS",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "ex-status-nodigi",
+   "dw_lines": [
+    "N0CALL>APDW18:>status",
+    "Status Report, WB2OSZ DireWolf",
+    "status"
+   ],
+   "fields": {
+    "comment": "status",
+    "data_type": "Status Report",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Status Report",
+     "WB2OSZ DireWolf"
+    ],
+    "symbol_and_vendor": [
+     "WB2OSZ DireWolf"
+    ],
+    "warnings": []
+   },
+   "frame_header": "N0CALL>APDW18",
+   "group": "existing",
+   "info_hex": "3e737461747573",
+   "info_text": ">status",
+   "note": "no digipeater, SSID 0 both, status report",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "ex-message",
+   "dw_lines": [
+    "N0CALL-1>APRS::N0TEST-1 :Hello{123",
+    "APRS Message, number \"123\", from \"N0CALL-1\" to \"N0TEST-1\"",
+    "Use of \"APRS\" in the destination field is obsolete.  You can help to improve the quality of APRS signals.",
+    "Tell the sender (N0CALL-1) to use the proper product identifier from https://github.com/aprsorg/aprs-deviceid ",
+    "Hello"
+   ],
+   "fields": {
+    "comment": "Hello",
+    "data_type": "APRS Message",
+    "error": false,
+    "extra_lines": [],
+    "message_from": "N0CALL-1",
+    "message_number": "123",
+    "message_to": "N0TEST-1",
+    "parts": [
+     "APRS Message",
+     "number \"123\"",
+     "from \"N0CALL-1\" to \"N0TEST-1\""
+    ],
+    "warnings": [
+     "Use of \"APRS\" in the destination field is obsolete.  You can help to improve the quality of APRS signals.",
+     "Tell the sender (N0CALL-1) to use the proper product identifier from https://github.com/aprsorg/aprs-deviceid "
+    ]
+   },
+   "frame_header": "N0CALL-1>APRS",
+   "group": "existing",
+   "info_hex": "3a4e30544553542d31203a48656c6c6f7b313233",
+   "info_text": ":N0TEST-1 :Hello{123",
+   "note": "message with a message number",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "ex-digi-used-first",
+   "dw_lines": [
+    "N0CALL-15>N0TEST-1,N0DIG-2*,WIDE2-1:hello",
+    "ERROR!!!  Unknown APRS Data Type Indicator \"h\", UNKNOWN vendor/model"
+   ],
+   "fields": {
+    "data_type": "ERROR!!!  Unknown APRS Data Type Indicator \"h\"",
+    "error": true,
+    "extra_lines": [],
+    "parts": [
+     "ERROR!!!  Unknown APRS Data Type Indicator \"h\"",
+     "UNKNOWN vendor/model"
+    ],
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-15>N0TEST-1,N0DIG-2*,WIDE2-1",
+   "group": "existing",
+   "info_hex": "68656c6c6f",
+   "info_text": "hello",
+   "note": "star on the first of two digipeaters, SSID 15",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "ex-digi-used-last",
+   "dw_lines": [
+    "N0CALL-15>N0TEST-1,N0DIG-2,WIDE2-1*:hello",
+    "ERROR!!!  Unknown APRS Data Type Indicator \"h\", UNKNOWN vendor/model"
+   ],
+   "fields": {
+    "data_type": "ERROR!!!  Unknown APRS Data Type Indicator \"h\"",
+    "error": true,
+    "extra_lines": [],
+    "parts": [
+     "ERROR!!!  Unknown APRS Data Type Indicator \"h\"",
+     "UNKNOWN vendor/model"
+    ],
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-15>N0TEST-1,N0DIG-2,WIDE2-1*",
+   "group": "existing",
+   "info_hex": "68656c6c6f",
+   "info_text": "hello",
+   "note": "star on the last digipeater: the one before it is marked as repeated too",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "ex-digi-8",
+   "dw_lines": [
+    "A>B,D1,D2,D3,D4,D5,D6,D7,D8:x",
+    "ERROR!!!  Unknown APRS Data Type Indicator \"x\", UNKNOWN vendor/model"
+   ],
+   "fields": {
+    "data_type": "ERROR!!!  Unknown APRS Data Type Indicator \"x\"",
+    "error": true,
+    "extra_lines": [],
+    "parts": [
+     "ERROR!!!  Unknown APRS Data Type Indicator \"x\"",
+     "UNKNOWN vendor/model"
+    ],
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "A>B,D1,D2,D3,D4,D5,D6,D7,D8",
+   "group": "existing",
+   "info_hex": "78",
+   "info_text": "x",
+   "note": "eight digipeaters (the maximum), one-character callsigns",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "ex-calls-short",
+   "dw_lines": [
+    "A>B:x",
+    "ERROR!!!  Unknown APRS Data Type Indicator \"x\", UNKNOWN vendor/model"
+   ],
+   "fields": {
+    "data_type": "ERROR!!!  Unknown APRS Data Type Indicator \"x\"",
+    "error": true,
+    "extra_lines": [],
+    "parts": [
+     "ERROR!!!  Unknown APRS Data Type Indicator \"x\"",
+     "UNKNOWN vendor/model"
+    ],
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "A>B",
+   "group": "existing",
+   "info_hex": "78",
+   "info_text": "x",
+   "note": "shortest frame: 1-character callsigns, one information byte",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "ex-calls-long",
+   "dw_lines": [
+    "ABCDEF-9>GHIJKL-10:ssid",
+    "ERROR!!!  Unknown APRS Data Type Indicator \"s\", UNKNOWN vendor/model"
+   ],
+   "fields": {
+    "data_type": "ERROR!!!  Unknown APRS Data Type Indicator \"s\"",
+    "error": true,
+    "extra_lines": [],
+    "parts": [
+     "ERROR!!!  Unknown APRS Data Type Indicator \"s\"",
+     "UNKNOWN vendor/model"
+    ],
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "ABCDEF-9>GHIJKL-10",
+   "group": "existing",
+   "info_hex": "73736964",
+   "info_text": "ssid",
+   "note": "6-character callsigns, SSID 9 and 10",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "ex-info-empty",
+   "dw_lines": [
+    "N0CALL>APRS:",
+    "ERROR!!!  Unknown APRS Data Type Indicator: unprintable 0x00",
+    "Use of \"APRS\" in the destination field is obsolete.  You can help to improve the quality of APRS signals.",
+    "Tell the sender (N0CALL) to use the proper product identifier from https://github.com/aprsorg/aprs-deviceid "
+   ],
+   "fields": {
+    "data_type": "ERROR!!!  Unknown APRS Data Type Indicator: unprintable 0x00",
+    "error": true,
+    "extra_lines": [],
+    "parts": [
+     "ERROR!!!  Unknown APRS Data Type Indicator: unprintable 0x00"
+    ],
+    "warnings": [
+     "Use of \"APRS\" in the destination field is obsolete.  You can help to improve the quality of APRS signals.",
+     "Tell the sender (N0CALL) to use the proper product identifier from https://github.com/aprsorg/aprs-deviceid "
+    ]
+   },
+   "frame_header": "N0CALL>APRS",
+   "group": "existing",
+   "info_hex": "",
+   "info_text": "",
+   "note": "empty information field",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "ex-info-fend-fesc",
+   "dw_lines": [
+    "N0CALL>APRS:m<0xc0>x<0xdb>y<0xdb><0xdc><0xdb><0xdd><0xc0><0xc0>",
+    "Morse Code Data",
+    "Use of \"APRS\" in the destination field is obsolete.  You can help to improve the quality of APRS signals.",
+    "Tell the sender (N0CALL) to use the proper product identifier from https://github.com/aprsorg/aprs-deviceid ",
+    "\u00c0x\u00dby\u00db\u00dc\u00db\u00dd\u00c0\u00c0"
+   ],
+   "fields": {
+    "comment": "\u00c0x\u00dby\u00db\u00dc\u00db\u00dd\u00c0\u00c0",
+    "data_type": "Morse Code Data",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Morse Code Data"
+    ],
+    "warnings": [
+     "Use of \"APRS\" in the destination field is obsolete.  You can help to improve the quality of APRS signals.",
+     "Tell the sender (N0CALL) to use the proper product identifier from https://github.com/aprsorg/aprs-deviceid "
+    ]
+   },
+   "frame_header": "N0CALL>APRS",
+   "group": "existing",
+   "info_hex": "6dc078db79dbdcdbddc0c0",
+   "info_text": "m<0xc0>x<0xdb>y<0xdb><0xdc><0xdb><0xdd><0xc0><0xc0>",
+   "note": "information bytes C0, DB, DB DC, DB DD, C0 C0: the KISS escape cases from a real demodulator",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "ex-info-ones",
+   "dw_lines": [
+    "N0CALL>APRS:<0xff><0xff><0xff><0xff><0xff><0xff><0xff><0xff><0xff><0xff>",
+    "ERROR!!!  Unknown APRS Data Type Indicator: unprintable 0xff",
+    "Use of \"APRS\" in the destination field is obsolete.  You can help to improve the quality of APRS signals.",
+    "Tell the sender (N0CALL) to use the proper product identifier from https://github.com/aprsorg/aprs-deviceid "
+   ],
+   "fields": {
+    "data_type": "ERROR!!!  Unknown APRS Data Type Indicator: unprintable 0xff",
+    "error": true,
+    "extra_lines": [],
+    "parts": [
+     "ERROR!!!  Unknown APRS Data Type Indicator: unprintable 0xff"
+    ],
+    "warnings": [
+     "Use of \"APRS\" in the destination field is obsolete.  You can help to improve the quality of APRS signals.",
+     "Tell the sender (N0CALL) to use the proper product identifier from https://github.com/aprsorg/aprs-deviceid "
+    ]
+   },
+   "frame_header": "N0CALL>APRS",
+   "group": "existing",
+   "info_hex": "ffffffffffffffffffff",
+   "info_text": "<0xff><0xff><0xff><0xff><0xff><0xff><0xff><0xff><0xff><0xff>",
+   "note": "ten FF bytes: bit stuffing on the air",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "ex-info-340",
+   "dw_lines": [
+    "N0CALL>APRS:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "ERROR!!!  Unknown APRS Data Type Indicator \"x\"",
+    "Use of \"APRS\" in the destination field is obsolete.  You can help to improve the quality of APRS signals.",
+    "Tell the sender (N0CALL) to use the proper product identifier from https://github.com/aprsorg/aprs-deviceid "
+   ],
+   "fields": {
+    "data_type": "ERROR!!!  Unknown APRS Data Type Indicator \"x\"",
+    "error": true,
+    "extra_lines": [],
+    "parts": [
+     "ERROR!!!  Unknown APRS Data Type Indicator \"x\""
+    ],
+    "warnings": [
+     "Use of \"APRS\" in the destination field is obsolete.  You can help to improve the quality of APRS signals.",
+     "Tell the sender (N0CALL) to use the proper product identifier from https://github.com/aprsorg/aprs-deviceid "
+    ]
+   },
+   "frame_header": "N0CALL>APRS",
+   "group": "existing",
+   "info_hex": "78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+   "info_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "note": "340 information bytes (over 256)",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "ex-info-tab-cr",
+   "dw_lines": [
+    "N0CALL>APRS:a<0x09>b<0x0d>",
+    "ERROR!!!  Unknown APRS Data Type Indicator \"a\"",
+    "Use of \"APRS\" in the destination field is obsolete.  You can help to improve the quality of APRS signals.",
+    "Tell the sender (N0CALL) to use the proper product identifier from https://github.com/aprsorg/aprs-deviceid "
+   ],
+   "fields": {
+    "data_type": "ERROR!!!  Unknown APRS Data Type Indicator \"a\"",
+    "error": true,
+    "extra_lines": [],
+    "parts": [
+     "ERROR!!!  Unknown APRS Data Type Indicator \"a\""
+    ],
+    "warnings": [
+     "Use of \"APRS\" in the destination field is obsolete.  You can help to improve the quality of APRS signals.",
+     "Tell the sender (N0CALL) to use the proper product identifier from https://github.com/aprsorg/aprs-deviceid "
+    ]
+   },
+   "frame_header": "N0CALL>APRS",
+   "group": "existing",
+   "info_hex": "6109620d",
+   "info_text": "a<0x09>b<0x0d>",
+   "note": "tab and carriage return in the information field",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "ex-aprs-position",
+   "dw_lines": [
+    "N0CALL-9>APDW18,WIDE1-1,WIDE2-1:!4903.50N/07201.75W-Test 001234",
+    "Position, House, WB2OSZ DireWolf",
+    "N 49 03.5000, W 072 01.7500",
+    "Test 001234"
+   ],
+   "fields": {
+    "comment": "Test 001234",
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "House",
+     "WB2OSZ DireWolf"
+    ],
+    "position": {
+     "lat": 49.058333,
+     "lat_text": "N 49 03.5000",
+     "lon": -72.029167,
+     "lon_text": "W 072 01.7500"
+    },
+    "symbol_and_vendor": [
+     "House",
+     "WB2OSZ DireWolf"
+    ],
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APDW18,WIDE1-1,WIDE2-1",
+   "group": "existing",
+   "info_hex": "21343930332e35304e2f30373230312e3735572d5465737420303031323334",
+   "info_text": "!4903.50N/07201.75W-Test 001234",
+   "note": "position with comment, two digipeaters",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "ex-lora-status",
+   "dw_lines": [
+    "N0CALL-7>APLRT1:>Test status",
+    "Status Report, Ricardo, CA2RXU ESP32 LoRa Tracker",
+    "Test status"
+   ],
+   "fields": {
+    "comment": "Test status",
+    "data_type": "Status Report",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Status Report",
+     "Ricardo",
+     "CA2RXU ESP32 LoRa Tracker"
+    ],
+    "symbol_and_vendor": [
+     "Ricardo",
+     "CA2RXU ESP32 LoRa Tracker"
+    ],
+    "warnings": []
+   },
+   "frame_header": "N0CALL-7>APLRT1",
+   "group": "existing",
+   "info_hex": "3e5465737420737461747573",
+   "info_text": ">Test status",
+   "note": "LoRa APRS shaped line 1 (docs/direwolf-cases.md, airtime table)",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "ex-lora-position",
+   "dw_lines": [
+    "N0CALL-7>APLRT1,WIDE1-1:!0000.00N/00000.00E[Test",
+    "Position, Human, Ricardo, CA2RXU ESP32 LoRa Tracker",
+    "N 00 00.0000, E 000 00.0000",
+    "Test"
+   ],
+   "fields": {
+    "comment": "Test",
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "Human",
+     "Ricardo",
+     "CA2RXU ESP32 LoRa Tracker"
+    ],
+    "position": {
+     "lat": 0.0,
+     "lat_text": "N 00 00.0000",
+     "lon": 0.0,
+     "lon_text": "E 000 00.0000"
+    },
+    "symbol_and_vendor": [
+     "Human",
+     "Ricardo",
+     "CA2RXU ESP32 LoRa Tracker"
+    ],
+    "warnings": []
+   },
+   "frame_header": "N0CALL-7>APLRT1,WIDE1-1",
+   "group": "existing",
+   "info_hex": "21303030302e30304e2f30303030302e3030455b54657374",
+   "info_text": "!0000.00N/00000.00E[Test",
+   "note": "LoRa APRS shaped line 2",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "ex-lora-igate",
+   "dw_lines": [
+    "N0CALL-7>APLRG1,WIDE1-1:=0000.00N/00000.00E-LoRa iGate test",
+    "Position, House, Ricardo, CA2RXU ESP32 LoRa iGate",
+    "N 00 00.0000, E 000 00.0000",
+    "LoRa iGate test"
+   ],
+   "fields": {
+    "comment": "LoRa iGate test",
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "House",
+     "Ricardo",
+     "CA2RXU ESP32 LoRa iGate"
+    ],
+    "position": {
+     "lat": 0.0,
+     "lat_text": "N 00 00.0000",
+     "lon": 0.0,
+     "lon_text": "E 000 00.0000"
+    },
+    "symbol_and_vendor": [
+     "House",
+     "Ricardo",
+     "CA2RXU ESP32 LoRa iGate"
+    ],
+    "warnings": []
+   },
+   "frame_header": "N0CALL-7>APLRG1,WIDE1-1",
+   "group": "existing",
+   "info_hex": "3d303030302e30304e2f30303030302e3030452d4c6f52612069476174652074657374",
+   "info_text": "=0000.00N/00000.00E-LoRa iGate test",
+   "note": "LoRa APRS shaped line 3",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "msg-number",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1::N0TEST-1 :Hello{123",
+    "APRS Message, number \"123\", from \"N0CALL-9\" to \"N0TEST-1\", UNKNOWN vendor/model",
+    "Hello"
+   ],
+   "fields": {
+    "comment": "Hello",
+    "data_type": "APRS Message",
+    "error": false,
+    "extra_lines": [],
+    "message_from": "N0CALL-9",
+    "message_number": "123",
+    "message_to": "N0TEST-1",
+    "parts": [
+     "APRS Message",
+     "number \"123\"",
+     "from \"N0CALL-9\" to \"N0TEST-1\"",
+     "UNKNOWN vendor/model"
+    ],
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "message",
+   "info_hex": "3a4e30544553542d31203a48656c6c6f7b313233",
+   "info_text": ":N0TEST-1 :Hello{123",
+   "note": "message with a message number",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "msg-nonumber",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1::N0TEST   :Plain text, no message id",
+    "APRS Message, with no number, from \"N0CALL-9\" to \"N0TEST\", UNKNOWN vendor/model",
+    "Plain text, no message id"
+   ],
+   "fields": {
+    "comment": "Plain text, no message id",
+    "data_type": "APRS Message",
+    "error": false,
+    "extra_lines": [],
+    "message_from": "N0CALL-9",
+    "message_number": null,
+    "message_to": "N0TEST",
+    "parts": [
+     "APRS Message",
+     "with no number",
+     "from \"N0CALL-9\" to \"N0TEST\"",
+     "UNKNOWN vendor/model"
+    ],
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "message",
+   "info_hex": "3a4e30544553542020203a506c61696e20746578742c206e6f206d657373616765206964",
+   "info_text": ":N0TEST   :Plain text, no message id",
+   "note": "no number: no ack expected",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "msg-max",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1::N0TEST-15:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx{1",
+    "APRS Message, number \"1\", from \"N0CALL-9\" to \"N0TEST-15\", UNKNOWN vendor/model",
+    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   ],
+   "fields": {
+    "comment": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "data_type": "APRS Message",
+    "error": false,
+    "extra_lines": [],
+    "message_from": "N0CALL-9",
+    "message_number": "1",
+    "message_to": "N0TEST-15",
+    "parts": [
+     "APRS Message",
+     "number \"1\"",
+     "from \"N0CALL-9\" to \"N0TEST-15\"",
+     "UNKNOWN vendor/model"
+    ],
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "message",
+   "info_hex": "3a4e30544553542d31353a787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787b31",
+   "info_text": ":N0TEST-15:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx{1",
+   "note": "67 text characters (the specification's limit), SSID 15 addressee, number 1",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "msg-brace-in-text",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1::N0TEST-1 :text {with} braces inside{77",
+    "WARNING: strlcpy result length 22 exceeds maximum length 11.  (/src/src/decode_aprs.c aprs_message 2032)",
+    "Message number \"with} brace\" has length outside range of 1 to 5.",
+    "APRS Message, number \"with} brace\", from \"N0CALL-9\" to \"N0TEST-1\", UNKNOWN vendor/model",
+    "text<0x20>"
+   ],
+   "fields": {
+    "comment": "text<0x20>",
+    "data_type": "APRS Message",
+    "error": false,
+    "extra_lines": [],
+    "message_from": "N0CALL-9",
+    "message_number": "with} brace",
+    "message_to": "N0TEST-1",
+    "parts": [
+     "APRS Message",
+     "number \"with} brace\"",
+     "from \"N0CALL-9\" to \"N0TEST-1\"",
+     "UNKNOWN vendor/model"
+    ],
+    "vendor": null,
+    "warnings": [
+     "WARNING: strlcpy result length 22 exceeds maximum length 11.  (/src/src/decode_aprs.c aprs_message 2032)",
+     "Message number \"with} brace\" has length outside range of 1 to 5."
+    ]
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "message",
+   "info_hex": "3a4e30544553542d31203a74657874207b776974687d2062726163657320696e736964657b3737",
+   "info_text": ":N0TEST-1 :text {with} braces inside{77",
+   "note": "a brace inside the text (not allowed by the specification): which brace starts the number is up to the decoder",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "msg-ack",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1::N0TEST-1 :ack123",
+    "\"N0CALL-9\" ACKnowledged message number \"123\" from \"N0TEST-1\", UNKNOWN vendor/model"
+   ],
+   "fields": {
+    "by_station": "N0CALL-9",
+    "data_type": "ACKnowledged message",
+    "error": false,
+    "extra_lines": [],
+    "message_number": "123",
+    "of_station": "N0TEST-1",
+    "parts": [
+     "\"N0CALL-9\" ACKnowledged message number \"123\" from \"N0TEST-1\"",
+     "UNKNOWN vendor/model"
+    ],
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "ack",
+   "info_hex": "3a4e30544553542d31203a61636b313233",
+   "info_text": ":N0TEST-1 :ack123",
+   "note": "ack of message 123",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "msg-ack-alnum",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1::N0TEST   :ackA5",
+    "\"N0CALL-9\" ACKnowledged message number \"A5\" from \"N0TEST\", UNKNOWN vendor/model"
+   ],
+   "fields": {
+    "by_station": "N0CALL-9",
+    "data_type": "ACKnowledged message",
+    "error": false,
+    "extra_lines": [],
+    "message_number": "A5",
+    "of_station": "N0TEST",
+    "parts": [
+     "\"N0CALL-9\" ACKnowledged message number \"A5\" from \"N0TEST\"",
+     "UNKNOWN vendor/model"
+    ],
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "ack",
+   "info_hex": "3a4e30544553542020203a61636b4135",
+   "info_text": ":N0TEST   :ackA5",
+   "note": "ack with an alphanumeric number",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "msg-rej",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1::N0TEST-1 :rej123",
+    "\"N0CALL-9\" REJected message number \"123\" from \"N0TEST-1\", UNKNOWN vendor/model"
+   ],
+   "fields": {
+    "by_station": "N0CALL-9",
+    "data_type": "REJected message",
+    "error": false,
+    "extra_lines": [],
+    "message_number": "123",
+    "of_station": "N0TEST-1",
+    "parts": [
+     "\"N0CALL-9\" REJected message number \"123\" from \"N0TEST-1\"",
+     "UNKNOWN vendor/model"
+    ],
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "reject",
+   "info_hex": "3a4e30544553542d31203a72656a313233",
+   "info_text": ":N0TEST-1 :rej123",
+   "note": "reject of message 123",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "msg-rej-alnum",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1::N0TEST   :rejZ9",
+    "\"N0CALL-9\" REJected message number \"Z9\" from \"N0TEST\", UNKNOWN vendor/model"
+   ],
+   "fields": {
+    "by_station": "N0CALL-9",
+    "data_type": "REJected message",
+    "error": false,
+    "extra_lines": [],
+    "message_number": "Z9",
+    "of_station": "N0TEST",
+    "parts": [
+     "\"N0CALL-9\" REJected message number \"Z9\" from \"N0TEST\"",
+     "UNKNOWN vendor/model"
+    ],
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "reject",
+   "info_hex": "3a4e30544553542020203a72656a5a39",
+   "info_text": ":N0TEST   :rejZ9",
+   "note": "reject with an alphanumeric number",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "bln-number",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1::BLN3     :Road closed until Friday",
+    "Bulletin with identifier \"3\", UNKNOWN vendor/model",
+    "Road closed until Friday"
+   ],
+   "fields": {
+    "bulletin_id": "3",
+    "comment": "Road closed until Friday",
+    "data_type": "Bulletin",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Bulletin with identifier \"3\"",
+     "UNKNOWN vendor/model"
+    ],
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "bulletin",
+   "info_hex": "3a424c4e3320202020203a526f616420636c6f73656420756e74696c20467269646179",
+   "info_text": ":BLN3     :Road closed until Friday",
+   "note": "bulletin number 3, no group",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "bln-group",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1::BLN1WX   :Weather group bulletin one",
+    "Group Bulletin with identifier \"1\", group name \"WX\", UNKNOWN vendor/model",
+    "Weather group bulletin one"
+   ],
+   "fields": {
+    "bulletin_group": "WX",
+    "bulletin_id": "1",
+    "comment": "Weather group bulletin one",
+    "data_type": "Group Bulletin",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Group Bulletin with identifier \"1\"",
+     "group name \"WX\"",
+     "UNKNOWN vendor/model"
+    ],
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "bulletin",
+   "info_hex": "3a424c4e3157582020203a576561746865722067726f75702062756c6c6574696e206f6e65",
+   "info_text": ":BLN1WX   :Weather group bulletin one",
+   "note": "bulletin 1 of group WX",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "bln-announce",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1::BLNA     :General announcement",
+    "Bulletin with identifier \"A\", UNKNOWN vendor/model",
+    "General announcement"
+   ],
+   "fields": {
+    "bulletin_id": "A",
+    "comment": "General announcement",
+    "data_type": "Bulletin",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Bulletin with identifier \"A\"",
+     "UNKNOWN vendor/model"
+    ],
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "announcement",
+   "info_hex": "3a424c4e4120202020203a47656e6572616c20616e6e6f756e63656d656e74",
+   "info_text": ":BLNA     :General announcement",
+   "note": "announcement A",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "bln-announce-group",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1::BLNZGRP  :Group announcement Z",
+    "Bulletin with identifier \"ZGRP\", UNKNOWN vendor/model",
+    "Group announcement Z"
+   ],
+   "fields": {
+    "bulletin_id": "ZGRP",
+    "comment": "Group announcement Z",
+    "data_type": "Bulletin",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Bulletin with identifier \"ZGRP\"",
+     "UNKNOWN vendor/model"
+    ],
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "announcement",
+   "info_hex": "3a424c4e5a47525020203a47726f757020616e6e6f756e63656d656e74205a",
+   "info_text": ":BLNZGRP  :Group announcement Z",
+   "note": "announcement Z of group GRP",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "pos-plain",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:!4903.50N/07201.75W-Test 001234",
+    "Position, House, UNKNOWN vendor/model",
+    "N 49 03.5000, W 072 01.7500",
+    "Test 001234"
+   ],
+   "fields": {
+    "comment": "Test 001234",
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "House",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "lat": 49.058333,
+     "lat_text": "N 49 03.5000",
+     "lon": -72.029167,
+     "lon_text": "W 072 01.7500"
+    },
+    "symbol": "House",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "position",
+   "info_hex": "21343930332e35304e2f30373230312e3735572d5465737420303031323334",
+   "info_text": "!4903.50N/07201.75W-Test 001234",
+   "note": "no timestamp, no messaging, comment",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "pos-messaging",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:=3012.34S/14000.10W>Pacific car",
+    "Position, normal car (side view), UNKNOWN vendor/model",
+    "S 30 12.3400, W 140 00.1000",
+    "Pacific car"
+   ],
+   "fields": {
+    "comment": "Pacific car",
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "normal car (side view)",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "lat": -30.205667,
+     "lat_text": "S 30 12.3400",
+     "lon": -140.001667,
+     "lon_text": "W 140 00.1000"
+    },
+    "symbol": "normal car (side view)",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "position",
+   "info_hex": "3d333031322e3334532f31343030302e3130573e5061636966696320636172",
+   "info_text": "=3012.34S/14000.10W>Pacific car",
+   "note": "messaging capable, southern western hemisphere",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "pos-nocomment",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:!0000.00N/00000.00E>",
+    "Position, normal car (side view), UNKNOWN vendor/model",
+    "N 00 00.0000, E 000 00.0000"
+   ],
+   "fields": {
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "normal car (side view)",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "lat": 0.0,
+     "lat_text": "N 00 00.0000",
+     "lon": 0.0,
+     "lon_text": "E 000 00.0000"
+    },
+    "symbol": "normal car (side view)",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "position",
+   "info_hex": "21303030302e30304e2f30303030302e3030453e",
+   "info_text": "!0000.00N/00000.00E>",
+   "note": "no comment at all, position 0 0",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "pos-overlay",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:!4903.50N107201.75W&",
+    "Position, I=Igte IGate R=RX T=1hopTX 2=2hopTX w/overlay 1, UNKNOWN vendor/model",
+    "N 49 03.5000, W 072 01.7500"
+   ],
+   "fields": {
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "I=Igte IGate R=RX T=1hopTX 2=2hopTX w/overlay 1",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "lat": 49.058333,
+     "lat_text": "N 49 03.5000",
+     "lon": -72.029167,
+     "lon_text": "W 072 01.7500"
+    },
+    "symbol": "I=Igte IGate R=RX T=1hopTX 2=2hopTX w/overlay 1",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "position",
+   "info_hex": "21343930332e35304e3130373230312e37355726",
+   "info_text": "!4903.50N107201.75W&",
+   "note": "alternate table overlay character 1",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "pos-south-east",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:!3012.34S/14000.10E-",
+    "Position, House, UNKNOWN vendor/model",
+    "S 30 12.3400, E 140 00.1000"
+   ],
+   "fields": {
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "House",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "lat": -30.205667,
+     "lat_text": "S 30 12.3400",
+     "lon": 140.001667,
+     "lon_text": "E 140 00.1000"
+    },
+    "symbol": "House",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "position",
+   "info_hex": "21333031322e3334532f31343030302e3130452d",
+   "info_text": "!3012.34S/14000.10E-",
+   "note": "south and east",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "pos-altitude",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:!4903.50N/07201.75W>/A=001234",
+    "Position, normal car (side view), UNKNOWN vendor/model",
+    "N 49 03.5000, W 072 01.7500, alt 376 m (1234 ft)"
+   ],
+   "fields": {
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "normal car (side view)",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "alt_ft": 1234,
+     "alt_m": 376,
+     "lat": 49.058333,
+     "lat_text": "N 49 03.5000",
+     "lon": -72.029167,
+     "lon_text": "W 072 01.7500"
+    },
+    "symbol": "normal car (side view)",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "position",
+   "info_hex": "21343930332e35304e2f30373230312e3735573e2f413d303031323334",
+   "info_text": "!4903.50N/07201.75W>/A=001234",
+   "note": "altitude in the comment",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "amb-1",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:!4903.5 N/07201.7 W-ambiguity 1",
+    "Position, House, UNKNOWN vendor/model",
+    "N 49 03.5000, W 072 01.7000",
+    "ambiguity 1"
+   ],
+   "fields": {
+    "comment": "ambiguity 1",
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "House",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "lat": 49.058333,
+     "lat_text": "N 49 03.5000",
+     "lon": -72.028333,
+     "lon_text": "W 072 01.7000"
+    },
+    "symbol": "House",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "ambiguity",
+   "info_hex": "21343930332e35204e2f30373230312e3720572d616d626967756974792031",
+   "info_text": "!4903.5 N/07201.7 W-ambiguity 1",
+   "note": "one digit blanked",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "amb-2",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:!4903.  N/07201.  W-ambiguity 2",
+    "Position, House, UNKNOWN vendor/model",
+    "N 49 03.0000, W 072 01.0000",
+    "ambiguity 2"
+   ],
+   "fields": {
+    "comment": "ambiguity 2",
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "House",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "lat": 49.05,
+     "lat_text": "N 49 03.0000",
+     "lon": -72.016667,
+     "lon_text": "W 072 01.0000"
+    },
+    "symbol": "House",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "ambiguity",
+   "info_hex": "21343930332e20204e2f30373230312e2020572d616d626967756974792032",
+   "info_text": "!4903.  N/07201.  W-ambiguity 2",
+   "note": "two digits blanked",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "amb-3",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:!490 .  N/0720 .  W-ambiguity 3",
+    "Position, House, UNKNOWN vendor/model",
+    "N 49 00.0000, W 072 00.0000",
+    "ambiguity 3"
+   ],
+   "fields": {
+    "comment": "ambiguity 3",
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "House",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "lat": 49.0,
+     "lat_text": "N 49 00.0000",
+     "lon": -72.0,
+     "lon_text": "W 072 00.0000"
+    },
+    "symbol": "House",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "ambiguity",
+   "info_hex": "21343930202e20204e2f30373230202e2020572d616d626967756974792033",
+   "info_text": "!490 .  N/0720 .  W-ambiguity 3",
+   "note": "three digits blanked (the minutes units)",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "amb-4",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:!49  .  N/072  .  W-ambiguity 4",
+    "Position, House, UNKNOWN vendor/model",
+    "N 49 00.0000, W 072 00.0000",
+    "ambiguity 4"
+   ],
+   "fields": {
+    "comment": "ambiguity 4",
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "House",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "lat": 49.0,
+     "lat_text": "N 49 00.0000",
+     "lon": -72.0,
+     "lon_text": "W 072 00.0000"
+    },
+    "symbol": "House",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "ambiguity",
+   "info_hex": "21343920202e20204e2f30373220202e2020572d616d626967756974792034",
+   "info_text": "!49  .  N/072  .  W-ambiguity 4",
+   "note": "four digits blanked",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "ts-dhm-z",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:/092345z4903.50N/07201.75W>",
+    "Position with time, normal car (side view), UNKNOWN vendor/model",
+    "N 49 03.5000, W 072 01.7500"
+   ],
+   "fields": {
+    "data_type": "Position with time",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position with time",
+     "normal car (side view)",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "lat": 49.058333,
+     "lat_text": "N 49 03.5000",
+     "lon": -72.029167,
+     "lon_text": "W 072 01.7500"
+    },
+    "symbol": "normal car (side view)",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "timestamp",
+   "info_hex": "2f3039323334357a343930332e35304e2f30373230312e3735573e",
+   "info_text": "/092345z4903.50N/07201.75W>",
+   "note": "day, hour, minute, zulu; no messaging",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "ts-dhm-local",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:@092345/4903.50N/07201.75W>",
+    "Position with time, normal car (side view), UNKNOWN vendor/model",
+    "N 49 03.5000, W 072 01.7500"
+   ],
+   "fields": {
+    "data_type": "Position with time",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position with time",
+     "normal car (side view)",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "lat": 49.058333,
+     "lat_text": "N 49 03.5000",
+     "lon": -72.029167,
+     "lon_text": "W 072 01.7500"
+    },
+    "symbol": "normal car (side view)",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "timestamp",
+   "info_hex": "403039323334352f343930332e35304e2f30373230312e3735573e",
+   "info_text": "@092345/4903.50N/07201.75W>",
+   "note": "day, hour, minute, local; messaging",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "ts-hms",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:/234517h4903.50N/07201.75W>",
+    "Position with time, normal car (side view), UNKNOWN vendor/model",
+    "N 49 03.5000, W 072 01.7500"
+   ],
+   "fields": {
+    "data_type": "Position with time",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position with time",
+     "normal car (side view)",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "lat": 49.058333,
+     "lat_text": "N 49 03.5000",
+     "lon": -72.029167,
+     "lon_text": "W 072 01.7500"
+    },
+    "symbol": "normal car (side view)",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "timestamp",
+   "info_hex": "2f32333435313768343930332e35304e2f30373230312e3735573e",
+   "info_text": "/234517h4903.50N/07201.75W>",
+   "note": "hour, minute, second, zulu",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "ts-mdhm",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:_10090556c220s004g005t077r001p002P003h50b09900",
+    "Positionless Weather Report, UNKNOWN vendor/model",
+    "wind 4.0 mph, direction 220, gust 5, temperature 77, rain 0.01 in last hour, rain 0.02 in last 24 hours, rain 0.03 since midnight, humidity 50, barometer 29.24, \"\""
+   ],
+   "fields": {
+    "data_type": "Positionless Weather Report",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Positionless Weather Report",
+     "UNKNOWN vendor/model"
+    ],
+    "vendor": null,
+    "warnings": [],
+    "weather": {
+     "barometer_inhg": 29.24,
+     "gust_mph": 5,
+     "humidity_pct": 50,
+     "rain_1h_in": 0.01,
+     "rain_24h_in": 0.02,
+     "rain_midnight_in": 0.03,
+     "temp_f": 77,
+     "wind_dir_deg": 220,
+     "wind_mph": 4.0
+    }
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "timestamp",
+   "info_hex": "5f313030393035353663323230733030346730303574303737723030317030303250303033683530623039393030",
+   "info_text": "_10090556c220s004g005t077r001p002P003h50b09900",
+   "note": "month, day, hour, minute in a positionless weather report",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "comp-cs",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:!/5L!!<*e7>7P[",
+    "Position, normal car (side view), UNKNOWN vendor/model",
+    "N 49 30.0000, W 072 45.0002, 67 km/h (42 MPH), course 88"
+   ],
+   "fields": {
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "normal car (side view)",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "course_deg": 88,
+     "lat": 49.5,
+     "lat_text": "N 49 30.0000",
+     "lon": -72.750003,
+     "lon_text": "W 072 45.0002",
+     "speed_kmh": 67,
+     "speed_mph": 42
+    },
+    "symbol": "normal car (side view)",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "compressed",
+   "info_hex": "212f354c21213c2a65373e37505b",
+   "info_text": "!/5L!!<*e7>7P[",
+   "note": "the specification's example: course and speed",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "comp-nocs",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:=/5L!!<*e7> s!",
+    "Position, normal car (side view), UNKNOWN vendor/model",
+    "N 49 30.0000, W 072 45.0002"
+   ],
+   "fields": {
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "normal car (side view)",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "lat": 49.5,
+     "lat_text": "N 49 30.0000",
+     "lon": -72.750003,
+     "lon_text": "W 072 45.0002"
+    },
+    "symbol": "normal car (side view)",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "compressed",
+   "info_hex": "3d2f354c21213c2a65373e207321",
+   "info_text": "=/5L!!<*e7> s!",
+   "note": "compressed position with the cs pair blank",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "comp-alt",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:!/5L!!<*e7>F{Q",
+    "Position, normal car (side view), UNKNOWN vendor/model",
+    "N 49 30.0000, W 072 45.0002, alt 305 m (999 ft)"
+   ],
+   "fields": {
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "normal car (side view)",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "alt_ft": 999,
+     "alt_m": 305,
+     "lat": 49.5,
+     "lat_text": "N 49 30.0000",
+     "lon": -72.750003,
+     "lon_text": "W 072 45.0002"
+    },
+    "symbol": "normal car (side view)",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "compressed",
+   "info_hex": "212f354c21213c2a65373e467b51",
+   "info_text": "!/5L!!<*e7>F{Q",
+   "note": "cs = altitude, T byte says GGA",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "comp-range",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:!\\5L!!<*e7r{?A",
+    "Position, Restrooms, UNKNOWN vendor/model, range=20.1",
+    "N 49 30.0000, W 072 45.0002"
+   ],
+   "fields": {
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "Restrooms",
+     "UNKNOWN vendor/model",
+     "range=20.1"
+    ],
+    "position": {
+     "lat": 49.5,
+     "lat_text": "N 49 30.0000",
+     "lon": -72.750003,
+     "lon_text": "W 072 45.0002"
+    },
+    "range_miles": 20.1,
+    "symbol": "Restrooms",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "compressed",
+   "info_hex": "215c354c21213c2a6537727b3f41",
+   "info_text": "!\\5L!!<*e7r{?A",
+   "note": "cs = pre-calculated radio range, alternate table",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "comp-ts",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:@092345z/5L!!<*e7>7P[",
+    "Position with time, normal car (side view), UNKNOWN vendor/model",
+    "N 49 30.0000, W 072 45.0002, 67 km/h (42 MPH), course 88"
+   ],
+   "fields": {
+    "data_type": "Position with time",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position with time",
+     "normal car (side view)",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "course_deg": 88,
+     "lat": 49.5,
+     "lat_text": "N 49 30.0000",
+     "lon": -72.750003,
+     "lon_text": "W 072 45.0002",
+     "speed_kmh": 67,
+     "speed_mph": 42
+    },
+    "symbol": "normal car (side view)",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "compressed",
+   "info_hex": "403039323334357a2f354c21213c2a65373e37505b",
+   "info_text": "@092345z/5L!!<*e7>7P[",
+   "note": "timestamp and messaging",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "comp-custom",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:!/]fJ[+*xIkNSY",
+    "Position, truck, UNKNOWN vendor/model",
+    "S 30 12.3359, W 140 00.1021, 85 km/h (53 MPH), course 180"
+   ],
+   "fields": {
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "truck",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "course_deg": 180,
+     "lat": -30.205598,
+     "lat_text": "S 30 12.3359",
+     "lon": -140.001702,
+     "lon_text": "W 140 00.1021",
+     "speed_kmh": 85,
+     "speed_mph": 53
+    },
+    "symbol": "truck",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "compressed",
+   "info_hex": "212f5d664a5b2b2a78496b4e5359",
+   "info_text": "!/]fJ[+*xIkNSY",
+   "note": "southern western position, own course and speed",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "mice-offduty",
+   "dw_lines": [
+    "N0CALL-9>SSRUVT,WIDE1-1:`(_f<0x1c><0x1c><0x1c>>/",
+    "MIC-E, normal car (side view), UNKNOWN vendor/model, Off Duty",
+    "N 33 25.6400, W 112 07.7400, 0 km/h (0 MPH)"
+   ],
+   "fields": {
+    "data_type": "MIC-E",
+    "error": false,
+    "extra_lines": [],
+    "mic_e_status": "Off Duty",
+    "parts": [
+     "MIC-E",
+     "normal car (side view)",
+     "UNKNOWN vendor/model",
+     "Off Duty"
+    ],
+    "position": {
+     "lat": 33.427333,
+     "lat_text": "N 33 25.6400",
+     "lon": -112.129,
+     "lon_text": "W 112 07.7400",
+     "speed_kmh": 0,
+     "speed_mph": 0
+    },
+    "symbol": "normal car (side view)",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>SSRUVT,WIDE1-1",
+   "group": "mic-e",
+   "info_hex": "60285f661c1c1c3e2f",
+   "info_text": "`(_f<0x1c><0x1c><0x1c>>/",
+   "note": "message M0 Off Duty, stopped, lon 100..109 offset (spec example position)",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "mice-inservice-moving",
+   "dw_lines": [
+    "N0CALL-9>S3RUVT,WIDE1-1:`(_f!2O>/",
+    "MIC-E, normal car (side view), UNKNOWN vendor/model, In Service",
+    "N 33 25.6400, W 112 07.7400, 96 km/h (60 MPH), course 251"
+   ],
+   "fields": {
+    "data_type": "MIC-E",
+    "error": false,
+    "extra_lines": [],
+    "mic_e_status": "In Service",
+    "parts": [
+     "MIC-E",
+     "normal car (side view)",
+     "UNKNOWN vendor/model",
+     "In Service"
+    ],
+    "position": {
+     "course_deg": 251,
+     "lat": 33.427333,
+     "lat_text": "N 33 25.6400",
+     "lon": -112.129,
+     "lon_text": "W 112 07.7400",
+     "speed_kmh": 96,
+     "speed_mph": 60
+    },
+    "symbol": "normal car (side view)",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>S3RUVT,WIDE1-1",
+   "group": "mic-e",
+   "info_hex": "60285f6621324f3e2f",
+   "info_text": "`(_f!2O>/",
+   "note": "M2 In Service, 52 knots, course 251",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "mice-emergency",
+   "dw_lines": [
+    "N0CALL-9>0510Q2,WIDE1-1:`g:\"<0x1c><0x1c><0x1c>>/",
+    "MIC-E, normal car (side view), UNKNOWN vendor/model, Emergency",
+    "S 05 10.1200, E 175 30.0600, 0 km/h (0 MPH)"
+   ],
+   "fields": {
+    "data_type": "MIC-E",
+    "error": false,
+    "extra_lines": [],
+    "mic_e_status": "Emergency",
+    "parts": [
+     "MIC-E",
+     "normal car (side view)",
+     "UNKNOWN vendor/model",
+     "Emergency"
+    ],
+    "position": {
+     "lat": -5.168667,
+     "lat_text": "S 05 10.1200",
+     "lon": 175.501,
+     "lon_text": "E 175 30.0600",
+     "speed_kmh": 0,
+     "speed_mph": 0
+    },
+    "symbol": "normal car (side view)",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>0510Q2,WIDE1-1",
+   "group": "mic-e",
+   "info_hex": "60673a221c1c1c3e2f",
+   "info_text": "`g:\"<0x1c><0x1c><0x1c>>/",
+   "note": "Emergency, south latitude, east longitude over 110",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "mice-custom-c1",
+   "dw_lines": [
+    "N0CALL-9>FB1RS4,WIDE1-1:`y]<0x1d><0x1d><0x1c>v>/",
+    "MIC-E, normal car (side view), UNKNOWN vendor/model, Custom-1",
+    "N 51 12.3400, E 003 05.0100, 19 km/h (12 MPH), course 90"
+   ],
+   "fields": {
+    "data_type": "MIC-E",
+    "error": false,
+    "extra_lines": [],
+    "mic_e_status": "Custom-1",
+    "parts": [
+     "MIC-E",
+     "normal car (side view)",
+     "UNKNOWN vendor/model",
+     "Custom-1"
+    ],
+    "position": {
+     "course_deg": 90,
+     "lat": 51.205667,
+     "lat_text": "N 51 12.3400",
+     "lon": 3.0835,
+     "lon_text": "E 003 05.0100",
+     "speed_kmh": 19,
+     "speed_mph": 12
+    },
+    "symbol": "normal car (side view)",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>FB1RS4,WIDE1-1",
+   "group": "mic-e",
+   "info_hex": "60795d1d1d1c763e2f",
+   "info_text": "`y]<0x1d><0x1d><0x1c>v>/",
+   "note": "custom message C1, longitude under 10 degrees",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "mice-old",
+   "dw_lines": [
+    "N0CALL-9>Q00PP0,WIDE1-1:'qW<0x7f><0x1c>QW>/",
+    "MIC-E, normal car (side view), UNKNOWN vendor/model, Returning",
+    "N 10 00.0000, E 105 59.9900, 9 km/h (6 MPH), course 359"
+   ],
+   "fields": {
+    "data_type": "MIC-E",
+    "error": false,
+    "extra_lines": [],
+    "mic_e_status": "Returning",
+    "parts": [
+     "MIC-E",
+     "normal car (side view)",
+     "UNKNOWN vendor/model",
+     "Returning"
+    ],
+    "position": {
+     "course_deg": 359,
+     "lat": 10.0,
+     "lat_text": "N 10 00.0000",
+     "lon": 105.999833,
+     "lon_text": "E 105 59.9900",
+     "speed_kmh": 9,
+     "speed_mph": 6
+    },
+    "symbol": "normal car (side view)",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>Q00PP0,WIDE1-1",
+   "group": "mic-e",
+   "info_hex": "2771577f1c51573e2f",
+   "info_text": "'qW<0x7f><0x1c>QW>/",
+   "note": "old-format data type indicator, M3 Returning",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "mice-fast",
+   "dw_lines": [
+    "N0CALL-9>0PPPQP,WIDE1-1:`kW<0x7f>(=W>/",
+    "MIC-E, normal car (side view), UNKNOWN vendor/model, Committed",
+    "N 00 00.1000, W 179 59.9900, 228 km/h (142 MPH), course 359"
+   ],
+   "fields": {
+    "data_type": "MIC-E",
+    "error": false,
+    "extra_lines": [],
+    "mic_e_status": "Committed",
+    "parts": [
+     "MIC-E",
+     "normal car (side view)",
+     "UNKNOWN vendor/model",
+     "Committed"
+    ],
+    "position": {
+     "course_deg": 359,
+     "lat": 0.001667,
+     "lat_text": "N 00 00.1000",
+     "lon": -179.999833,
+     "lon_text": "W 179 59.9900",
+     "speed_kmh": 228,
+     "speed_mph": 142
+    },
+    "symbol": "normal car (side view)",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>0PPPQP,WIDE1-1",
+   "group": "mic-e",
+   "info_hex": "606b577f283d573e2f",
+   "info_text": "`kW<0x7f>(=W>/",
+   "note": "123 knots, course 359, lon 179, M4 Committed",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "mice-status",
+   "dw_lines": [
+    "N0CALL-9>1R0S50,WIDE1-1:`I(<0x1c><0x1c><0x1c><0x1c>>/]Status text",
+    "MIC-E, normal car (side view), Kenwood TM-D700, Special",
+    "N 12 03.5000, E 045 12.0000, 0 km/h (0 MPH)",
+    "Status text"
+   ],
+   "fields": {
+    "comment": "Status text",
+    "data_type": "MIC-E",
+    "error": false,
+    "extra_lines": [],
+    "mic_e_status": "Special",
+    "parts": [
+     "MIC-E",
+     "normal car (side view)",
+     "Kenwood TM-D700",
+     "Special"
+    ],
+    "position": {
+     "lat": 12.058333,
+     "lat_text": "N 12 03.5000",
+     "lon": 45.2,
+     "lon_text": "E 045 12.0000",
+     "speed_kmh": 0,
+     "speed_mph": 0
+    },
+    "symbol_and_vendor": [
+     "normal car (side view)",
+     "Kenwood TM-D700"
+    ],
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>1R0S50,WIDE1-1",
+   "group": "mic-e",
+   "info_hex": "6049281c1c1c1c3e2f5d5374617475732074657874",
+   "info_text": "`I(<0x1c><0x1c><0x1c><0x1c>>/]Status text",
+   "note": "M5 Special, status text after the position (a ']' type character)",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "mice-altitude",
+   "dw_lines": [
+    "N0CALL-9>12P35P,WIDE1-1:`I(<0x1c><0x1c><0x1c><0x1c>>/]\"6[}alt 250 m",
+    "MIC-E, normal car (side view), Kenwood TM-D700, Priority",
+    "S 12 03.5000, W 045 12.0000, 0 km/h (0 MPH), alt 250 m (820 ft)",
+    "alt 250 m"
+   ],
+   "fields": {
+    "comment": "alt 250 m",
+    "data_type": "MIC-E",
+    "error": false,
+    "extra_lines": [],
+    "mic_e_status": "Priority",
+    "parts": [
+     "MIC-E",
+     "normal car (side view)",
+     "Kenwood TM-D700",
+     "Priority"
+    ],
+    "position": {
+     "alt_ft": 820,
+     "alt_m": 250,
+     "lat": -12.058333,
+     "lat_text": "S 12 03.5000",
+     "lon": -45.2,
+     "lon_text": "W 045 12.0000",
+     "speed_kmh": 0,
+     "speed_mph": 0
+    },
+    "symbol_and_vendor": [
+     "normal car (side view)",
+     "Kenwood TM-D700"
+    ],
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>12P35P,WIDE1-1",
+   "group": "mic-e",
+   "info_hex": "6049281c1c1c1c3e2f5d22365b7d616c7420323530206d",
+   "info_text": "`I(<0x1c><0x1c><0x1c><0x1c>>/]\"6[}alt 250 m",
+   "note": "M6 Priority, altitude in the comment as 3 base-91 characters and '}'",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "phg-5132",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:!4903.50N/07201.75W#PHG5132",
+    "Position, Generic digipeater, UNKNOWN vendor/model, 25 W height(HAAT)=20ft=6m 3dBi E",
+    "N 49 03.5000, W 072 01.7500"
+   ],
+   "fields": {
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "Generic digipeater",
+     "UNKNOWN vendor/model",
+     "25 W height(HAAT)=20ft=6m 3dBi E"
+    ],
+    "phg": {
+     "directivity": "E",
+     "gain_dbi": 3,
+     "height_ft": 20,
+     "height_m": 6,
+     "power_w": 25
+    },
+    "position": {
+     "lat": 49.058333,
+     "lat_text": "N 49 03.5000",
+     "lon": -72.029167,
+     "lon_text": "W 072 01.7500"
+    },
+    "symbol": "Generic digipeater",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "extension",
+   "info_hex": "21343930332e35304e2f30373230312e3735572350484735313332",
+   "info_text": "!4903.50N/07201.75W#PHG5132",
+   "note": "PHG power 5, height 1, gain 3, directivity 2",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "phg-comment",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:!4903.50N/07201.75W#PHG2360/digi comment",
+    "Position, Generic digipeater, UNKNOWN vendor/model, 4 W height(HAAT)=80ft=24m 6dBi omni",
+    "N 49 03.5000, W 072 01.7500",
+    "/digi comment"
+   ],
+   "fields": {
+    "comment": "/digi comment",
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "Generic digipeater",
+     "UNKNOWN vendor/model",
+     "4 W height(HAAT)=80ft=24m 6dBi omni"
+    ],
+    "phg": {
+     "directivity": "omni",
+     "gain_dbi": 6,
+     "height_ft": 80,
+     "height_m": 24,
+     "power_w": 4
+    },
+    "position": {
+     "lat": 49.058333,
+     "lat_text": "N 49 03.5000",
+     "lon": -72.029167,
+     "lon_text": "W 072 01.7500"
+    },
+    "symbol": "Generic digipeater",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "extension",
+   "info_hex": "21343930332e35304e2f30373230312e37355723504847323336302f6469676920636f6d6d656e74",
+   "info_text": "!4903.50N/07201.75W#PHG2360/digi comment",
+   "note": "PHG followed by a comment",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "phg-zero",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:=0000.00N/00000.00E#PHG0000",
+    "Position, Generic digipeater, UNKNOWN vendor/model",
+    "N 00 00.0000, E 000 00.0000"
+   ],
+   "fields": {
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "Generic digipeater",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "lat": 0.0,
+     "lat_text": "N 00 00.0000",
+     "lon": 0.0,
+     "lon_text": "E 000 00.0000"
+    },
+    "symbol": "Generic digipeater",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "extension",
+   "info_hex": "3d303030302e30304e2f30303030302e3030452350484730303030",
+   "info_text": "=0000.00N/00000.00E#PHG0000",
+   "note": "PHG with power 0",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "rng-0050",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:!4903.50N/07201.75W#RNG0050 range",
+    "Position, Generic digipeater, UNKNOWN vendor/model, range=50.0",
+    "N 49 03.5000, W 072 01.7500",
+    " range"
+   ],
+   "fields": {
+    "comment": " range",
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "Generic digipeater",
+     "UNKNOWN vendor/model",
+     "range=50.0"
+    ],
+    "position": {
+     "lat": 49.058333,
+     "lat_text": "N 49 03.5000",
+     "lon": -72.029167,
+     "lon_text": "W 072 01.7500"
+    },
+    "range_miles": 50.0,
+    "symbol": "Generic digipeater",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "extension",
+   "info_hex": "21343930332e35304e2f30373230312e37355723524e47303035302072616e6765",
+   "info_text": "!4903.50N/07201.75W#RNG0050 range",
+   "note": "pre-calculated radio range 50 miles",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "dfs-2360",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:!4903.50N/07201.75W\\DFS2360",
+    "Position, Triangle DF primary symbol, UNKNOWN vendor/model",
+    "N 49 03.5000, W 072 01.7500"
+   ],
+   "fields": {
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "Triangle DF primary symbol",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "lat": 49.058333,
+     "lat_text": "N 49 03.5000",
+     "lon": -72.029167,
+     "lon_text": "W 072 01.7500"
+    },
+    "symbol": "Triangle DF primary symbol",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "extension",
+   "info_hex": "21343930332e35304e2f30373230312e3735575c44465332333630",
+   "info_text": "!4903.50N/07201.75W\\DFS2360",
+   "note": "direction finding strength 2, height 3, gain 6, omni",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "cse-spd",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:!4903.50N/07201.75W>088/036",
+    "Position, normal car (side view), UNKNOWN vendor/model",
+    "N 49 03.5000, W 072 01.7500, 67 km/h (41 MPH), course 88"
+   ],
+   "fields": {
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "normal car (side view)",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "course_deg": 88,
+     "lat": 49.058333,
+     "lat_text": "N 49 03.5000",
+     "lon": -72.029167,
+     "lon_text": "W 072 01.7500",
+     "speed_kmh": 67,
+     "speed_mph": 41
+    },
+    "symbol": "normal car (side view)",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "extension",
+   "info_hex": "21343930332e35304e2f30373230312e3735573e3038382f303336",
+   "info_text": "!4903.50N/07201.75W>088/036",
+   "note": "course 88, speed 36",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "cse-spd-zero",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:!4903.50N/07201.75W>000/000",
+    "Position, normal car (side view), UNKNOWN vendor/model",
+    "N 49 03.5000, W 072 01.7500, 0 km/h (0 MPH), course 0"
+   ],
+   "fields": {
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "normal car (side view)",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "course_deg": 0,
+     "lat": 49.058333,
+     "lat_text": "N 49 03.5000",
+     "lon": -72.029167,
+     "lon_text": "W 072 01.7500",
+     "speed_kmh": 0,
+     "speed_mph": 0
+    },
+    "symbol": "normal car (side view)",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "extension",
+   "info_hex": "21343930332e35304e2f30373230312e3735573e3030302f303030",
+   "info_text": "!4903.50N/07201.75W>000/000",
+   "note": "course 0, speed 0",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "cse-spd-high",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:!4903.50N/07201.75W>270/120",
+    "Position, normal car (side view), UNKNOWN vendor/model",
+    "N 49 03.5000, W 072 01.7500, 222 km/h (138 MPH), course 270"
+   ],
+   "fields": {
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "normal car (side view)",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "course_deg": 270,
+     "lat": 49.058333,
+     "lat_text": "N 49 03.5000",
+     "lon": -72.029167,
+     "lon_text": "W 072 01.7500",
+     "speed_kmh": 222,
+     "speed_mph": 138
+    },
+    "symbol": "normal car (side view)",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "extension",
+   "info_hex": "21343930332e35304e2f30373230312e3735573e3237302f313230",
+   "info_text": "!4903.50N/07201.75W>270/120",
+   "note": "course 270, speed 120",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "wx-positionless",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:_10090556c220s004g005t077r000p000P000h50b09900wRSW",
+    "Positionless Weather Report, UNKNOWN vendor/model",
+    "wind 4.0 mph, direction 220, gust 5, temperature 77, rain 0.00 in last hour, rain 0.00 in last 24 hours, rain 0.00 since midnight, humidity 50, barometer 29.24, \"wRSW\""
+   ],
+   "fields": {
+    "data_type": "Positionless Weather Report",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Positionless Weather Report",
+     "UNKNOWN vendor/model"
+    ],
+    "vendor": null,
+    "warnings": [],
+    "weather": {
+     "barometer_inhg": 29.24,
+     "gust_mph": 5,
+     "humidity_pct": 50,
+     "rain_1h_in": 0.0,
+     "rain_24h_in": 0.0,
+     "rain_midnight_in": 0.0,
+     "software": "wRSW",
+     "temp_f": 77,
+     "wind_dir_deg": 220,
+     "wind_mph": 4.0
+    }
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "weather",
+   "info_hex": "5f31303039303535366332323073303034673030357430373772303030703030305030303068353062303939303077525357",
+   "info_text": "_10090556c220s004g005t077r000p000P000h50b09900wRSW",
+   "note": "positionless: the specification's example",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "wx-positionless-missing",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:_10090556c...s...g...t077r...p...P...h..b.....",
+    "Positionless Weather Report, UNKNOWN vendor/model",
+    ", temperature 77, \"\""
+   ],
+   "fields": {
+    "data_type": "Positionless Weather Report",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Positionless Weather Report",
+     "UNKNOWN vendor/model"
+    ],
+    "vendor": null,
+    "warnings": [],
+    "weather": {
+     "temp_f": 77
+    }
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "weather",
+   "info_hex": "5f3130303930353536632e2e2e732e2e2e672e2e2e74303737722e2e2e702e2e2e502e2e2e682e2e622e2e2e2e2e",
+   "info_text": "_10090556c...s...g...t077r...p...P...h..b.....",
+   "note": "positionless, missing fields as dots",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "wx-pos",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:!4903.50N/07201.75W_220/004g005t077r000p000P000h50b09900wRSW",
+    "Weather Report, WEATHER Station (blue), UNKNOWN vendor/model",
+    "N 49 03.5000, W 072 01.7500",
+    "wind 4.6 mph, direction 220, gust 5, temperature 77, rain 0.00 in last hour, rain 0.00 in last 24 hours, rain 0.00 since midnight, humidity 50, barometer 29.24, \"wRSW\""
+   ],
+   "fields": {
+    "data_type": "Weather Report",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Weather Report",
+     "WEATHER Station (blue)",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "lat": 49.058333,
+     "lat_text": "N 49 03.5000",
+     "lon": -72.029167,
+     "lon_text": "W 072 01.7500"
+    },
+    "symbol": "WEATHER Station (blue)",
+    "vendor": null,
+    "warnings": [],
+    "weather": {
+     "barometer_inhg": 29.24,
+     "gust_mph": 5,
+     "humidity_pct": 50,
+     "rain_1h_in": 0.0,
+     "rain_24h_in": 0.0,
+     "rain_midnight_in": 0.0,
+     "software": "wRSW",
+     "temp_f": 77,
+     "wind_dir_deg": 220,
+     "wind_mph": 4.6
+    }
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "weather",
+   "info_hex": "21343930332e35304e2f30373230312e3735575f3232302f303034673030357430373772303030703030305030303068353062303939303077525357",
+   "info_text": "!4903.50N/07201.75W_220/004g005t077r000p000P000h50b09900wRSW",
+   "note": "position + weather: symbol _ and wind direction / speed as data extension",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "wx-pos-negative",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:=3012.34S/14000.10W_090/010g015t-05r000p000P000h85b10132",
+    "Weather Report, WEATHER Station (blue), UNKNOWN vendor/model",
+    "S 30 12.3400, W 140 00.1000",
+    "wind 11.5 mph, direction 90, gust 15, temperature -5, rain 0.00 in last hour, rain 0.00 in last 24 hours, rain 0.00 since midnight, humidity 85, barometer 29.92, \"\""
+   ],
+   "fields": {
+    "data_type": "Weather Report",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Weather Report",
+     "WEATHER Station (blue)",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "lat": -30.205667,
+     "lat_text": "S 30 12.3400",
+     "lon": -140.001667,
+     "lon_text": "W 140 00.1000"
+    },
+    "symbol": "WEATHER Station (blue)",
+    "vendor": null,
+    "warnings": [],
+    "weather": {
+     "barometer_inhg": 29.92,
+     "gust_mph": 15,
+     "humidity_pct": 85,
+     "rain_1h_in": 0.0,
+     "rain_24h_in": 0.0,
+     "rain_midnight_in": 0.0,
+     "temp_f": -5,
+     "wind_dir_deg": 90,
+     "wind_mph": 11.5
+    }
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "weather",
+   "info_hex": "3d333031322e3334532f31343030302e3130575f3039302f30313067303135742d3035723030307030303050303030683835623130313332",
+   "info_text": "=3012.34S/14000.10W_090/010g015t-05r000p000P000h85b10132",
+   "note": "negative temperature, humidity 85",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "wx-pos-ts",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:@092345z4903.50N/07201.75W_220/004g005t077r000p000P000h50b09900L123",
+    "Weather Report, WEATHER Station (blue), UNKNOWN vendor/model",
+    "N 49 03.5000, W 072 01.7500",
+    "wind 4.6 mph, direction 220, gust 5, temperature 77, rain 0.00 in last hour, rain 0.00 in last 24 hours, rain 0.00 since midnight, humidity 50, barometer 29.24, 123 watts/m^2, \"\""
+   ],
+   "fields": {
+    "data_type": "Weather Report",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Weather Report",
+     "WEATHER Station (blue)",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "lat": 49.058333,
+     "lat_text": "N 49 03.5000",
+     "lon": -72.029167,
+     "lon_text": "W 072 01.7500"
+    },
+    "symbol": "WEATHER Station (blue)",
+    "vendor": null,
+    "warnings": [],
+    "weather": {
+     "barometer_inhg": 29.24,
+     "gust_mph": 5,
+     "humidity_pct": 50,
+     "luminosity_wm2": 123,
+     "rain_1h_in": 0.0,
+     "rain_24h_in": 0.0,
+     "rain_midnight_in": 0.0,
+     "temp_f": 77,
+     "wind_dir_deg": 220,
+     "wind_mph": 4.6
+    }
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "weather",
+   "info_hex": "403039323334357a343930332e35304e2f30373230312e3735575f3232302f30303467303035743037377230303070303030503030306835306230393930304c313233",
+   "info_text": "@092345z4903.50N/07201.75W_220/004g005t077r000p000P000h50b09900L123",
+   "note": "timestamp, luminosity",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "dao-human",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:!4903.50N/07201.75W-Test !W83!",
+    "Position, House, UNKNOWN vendor/model",
+    "N 49 03.5080, W 072 01.7530",
+    "Test<0x20>"
+   ],
+   "fields": {
+    "comment": "Test<0x20>",
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "House",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "lat": 49.058467,
+     "lat_text": "N 49 03.5080",
+     "lon": -72.029217,
+     "lon_text": "W 072 01.7530"
+    },
+    "symbol": "House",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "dao",
+   "info_hex": "21343930332e35304e2f30373230312e3735572d54657374202157383321",
+   "info_text": "!4903.50N/07201.75W-Test !W83!",
+   "note": "human readable DAO, datum W (WGS84)",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "dao-base91",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:!4903.50N/07201.75W-Test !wfe!",
+    "Position, House, UNKNOWN vendor/model",
+    "N 49 03.5076, W 072 01.7575",
+    "Test<0x20>"
+   ],
+   "fields": {
+    "comment": "Test<0x20>",
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "House",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "lat": 49.05846,
+     "lat_text": "N 49 03.5076",
+     "lon": -72.029292,
+     "lon_text": "W 072 01.7575"
+    },
+    "symbol": "House",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "dao",
+   "info_hex": "21343930332e35304e2f30373230312e3735572d54657374202177666521",
+   "info_text": "!4903.50N/07201.75W-Test !wfe!",
+   "note": "base-91 DAO, datum w (WGS84)",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "dao-base91-bare",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:!4903.50N/07201.75W-!wfe!",
+    "Position, House, UNKNOWN vendor/model",
+    "N 49 03.5000, W 072 01.7500",
+    "!wfe!"
+   ],
+   "fields": {
+    "comment": "!wfe!",
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "House",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "lat": 49.058333,
+     "lat_text": "N 49 03.5000",
+     "lon": -72.029167,
+     "lon_text": "W 072 01.7500"
+    },
+    "symbol": "House",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "dao",
+   "info_hex": "21343930332e35304e2f30373230312e3735572d2177666521",
+   "info_text": "!4903.50N/07201.75W-!wfe!",
+   "note": "a base-91 DAO as the whole comment, nothing in front of it",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "status-plain",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:>Net control tonight",
+    "Status Report, UNKNOWN vendor/model",
+    "Net control tonight"
+   ],
+   "fields": {
+    "comment": "Net control tonight",
+    "data_type": "Status Report",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Status Report",
+     "UNKNOWN vendor/model"
+    ],
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "status",
+   "info_hex": "3e4e657420636f6e74726f6c20746f6e69676874",
+   "info_text": ">Net control tonight",
+   "note": "plain status",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "status-ts",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:>092345zNet at twenty hundred",
+    "Status Report, UNKNOWN vendor/model",
+    "Net at twenty hundred"
+   ],
+   "fields": {
+    "comment": "Net at twenty hundred",
+    "data_type": "Status Report",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Status Report",
+     "UNKNOWN vendor/model"
+    ],
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "status",
+   "info_hex": "3e3039323334357a4e6574206174207477656e74792068756e64726564",
+   "info_text": ">092345zNet at twenty hundred",
+   "note": "status with a timestamp",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "status-grid6",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:>JJ00AA/- Grid status",
+    "Status Report, House, UNKNOWN vendor/model",
+    "Grid square = JJ00AA, N 00 01.2500, E 000 02.5000",
+    "Grid status"
+   ],
+   "fields": {
+    "comment": "Grid status",
+    "data_type": "Status Report",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Status Report",
+     "House",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "grid": "JJ00AA",
+     "lat": 0.020833,
+     "lat_text": "N 00 01.2500",
+     "lon": 0.041667,
+     "lon_text": "E 000 02.5000"
+    },
+    "symbol": "House",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "status",
+   "info_hex": "3e4a4a303041412f2d204772696420737461747573",
+   "info_text": ">JJ00AA/- Grid status",
+   "note": "6 character Maidenhead locator, symbol, space, text",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "status-grid4",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:>JJ00/- Grid 4",
+    "Status Report, House, UNKNOWN vendor/model",
+    "Grid square = JJ00, N 00 30.0000, E 001 00.0000",
+    "Grid 4"
+   ],
+   "fields": {
+    "comment": "Grid 4",
+    "data_type": "Status Report",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Status Report",
+     "House",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "grid": "JJ00",
+     "lat": 0.5,
+     "lat_text": "N 00 30.0000",
+     "lon": 1.0,
+     "lon_text": "E 001 00.0000"
+    },
+    "symbol": "House",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "status",
+   "info_hex": "3e4a4a30302f2d20477269642034",
+   "info_text": ">JJ00/- Grid 4",
+   "note": "4 character Maidenhead locator",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "obj-live",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:;LEADER   *092345z4903.50N/07201.75W>088/036",
+    "Object, \"LEADER\", normal car (side view), UNKNOWN vendor/model",
+    "N 49 03.5000, W 072 01.7500, 67 km/h (41 MPH), course 88"
+   ],
+   "fields": {
+    "data_type": "Object",
+    "error": false,
+    "extra_lines": [],
+    "name": "LEADER",
+    "parts": [
+     "Object",
+     "\"LEADER\"",
+     "normal car (side view)",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "course_deg": 88,
+     "lat": 49.058333,
+     "lat_text": "N 49 03.5000",
+     "lon": -72.029167,
+     "lon_text": "W 072 01.7500",
+     "speed_kmh": 67,
+     "speed_mph": 41
+    },
+    "symbol": "normal car (side view)",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "object",
+   "info_hex": "3b4c45414445522020202a3039323334357a343930332e35304e2f30373230312e3735573e3038382f303336",
+   "info_text": ";LEADER   *092345z4903.50N/07201.75W>088/036",
+   "note": "live object, course and speed",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "obj-kill",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:;LEADER   _092345z4903.50N/07201.75W>088/036",
+    "Killed Object, \"LEADER\", normal car (side view), UNKNOWN vendor/model",
+    "N 49 03.5000, W 072 01.7500, 67 km/h (41 MPH), course 88"
+   ],
+   "fields": {
+    "data_type": "Killed Object",
+    "error": false,
+    "extra_lines": [],
+    "name": "LEADER",
+    "parts": [
+     "Killed Object",
+     "\"LEADER\"",
+     "normal car (side view)",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "course_deg": 88,
+     "lat": 49.058333,
+     "lat_text": "N 49 03.5000",
+     "lon": -72.029167,
+     "lon_text": "W 072 01.7500",
+     "speed_kmh": 67,
+     "speed_mph": 41
+    },
+    "symbol": "normal car (side view)",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "object",
+   "info_hex": "3b4c45414445522020205f3039323334357a343930332e35304e2f30373230312e3735573e3038382f303336",
+   "info_text": ";LEADER   _092345z4903.50N/07201.75W>088/036",
+   "note": "killed object",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "obj-compressed",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:;COMPOBJ  *092345z/5L!!<*e7>7P[",
+    "Object, \"COMPOBJ\", normal car (side view), UNKNOWN vendor/model",
+    "N 49 30.0000, W 072 45.0002, 67 km/h (42 MPH), course 88"
+   ],
+   "fields": {
+    "data_type": "Object",
+    "error": false,
+    "extra_lines": [],
+    "name": "COMPOBJ",
+    "parts": [
+     "Object",
+     "\"COMPOBJ\"",
+     "normal car (side view)",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "course_deg": 88,
+     "lat": 49.5,
+     "lat_text": "N 49 30.0000",
+     "lon": -72.750003,
+     "lon_text": "W 072 45.0002",
+     "speed_kmh": 67,
+     "speed_mph": 42
+    },
+    "symbol": "normal car (side view)",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "object",
+   "info_hex": "3b434f4d504f424a20202a3039323334357a2f354c21213c2a65373e37505b",
+   "info_text": ";COMPOBJ  *092345z/5L!!<*e7>7P[",
+   "note": "live object, compressed position",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "obj-hms",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:;TESTOBJ  *234517h4903.50N/07201.75W[",
+    "Object, \"TESTOBJ\", Human, UNKNOWN vendor/model",
+    "N 49 03.5000, W 072 01.7500"
+   ],
+   "fields": {
+    "data_type": "Object",
+    "error": false,
+    "extra_lines": [],
+    "name": "TESTOBJ",
+    "parts": [
+     "Object",
+     "\"TESTOBJ\"",
+     "Human",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "lat": 49.058333,
+     "lat_text": "N 49 03.5000",
+     "lon": -72.029167,
+     "lon_text": "W 072 01.7500"
+    },
+    "symbol": "Human",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "object",
+   "info_hex": "3b544553544f424a20202a32333435313768343930332e35304e2f30373230312e3735575b",
+   "info_text": ";TESTOBJ  *234517h4903.50N/07201.75W[",
+   "note": "object with an HMS timestamp",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "obj-phg",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:;REPEATER *092345z4903.50N/07201.75W#PHG5132",
+    "Object, \"REPEATER\", Generic digipeater, UNKNOWN vendor/model, 25 W height(HAAT)=20ft=6m 3dBi E",
+    "N 49 03.5000, W 072 01.7500"
+   ],
+   "fields": {
+    "data_type": "Object",
+    "error": false,
+    "extra_lines": [],
+    "name": "REPEATER",
+    "parts": [
+     "Object",
+     "\"REPEATER\"",
+     "Generic digipeater",
+     "UNKNOWN vendor/model",
+     "25 W height(HAAT)=20ft=6m 3dBi E"
+    ],
+    "phg": {
+     "directivity": "E",
+     "gain_dbi": 3,
+     "height_ft": 20,
+     "height_m": 6,
+     "power_w": 25
+    },
+    "position": {
+     "lat": 49.058333,
+     "lat_text": "N 49 03.5000",
+     "lon": -72.029167,
+     "lon_text": "W 072 01.7500"
+    },
+    "symbol": "Generic digipeater",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "object",
+   "info_hex": "3b5245504541544552202a3039323334357a343930332e35304e2f30373230312e3735572350484735313332",
+   "info_text": ";REPEATER *092345z4903.50N/07201.75W#PHG5132",
+   "note": "object with PHG",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "item-live",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:)AID #2!4903.50N/07201.75WA",
+    "Item, \"AID #2\", Aid station, UNKNOWN vendor/model",
+    "N 49 03.5000, W 072 01.7500"
+   ],
+   "fields": {
+    "data_type": "Item",
+    "error": false,
+    "extra_lines": [],
+    "name": "AID #2",
+    "parts": [
+     "Item",
+     "\"AID #2\"",
+     "Aid station",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "lat": 49.058333,
+     "lat_text": "N 49 03.5000",
+     "lon": -72.029167,
+     "lon_text": "W 072 01.7500"
+    },
+    "symbol": "Aid station",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "item",
+   "info_hex": "2941494420233221343930332e35304e2f30373230312e37355741",
+   "info_text": ")AID #2!4903.50N/07201.75WA",
+   "note": "live item, name of 5 characters",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "item-kill",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:)AID #2_4903.50N/07201.75WA",
+    "Killed Item, \"AID #2\", Aid station, UNKNOWN vendor/model",
+    "N 49 03.5000, W 072 01.7500"
+   ],
+   "fields": {
+    "data_type": "Killed Item",
+    "error": false,
+    "extra_lines": [],
+    "name": "AID #2",
+    "parts": [
+     "Killed Item",
+     "\"AID #2\"",
+     "Aid station",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "lat": 49.058333,
+     "lat_text": "N 49 03.5000",
+     "lon": -72.029167,
+     "lon_text": "W 072 01.7500"
+    },
+    "symbol": "Aid station",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "item",
+   "info_hex": "294149442023325f343930332e35304e2f30373230312e37355741",
+   "info_text": ")AID #2_4903.50N/07201.75WA",
+   "note": "killed item",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "item-compressed",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:)AID #3!/5L!!<*e7>7P[",
+    "Item, \"AID #3\", normal car (side view), UNKNOWN vendor/model",
+    "N 49 30.0000, W 072 45.0002, 67 km/h (42 MPH), course 88"
+   ],
+   "fields": {
+    "data_type": "Item",
+    "error": false,
+    "extra_lines": [],
+    "name": "AID #3",
+    "parts": [
+     "Item",
+     "\"AID #3\"",
+     "normal car (side view)",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "course_deg": 88,
+     "lat": 49.5,
+     "lat_text": "N 49 30.0000",
+     "lon": -72.750003,
+     "lon_text": "W 072 45.0002",
+     "speed_kmh": 67,
+     "speed_mph": 42
+    },
+    "symbol": "normal car (side view)",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "item",
+   "info_hex": "29414944202333212f354c21213c2a65373e37505b",
+   "info_text": ")AID #3!/5L!!<*e7>7P[",
+   "note": "item with a compressed position",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "tp-position",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:}N0TEST-1>APZ000,TCPIP,N0CALL*:!4903.50N/07201.75W-Third party",
+    "Position, House, UNKNOWN vendor/model",
+    "N 49 03.5000, W 072 01.7500",
+    "Third party"
+   ],
+   "fields": {
+    "comment": "Third party",
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "House",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "lat": 49.058333,
+     "lat_text": "N 49 03.5000",
+     "lon": -72.029167,
+     "lon_text": "W 072 01.7500"
+    },
+    "symbol": "House",
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "third-party",
+   "info_hex": "7d4e30544553542d313e41505a3030302c54435049502c4e3043414c4c2a3a21343930332e35304e2f30373230312e3735572d5468697264207061727479",
+   "info_text": "}N0TEST-1>APZ000,TCPIP,N0CALL*:!4903.50N/07201.75W-Third party",
+   "note": "third-party position",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "tp-message",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:}N0TEST-1>APZ000,TCPIP*::N0DEST-2 :Hello via gateway{12",
+    "APRS Message, number \"12\", from \"N0TEST-1\" to \"N0DEST-2\", UNKNOWN vendor/model",
+    "Hello via gateway"
+   ],
+   "fields": {
+    "comment": "Hello via gateway",
+    "data_type": "APRS Message",
+    "error": false,
+    "extra_lines": [],
+    "message_from": "N0TEST-1",
+    "message_number": "12",
+    "message_to": "N0DEST-2",
+    "parts": [
+     "APRS Message",
+     "number \"12\"",
+     "from \"N0TEST-1\" to \"N0DEST-2\"",
+     "UNKNOWN vendor/model"
+    ],
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "third-party",
+   "info_hex": "7d4e30544553542d313e41505a3030302c54435049502a3a3a4e30444553542d32203a48656c6c6f2076696120676174657761797b3132",
+   "info_text": "}N0TEST-1>APZ000,TCPIP*::N0DEST-2 :Hello via gateway{12",
+   "note": "third-party message",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "tp-status",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:}N0TEST>APZ000,TCPIP*:>status of someone else",
+    "Status Report, UNKNOWN vendor/model",
+    "status of someone else"
+   ],
+   "fields": {
+    "comment": "status of someone else",
+    "data_type": "Status Report",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Status Report",
+     "UNKNOWN vendor/model"
+    ],
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "third-party",
+   "info_hex": "7d4e30544553543e41505a3030302c54435049502a3a3e737461747573206f6620736f6d656f6e6520656c7365",
+   "info_text": "}N0TEST>APZ000,TCPIP*:>status of someone else",
+   "note": "third-party status",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "neg-unknown-dti",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:~unknown data type",
+    "ERROR!!!  Unknown APRS Data Type Indicator \"~\", UNKNOWN vendor/model"
+   ],
+   "fields": {
+    "data_type": "ERROR!!!  Unknown APRS Data Type Indicator \"~\"",
+    "error": true,
+    "extra_lines": [],
+    "parts": [
+     "ERROR!!!  Unknown APRS Data Type Indicator \"~\"",
+     "UNKNOWN vendor/model"
+    ],
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "negative",
+   "info_hex": "7e756e6b6e6f776e20646174612074797065",
+   "info_text": "~unknown data type",
+   "note": "no such data type indicator",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "neg-short-pos",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:!4903.50N/0720",
+    "Invalid character in longitude.  Found 'Symbol code is not a printable character.",
+    "Position, --no-symbol--, UNKNOWN vendor/model",
+    "N 49 03.5000, Invalid Longitude"
+   ],
+   "fields": {
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "--no-symbol--",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "lat": 49.058333,
+     "lat_text": "N 49 03.5000",
+     "lon": null
+    },
+    "symbol": "--no-symbol--",
+    "vendor": null,
+    "warnings": [
+     "Invalid character in longitude.  Found 'Symbol code is not a printable character."
+    ]
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "negative",
+   "info_hex": "21343930332e35304e2f30373230",
+   "info_text": "!4903.50N/0720",
+   "note": "position cut off",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "neg-bad-lat",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:!4903.50X/07201.75W-",
+    "Error: 'X' found for latitude hemisphere.  Specification requires upper case N or S.",
+    "Position, House, UNKNOWN vendor/model",
+    "Invalid Latitude, W 072 01.7500"
+   ],
+   "fields": {
+    "data_type": "Position",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "Position",
+     "House",
+     "UNKNOWN vendor/model"
+    ],
+    "position": {
+     "lat": null,
+     "lon": -72.029167,
+     "lon_text": "W 072 01.7500"
+    },
+    "symbol": "House",
+    "vendor": null,
+    "warnings": [
+     "Error: 'X' found for latitude hemisphere.  Specification requires upper case N or S."
+    ]
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "negative",
+   "info_hex": "21343930332e3530582f30373230312e3735572d",
+   "info_text": "!4903.50X/07201.75W-",
+   "note": "latitude without N or S",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "neg-short-msg",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1::N0TEST",
+    "APRS Message must have a minimum of 11 characters for : 9 character addressee :",
+    "APRS Message, UNKNOWN vendor/model"
+   ],
+   "fields": {
+    "data_type": "APRS Message",
+    "error": false,
+    "extra_lines": [],
+    "parts": [
+     "APRS Message",
+     "UNKNOWN vendor/model"
+    ],
+    "vendor": null,
+    "warnings": [
+     "APRS Message must have a minimum of 11 characters for : 9 character addressee :"
+    ]
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "negative",
+   "info_hex": "3a4e3054455354",
+   "info_text": ":N0TEST",
+   "note": "message shorter than an addressee",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  },
+  {
+   "case": "neg-empty",
+   "dw_lines": [
+    "N0CALL-9>APZ000,WIDE1-1:",
+    "ERROR!!!  Unknown APRS Data Type Indicator: unprintable 0x00, UNKNOWN vendor/model"
+   ],
+   "fields": {
+    "data_type": "ERROR!!!  Unknown APRS Data Type Indicator: unprintable 0x00",
+    "error": true,
+    "extra_lines": [],
+    "parts": [
+     "ERROR!!!  Unknown APRS Data Type Indicator: unprintable 0x00",
+     "UNKNOWN vendor/model"
+    ],
+    "vendor": null,
+    "warnings": []
+   },
+   "frame_header": "N0CALL-9>APZ000,WIDE1-1",
+   "group": "negative",
+   "info_hex": "",
+   "info_text": "",
+   "note": "empty information field",
+   "rc": 0,
+   "schema": "dvt-direwolf-aprs/1"
+  }
+ ],
+ "schema": "dvt-direwolf-aprs/1",
+ "tool": "Dire Wolf Release 1.8.1, November 2025"
+}

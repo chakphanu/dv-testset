@@ -13,4 +13,9 @@ in `.env.example`). JSON text only: no audio, no frame dumps. Reading and result
   Dire Wolf's KISS port, its KISSCOPY fan-out, `kissutil` and its log made of them;
   `kissutil_encoder` holds kissutil's TNC2 to KISS bytes against ours.
 
+- `aprs_decode.json` (schema `dvt-direwolf-aprs/1`, `python3 -m dvtest.oracle_aprs run`): the
+  information field (hex and text) of 93 APRS frames and what Dire Wolf's `decode_aprs` printed
+  and (parsed) decoded for each: the 17 frames above plus 76 strings written from the APRS 1.0.1
+  formats for DV-Router's APRS core (`dvtest/aprs_cases.py`). Reading: `docs/direwolf-cases.md`.
+
 `vectors/airtime/anchors.json` (`python3 -m dvtest.airtime`) is the LoRa airtime table.
