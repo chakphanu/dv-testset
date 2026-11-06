@@ -2,6 +2,7 @@
 """dvtest/sut_config.py (the dv-router.toml template of DVT_SUT_LAUNCH=native)
 and the early refusals of scripts/run.sh for that launch mode."""
 import os
+import re
 import subprocess
 import sys
 import tomllib
@@ -482,8 +483,9 @@ enable = true
 
 def test_gens_are_ordered_and_the_default_is_c165c93(monkeypatch):
     monkeypatch.delenv("DVT_SUT_GEN", raising=False)
-    assert sut_config.GENS == ("71ab207", "c165c93", "c2465de") and sut_config.gen_value() == "c165c93"
+    assert sut_config.GENS == ("71ab207", "c165c93", "c2465de", "compat1") and sut_config.gen_value() == "c165c93"
     assert sut_config.gen_at_least("c2465de", "c165c93") and not sut_config.gen_at_least("c165c93", "c2465de")
+    assert sut_config.gen_at_least("compat1", "c2465de") and not sut_config.gen_at_least("c2465de", "compat1")
     assert sut_config.gen_at_least("c165c93", "71ab207")
 
 
@@ -521,3 +523,100 @@ def test_edge_name_follows_the_environment(monkeypatch):
     monkeypatch.setenv("DVT_SUT_GEN", "bogus")
     with pytest.raises(sut_config.ConfigError):
         sut_config.edge_name("mmdvm")
+
+
+# ---- compat1: the shim keys are gone (COMPAT1)
+
+REPO = Path(__file__).resolve().parents[2]
+SNIPPETS = REPO / "rig" / "config" / "dv-router"
+TOTP_TEMPLATE = """\
+schema = 1
+[web]
+enable = false
+[admin]
+enable = false
+"""
+
+
+def _snippet(name):
+    return (SNIPPETS / name).read_text(encoding="utf-8")
+
+
+def _web_admin(gen):
+    out = sut_config.render(TOTP_TEMPLATE, "172.30.0", extras=[_snippet("web.toml"), _snippet("admin.toml")], gen=gen)
+    return tomllib.loads(out)
+
+
+def test_compat1_renames_the_totp_keys_of_the_snippets():
+    cfg = _web_admin("compat1")
+    assert cfg["web"]["totp_required"] is True and "operator_totp" not in cfg["web"]
+    assert cfg["admin"]["totp_required"] is True and "totp" not in cfg["admin"]
+    assert cfg["web"]["enable"] is True and cfg["admin"]["bind"] == "0.0.0.0:8080"          # the rest is untouched
+
+
+def test_older_gens_keep_the_old_totp_keys():
+    for gen in ("71ab207", "c165c93", "c2465de"):
+        cfg = _web_admin(gen)
+        assert cfg["web"]["operator_totp"] is True and "totp_required" not in cfg["web"], gen
+        assert cfg["admin"]["totp"] is True and "totp_required" not in cfg["admin"], gen
+
+
+def test_compat1_totp_required_snippet_after_web_admin_has_no_duplicate_key():
+    extras = [_snippet("web.toml"), _snippet("admin.toml"), _snippet("totp-required.toml")]
+    cfg = tomllib.loads(sut_config.render(TOTP_TEMPLATE, "172.30.0", extras=extras, gen="compat1"))
+    assert cfg["web"]["totp_required"] is True and cfg["admin"]["totp_required"] is True
+    assert "operator_totp" not in cfg["web"] and "totp" not in cfg["admin"]
+    old = tomllib.loads(sut_config.render(TOTP_TEMPLATE, "172.30.0", extras=extras, gen="c165c93"))
+    assert old["web"]["operator_totp"] is True and old["web"]["totp_required"] is True and old["admin"]["totp"] is True
+
+
+def test_compat1_adapt_text_drops_an_old_key_when_the_new_one_is_there_and_keeps_values():
+    text = "[web]\noperator_totp = false  # keep\ntotp_required = true\n[admin]\ntotp = false\n[node]\ntotp = 1\n"
+    out = sut_config.adapt_text(text, "compat1")
+    cfg = tomllib.loads(out)
+    assert cfg == {"web": {"totp_required": True}, "admin": {"totp_required": False}, "node": {"totp": 1}}
+    assert sut_config.adapt_text(text, "c2465de") == text and sut_config.adapt_text(text, "71ab207") == text
+    assert sut_config.adapt_text("[admin]\ntotp = false # c\n", "compat1") == "[admin]\ntotp_required = false # c\n"
+
+
+PEER_FILES = ("xlx-peer.toml", "xlx-peer2.toml", "xlx-peer-host.toml", "xlx-peer2-host.toml", "xlx-peer-host-bad.toml",
+              "xlx-peer-tester.toml")
+
+
+def test_compat1_adds_kind_xlx_to_every_xlx_peer_row():
+    for name in PEER_FILES:
+        text = _snippet(name)
+        rows = text.count("[[edges.xlx.peer]]")
+        assert rows >= 1, name
+        out = sut_config.render(text, "172.30.0", gen="compat1")
+        peers = tomllib.loads(out)["edges"]["xlx"]["peer"]
+        assert len(peers) == rows and all(p["kind"] == "xlx" for p in peers), name
+        assert all(p["callsign"].startswith("XLX") and p["modules"] for p in peers), name
+        for gen in ("71ab207", "c165c93", "c2465de"):
+            old = tomllib.loads(sut_config.render(text, "172.30.0", gen=gen))["edges"]["xlx"]["peer"]
+            assert len(old) == rows and all("kind" not in p for p in old), (name, gen)
+
+
+def test_compat1_keeps_an_existing_kind_and_other_peer_tables():
+    text = '[[edges.xlx.peer]]\nkind = "xlx"\ncallsign = "XLX1"\n[[edges.nxdn.peer]]\ncallsign = "N1"\n[[edges.xlx.peer]]\ncallsign = "XLX2"\n'
+    cfg = tomllib.loads(sut_config.render(text, "172.30.0", gen="compat1"))
+    assert [p["kind"] for p in cfg["edges"]["xlx"]["peer"]] == ["xlx", "xlx"]
+    assert "kind" not in cfg["edges"]["nxdn"]["peer"][0]
+
+
+def test_compat1_includes_the_c2465de_and_c165c93_changes():
+    out = sut_config.render(MMDVM_TEMPLATE, "172.30.0", gen="compat1")
+    assert "[edges.dmrhb]" in out and "mmdvm" not in out.replace("mmdvmx", "") and "fabric" not in out
+    assert sut_config.edge_name("mmdvm", "compat1") == "dmrhb" and sut_config.env_prefix("mmdvm", "compat1") == "DV_DMRHB_"
+
+
+def test_run_sh_writes_no_mmdvm_env_name_from_c2465de_on():
+    """scripts/run.sh picks the DV_<edge>_NO_RADIO_ID prefix with a case on DVT_SUT_GEN: every generation that env_prefix() maps to
+    DV_DMRHB_ must be on the DMRHB side of that case, all others on MMDVM."""
+    text = (REPO / "scripts" / "run.sh").read_text(encoding="utf-8")
+    m = re.search(r'case "\$\{DVT_SUT_GEN:-\}" in ([^)]*)\) hb=DMRHB ;; \*\) hb=MMDVM ;; esac', text)
+    assert m, "the hb= case of scripts/run.sh changed"
+    dmrhb = set(m.group(1).split("|"))
+    for gen in sut_config.GENS:
+        assert (gen in dmrhb) == (sut_config.env_prefix("mmdvm", gen) == "DV_DMRHB_"), gen
+    assert "DV_MMDVM_" not in text.replace("DV_MMDVM_* became", "")

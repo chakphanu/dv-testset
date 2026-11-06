@@ -359,7 +359,7 @@ the tester gets the other two through `rig/compose.yml` (empty = the default).
 
 | Knob | Values | What it selects |
 |------|--------|-----------------|
-| `DVT_SUT_GEN` | `c165c93` (default), `71ab207`, `c2465de` | the config dialect and the edge names of the image under test (`dvtest/sut_config.py`, `apply_gen`, `edge_name`, `env_prefix`). `c165c93` (ACL0c-f) removes the `[fabric]` table of the template: it is an unknown table of that validator (its only key `acl` was ignored with a warning before), so the file is refused without this. `71ab207` renders the template as it was. Both older images accept the `c165c93` rendering (checked), so the default is safe for either. **`c2465de` (tags >= wip-c2465de)** adds the rename of the DMR Homebrew edge `mmdvm` to `dmrhb`: the renderer turns `[edges.mmdvm]` / `[edges.mmdvm.x]` / `[[edges.mmdvm.x]]` into `edges.dmrhb`, `scripts/run.sh` writes `DV_DMRHB_NO_RADIO_ID` instead of `DV_MMDVM_NO_RADIO_ID`, and `edge_name("mmdvm")` / `env_prefix("mmdvm")` give `dmrhb` / `DV_DMRHB_` for cases and tools that name the edge. `dv-edge-dmrhb` is in `PROC_STAT_NAMES` / `scripts/lib/procstat.sh` next to `dv-edge-mmdvm` (the image has one of them). Child `dv-edge-dmrhb`, edge id `dmrhb-<inc>`, the API / events edge `dmrhb` and the metrics label `proc="dmrhb"` follow; wire id 2 and UDP 62030 are unchanged, and the MMDVM PROTOCOL name (spec entry `mmdvm`, `dvtest/proto/dmr.py`, the xlxd reference) is not renamed. On `wip-c2465de` the c165c93 rendering still loads (`[edges.mmdvm]` is a warning for one release) |
+| `DVT_SUT_GEN` | `c165c93` (default), `71ab207`, `c2465de`, `compat1` | the config dialect and the edge names of the image under test (`dvtest/sut_config.py`, `apply_gen`, `edge_name`, `env_prefix`). `c165c93` (ACL0c-f) removes the `[fabric]` table of the template: it is an unknown table of that validator (its only key `acl` was ignored with a warning before), so the file is refused without this. `71ab207` renders the template as it was. Both older images accept the `c165c93` rendering (checked), so the default is safe for either. **`c2465de` (tags >= wip-c2465de)** adds the rename of the DMR Homebrew edge `mmdvm` to `dmrhb`: the renderer turns `[edges.mmdvm]` / `[edges.mmdvm.x]` / `[[edges.mmdvm.x]]` into `edges.dmrhb`, `scripts/run.sh` writes `DV_DMRHB_NO_RADIO_ID` instead of `DV_MMDVM_NO_RADIO_ID`, and `edge_name("mmdvm")` / `env_prefix("mmdvm")` give `dmrhb` / `DV_DMRHB_` for cases and tools that name the edge. `dv-edge-dmrhb` is in `PROC_STAT_NAMES` / `scripts/lib/procstat.sh` next to `dv-edge-mmdvm` (the image has one of them). Child `dv-edge-dmrhb`, edge id `dmrhb-<inc>`, the API / events edge `dmrhb` and the metrics label `proc="dmrhb"` follow; wire id 2 and UDP 62030 are unchanged, and the MMDVM PROTOCOL name (spec entry `mmdvm`, `dvtest/proto/dmr.py`, the xlxd reference) is not renamed. On `wip-c2465de` the c165c93 rendering still loads (`[edges.mmdvm]` is a warning for one release). **`compat1`** is a superset of `c2465de`, see "compat1" below |
 | `DVT_TOTP1B` | unset / `1` (default), `0` | the TOTP1b behaviour of the web side (`dvtest/totp_optional.py`, `web_wrong_password()`): a wrong password at the step-up and at disable is 403 `totp_invalid` (as on admin), and the login page clears a stale wrong-code banner (`test_operator_login_with_totp_step`). `0` = `wip-71ab207`: 401 `unauthorized`, banner not asserted |
 | `DVT_ASL_PHONE_REG` | unset / `1` (default), `0` | the phone-mode IAX2 registration cases R8-R12 of `cases/test_asl_edge.py` (REGREQ / REGAUTH / REGACK, REGREJ for a wrong secret; ASL1g). `0` skips them for an image before ASL1g (it answers a REGREQ with REGREJ) |
 
@@ -380,6 +380,36 @@ container (`--network none`, the `dvtest.limits` caps, read-only root, `--cap-dr
 (`fabric.acl was removed with the broker ACL`). Warnings only: `admin.totp` / `web.operator_totp` ignored, the `ids.dmrid` / `ids.nxdn`
 seed files not found (no mount in the check), `node.state_dir` unset. The ASL1h registration log lines are checked after a run:
 `python3 -m dvtest.tools.asl_reg_log out/<run>/logs/xlxd-sut.log --expect-registrations 1` (run.sh writes the log at the end).
+
+#### compat1 (DV-Router COMPAT1: the backward-compat shims are removed)
+
+`DVT_SUT_GEN=compat1` is a superset of `c2465de`; the repo default stays `c165c93` and every older value renders exactly as before. The
+snippets in `rig/config/dv-router/` keep the keys of the older images; the renames happen at render time for compat1 only
+(`sut_config.adapt_text` per template / extra text before the merge, `apply_gen` after it). `DVT_SUT_GEN` also reaches the tester now
+(`rig/compose.yml`, empty = default) for the two gen-dependent expectations below.
+
+| What | compat1 | older gens |
+|------|---------|------------|
+| `web.toml` `[web] operator_totp`, `admin.toml` `[admin] totp` | rendered as `totp_required` (the old keys are errors; a line whose `totp_required` is already in the table, e.g. from `totp-required.toml`, is dropped, never repeated) | old keys (warnings since TOTP1) |
+| `[[edges.xlx.peer]]` rows (`xlx-peer*.toml`, `xlx-peer-host*.toml`, `xlx-peer-tester.toml`, and the template's own rows) | `kind = "xlx"` added as the first key of a row that has no `kind` | no `kind` (unknown key there) |
+| `DV_<EDGE>_NO_RADIO_ID` written by `scripts/run.sh` | `DV_DMRHB_*` only (the `hb=` case lists `c2465de` and `compat1`); no `DV_MMDVM_*` name is written | `DV_MMDVM_*` before c2465de |
+| `[edges.mmdvm]` | renamed to `edges.dmrhb` as on c2465de | as before |
+| web operations (`api_web.web_ops()` / `web_keys()`, `cases/test_web_api.py`) | `PUT /api/v1/auth/password` is gone: 47 audience operations, 51 with the four root probes (`POST` stays) | 48 / 52 |
+| `dv_edge_data_total` (`cases/test_data_ident.py`, `metrics.edge_data_family()`) | removed; no successor name is known yet, so the edge counter is read as 0 and the records say "n/a" (nothing asserted it). Set `metrics.EDGE_DATA_SUCCESSOR` when DV-Router names the new family | read as before |
+
+Offline check of any rendered TOML: `dv-router config check FILE` (no network, no writes). The rig has no hook for it yet:
+`scripts/run.sh` has no config-check call, and `dvtest.tools.config_check` (above) still starts `dv-router --config FILE` in a throw-away
+container and reads the validation lines. Use `config check` by hand on a file from `out/<run>/xlxd-config/` when an image has it.
+
+Three host-state traps that DV-Router named for rig / dev hosts that keep a state directory across images (none is produced by the rig:
+`grep` of `rig/`, `dvtest/` and `scripts/` finds no `limits` row, no managed header and no `accounts.jsonl` writer; the rig's `sut-state/`
+is created fresh per run and dv-svc-web writes its accounts itself):
+
+- a baseline `web/accounts.jsonl` with rows that carry `limits:{}` stops `dv-svc-web` from starting (fail-closed). Delete or fix the
+  rows before reusing an old state dir;
+- a baseline-imported state TOML that still has the old managed header is run as native (hand-written) config. Regenerate it or
+  remove the old header, do not assume the import tool owns it;
+- `dv-svc-callhome` on a fresh install needs `identity create` first, or it does not start.
 
 ## AllStarLink test lab (profile asl-lab)
 

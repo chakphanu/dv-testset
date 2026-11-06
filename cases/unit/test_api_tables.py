@@ -241,3 +241,37 @@ def test_tables_match_the_real_specs():
     if readme.is_file():
         rows = api_web.parse_migration_table(readme.read_text(encoding="utf-8"))
         assert set(rows) == set(api_web.MIGRATION), "README migration table differs from api_web.MIGRATION"
+
+
+def test_compat1_drops_put_auth_password_only(monkeypatch):
+    """COMPAT1: 51 operations (47 audience + 4 root probes), PUT /api/v1/auth/password gone; every older generation keeps 52."""
+    monkeypatch.delenv("DVT_SUT_GEN", raising=False)
+    key = ("PUT", "/api/v1/auth/password")
+    for gen in ("71ab207", "c165c93", "c2465de"):
+        assert api_web.web_ops(gen) == api_web.WEB_OPS and len(api_web.web_keys(gen)) == 52 and key in api_web.web_keys(gen)
+    ops = api_web.web_ops("compat1")
+    assert len(ops) == 47 and len(api_web.web_keys("compat1")) == 51 and key not in api_web.web_keys("compat1")
+    assert ("POST", "/api/v1/auth/password") in api_web.web_keys("compat1")
+    assert [op.key for op in api_web.WEB_OPS if op not in ops] == [key]
+    assert {op.path for op in ops} == api_web.WEB_TEMPLATES                  # the template still has POST
+    assert api_web.REMOVED_ON_COMPAT1 == (key,)
+    assert len(api_web.WEB_OPS) == 48 and len(api_web.WEB_KEYS) == 52         # the module tables stay the old ones
+
+
+def test_web_ops_follow_the_environment(monkeypatch):
+    monkeypatch.delenv("DVT_SUT_GEN", raising=False)
+    assert len(api_web.web_ops()) == 48
+    monkeypatch.setenv("DVT_SUT_GEN", "compat1")
+    assert len(api_web.web_ops()) == 47 and len(api_web.web_keys()) == 51
+    monkeypatch.setenv("DVT_SUT_GEN", "bogus")
+    with pytest.raises(Exception):
+        api_web.web_ops()
+
+
+def test_compare_spec_dir_uses_the_table_of_the_generation(tmp_path):
+    web = "paths:\n" + "".join("  %s:\n    %s:\n" % (p, m.lower()) for m, p in sorted(api_web.web_keys("compat1")))
+    (tmp_path / "openapi-web.yaml").write_text(web, encoding="utf-8")
+    (tmp_path / "openapi-admin.yaml").write_text("paths:\n", encoding="utf-8")
+    assert api_web.compare_spec_dir(str(tmp_path), admin_table=set(), gen="compat1")["web"] == ([], [])
+    added, removed = api_web.compare_spec_dir(str(tmp_path), admin_table=set(), gen="c165c93")["web"]
+    assert added == [] and removed == [("PUT", "/api/v1/auth/password")]      # in the old table only

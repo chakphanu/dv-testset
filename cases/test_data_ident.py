@@ -47,7 +47,10 @@ blocks at frames 1..8 and 9..16).
      test_xlxd_interlink.py (both directions) is byte-identical in both settings.
   f  every case prints the deltas of all counters it reads, including
      dv_edge_data_total{result=unidentified}, which the DV-Router answer marks as
-     unverified for worker-submitted items: recorded, never asserted.
+     unverified for worker-submitted items: recorded, never asserted. COMPAT1
+     removed that family (DVT_SUT_GEN=compat1; no successor name is known yet,
+     dvtest/metrics.py edge_data_family): the edge deltas are then 0 and the
+     records say so.
 
 Findings and records go to stdout and to out/<run>/data-ident.txt ("FINDING" =
 observed differs from the documented rule, "RECORD" = nothing documented).
@@ -82,6 +85,9 @@ POLL_S = 25.0                   # the change shows up within this after the even
 OVER_WAIT_S = 15.0              # a text over starts after the floor was idle for idle_gap_ms
 XLX_MODULE = "D"                # first of DVT_INTERLINK_MODULES
 RESULTS = ("accepted", "unidentified")
+# the per-edge counter is only recorded, never asserted; compat1 removed dv_edge_data_total (dvtest/metrics.py edge_data_family): the
+# records then say "n/a (removed on compat1)" and the edge deltas are 0
+EDGE_NAME = metrics.edge_data_family() or "dv_edge_data_total n/a (removed on compat1)"
 
 
 # ---------------------------------------------------------------- findings
@@ -103,13 +109,13 @@ def note(target, case, tag, text):
 def snapshot(samples):
     """The counters the cases read, by flat name: room.<result> (controller,
     dv_room_data_total), pkt.<kind>.<result> (worker, dv_pkt_items_total),
-    edge.<result> (dv_edge_data_total), each also as .all (any result)."""
+    edge.<result> (dv_edge_data_total; metrics.edge_data_family(): 0 on compat1, which removed it), each also as .all (any result)."""
     snap = {"room.all": metrics.total(samples, "dv_room_data_total"),
             "pkt.all": metrics.total(samples, "dv_pkt_items_total"),
-            "edge.all": metrics.total(samples, "dv_edge_data_total")}
+            "edge.all": metrics.edge_total(samples)}
     for result in RESULTS:
         snap["room." + result] = metrics.total(samples, "dv_room_data_total", result=result)
-        snap["edge." + result] = metrics.total(samples, "dv_edge_data_total", result=result)
+        snap["edge." + result] = metrics.edge_total(samples, result=result)
         for kind in ("text", "status"):
             snap["pkt.%s.%s" % (kind, result)] = metrics.total(
                 samples, "dv_pkt_items_total", kind=kind, result=result)
@@ -199,7 +205,7 @@ def hub(rig, target, rig_control):
     yield helper
     try:
         for line in helper.text().splitlines():
-            if line.startswith(("dv_room_data_total", "dv_pkt_items_total", "dv_edge_data_total")) \
+            if line.startswith(("dv_room_data_total", "dv_pkt_items_total") + ((metrics.edge_data_family(),) if metrics.edge_data_family() else ())) \
                     and line.rsplit(" ", 1)[-1] not in ("0", "0.0"):
                 note(target, "hub", "RECORD", "end of run: " + line)
     except Exception:                                    # the SUT may be gone; not a case failure
@@ -365,8 +371,8 @@ def test_peer_sms_needs_an_identity(rig, target, hub, m17_peers):
     after, seen = hub.wait_for(before, anything_counted)
     change = delta(after, before)
     delivered = [got["text"].rstrip() for _sid, got in texts_of(overs) if got["text"].rstrip().endswith(body)]
-    note(target, "c", "RECORD", "delivered=%s %s counters=%s dv_edge_data_total{unidentified} delta=%d (unverified "
-         "in the docs)" % (bool(delivered), delivered[:1], moved(change), change["edge.unidentified"]))
+    note(target, "c", "RECORD", "delivered=%s %s counters=%s %s{unidentified} delta=%d (unverified "
+         "in the docs)" % (bool(delivered), delivered[:1], moved(change), EDGE_NAME, change["edge.unidentified"]))
     assert seen, "no counter moved in %.0f s" % POLL_S
     if REQUIRE_IDENT:
         assert not delivered, "peer SMS was delivered under require_ident=true: %s" % delivered
@@ -465,8 +471,8 @@ def test_xlx_peer_slow_data_counters(rig, target, hub, interlink):
     if not seen:                                         # one of the two may be all there is: judged below
         seen = anything_counted_any(after, before)
     change = delta(after, before)
-    note(target, "d", "RECORD", "sent %d frames, listener got %d; counters %s; dv_edge_data_total{unidentified} "
-         "delta=%d" % (len(frames), len(got["received"]), moved(change), change["edge.unidentified"]))
+    note(target, "d", "RECORD", "sent %d frames, listener got %d; counters %s; %s{unidentified} "
+         "delta=%d" % (len(frames), len(got["received"]), moved(change), EDGE_NAME, change["edge.unidentified"]))
     assert [a for a, _s in got["received"]] == [a for a, _s in got["sent"]], "voice differs across the interlink"
     slow_differs = [i for i, (r, s) in enumerate(zip(got["received"], got["sent"])) if r[1] != s[1]]
     if slow_differs:

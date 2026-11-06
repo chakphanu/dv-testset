@@ -287,7 +287,7 @@ def test_public_events_resume_and_topics(anon):
 
 # ================================================================ (a) role matrix
 
-WEB_MATRIX = [(op, role) for op in api_web.WEB_OPS + api_web.WEB_ROOT_OPS for role in api_probe.WEB_ROLES]
+WEB_MATRIX = [(op, role) for op in api_web.web_ops() + api_web.WEB_ROOT_OPS for role in api_probe.WEB_ROLES]
 
 # Answers of matrix probes that DV-Router documents exactly since API4 (asserted on top of the class):
 # (method, path) -> {role: (status, problem code or None)}
@@ -506,7 +506,7 @@ def test_removed_admin_urls_are_404(service, methods, old, new, web_url_admin, w
 
 def test_unchanged_rtc_urls_still_work(rx_user, anon):
     assert len(api_web.UNCHANGED) == 4 and [r[2] for r in api_web.UNCHANGED] == list(api_web.RTC_PATHS)
-    for op in api_web.WEB_OPS:
+    for op in api_web.web_ops():
         if op.path not in api_web.RTC_PATHS:
             continue
         res = api_probe.send(rx_user.client, op)

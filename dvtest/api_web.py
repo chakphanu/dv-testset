@@ -200,6 +200,24 @@ WEB_ROOT_OPS = (
 )
 
 WEB_KEYS = frozenset(op.key for op in WEB_OPS + WEB_ROOT_OPS)      # 52, as the spec
+# COMPAT1 (DVT_SUT_GEN=compat1) removed the shim method PUT /api/v1/auth/password (POST stays): 47 audience operations, 51 with the
+# root probes. WEB_OPS / WEB_KEYS above are the tables of every older generation; web_ops() / web_keys() pick by generation.
+REMOVED_ON_COMPAT1 = (("PUT", "/api/v1/auth/password"),)
+
+
+def web_ops(gen=None):
+    """The audience operations of generation `gen` (else env DVT_SUT_GEN, else the default): WEB_OPS (48) before compat1, 47 from
+    compat1 on (REMOVED_ON_COMPAT1 dropped). ConfigError for an unknown generation."""
+    from dvtest import sut_config
+    if not sut_config.gen_at_least(gen, sut_config.COMPAT1):
+        return WEB_OPS
+    return tuple(op for op in WEB_OPS if op.key not in REMOVED_ON_COMPAT1)
+
+
+def web_keys(gen=None):
+    """The (method, path) keys of the operations of generation `gen`, root probes included: 52 before compat1, 51 from compat1 on."""
+    return frozenset(op.key for op in web_ops(gen) + WEB_ROOT_OPS)
+
 WEB_TEMPLATES = frozenset(op.path for op in WEB_OPS)                  # the 34 audience templates
 RTC_PATHS = ("/api/v1/rtc/offer", "/api/v1/rtc/close", "/api/v1/rtc/alive", "/api/v1/rtc/ice")
 
@@ -383,12 +401,12 @@ def success_mismatches(ops, spec_success):
     return sorted(bad)
 
 
-def compare_spec_success(directory):
+def compare_spec_success(directory, gen=None):
     """{"web": mismatches, "admin": mismatches} of the declared success statuses
-    (success_mismatches) against the two spec files in `directory`."""
+    (success_mismatches) against the two spec files in `directory`; the web table is that of generation `gen` (web_ops)."""
     from dvtest import api_admin
     out = {}
-    for name, ops in (("web", WEB_OPS + WEB_ROOT_OPS), ("admin", api_admin.ADMIN_OPS)):
+    for name, ops in (("web", web_ops(gen) + WEB_ROOT_OPS), ("admin", api_admin.ADMIN_OPS)):
         with open(os.path.join(directory, "openapi-%s.yaml" % name), encoding="utf-8") as fh:
             out[name] = success_mismatches(ops, parse_spec_success(fh.read()))
     return out
@@ -401,12 +419,12 @@ def diff_ops(table, spec):
     return sorted(spec - table), sorted(table - spec)
 
 
-def compare_spec_dir(directory, web_table=None, admin_table=None):
+def compare_spec_dir(directory, web_table=None, admin_table=None, gen=None):
     """Compare the tables with openapi-web.yaml and openapi-admin.yaml in
     `directory`. Returns {"web": (added, removed), "admin": (added, removed)};
-    FileNotFoundError when a file is missing."""
+    FileNotFoundError when a file is missing. The default web table is that of generation `gen` (web_keys)."""
     from dvtest import api_admin
-    web_table = WEB_KEYS if web_table is None else web_table
+    web_table = web_keys(gen) if web_table is None else web_table
     admin_table = api_admin.ADMIN_KEYS if admin_table is None else admin_table
     out = {}
     for name, table in (("web", web_table), ("admin", admin_table)):

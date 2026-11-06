@@ -124,3 +124,25 @@ def total(samples, name, **labels):
     return sum(s.value for s in samples
                if s.name == name and all(s.labels.get(k) == v for k, v in labels.items())
                and not math.isnan(s.value))
+
+
+# The per-edge data item counter of the hub. `dv_edge_data_total{result=...}` exists up to the generation before compat1; COMPAT1 removed
+# it and no successor name is known to the rig yet (not in docs, the soak families, or any recorded run). Set EDGE_DATA_SUCCESSOR to the
+# new family name when DV-Router names it; until then a case on compat1 reads no edge counter (edge_data_family() is None).
+EDGE_DATA_OLD = "dv_edge_data_total"
+EDGE_DATA_SUCCESSOR = None
+
+
+def edge_data_family(gen=None):
+    """The name of the per-edge data item counter on image generation `gen` (else env DVT_SUT_GEN, else the default), or None when the
+    generation has none that the rig knows (compat1 until EDGE_DATA_SUCCESSOR is set). ConfigError for an unknown generation."""
+    from dvtest import sut_config
+    if sut_config.gen_at_least(gen, sut_config.COMPAT1):
+        return EDGE_DATA_SUCCESSOR
+    return EDGE_DATA_OLD
+
+
+def edge_total(samples, gen=None, **labels):
+    """total() of the per-edge data counter of generation `gen`; 0.0 when the generation has no such counter."""
+    name = edge_data_family(gen)
+    return 0.0 if name is None else total(samples, name, **labels)

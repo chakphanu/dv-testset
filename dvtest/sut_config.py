@@ -84,10 +84,16 @@ def require_ident_value(value=None):
 # "mmdvm" to "dmrhb": child dv-edge-dmrhb, edge id dmrhb-<inc>, API/events edge "dmrhb", metrics label proc="dmrhb", config table
 # [edges.dmrhb] ([edges.mmdvm] still loads for one release, with a warning), env DV_MMDVM_* -> DV_DMRHB_*; wire id 2 and UDP 62030 are
 # unchanged. The MMDVM PROTOCOL name (spec entry "mmdvm", dvtest/proto/dmr.py, the xlxd reference side) is not renamed.
-GENS = ("71ab207", "c165c93", "c2465de")
+# `compat1` (COMPAT1, the backward-compat shims are gone; a superset of c2465de) makes the shim keys errors: `web.operator_totp` /
+# `admin.totp` are rejected (the key is `totp_required`), every `[[edges.xlx.peer]]` row needs `kind = "xlx"`, env DV_MMDVM_* is
+# gone (DV_DMRHB_* only), `[edges.mmdvm]` no longer loads. The repo snippets keep the keys of the older images; the renames happen at
+# render time for compat1 only (`apply_gen`, `adapt_text`), so every older generation renders as before.
+GENS = ("71ab207", "c165c93", "c2465de", "compat1")
 DEFAULT_GEN = "c165c93"
 RENAMES = {"mmdvm": "dmrhb"}          # edge name before -> from generation c2465de on
 RENAMED_FROM = "c2465de"
+COMPAT1 = "compat1"
+KEY_RENAMES = {("web", "operator_totp"): "totp_required", ("admin", "totp"): "totp_required"}   # (table, old key) -> new key, compat1
 
 
 def gen_value(value=None):
@@ -116,13 +122,52 @@ def env_prefix(name, gen=None):
 
 
 _EDGES_HEADER = re.compile(r"^(\s*\[\[?\s*)edges\.mmdvm(\b)")
+_XLX_PEER_HEADER = re.compile(r"^\s*\[\[\s*edges\.xlx\.peer\s*\]\]\s*(#.*)?$")
+
+
+def adapt_text(text, gen):
+    """One TOML text (the template or one extra) in the key dialect of generation `gen`, BEFORE the extras are merged. Before compat1:
+    unchanged. compat1: `[web] operator_totp` and `[admin] totp` become `totp_required` (the old keys are errors there); a line whose
+    new key is already in the same table is dropped instead, so no key is repeated. The values are kept."""
+    if not gen_at_least(gen, COMPAT1):
+        return text
+    parts = _split_tables(text)
+    for part in parts:
+        name, body = part[0], part[3]
+        olds = [old for (table, old) in KEY_RENAMES if table == name]
+        if not olds:
+            continue
+        have = {m.group(1) for m in map(_KEY.match, body) if m}
+        out = []
+        for line in body:
+            m = _KEY.match(line)
+            new = KEY_RENAMES.get((name, m.group(1))) if m else None
+            if new is None:
+                out.append(line)
+            elif new not in have:
+                have.add(new)
+                out.append(line[:m.start(1)] + new + line[m.end(1):])
+            # else: the new key is there already, the old line is dropped
+        part[3] = out
+    return _join_tables(parts)
+
+
+def _add_peer_kind(text):
+    """`kind = "xlx"` as the first line of every `[[edges.xlx.peer]]` row that has no `kind` key."""
+    parts = _split_tables(text)
+    for part in parts:
+        if part[2] is not None and _XLX_PEER_HEADER.match(part[2]):
+            if not any(m and m.group(1) == "kind" for m in map(_KEY.match, part[3])):
+                part[3].insert(0, 'kind = "xlx"')
+    return _join_tables(parts)
 
 
 def apply_gen(text, gen):
     """The rendered text in the dialect of generation `gen`. 71ab207: unchanged. From c165c93 on: the `[fabric]` table is removed (the
     broker ACL is gone: its only key `acl` was ignored with a warning before, and the table itself is an unknown field now, so the
     validator refuses the file); sub-tables `[fabric.x]` go with it. From c2465de on: every `[edges.mmdvm]`, `[edges.mmdvm.x]` and
-    `[[edges.mmdvm.x]]` header becomes `edges.dmrhb`. Other removed keys (access.allow_file / deny_file, callhome interlink_file) are
+    `[[edges.mmdvm.x]]` header becomes `edges.dmrhb`. From compat1 on: every `[[edges.xlx.peer]]` row gets `kind = "xlx"` (the totp key
+    renames are done per text before the merge: `adapt_text`). Other removed keys (access.allow_file / deny_file, callhome interlink_file) are
     not rewritten: dvtest/tools/config_check.py reports them."""
     gen = gen_value(gen)
     if gen == "71ab207":
@@ -131,6 +176,8 @@ def apply_gen(text, gen):
     text = _join_tables(parts)
     if gen_at_least(gen, RENAMED_FROM):
         text = "\n".join(_EDGES_HEADER.sub(lambda m: m.group(1) + "edges.dmrhb" + m.group(2), line) for line in text.split("\n"))
+    if gen_at_least(gen, COMPAT1):
+        text = _add_peer_kind(text)
     return text
 
 
@@ -234,8 +281,9 @@ def render(text, net, own=11, transcoder=21, tester=30, require_ident=None, extr
         raise ConfigError("net must be a /24 prefix like 172.30.0 (got %r)" % net)
     values = {"NET": net, "REQUIRE_IDENT": require_ident_value(require_ident)}
     gen = gen_value(gen)
+    text = adapt_text(text, gen)
     for extra in extras:
-        text = merge_extra(text.rstrip("\n") + "\n", extra)
+        text = merge_extra(text.rstrip("\n") + "\n", adapt_text(extra, gen))
     for name, octet in (("OWN_IP", own), ("TRANSCODER_IP", transcoder), ("TESTER_IP", tester),
                         ("WEB_PROXY_IP", web_proxy), ("BROWSER_IP", browser), ("COTURN_IP", coturn)):
         if not isinstance(octet, int) or isinstance(octet, bool) or not 1 <= octet <= 254:

@@ -382,6 +382,8 @@ services:
       DVT_WEB_URL: https://${DVT_WEB_HOST:-dvt-web}
       DVT_WEB_PROXY: ${DVT_NET:-172.30.0}.90
       DVT_TOTP1B: ${DVT_TOTP1B:-}
+      # image generation of the SUT (docs/rig.md "Image generations"); the tester reads it for gen-dependent expectations (api_web, test_data_ident). Empty = the default
+      DVT_SUT_GEN: ${DVT_SUT_GEN:-}
       DVT_ADMIN_URL: https://${DVT_ADMIN_HOST:-dvt-admin}:${DVT_ADMIN_PORT:-8443}
       # profile browser (cases/browser_fixtures.py): on when the browser service runs
       DVT_BROWSER: ${DVT_BROWSER:-off}

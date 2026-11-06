@@ -788,8 +788,9 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
     [ "$svc" != xlxd-sut ] || printf '      DV_DMRPLUS_GATEWAY_ID: "1023000"\n'
     # DVT_NO_RADIO_ID: no-radio-id policy of every radio-id protocol (unset = not written; xlxd ignores it)
     if [ "$svc" = xlxd-sut ] && [ -n "${DVT_NO_RADIO_ID:-}" ]; then
-      # DV_MMDVM_* became DV_DMRHB_* with DVT_SUT_GEN=c2465de (the DMR Homebrew edge was renamed dmrhb; docs/rig.md "Image generations")
-      hb=MMDVM; [ "${DVT_SUT_GEN:-}" != c2465de ] || hb=DMRHB
+      # DV_MMDVM_* became DV_DMRHB_* with DVT_SUT_GEN=c2465de and every later generation (compat1; the DMR Homebrew edge was renamed
+      # dmrhb; docs/rig.md "Image generations"). Only 71ab207 and c165c93 (the default) keep the old name.
+      case "${DVT_SUT_GEN:-}" in c2465de|compat1) hb=DMRHB ;; *) hb=MMDVM ;; esac
       for p in $hb DMRPLUS NXDN P25; do printf '      DV_%s_NO_RADIO_ID: "%s"\n' "$p" "$DVT_NO_RADIO_ID"; done
     fi
     # DVT_USRP_IDLE_TIMEOUT_S: dynamic USRP idle timeout of the sut (unset = not written; xlxd ignores it)

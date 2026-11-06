@@ -70,3 +70,23 @@ def test_families_from_help_type_and_samples():
     # a family that only has HELP / TYPE lines is still a family
     assert metrics.families("# HELP dv_x something\n# TYPE dv_y counter\n") == {"dv_x", "dv_y"}
     assert metrics.families("") == set()
+
+
+def test_edge_data_family_by_generation(monkeypatch):
+    """dv_edge_data_total up to c2465de; compat1 removed it and no successor is known (None, readers get 0)."""
+    monkeypatch.delenv("DVT_SUT_GEN", raising=False)
+    for gen in (None, "71ab207", "c165c93", "c2465de"):
+        assert metrics.edge_data_family(gen) == "dv_edge_data_total", gen
+    assert metrics.edge_data_family("compat1") is None
+    monkeypatch.setenv("DVT_SUT_GEN", "compat1")
+    assert metrics.edge_data_family() is None
+    monkeypatch.setattr(metrics, "EDGE_DATA_SUCCESSOR", "dv_edge_items_total")
+    assert metrics.edge_data_family() == "dv_edge_items_total" and metrics.edge_data_family("c165c93") == "dv_edge_data_total"
+
+
+def test_edge_total_reads_the_old_family_and_is_zero_without_one(monkeypatch):
+    monkeypatch.delenv("DVT_SUT_GEN", raising=False)
+    text = 'dv_edge_data_total{result="unidentified",edge="xlx"} 3\ndv_edge_data_total{result="accepted"} 4\n'
+    samples = metrics.parse(text)
+    assert metrics.edge_total(samples) == 7.0 and metrics.edge_total(samples, result="unidentified") == 3.0
+    assert metrics.edge_total(samples, "compat1") == 0.0 and metrics.edge_total(samples, "compat1", result="accepted") == 0.0
