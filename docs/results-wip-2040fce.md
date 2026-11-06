@@ -27,7 +27,7 @@ wip-239382b in brackets are from the same rig and the same cases (`docs/results-
 | 4 | Host-name peer rows, NXDN (`nxdn-peer-host`, `-bad`; `test_edge_relink.py -k nxdn`) | `20261105T211601Z`, `T211736Z` | 2 / 0 each | 1 min 28 s, 1 min 48 s | pass |
 | 4 | Host-name peer rows, P25 (`p25-peer-host`, `-bad`; `-k p25`) | `20261105T211930Z`, `T212049Z` | 2 / 0 each | 1 min 11 s, 1 min 32 s | pass |
 | 5a | SOAK1 standard (600 s warmup + 3000 s measured; `web.toml:totp-required.toml:soak-edges.toml:admin.toml`, `--profile web,webload`) | `20261105T212227Z` | 1 / 0 / 0 | 69 min 22 s | pass, 48 children, no restart, table below |
-| 5b | Long soak (600 s warmup + 5100 s measured, `DVT_SOAK_WALL_CAP_S=6600`) | see "Long soak" | | | |
+| 5b | Long soak (600 s warmup + 5100 s measured, `DVT_SOAK_WALL_CAP_S=6600`) | | | | stopped after about 26 minutes (`soak.stop`) when wip-dce9d0a and wip-488b89d superseded this image; no verdict |
 | E | D-STAR echo integrity E9 across images (a request of DV-Router) | see "Echo" | | | defect B (seq byte) on every image, defect A not reproduced |
 
 Load average at the start of the runs was 0.4 to 4.8 (1 minute); no timing-sensitive case failed.
