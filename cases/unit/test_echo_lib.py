@@ -775,12 +775,12 @@ def _hdr(**kw):
 def test_header_policy_per_kind():
     assert echo.header_policy("dextra", "echo_listener") == (False, True)
     assert echo.header_policy("dplus", "echo_listener") == (True, True)
-    assert echo.header_policy("dcs", "echo_sender") == (False, False)
+    assert echo.header_policy("dcs", "echo_sender") == (False, True)
     assert echo.header_policy("g3", "echo_sender") == (False, False)
     assert echo.header_policy("g3", "echo_listener") == (False, True)
 
 
-def test_header_rule_dplus_suffix_follows_the_live_copy_and_dcs_rpt2_is_a_finding():
+def test_header_rule_dplus_suffix_follows_the_live_copy_and_dcs_rpt2_is_strict():
     sent = _hdr(rpt2="XLX999 E")
     fwd = _hdr(rpt2="REF999 E", suffix="DPLS")
     echo_h = _hdr(rpt2="REF999 E", suffix="DPLS")
@@ -788,6 +788,7 @@ def test_header_rule_dplus_suffix_follows_the_live_copy_and_dcs_rpt2_is_a_findin
     assert echo.header_failures(sent, fwd, echo_h, suffix_from_forward=True) == []
     assert echo.header_failures(sent, fwd, _hdr(rpt2="REF999 E", suffix="XXXX"), suffix_from_forward=True) != []
     dcs_fwd, dcs_echo = _hdr(rpt2="XLX999 E"), _hdr(rpt2="DCS999 E")
+    assert echo.header_failures(sent, dcs_fwd, dcs_echo) == ["echo RPT2 is 'DCS999 E', the forward copy carries 'XLX999 E'"]    # DCS: strict, the live copy is the defect
     assert echo.header_failures(sent, dcs_fwd, dcs_echo, rpt2_vs_forward=False) == []
     assert echo.header_notes(dcs_fwd, dcs_echo) == ["echo RPT2 is 'DCS999 E', the live copy carries 'XLX999 E'"]
     assert echo.header_notes(dcs_fwd, dcs_fwd) == []

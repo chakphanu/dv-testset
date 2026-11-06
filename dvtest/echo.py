@@ -429,15 +429,14 @@ def header_record(packet):
 
 
 def header_policy(kind, stream):
-    """(suffix_from_forward, rpt2_vs_forward) for the header rule of one echo stream. DExtra: the full rule (suffix as sent, RPT2 as the
-    forward copy). DPlus: the DPlus edge stamps its own suffix (DPLS) on every header it emits, live copy and echo alike, so the echo
-    suffix is compared with the forward copy's. DCS: the live copy carries the sender's RPT2 unchanged while the echo names the reflector
-    (DCS999 E): recorded as a finding, not asserted (DV-Router's call). G3: the sender's own echo return is G3 egress and the forward
-    copy the tester has is a DExtra listener's, so RPT2 is not comparable there (the DExtra-side listener stream still is)."""
+    """(suffix_from_forward, rpt2_vs_forward) for the header rule of one echo stream. DExtra and DCS: the full rule (suffix as sent,
+    RPT2 as the forward copy). On DCS the echo RPT2 is the reflector name + module ('DCS999 E'), which is what ircDDBGateway needs
+    (DV-Router ruling); a live copy that carries the sender's RPT2 unchanged is a live-path defect and FAILS here, the judge does not
+    accept it. DPlus: the DPlus edge stamps its own suffix (DPLS) on every header it emits, live copy and echo alike, so the echo
+    suffix is compared with the forward copy's. G3: the sender's own echo return is G3 egress and the forward copy the tester has is
+    a DExtra listener's, so RPT2 is not comparable there (the DExtra-side listener stream still is)."""
     if kind == "dplus":
         return True, True
-    if kind == "dcs":
-        return False, False
     if kind == "g3" and stream == "echo_sender":
         return False, False
     return False, True
