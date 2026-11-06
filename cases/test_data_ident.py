@@ -131,6 +131,24 @@ def delta(after, before):
     return {key: after[key] - before[key] for key in after}
 
 
+def edge_counts_known():
+    """True on the generations that have dv_edge_raw_total / dv_edge_render_total (compat1 and newer; they replace dv_edge_data_total)."""
+    from dvtest import sut_config
+    return sut_config.gen_at_least(None, sut_config.COMPAT1)
+
+
+def check_edge_counts(change, delivered):
+    """By sums only (no label values): dv_edge_raw_total counts the item the edge saw (+1, delivered or not), dv_edge_render_total only
+    what was rendered for delivery: > 0 for a delivered text item, 0 for an unidentified one denied under require_ident=true."""
+    if not edge_counts_known():
+        return
+    assert change["edge_raw.all"] == 1, "dv_edge_raw_total moved by %s, want 1: %s" % (change["edge_raw.all"], moved(change))
+    if delivered:
+        assert change["edge_render.all"] > 0, "dv_edge_render_total did not move for a delivered item: %s" % moved(change)
+    else:
+        assert change["edge_render.all"] == 0, "dv_edge_render_total moved for a denied item: %s" % moved(change)
+
+
 def moved(delta_map):
     """The non-zero entries, for printing."""
     return {key: int(value) for key, value in sorted(delta_map.items()) if value}
@@ -315,6 +333,7 @@ def test_direct_sms_becomes_a_dstar_text_over(rig, target, hub):
     assert seen, "no counter moved in %.0f s" % POLL_S
     assert change["room.accepted"] >= 1, "controller did not count the SMS as accepted: %s" % moved(change)
     assert change["room.unidentified"] == 0 and change["pkt.text.unidentified"] == 0, moved(change)
+    check_edge_counts(change, delivered=True)
 
 
 # ---------------------------------------------------------------- b: SRC variants
@@ -382,11 +401,13 @@ def test_peer_sms_needs_an_identity(rig, target, hub, m17_peers):
         assert change["room.unidentified"] >= 1, "controller counted no unidentified item: %s" % moved(change)
         assert change["pkt.text.unidentified"] >= 1, "worker counted no unidentified text: %s" % moved(change)
         assert change["room.accepted"] == 0 and change["pkt.text.accepted"] == 0, moved(change)
+        check_edge_counts(change, delivered=False)
     else:
         assert delivered, "peer SMS was not delivered under require_ident=false (counters %s, overs %s)" % (
             moved(change), [describe(o) for o in overs])
         assert change["room.accepted"] >= 1 and change["pkt.text.accepted"] >= 1, moved(change)
         assert change["room.unidentified"] == 0 and change["pkt.text.unidentified"] == 0, moved(change)
+        check_edge_counts(change, delivered=True)
         text = delivered[0]
         if text != "%s: %s" % (src, body):
             note(target, "c", "RECORD", "display text %r (SRC %s, body %s)" % (text, src, body))
