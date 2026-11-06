@@ -1,12 +1,14 @@
 <!-- SPDX-License-Identifier: MIT -->
 # M17 v3 test sources for DV-Router (P26j, offline half)
 
-Status: generator, vectors, unit tests and a DRAFT verifier image exist; the
-image is NOT built and nothing here has run against DV-Router or m17-fme.
+Status: generator, vectors, unit tests and the m17-fme verifier image exist. The
+image was BUILT and RUN (section "Build and run results"): the micro-ecc digest
+convention of the generator is accepted by m17-fme, and `oracle_verdict` is
+filled for 48 entries. Nothing here has run against DV-Router.
 DV-Router's v3 gate has no runtime enable (Rust API only), so there is no rig
 run for P26j: the evidence is the vector files in `vectors/m17v3/`, which a
 test in the DV-Router repository reads verdict for verdict, plus a one-time
-signature cross-check in m17-fme (Docker steps below).
+signature cross-check in m17-fme (done, see below).
 
 What this does and does not prove (the honest wording for the tracker):
 independent implementation of the signature scheme (m17-fme, micro-ecc),
@@ -22,9 +24,9 @@ unused, pyM17 has the nibbles swapped).
 | `dvtest/ecdsa_p256.py` | pure-Python ECDSA P-256, RFC 6979 nonce, micro-ecc digest convention |
 | `dvtest/proto/m17v3.py` | v3 TYPE, legacy mapping, META encoders and decoders, digest, signed-stream generator, negative builders, reference verifier |
 | `dvtest/m17v3_vectors.py`, `scripts/gen-m17v3-vectors.py` | build and write the vector files |
-| `vectors/m17v3/` | the vectors (`README.md` there: schema, verdicts, provenance) |
+| `vectors/m17v3/` | the vectors (`README.md` there: schema, verdicts, provenance); `oracle_verdicts.json` is the overlay with the m17-fme results |
 | `dvtest/oracle_m17.py` | m17-fme input files, output parser, comparison, thin Docker call |
-| `rig/Dockerfile.m17fme`, `rig/m17fme-entry.sh` | verifier image (NOT built) |
+| `rig/Dockerfile.m17fme`, `rig/m17fme-entry.sh` | verifier image `dvt-m17fme:local` (built, 119 MB on disk) |
 | `scripts/pre-fetch-m17.sh`, `.env.example` (`M17_*`, `MICRO_ECC_*`, `LIBM17_*`) | one-time fetch and pins |
 | `cases/unit/test_ecdsa_p256.py`, `test_m17v3.py`, `test_oracle_m17.py` | all pure |
 
@@ -72,7 +74,7 @@ numbers). Where they differ the spec (or the code) wins:
    big-endian copy applies because `uECC_VLI_NATIVE_LITTLE_ENDIAN` defaults to 0
    (uECC.h l.51-52) and no M17 project defines it; builds that do are
    incompatible by the header's own warning. Research's UNVERIFIED point is
-   now read, not yet run (Docker steps).
+   now read and run ("Build and run results"): accepted by m17-fme.
 6. Draft l.1156 says "15-byte META block" (typo, META is 14 bytes everywhere else).
 7. m17-fme dates: head 6a93a2a is dated 2026-01-30 in the clone (research:
    2026-01-26). No effect.
@@ -163,39 +165,115 @@ DV-Router Rust test compares; "oracle" is what checks the vector itself.
 Not covered, by design: late-joiner timing of META inside a superframe (no v3
 sender exists to copy), real v3 client interop, packet-mode v3.
 
-## Docker steps to verify next (nothing here is built)
+## Build and run results (m17-fme 6a93a2a, micro-ecc 31520c8)
 
-Do these when the rig is idle, inside `scripts/contained.sh --name build`.
+Built once, no change to `rig/Dockerfile.m17fme` or `rig/m17fme-entry.sh` beyond
+the header comment: `scripts/contained.sh --name build -- docker build ...`
+(command in the Dockerfile header), base `debian:bookworm-slim`. cmake printed
+`micro-ecc found`; gcc warns `-Wmaybe-uninitialized` in `uECC.c` (harmless).
+`docker images`: `dvt-m17fme:local` 119 MB on disk (29.7 MB content). The
+banner reports `Build Version: GIT-NOTFOUND` and `Specification Version: 2.0.3`.
+The output has no ANSI escapes (`-DCOLORS=OFF`), but the usage banner uses
+box-drawing UTF-8 (ignored by the parser).
 
-1. `scripts/pre-fetch-m17.sh` (already done once in this worktree).
-2. Build `rig/Dockerfile.m17fme` (command in its header). Things that may
-   break: the named build contexts, `COPY --from=uecc *.c *.h *.inc` wildcards,
-   `find_file(UECC ...)` seeing `src/micro-ecc/uECC.h` (otherwise `-- micro-ecc
-   not found` and `Signature` lines say `uECC Support Not Compiled;`),
-   `git_describe` without git, a missing `-lm`.
-3. Smoke: `docker run --rm --network none dvt-m17fme:local version` prints the
-   usage banner.
-4. `python3 -m dvtest.oracle_m17 --image dvt-m17fme:local --out out/m17fme.json
-   --verdicts-out out/oracle_verdicts.json`. One container per vector. Expect:
-   `valid` and `valid-meta-changes` -> ` Signature Valid;`; the
-   `invalid_signature` rows -> ` Signature Invalid;`; the `incomplete` rows -> no
-   signature line; `malformed` and `unsigned` rows are reported with
-   `agrees: null` (m17-fme keys on FN only).
-5. If `valid` prints `Invalid`: the micro-ecc convention is wrong in
-   `dvtest/ecdsa_p256.py` (check `uECC_VLI_NATIVE_LITTLE_ENDIAN`, left-padding);
-   rerun by hand with `-v 1` (m17-fme then prints the four signature chunks)
-   and compare with the vector's `signature`. This is the first thing to
-   settle; everything else in P26j-4 depends on it.
-6. Copy `out/oracle_verdicts.json` to `vectors/m17v3/oracle_verdicts.json`, run
-   `scripts/gen-m17v3-vectors.py`; the unit test then keeps the files
-   consistent.
-7. Optional, GNSS: a ten-line C driver linking libm17 (`set_LSF_meta_position`
+One fix was needed in the run side, not in the image: `dvtest.oracle_m17` wrote
+the input files into a 0700 temp directory that the container user (uid 10001)
+could not read, so every run ended with `dvt-m17fme: cannot read ...` (exit 2,
+on stderr, which `run_command` did not capture). Now the files are made
+world-readable (they are public vector data) and `run_command` merges stderr.
+
+### VERIFIED by the build and run
+
+`python3 -m dvtest.oracle_m17 --image dvt-m17fme:local` (container per vector:
+`--network none`, `--read-only`, `--cap-drop ALL`, `dvtest.limits` caps, 60 s
+timeout), 36 vectors with packets (`bad-key-63-bytes` is skipped), plus by hand the two recipe entries, the
+`m17-fme`-oracle rows of `ecdsa.json` / `keys.json`, and the META decode.
+
+1. The micro-ecc convention is ACCEPTED: digest = 16 zero bytes, per data frame
+   `digest ^= payload` then rotate-left one byte; ECDSA P-256 over the digest
+   left-padded to 32 bytes; signature raw `r||s`; public key `x||y`. m17-fme
+   prints ` Signature Valid;` for `valid`, `valid-meta-changes` and
+   `boundary-max-frames` (0x7FFC data frames, 32768 packets), and for both
+   keys (`key-a`, `key-b`: a fresh 5-frame stream signed with each key) and
+   the two 16-byte-digest rows (`digest16-0-valid`, `digest16-1-valid`; a
+   one-frame stream whose payload is the digest rotated right).
+2. ` Signature Invalid;` for every stream that breaks the signature or the
+   digest: `tampered-payload`, `wrong-key`, `lost-frame`, `reordered-frames`,
+   `duplicate-data-frame`, the 5 `digest-*` variants (no rotate, right-padded
+   to 32, SHA-256 of the digest, SHA-256 of the payloads, truncated to 15),
+   `bad-key-off-curve`, `bad-key-zero`, the 4 `bad-signature-*`, and the two
+   flipped-bit rows. The negatives are discriminating: the convention is not
+   accepted by accident.
+3. No signature line (`no_verdict`) for the streams that do not end with FN
+   0x7FFF: `missing-tail-frame`, `missing-tail-two`, `missing-tail-all`,
+   `signed-bit-no-tail`, `truncated-mid-stream`, `tail-fn-shifted`,
+   `unsigned-plain`.
+4. Zero disagreements with `expect.verdict` in `compare()`: 23 of 36 runs
+   `agrees: true`, none false; the 13 `malformed` / `unsigned` rows are
+   `agrees: null` by design.
+5. META decode (m17-fme prints it for legacy-labelled packets; TYPE 0x0025 for
+   GNSS, 0x0045 for ECD, 0x0005 for text): all 7 `meta_gnss` rows decode to
+   the same values as `decoded_float` (latitude and longitude to six decimals,
+   altitude, speed, bearing, radius 8.0 for n=3 and 128.0 for n=7, `GPS Not
+   Valid` when the position bits are clear, source/station names for 0 / 1 / 2
+   and `Other Data Source: F; Reserved Station Type: F` for 15); the 4
+   `meta_text_v2` rows give `Meta Text Data; i/n` per block and the same
+   `Complete Meta Text`; both `meta_ecd` rows give `Meta Extended CSD; CF1 ...
+   CF2 ...` with the callsigns. This is a cross-check of the v2 layout; it is
+   not libm17 (the GNSS rows keep `oracle: libm17+mrefd`, so their
+   `oracle_verdict` stays null; the four text rows got `decode_match`).
+6. A v3 TYPE (0x2010 with GNSS META) prints only ` Unknown LSF TYPE;`: the
+   confirmation that v3 packets must be re-labelled.
+
+### Where m17-fme is more lenient than the strict collector
+
+Not a disagreement on the digest or the byte order (those agree); m17-fme
+simply does not check what the strict collector (`collect_stream`) checks. The
+`oracle_verdict` column records what it printed:
+
+| Vector | `expect.collector` | m17-fme |
+|--------|--------------------|---------|
+| `short-packet`, `short-data-packet` (53-byte packet) | `size_error` | `IP CRC ERR`, but still ` Signature Valid;` |
+| `long-packet` (55-byte packet) | `size_error` | one `Unknown LSF TYPE;`, still Valid |
+| `early-tail-chunk` | `sequence_error` | Valid (signature chunks are placed by FN) |
+| `eot-none` | `sequence_error` | Valid (a missing EOT does not matter) |
+| `eot-last-data`, `eot-first-sig`, `eot-third-sig`, `eot-both` | `sequence_error` | Invalid (EOT mid-stream restarts the accumulation) |
+| `tail-duplicate-fn` | `sequence_error` | Invalid |
+| `unsigned-with-tail` | `null` | Valid (keys on FN, not on the signed bit) |
+| `lost-frame`, `reordered-frames`, `duplicate-data-frame`, `boundary-one-too-many` | `sequence_error` | Invalid (spec verdict `invalid_signature`/`malformed`) |
+| `bad-key-*`, `bad-signature-*` | `bad_public_key` / `bad_signature_encoding` | Invalid (does not tell the cause) |
+
+So a strict collector is stricter than m17-fme on size, CRC, EOT and tail
+order; any test that wants those rejected must use the collector expectation,
+not the m17-fme verdict.
+
+### UNVERIFIED (still open)
+
+- `bad-key-63-bytes` (m17-fme's key file holds 64 bytes), `digest16-*-right-padded`
+  (a 32-byte digest cannot be expressed as an m17-fme stream), the two `meta_aes_iv`
+  rows (libm17 + m17-fme IV path, not run), all GNSS rows against libm17 and
+  mrefd (step 7, no C driver written), and every v3-only field (m17-fme rejects
+  the v3 TYPE; no v3 implementation exists).
+- Text v3 (`meta_text_v3`) is spec-only. The draft's three ambiguities and the
+  collector's EOT assumption are unchanged.
+- Nothing has run against DV-Router.
+
+## Remaining steps
+
+1. (done) `scripts/pre-fetch-m17.sh`, build, smoke, oracle run, overlay file
+   `vectors/m17v3/oracle_verdicts.json`, `scripts/gen-m17v3-vectors.py`.
+2. Optional, GNSS: a ten-line C driver linking libm17 (`set_LSF_meta_position`
    with each entry's `libm17_args`, print `meta`) in a second build stage;
    compare within 1 LSB on latitude and longitude. Not written.
-8. Re-check upstream (m17-fme, OpenRTX, DroidStar) for a v3 TYPE before closing
+3. Re-check upstream (m17-fme, OpenRTX, DroidStar) for a v3 TYPE before closing
    P26j; open a spec issue for the draft's three ambiguities (text index base
    l.2209, altitude l.2166, AES prose l.2032; the last is already fixed in
    2.0.10 but not in the draft).
+4. To redo the run: build as in the Dockerfile header, then
+   `python3 -m dvtest.oracle_m17 --image dvt-m17fme:local --out out/m17fme.json
+   --verdicts-out out/oracle_verdicts.json`; the tool covers the 36 streams with
+   packets and a 64-byte key only (the recipe, ecdsa, key and META rows of
+   `oracle_verdicts.json` were produced by hand with the same container).
 
 ## What the DV-Router test needs to supply
 

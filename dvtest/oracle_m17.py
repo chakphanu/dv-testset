@@ -20,11 +20,12 @@ TYPE (dvtest.proto.m17v3.retype_packets) before they are written; the
 signature covers payloads only, so the verdict is the same.
 
 The pure parts are unit-tested (cases/unit/test_oracle_m17.py); run_command()
-and docker_argv() are the thin Docker side, not exercised before the image is
-built (docs/m17v3-cases.md, "Docker steps").
+and docker_argv() are the thin Docker side, exercised against the built image
+(docs/m17v3-cases.md, "Build and run results").
 """
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -169,7 +170,7 @@ def docker_argv(image, workdir, ipf_name, key_name, env=None):
 def run_command(argv, *, timeout=60):
     """Run one command without a shell: {"argv", "returncode", "timed_out", "stdout"}."""
     try:
-        done = subprocess.run(list(argv), capture_output=True, timeout=timeout, check=False)
+        done = subprocess.run(list(argv), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout, check=False)
     except subprocess.TimeoutExpired as exc:
         return {"argv": list(argv), "returncode": None, "timed_out": True,
                 "stdout": (exc.stdout or b"").decode("utf-8", "replace")}
@@ -189,6 +190,10 @@ def verify_entry(entry, public_xy, image, workdir, run=run_command):
         handle.write(ipf_lines(packets))
     with open("%s/pub.txt" % workdir, "w", encoding="ascii") as handle:
         handle.write(pubkey_text(public_xy))
+    # the container user (uid 10001) must read the mount: the files are public vector data, no secrets
+    os.chmod(workdir, 0o755)
+    os.chmod("%s/stream.ipf" % workdir, 0o644)
+    os.chmod("%s/pub.txt" % workdir, 0o644)
     result = run(docker_argv(image, workdir, "stream.ipf", "pub.txt"))
     summary = summarize(parse_fme_output(result["stdout"]))
     out = compare(entry, summary)
@@ -202,7 +207,6 @@ def main(argv=None):
     Runs every signed-stream vector with packets through the container and writes
     the comparison as JSON (entries with a recipe or a key that is not 64 bytes are skipped; the oracle_verdict values of the vector files are
     filled from it by hand, not by this tool)."""
-    import os
     import tempfile
     parser = argparse.ArgumentParser(description=main.__doc__.split("\n")[0])
     parser.add_argument("--image", required=True)

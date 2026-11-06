@@ -33,7 +33,9 @@ can differ from the inputs by less than one LSB:
 - `oracle`: the independent implementation that can check the entry
   (`m17-fme`, `libm17`, `libm17+mrefd`, `libm17+m17-fme`, `ecdsa-verifier`,
   `spec-only`; described in `manifest.json`).
-- `oracle_verdict`: `null` until that oracle has been run. The results come from
+- `oracle_verdict`: `null` until that oracle has been run (m17-fme: `valid`,
+  `invalid_signature`, `no_verdict` = no signature line printed, `decode_match`
+  for the v2 text META; `docs/m17v3-cases.md`, "Build and run results"). The results come from
   the optional file `oracle_verdicts.json` (`{entry id: verdict}`, written by
   `python3 -m dvtest.oracle_m17 --verdicts-out ...`); the generator copies it
   into the entries, so the files stay reproducible.

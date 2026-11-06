@@ -100,6 +100,10 @@ def test_verify_entry_with_a_fake_runner(tmp_path):
     first = (tmp_path / "stream.ipf").read_text().splitlines()[0]
     assert m17.parse_stream(bytes.fromhex(first[4:]))["type"] == 0x0885      # legacy label
     assert len((tmp_path / "pub.txt").read_text()) == 128
+    # the container user (uid 10001) must be able to read the mount
+    assert os.stat(str(tmp_path)).st_mode & 0o005 == 0o005
+    assert os.stat(str(tmp_path / "stream.ipf")).st_mode & 0o004
+    assert os.stat(str(tmp_path / "pub.txt")).st_mode & 0o004
     big = next(e for e in doc["entries"] if e["id"] == "boundary-max-frames")
     assert o.verify_entry(big, b"", "img", str(tmp_path), run=fake) is None
     short_key = next(e for e in doc["entries"] if e["id"] == "bad-key-63-bytes")

@@ -44,25 +44,25 @@
    "path": "ecdsa.json",
    "kind": "ecdsa",
    "entries": 8,
-   "sha256": "5ef93291ab6b0f414215fb07929e5b681765b16032ee6853f2b11c5740caf78d"
+   "sha256": "d2ff856e237d4e3382769f1a24f9eb2b1bd4b4768a7cdbdb87688e5e3c629499"
   },
   {
    "path": "keys.json",
    "kind": "keys",
    "entries": 2,
-   "sha256": "56eeb37b6fed23af60cf8a0e9ba84c10c6855674abec59ee9dccd03586812bf7"
+   "sha256": "6f79325205c9d17ab69c9059cf2ddbc4f44af58c926b3d41bced195c9152bf4b"
   },
   {
    "path": "signed_streams.json",
    "kind": "signed_streams",
    "entries": 39,
-   "sha256": "652650233d999cddd1f28af79d5c027c9ecf9cb2b75f51eb2315682cde1a01af"
+   "sha256": "6fa50f2fcfe9baf3f308a35867eb16632a705f62097c4f681db5d2c8f0164619"
   },
   {
    "path": "type_meta.json",
    "kind": "type_meta",
    "entries": 75,
-   "sha256": "2239ef4829346198a6dce85ba18dff0f2ac64048c629a62d9bfc386c9c9f58fe"
+   "sha256": "93a3cd8bf3da5b8715daaa4be260fbb1a90051ec1a6af42c349e72e6d37cac5e"
   }
  ]
 }

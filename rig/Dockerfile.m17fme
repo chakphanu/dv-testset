@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: MIT
 # m17-fme (lwvmobile/m17-fme, GPL-3.0) as the independent verifier of M17
 # signed streams and of the GNSS / text META decode (P26j, docs/m17v3-cases.md).
-# DRAFT, not built, not validated. A separate image: the GPL program runs as a
+# Built and run (docs/m17v3-cases.md, "Build and run results"): image about 119 MB on disk,
+# unchanged from the draft. A separate image: the GPL program runs as a
 # process, dv-testset itself stays MIT and copies none of its code.
 #
 # Sources are the named build contexts (fetched by scripts/pre-fetch-m17.sh at
