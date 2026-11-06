@@ -86,6 +86,20 @@ def _sized_blocks(data, sizes):
     return out
 
 
+def _printable_header():
+    """A radio header whose 41 bytes are ALL printable ASCII (flags 0x20 0x20 0x20, which no radio sends, and
+    a suffix chosen so that both FCS bytes are printable too, the first suffix of the search order that
+    works): the only kind of header a decoder that maps every byte outside 32..127 to '.' before the
+    FCS check (DSDcc's slow data path) can accept."""
+    import itertools
+    for chars in itertools.product("ABCDEFGHIJKLMNOPQRSTUVWXYZ", repeat=2):
+        hdr = dextra.radio_header(my=CALL, rpt1="N0CALL B", rpt2="XLX999 B", ur="CQCQCQ", suffix="".join(chars),
+                                  flags=b"\x20\x20\x20")
+        if all(32 <= b <= 126 for b in hdr):
+            return hdr
+    raise ValueError("no printable header found")
+
+
 def _render_blocks(blocks, first_slot=0, superframes=None):
     return sd.render(sd.superframes_to_halves(sd.place(blocks, first_slot, superframes)))
 
@@ -152,6 +166,8 @@ def corpus():
         _render_blocks([sd.squelch_block(19)] + hb))
     add("header-split", "header blocks 0..4 in slots 5..9, blocks 5..8 in the next superframe", _render_blocks(hb, 5))
     add("header-twice", "the full header in each of 2 superframes", sd.render(sd.superframes_to_halves([hb + [F], hb + [F]])))
+    add("header-printable-bytes", "9 header blocks of a header whose 41 bytes are all printable ASCII (flags 20 20 20, printable FCS)",
+        _render_blocks(sd.header_blocks(_printable_header())))
     add("header-bad-fcs", "9 header blocks of a header whose FCS does not match", _render_blocks(hb_bad))
 
     # ---- GPS: D-PRS ($$CRC) and NMEA
@@ -164,6 +180,8 @@ def corpus():
         _render_blocks(sd.simple_data_blocks(sd.dprs_line(DPRS_PAYLOAD, crc_covers_cr=False))))
     add("dprs-two-lines", "two D-PRS lines one after the other (collector state after a valid line)",
         _render_blocks(dprs_b + sd.simple_data_blocks(sd.dprs_line(DPRS_PAYLOAD.replace("home", "work")))))
+    add("dprs-then-text", "D-PRS line (17 blocks, 2 superframes) then a message in the third superframe (DSDcc evaluates a GPS line only when a text or header block starts a superframe)",
+        sd.render(sd.superframes_to_halves(sd.place(dprs_b, 0, 2) + [tb + [F] * 6])))
     add("dprs-len-299", "D-PRS sentence of exactly 299 bytes ('$$CRC' to the CR), valid CRC",
         _render_blocks(sd.simple_data_blocks(_dprs_of_length(299))))
     add("dprs-len-300", "D-PRS sentence of exactly 300 bytes ('$$CRC' to the CR), valid CRC",
@@ -290,6 +308,21 @@ def dgw_nmea_line(sentence, call="N0CALL"):
     return "%s-5>GPS30,DSTAR*:%s*%02x" % (call, cut, sd.nmea_checksum(body))
 
 
+def mmdvm_clean_header(raw41):
+    """The header MMDVMHost's CDStarSlowData::getHeader() hands out, or None: it first masks the flags byte
+    with 0x68, zeroes flag bytes 2 and 3, clears bit 7 of bytes 3..38 (read from the pinned source, confirmed
+    by the case header-printable-bytes) and only then checks the FCS, so a header whose flag bytes are not
+    the cleaned ones fails."""
+    hdr = bytearray(raw41)
+    hdr[0] &= 0x68
+    hdr[1] = hdr[2] = 0
+    for i in range(3, 39):
+        hdr[i] &= 0x7F
+    if sd.crc16_x25(bytes(hdr[:39])).to_bytes(2, "little") != bytes(hdr[39:41]):
+        return None
+    return bytes(hdr)
+
+
 def ours_mmdvm_view(frames):
     """What MMDVMHost's decoder should print, according to dvtest.dstar_sd.Decoder("reset"):
     list of {"kind", "seq", "hex"} in the order of the driver output (block, header, text per frame)."""
@@ -301,8 +334,10 @@ def ours_mmdvm_view(frames):
         if len(dec.blocks) > before:
             out.append({"kind": "block", "seq": seq, "hex": "%02x" % dec.blocks[-1][1]})
         for ev in events:
-            if ev["kind"] == "header" and ev["crc_ok"]:
-                out.append({"kind": "header", "seq": seq, "hex": ev["bytes"].hex()})
+            if ev["kind"] == "header":
+                clean = mmdvm_clean_header(ev["bytes"])
+                if clean is not None:
+                    out.append({"kind": "header", "seq": seq, "hex": clean.hex()})
         for ev in events:
             if ev["kind"] == "text":
                 out.append({"kind": "text", "seq": seq, "hex": ev["text"].encode("ascii").hex()})

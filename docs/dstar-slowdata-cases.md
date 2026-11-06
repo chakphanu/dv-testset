@@ -23,7 +23,7 @@ of it offline (no rig run, no DV-Router run):
    a block that straddles a sync (negative), the packet loss rewrite table, and DSVT carriers.
 2. **Two independent decoders as oracles**: MMDVMHost's `CDStarSlowData` and DStarGateway's
    `CTextCollector` / `CGPSACollector` / `CNMEASentenceCollector` are linked unmodified into two
-   small drivers and run in one throw-away image (`dvt-dstarsd:local`, 116 MB). 56 overs built
+   small drivers and run in one throw-away image (`dvt-dstarsd:local`, 116 MB). 58 overs built
    from the spec were fed to both; the verdicts are in `vectors/dstar_sd/corpus.json` and our
    decoder reproduces all of them (event by event, including frame numbers).
 3. **The answer to DP5f's factual part**, measured rather than read: MMDVMHost's receive class
@@ -35,7 +35,8 @@ of it offline (no rig run, no DV-Router run):
 
 Not delivered: any rig case, a feed of these overs into a DV-Router edge (the carrier builder
 `over_datagrams` exists and round-trips through `dvtest.slowdata.overs`, nothing sends it), a
-third decoder (DSDcc on the two real `.dis` recordings, plan row 3 of section 8, is not done),
+third decoder: DSDcc is done in stage 2 (image `dvt-dsdcc:local`, the two published `.dis` recordings and
+our own corpus on a synthetic RF stream, section "Stage 2" below),
 a capture from a real Icom radio (none exists, nothing here claims one), and a verification of the DV-Router lead's statements (nibble rule, limits, frame-pair
 holes: stage 1b records them, no oracle checks them). The decisions taken and the questions left are in
 "Stage 1b" and "Open questions".
@@ -52,7 +53,7 @@ their block structure is, `vectors/dstar_sd/published_structure.json`).
 | Path | What |
 |------|------|
 | `dvtest/dstar_sd.py` | scrambler (LFSR), CRC-16, NMEA checksum, `dprs_line`, block builders, `place` / `interleave` / `render` layout engine, `fast_data_superframe`, `packet_loss_rewrite`, `Decoder` (policy "accumulate" or "reset"), `over_datagrams` |
-| `dvtest/oracle_dstar_sd.py` | the 56-case corpus, driver input and output text, our views in each oracle's terms, comparison, the thin `docker run` call, `python3 -m dvtest.oracle_dstar_sd run` |
+| `dvtest/oracle_dstar_sd.py` | the 58-case corpus, driver input and output text, our views in each oracle's terms, comparison, the thin `docker run` call, `python3 -m dvtest.oracle_dstar_sd run` |
 | `rig/Dockerfile.dstarsd`, `rig/dstarsd/` (two drivers, two shims), `scripts/pre-fetch-dstarsd.sh`, `.env.example` (`DSTARSD_*`) | the image `dvt-dstarsd:local`, the drivers (ours, C++) and the one-time source fetch |
 | `vectors/dstar_sd/corpus.json`, `published_structure.json`, `README.md` | the vectors (JSON text only) |
 | `cases/unit/test_dstar_sd.py`, `cases/unit/test_oracle_dstar_sd.py` | 43 tests (35 + 8) next to the 7 existing ones of `test_slowdata.py` (untouched, passing); the first file also reads the committed corpus and the published structure |
@@ -114,7 +115,7 @@ D-Star Slow Data" v0.2, ORC = the oracle run below.
 
 ## Facts read from the oracles
 
-V = in `vectors/dstar_sd/corpus.json` (56 cases, `mmdvm` and `dgw` columns, our decoder equal),
+V = in `vectors/dstar_sd/corpus.json` (58 cases, `mmdvm` and `dgw` columns, our decoder equal),
 S = read from the pinned source, not shown by a vector.
 
 | Fact | Status |
@@ -144,8 +145,8 @@ S = read from the pinned source, not shown by a vector.
 | Present numbered segments stay usable after missing ones | within one superframe only | across superframes |
 | "follows `MMDVMHost/DStarSlowData.cpp:112-170`" | lines 112-159 collect, **173-181 clear at the sync**: the cited lines do NOT show accumulation over a sync (the DV-Router data.md citation of MMDVMHost for accumulate-across-sync was WRONG; the decision below makes the code match the citation) | DStarGateway `TextCollector.cpp:120-123` does |
 
-DSDcc is said by the research note to accumulate as well (`dstar.cpp:324, :405`); not run here,
-UNVERIFIED.
+DSDcc is said by the research note to accumulate as well (`dstar.cpp:324, :405`): VERIFIED in stage 2
+(it shows the full text of `text-slot8-split`, see "Stage 2").
 
 ## Not verified
 
@@ -154,8 +155,8 @@ UNVERIFIED.
   repeat pattern real radios use is not known beyond the G4KLX tables; nothing here claims Icom
   conformance. `text-slot8-split` and its relatives are legal bytes, not a known radio behaviour.
 - The two oracles are one code family (G4KLX lineage, both reset the pair phase at a sync): their
-  agreement with our decoder is evidence about the format, not an independent proof of it. DSDcc,
-  dsd-fme and DroidStar were not run (DSDcc / dsd-fme need RF audio or a patched dump hook).
+  agreement with our decoder is evidence about the format, not an independent proof of it. DSDcc (not G4KLX
+  lineage) was run in stage 2; dsd-fme and DroidStar were not run (dsd-fme needs RF audio).
 - Fast data: only the mini-headers are seen by a decoder; the byte order inside a block, the guard
   byte and the scrambling range are read from low resolution figures. Fast data in the voice field is
   `fast_data_superframe`'s own model.
@@ -169,7 +170,7 @@ UNVERIFIED.
 | Need | Where |
 |------|-------|
 | The scrambler as bytes, and its derivation | `dstar_sd.SCRAMBLER` (`70 4F 93 40 64 74 6D 30 2B`), `lfsr_bytes` |
-| Wire frames (21 per superframe, `seq hex6`) for 56 cases: aligned, offset, split, straddling, lost frame, header, D-PRS, NMEA, squelch, fast data | `vectors/dstar_sd/corpus.json` `frames` |
+| Wire frames (21 per superframe, `seq hex6`) for 58 cases: aligned, offset, split, straddling, lost frame, header, D-PRS, NMEA, squelch, fast data | `vectors/dstar_sd/corpus.json` `frames` |
 | What a MMDVMHost-family and a DStarGateway-family receiver does with each | `mmdvm`, `dgw` (events `[kind, seq, hex]`), `text_agree`; DV-Router: `expected_dvrouter`, `lenient_alternative`, `unit66_hex` (stage 1b) |
 | Boundary lines for the GPS buffers: D-PRS sentence of 299 / 300 / 301 bytes, NMEA of 80 .. 85 bytes including CR LF, valid CRC / checksum | cases `dprs-len-299`, `-300`, `-301`, `nmea-len-80` .. `-85` |
 | CRC rule: Icom CRC covers the CR; check values `crc16_x25("123456789") = 0x906E`, `"ABCDEF" = 0x6F5E` | `dstar_sd.crc16_x25`, test_dstar_sd |
@@ -286,10 +287,94 @@ reference of what a decoder COULD do.
 | Item | Status |
 |---|---|
 | Text and GPS expectations of the 43 stage 1 cases, the 299 / 300 / 301 and NMEA 80 .. 85 vectors (DStarGateway result before the DV-Router limit) | VERIFIED against the oracle run of this revision (`image dvt-dstarsd:local`, same pins) |
-| Unit model reproduces `expected_dvrouter` for all 56 cases | VERIFIED (test) |
+| Unit model reproduces `expected_dvrouter` for all 58 cases | VERIFIED (test) |
 | 66 byte layout of the unit (3 byte bitmap + 21 x 3) | statement of the lead; the bit order is the generator's assumption |
 | Reset at every sync (text) | decision of the lead; equals MMDVMHost, VERIFIED by the oracle |
 | Length nibble rule, limits 300 / 82, hole behaviour, opaque types | STATEMENT, UNVERIFIED by any oracle; the DStarGateway column shows only what it does instead |
+
+## Stage 2: DSDcc, a decoder outside the G4KLX family
+
+Status: delivered and run (2026-11-07), image `dvt-dsdcc:local`, **114 MB**. Question answered: what does a
+non-G4KLX decoder make of (a) the two published real RF recordings and (b) our own corpus?
+
+### What was built
+
+- Pins (`.env.example`, never in a script): `DSDCC_REPO` = `f4exb/dsdcc`, `DSDCC_COMMIT`
+  `f27b32d2df131ae3a376fe72d3fb880ae1f9ede1` (the commit the research note read, `dstar.cpp` line numbers
+  below refer to it), `DSDCC_SAMPLE_WITH_HEADER_SHA256` / `DSDCC_SAMPLE_ON_THE_FLY_SHA256` (the two recordings
+  of its `samples/` folder, S16LE 48 kS/s discriminator output: `dstar_f1zil_1.dis` with header,
+  `dstar_f1zil_2.dis` captured on the fly), base `debian:bookworm-slim`. The research note's local copy of the
+  recordings is the same files (same hash); `scripts/pre-fetch-dsdcc.sh` fetches the pinned commit into
+  `.cache/dsdcc` and checks both hashes. The recordings are never committed.
+- `rig/Dockerfile.dsdcc`: multi-stage, cmake build of the UNMODIFIED library and its stock tool `dsdccx`,
+  `-DUSE_MBELIB=OFF` (no vocoder, no serialDV), non-root user. Three builds, no build error (the first image had only the
+  stock tool, the second added our driver, the third its two content-free flags). Run: `docker run --rm -i --network none --read-only --cap-drop ALL
+  --security-opt no-new-privileges`, `dvtest.limits.docker_run_args()`, a tmpfs `/tmp`, a timeout.
+- The stock tool prints the slow data state with `-M`, but its `-m` option ignores any value below 0.1 s (one line
+  per five voice frames, `dsd_main.cpp:260-263`), too coarse. `rig/dsdcc/oracle-dsdcc.cpp` (ours, MIT) therefore
+  links the unmodified shared library through its public headers, feeds it the same samples in D-STAR-only mode
+  and prints every change of the info text, the locator and which header strings are non-empty. Header strings
+  are never printed (flags only).
+- `dvtest/oracle_dsdcc.py`: `modulate()` turns the 21-frame superframes of a corpus case into a headerless 4800
+  baud two-level stream (bit 1 = positive, the 24 bit slow data field of frame 0 is the sync, bytes LSB first;
+  a lead-in of alternating bits, one more sync frame at the end), `run_case()`, `summarize_recording()`.
+  `python3 -m dvtest.oracle_dsdcc run` writes `vectors/dstar_sd/dsdcc.json` (per case: the state changes,
+  whether the MMDVMHost / DV-Router texts and the DStarGateway texts were shown at some time, the final text).
+  The 5 cases with a missing frame (`text-lost-frame`, `text-sync-missing`, `pair-hole-*`) are skipped: an RF
+  frame is never absent, it is garbled.
+- Tests: `cases/unit/test_oracle_dsdcc.py` (9 tests, no Docker; they also read `dsdcc.json`).
+
+### The two published recordings (VERIFIED run, content NOT recorded)
+
+Both are real voice conversations over a repeater: callsigns, a name, a place and a position are personal data
+and are neither printed here nor stored; only counts and shapes are.
+
+| Recording | What DSDcc shows |
+|---|---|
+| `dstar_f1zil_1.dis` (with header) | a complete printable header (MY, UR, RPT1, RPT2); the info text grows in 8 steps from a 5 character fragment to a **18 character message** (padded to the 20 character field), i.e. the sender transmits text blocks (0x40..0x43) and DSDcc shows them block by block; no valid locator |
+| `dstar_f1zil_2.dis` (on the fly) | no usable header (the header strings it holds are not printable: a spurious header sync, bit errors); 3 short text fragments of at most 5 characters (partial or noise, no full message); **a locator of valid shape**, so at least one D-PRS line (`$$CRC` with a valid CRC, plain position) was received |
+
+So the answer to "do the recordings carry text or GPS" (research note, UNVERIFIED until now): recording 1 carries
+a text message, recording 2 carries a D-PRS position. What this does NOT give: the block layout (start slot,
+interleave pattern, repeat rate) of the real radio, because DSDcc keeps no block events and the driver does not
+know where the sync frames fall; a raw dump of the slow data bytes would need a patched decoder, which is not
+done (it would mean a modified copy of GPL source). This is NOT an Icom conformance statement.
+
+### Our corpus through DSDcc (VERIFIED, synthetic RF)
+
+53 of the 58 cases decode; all 5 skipped have a hole. DSDcc has no "message complete" event: the info text field
+is overwritten byte by byte, so the comparison is "was the text ever shown" (`expected_texts_shown`,
+`lenient_texts_shown`) and what the field holds at the end (`final_text`).
+
+| Finding | Cases | Compared with the oracles |
+|---|---|---|
+| Aligned and offset messages (slots 0, 1, 3, 6), repeats, `text-dvrouter-twice`, text interleaved with D-PRS / NMEA | `text-aligned` ... `nmea-text-interleave` | shows the same 20 characters as everyone |
+| **Accumulates over a sync**: the split messages show the full text | `text-slot8-split`, `-slot9-split`, `text-missing-block-late` | like DStarGateway, NOT like MMDVMHost and not like the DP5f decision for DV-Router (`expected_dvrouter` empty) |
+| Old and new blocks mix | `text-stale-mix` shows `N0CALL: CQ DE NORLD.` | identical to the DStarGateway string |
+| Both messages of `text-two-messages-split` are shown; the field passes through mixed states while the second one arrives | `text-two-messages-split` | like DStarGateway |
+| A missing block leaves its place as it was | `text-missing-block-never` ends as `N0CALL: CQ     0CALL` (block 2 stays blank) | the oracles emit nothing |
+| **Self-aligning byte counter, no fixed frame pairs**: the layout that straddles a sync decodes | `text-straddle` shows the full text | MMDVMHost, DStarGateway and the DV-Router unit model all emit nothing; DSDcc is the only decoder here that reads it |
+| Bit 7 is NOT stripped: any byte outside 32..127 becomes `.` (`dstar.cpp:400,405`) | `text-high-bit` shows 20 dots | both oracles strip bit 7 and show the text |
+| **Radio header resend is practically not decoded**: the 41 header bytes go through the same `.` mapping before the FCS check (`dstar.cpp:400`), so the flag bytes 00 00 00 become 2E 2E 2E and the check fails | `header-aligned`, `-after-squelch`, `-twice`: not decoded; `header-printable-bytes` (all 41 bytes printable ASCII) is the only header it accepts | MMDVMHost decodes the normal header and rejects `header-printable-bytes` (its `getHeader()` masks the flags byte with 0x68 and zeroes bytes 2 and 3 before the FCS check); no header satisfies both |
+| D-PRS is decoded (locator `JJ00AA` for the 0 N 0 E test position) only when a **text or header block starts a LATER superframe** (`dstar.cpp:340-355`: the GPS line is evaluated at that moment) and the line contains `DSTAR*:/` | only `dprs-then-text`; `dprs-aligned`, `-slot3`, `-two-lines`, `dprs-text-interleave` give no locator | DStarGateway decodes all of these (`gpsa`); the new case `dprs-then-text` exists for this |
+| **256 byte GPS buffer without a bound check** (`dstar.h` `gpsNMEA[256]`, `dstar.cpp:408-409`): lines of 299 / 300 / 301 bytes (and the six NMEA sentences of `nmea-six-types` together) run over into the neighbouring state fields | the `locator` field shows pieces of the line (`xxxxxx`) | DV-Router's 300 byte limit does not fit this reference: do not take DSDcc's behaviour on long lines as a model; it is a robustness defect in the reference |
+| NMEA sentences, squelch, fast data, filler: nothing visible | `nmea-*`, `squelch-*`, `fast-*`, `filler-only` | MMDVMHost shows block types, DStarGateway decodes NMEA |
+
+Summary for the DV-Router lead: the three decoders agree on every well-formed, aligned message. They disagree
+exactly where the corpus is designed to disagree (split over a sync: DSDcc accumulates, MMDVMHost resets), and
+DSDcc adds two behaviours no one else shows (it decodes the straddling layout; it does not decode the normal
+header resend). None of this changes the DP5f decision (reset at every sync), but DSDcc must not be cited as a
+precedent for the reset: it accumulates (the research note was right).
+
+### Verified and unverified in stage 2
+
+| Item | Status |
+|---|---|
+| Image builds and runs, driver output on the two recordings and on 53 synthetic overs | VERIFIED (this run) |
+| The synthetic RF stream is what DSDcc locks onto (headerless, 4800 baud, sync = the 24 bit slow data field) | VERIFIED indirectly: the text of every aligned case decodes frame by frame; a real radio's analogue chain is not modelled |
+| Content of the recordings | not recorded (personal data) |
+| Block layout of the real radios | UNVERIFIED (see above) |
+| `dsd-fme`, DroidStar | not run |
 
 ## Open questions for the DV-Router lead
 
@@ -306,7 +391,11 @@ reference of what a decoder COULD do.
    `expected_dvrouter`; the GPS event `hex` is DStarGateway's APRS line format, only the presence and
    the frame number are meaningful for DV-Router.
 5. **A real boundary capture** (the DP5e done-when wording "real Icom boundary capture still wanted")
-   stays open: nothing here closes it.
+   stays open: the two DSDcc recordings prove that text and a D-PRS position occur on real RF, but not the block
+   layout. A patched decoder that dumps the slow data bytes with the sync position (half a day, modifies GPL code
+   locally, would not be committed) or a capture from a radio through a hotspot would close it; do you want it?
+6. **DSDcc and the long line**: DSDcc's 256 byte unchecked GPS buffer is a reference defect, not a model; should the
+   corpus keep `dprs-len-299` .. `-301` as a DV-Router-only check (it does)?
 
 Answered by the lead and recorded above: reset or accumulate (reset), CRC scope (covers the CR),
 length nibble (read, named difference), fast data (opaque), GPS limits (300 / 82).

@@ -239,7 +239,7 @@ def test_pair_hole_vectors_are_marked_unverified_and_have_holes_in_the_bitmap():
 
 def test_corpus_is_current_for_the_new_cases():
     names = [n for n, _, _ in orc.corpus()]
-    assert len(names) == len(set(names)) == len(_doc()["cases"]) == 56
+    assert len(names) == len(set(names)) == len(_doc()["cases"]) == 58
     for rec, (name, _note, frames) in zip(_doc()["cases"], orc.corpus()):
         assert rec["case"] == name
         assert rec["unit66_hex"] == [sd.unit66(u).hex() for u in sd.split_units(frames)]

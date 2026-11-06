@@ -3,7 +3,7 @@
 
 JSON text only: no audio, no frame dumps. Reading and results: `docs/dstar-slowdata-cases.md`.
 
-- `corpus.json` (schema `dvt-dstar-sd-corpus/2`, 56 cases), written by
+- `corpus.json` (schema `dvt-dstar-sd-corpus/2`, 58 cases), written by
   `python3 -m dvtest.oracle_dstar_sd run --out vectors/dstar_sd/corpus.json` from the image
   `dvt-dstarsd:local` (`rig/Dockerfile.dstarsd`, pins `DSTARSD_*` in `.env.example`). Per case:
   `frames` ("seq hex6": the 21 frames of each superframe as they go on the wire, frame 0 = sync,
@@ -21,3 +21,7 @@ JSON text only: no audio, no frame dumps. Reading and results: `docs/dstar-slowd
   sync), `lenient_alternative` (DStarGateway's events), `ours_dvrouter` (unit model), `named_difference`
   (key into the top-level `named_differences`). Cases with basis `lead-statement-unverified` rest on the
   DV-Router lead's statements and no oracle.
+- `dsdcc.json` (schema `dvt-dstar-sd-dsdcc/1`, stage 2): what DSDcc (image `dvt-dsdcc:local`, pins `DSDCC_*`) shows for each
+  case on a synthetic RF stream (`python3 -m dvtest.oracle_dsdcc run`): the changes of its 20 character info text
+  and locator per frame, whether the expected and the lenient texts were shown, the final text. Five cases with a
+  missing frame are skipped. Nothing from the two published recordings is stored.

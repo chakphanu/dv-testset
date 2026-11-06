@@ -1,0 +1,1870 @@
+{
+ "schema": "dvt-dstar-sd-dsdcc/1",
+ "image": "dvt-dsdcc:local",
+ "pins": {
+  "DSDCC_REPO": "https://github.com/f4exb/dsdcc",
+  "DSDCC_COMMIT": "f27b32d2df131ae3a376fe72d3fb880ae1f9ede1",
+  "DSDCC_SAMPLE_WITH_HEADER_SHA256": "cd4d34d7ec6a531fe66f9b03966ba05360c2c5f745c38cd4deba6cc21568d400",
+  "DSDCC_SAMPLE_ON_THE_FLY_SHA256": "581b496f608122075b0dd22b2ae35efb0e2a5e71e691889b439dbcb3e0161754",
+  "DSDCC_BASE_IMAGE": "debian:bookworm-slim"
+ },
+ "cases": [
+  {
+   "case": "text-aligned",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 2,
+     "text": "N0                  ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 3,
+     "text": "N0CAL               ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 4,
+     "text": "N0CALL:             ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 5,
+     "text": "N0CALL: CQ          ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 6,
+     "text": "N0CALL: CQ D        ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 7,
+     "text": "N0CALL: CQ DE N     ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 8,
+     "text": "N0CALL: CQ DE N0C   ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 9,
+     "text": "N0CALL: CQ DE N0CALL",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [
+    true
+   ],
+   "lenient_texts_shown": [
+    true
+   ],
+   "final_text": "N0CALL: CQ DE N0CALL",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "text-dvrouter-twice",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 2,
+     "text": "N0                  ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 3,
+     "text": "N0CAL               ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 4,
+     "text": "N0CALL:             ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 5,
+     "text": "N0CALL: CQ          ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 6,
+     "text": "N0CALL: CQ D        ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 7,
+     "text": "N0CALL: CQ DE N     ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 8,
+     "text": "N0CALL: CQ DE N0C   ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 9,
+     "text": "N0CALL: CQ DE N0CALL",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [
+    true,
+    true
+   ],
+   "lenient_texts_shown": [
+    true,
+    true
+   ],
+   "final_text": "N0CALL: CQ DE N0CALL",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "text-slot1",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 4,
+     "text": "N0                  ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 5,
+     "text": "N0CAL               ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 6,
+     "text": "N0CALL:             ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 7,
+     "text": "N0CALL: CQ          ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 8,
+     "text": "N0CALL: CQ D        ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 9,
+     "text": "N0CALL: CQ DE N     ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 10,
+     "text": "N0CALL: CQ DE N0C   ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 11,
+     "text": "N0CALL: CQ DE N0CALL",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [
+    true
+   ],
+   "lenient_texts_shown": [
+    true
+   ],
+   "final_text": "N0CALL: CQ DE N0CALL",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "text-slot3",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 8,
+     "text": "N0                  ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 9,
+     "text": "N0CAL               ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 10,
+     "text": "N0CALL:             ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 11,
+     "text": "N0CALL: CQ          ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 12,
+     "text": "N0CALL: CQ D        ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 13,
+     "text": "N0CALL: CQ DE N     ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 14,
+     "text": "N0CALL: CQ DE N0C   ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 15,
+     "text": "N0CALL: CQ DE N0CALL",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [
+    true
+   ],
+   "lenient_texts_shown": [
+    true
+   ],
+   "final_text": "N0CALL: CQ DE N0CALL",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "text-slot6",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 14,
+     "text": "N0                  ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 15,
+     "text": "N0CAL               ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 16,
+     "text": "N0CALL:             ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 17,
+     "text": "N0CALL: CQ          ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 18,
+     "text": "N0CALL: CQ D        ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 19,
+     "text": "N0CALL: CQ DE N     ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 20,
+     "text": "N0CALL: CQ DE N0C   ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 21,
+     "text": "N0CALL: CQ DE N0CALL",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [
+    true
+   ],
+   "lenient_texts_shown": [
+    true
+   ],
+   "final_text": "N0CALL: CQ DE N0CALL",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "text-slot8-split",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 18,
+     "text": "N0                  ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 19,
+     "text": "N0CAL               ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 20,
+     "text": "N0CALL:             ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 21,
+     "text": "N0CALL: CQ          ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 23,
+     "text": "N0CALL: CQ D        ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 24,
+     "text": "N0CALL: CQ DE N     ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 25,
+     "text": "N0CALL: CQ DE N0C   ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 26,
+     "text": "N0CALL: CQ DE N0CALL",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [
+    true
+   ],
+   "final_text": "N0CALL: CQ DE N0CALL",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "text-slot9-split",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 20,
+     "text": "N0                  ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 21,
+     "text": "N0CAL               ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 23,
+     "text": "N0CALL:             ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 24,
+     "text": "N0CALL: CQ          ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 25,
+     "text": "N0CALL: CQ D        ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 26,
+     "text": "N0CALL: CQ DE N     ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 27,
+     "text": "N0CALL: CQ DE N0C   ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 28,
+     "text": "N0CALL: CQ DE N0CALL",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [
+    true
+   ],
+   "final_text": "N0CALL: CQ DE N0CALL",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "text-straddle",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 3,
+     "text": "N0                  ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 4,
+     "text": "N0CAL               ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 5,
+     "text": "N0CALL:             ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 6,
+     "text": "N0CALL: CQ          ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 7,
+     "text": "N0CALL: CQ D        ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 8,
+     "text": "N0CALL: CQ DE N     ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 9,
+     "text": "N0CALL: CQ DE N0C   ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 10,
+     "text": "N0CALL: CQ DE N0CALL",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "N0CALL: CQ DE N0CALL",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "text-missing-block-late",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 2,
+     "text": "N0                  ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 3,
+     "text": "N0CAL               ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 4,
+     "text": "N0CALL:             ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 5,
+     "text": "N0CALL: CQ          ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 8,
+     "text": "N0CALL: CQ     0C   ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 9,
+     "text": "N0CALL: CQ     0CALL",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 23,
+     "text": "N0CALL: CQ D   0CALL",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 24,
+     "text": "N0CALL: CQ DE N0CALL",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [
+    true
+   ],
+   "final_text": "N0CALL: CQ DE N0CALL",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "text-missing-block-never",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 2,
+     "text": "N0                  ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 3,
+     "text": "N0CAL               ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 4,
+     "text": "N0CALL:             ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 5,
+     "text": "N0CALL: CQ          ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 8,
+     "text": "N0CALL: CQ     0C   ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 9,
+     "text": "N0CALL: CQ     0CALL",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "N0CALL: CQ     0CALL",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "text-repeat-per-superframe",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 2,
+     "text": "N0                  ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 3,
+     "text": "N0CAL               ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 4,
+     "text": "N0CALL:             ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 5,
+     "text": "N0CALL: CQ          ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 6,
+     "text": "N0CALL: CQ D        ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 7,
+     "text": "N0CALL: CQ DE N     ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 8,
+     "text": "N0CALL: CQ DE N0C   ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 9,
+     "text": "N0CALL: CQ DE N0CALL",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [
+    true,
+    true
+   ],
+   "lenient_texts_shown": [
+    true,
+    true
+   ],
+   "final_text": "N0CALL: CQ DE N0CALL",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "text-two-messages-split",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 2,
+     "text": "N0                  ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 3,
+     "text": "N0CAL               ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 4,
+     "text": "N0CALL:             ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 5,
+     "text": "N0CALL: CQ          ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 6,
+     "text": "N0CALL: CQ D        ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 7,
+     "text": "N0CALL: CQ DE N     ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 8,
+     "text": "N0CALL: CQ DE N0C   ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 9,
+     "text": "N0CALL: CQ DE N0CALL",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 24,
+     "text": "N0TESL: CQ DE N0CALL",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 25,
+     "text": "N0TEST: CQ DE N0CALL",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 26,
+     "text": "N0TEST: HE DE N0CALL",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 44,
+     "text": "N0TEST: HELLE N0CALL",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 45,
+     "text": "N0TEST: HELLO W0CALL",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 46,
+     "text": "N0TEST: HELLO WORALL",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 47,
+     "text": "N0TEST: HELLO WORLD.",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [
+    true
+   ],
+   "lenient_texts_shown": [
+    true,
+    true
+   ],
+   "final_text": "N0TEST: HELLO WORLD.",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "text-stale-mix",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 2,
+     "text": "N0                  ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 3,
+     "text": "N0CAL               ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 4,
+     "text": "N0CALL:             ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 5,
+     "text": "N0CALL: CQ          ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 6,
+     "text": "N0CALL: CQ D        ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 7,
+     "text": "N0CALL: CQ DE N     ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 23,
+     "text": "N0CALL: CQ DE NOR   ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 24,
+     "text": "N0CALL: CQ DE NORLD.",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [
+    true
+   ],
+   "final_text": "N0CALL: CQ DE NORLD.",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "text-high-bit",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 2,
+     "text": "..                  ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 3,
+     "text": ".....               ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 4,
+     "text": ".......             ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 5,
+     "text": "..........          ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 6,
+     "text": "............        ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 7,
+     "text": "...............     ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 8,
+     "text": ".................   ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 9,
+     "text": "....................",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [
+    false
+   ],
+   "lenient_texts_shown": [
+    false
+   ],
+   "final_text": "....................",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "text-lost-frame",
+   "skipped": "a frame is missing: no RF equivalent"
+  },
+  {
+   "case": "text-sync-missing",
+   "skipped": "a frame is missing: no RF equivalent"
+  },
+  {
+   "case": "header-aligned",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "header-after-squelch",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "header-split",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "header-twice",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "header-printable-bytes",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 18,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 31
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": true
+  },
+  {
+   "case": "header-bad-fcs",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "dprs-aligned",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "dprs-slot3",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "dprs-bad-crc",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "dprs-text-interleave",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 2,
+     "text": "N0                  ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 3,
+     "text": "N0CAL               ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 6,
+     "text": "N0CALL:             ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 7,
+     "text": "N0CALL: CQ          ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 10,
+     "text": "N0CALL: CQ D        ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 11,
+     "text": "N0CALL: CQ DE N     ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 14,
+     "text": "N0CALL: CQ DE N0C   ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 15,
+     "text": "N0CALL: CQ DE N0CALL",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [
+    true,
+    true,
+    true
+   ],
+   "lenient_texts_shown": [
+    true,
+    true,
+    true
+   ],
+   "final_text": "N0CALL: CQ DE N0CALL",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "dprs-crc-without-cr",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "dprs-two-lines",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "dprs-then-text",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 44,
+     "text": "N0                  ",
+     "locator": "JJ00AA",
+     "header_flags": 48
+    },
+    {
+     "frame": 45,
+     "text": "N0CAL               ",
+     "locator": "JJ00AA",
+     "header_flags": 48
+    },
+    {
+     "frame": 46,
+     "text": "N0CALL:             ",
+     "locator": "JJ00AA",
+     "header_flags": 48
+    },
+    {
+     "frame": 47,
+     "text": "N0CALL: CQ          ",
+     "locator": "JJ00AA",
+     "header_flags": 48
+    },
+    {
+     "frame": 48,
+     "text": "N0CALL: CQ D        ",
+     "locator": "JJ00AA",
+     "header_flags": 48
+    },
+    {
+     "frame": 49,
+     "text": "N0CALL: CQ DE N     ",
+     "locator": "JJ00AA",
+     "header_flags": 48
+    },
+    {
+     "frame": 50,
+     "text": "N0CALL: CQ DE N0C   ",
+     "locator": "JJ00AA",
+     "header_flags": 48
+    },
+    {
+     "frame": 51,
+     "text": "N0CALL: CQ DE N0CALL",
+     "locator": "JJ00AA",
+     "header_flags": 48
+    }
+   ],
+   "expected_texts_shown": [
+    true
+   ],
+   "lenient_texts_shown": [
+    true
+   ],
+   "final_text": "N0CALL: CQ DE N0CALL",
+   "locator_valid_shape_shown": true,
+   "header_decoded": false
+  },
+  {
+   "case": "dprs-len-299",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 111,
+     "text": "                    ",
+     "locator": "x     ",
+     "header_flags": 16
+    },
+    {
+     "frame": 112,
+     "text": "                    ",
+     "locator": "xxxx  ",
+     "header_flags": 16
+    },
+    {
+     "frame": 113,
+     "text": "                    ",
+     "locator": "xxxxxx",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "dprs-len-300",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 111,
+     "text": "                    ",
+     "locator": "x     ",
+     "header_flags": 16
+    },
+    {
+     "frame": 112,
+     "text": "                    ",
+     "locator": "xxxx  ",
+     "header_flags": 16
+    },
+    {
+     "frame": 113,
+     "text": "                    ",
+     "locator": "xxxxxx",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "dprs-len-301",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 111,
+     "text": "                    ",
+     "locator": "x     ",
+     "header_flags": 16
+    },
+    {
+     "frame": 112,
+     "text": "                    ",
+     "locator": "xxxx  ",
+     "header_flags": 16
+    },
+    {
+     "frame": 113,
+     "text": "                    ",
+     "locator": "xxxxxx",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "nmea-gga",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "nmea-rmc",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "nmea-bad-checksum",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "nmea-gga-rmc-free",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "nmea-six-types",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 115,
+     "text": "                    ",
+     "locator": "1.    ",
+     "header_flags": 16
+    },
+    {
+     "frame": 116,
+     "text": "                    ",
+     "locator": "1.0,1 ",
+     "header_flags": 16
+    },
+    {
+     "frame": 117,
+     "text": "                    ",
+     "locator": "1.0,1.",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "nmea-len-82",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "nmea-len-83",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "nmea-len-80",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "nmea-len-81",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "nmea-len-84",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "nmea-len-85",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "nmea-text-interleave",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 2,
+     "text": "N0                  ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 3,
+     "text": "N0CAL               ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 6,
+     "text": "N0CALL:             ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 7,
+     "text": "N0CALL: CQ          ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 10,
+     "text": "N0CALL: CQ D        ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 11,
+     "text": "N0CALL: CQ DE N     ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 14,
+     "text": "N0CALL: CQ DE N0C   ",
+     "locator": "      ",
+     "header_flags": 16
+    },
+    {
+     "frame": 15,
+     "text": "N0CALL: CQ DE N0CALL",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [
+    true,
+    true,
+    true
+   ],
+   "lenient_texts_shown": [
+    true,
+    true,
+    true
+   ],
+   "final_text": "N0CALL: CQ DE N0CALL",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "nmea-nibble-0x36",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "nmea-nibble-0x3f",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "nmea-nibble-0x30",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "nmea-nibble-low",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "nmea-nibble-short-block",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "pair-hole-text-once",
+   "skipped": "a frame is missing: no RF equivalent"
+  },
+  {
+   "case": "pair-hole-text-twice",
+   "skipped": "a frame is missing: no RF equivalent"
+  },
+  {
+   "case": "pair-hole-nmea-then-ok",
+   "skipped": "a frame is missing: no RF equivalent"
+  },
+  {
+   "case": "squelch-only",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "squelch-mismatch",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "fast-data-superframe",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "fast-length-max",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "fast-length-invalid",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  },
+  {
+   "case": "filler-only",
+   "states": [
+    {
+     "frame": 0,
+     "text": "                    ",
+     "locator": "      ",
+     "header_flags": 16
+    }
+   ],
+   "expected_texts_shown": [],
+   "lenient_texts_shown": [],
+   "final_text": "                    ",
+   "locator_valid_shape_shown": false,
+   "header_decoded": false
+  }
+ ]
+}

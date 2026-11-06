@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: MIT
+# DSDcc (f4exb/dsdcc, GPL-3.0-or-later per its file headers) as a THIRD D-STAR slow data decoder, one
+# that is not of the G4KLX family (docs/dstar-slowdata-cases.md, stage 2). The library and its stock
+# tool dsdccx are built UNMODIFIED from the fetched source and run as a process on discriminator
+# audio (S16LE, 48 kS/s) read from stdin; nothing of its code or text is in this repository.
+#
+# Source is the named build context "dsdcc" (scripts/pre-fetch-dsdcc.sh at DSDCC_REPO @ DSDCC_COMMIT of
+# .env.example): .cache/dsdcc. Build by hand, inside scripts/contained.sh --name build, never while the
+# rig runs:
+#   docker build -f rig/Dockerfile.dsdcc --build-arg DSDCC_BASE_IMAGE=$DSDCC_BASE_IMAGE \
+#     --build-arg DSDCC_JOBS=$DVT_BUILD_JOBS --build-context dsdcc=.cache/dsdcc -t dvt-dsdcc:local rig
+#
+# Build choices:
+#  * no mbelib and no serialDV (-DUSE_MBELIB=OFF): no audio is produced, only the D-STAR header and
+#    slow data state, which is all this oracle needs (and no patent-encumbered vocoder code);
+#  * the stock tool prints that state with -M (formatted messages: my / ur / rpt1 / rpt2 callsigns,
+#    the 20 character info text, the locator), but never faster than every 0.1 s (its -m option
+#    ignores smaller values), i.e. one line per five voice frames: too coarse. rig/dsdcc/oracle-dsdcc.cpp
+#    (ours, MIT) therefore links the unmodified shared library through its public headers, feeds the same
+#    S16LE samples to DSDDecoder in D-STAR-only mode and prints every CHANGE of the info text, the
+#    locator and the set of non-empty header strings (default entrypoint, stdin: S16LE 48 kS/s);
+#  * the stock tool stays in the image (--entrypoint /opt/dsdcc/bin/dsdccx);
+#  * run it with --network none, --read-only, a tmpfs /tmp
+ARG DSDCC_BASE_IMAGE
+FROM ${DSDCC_BASE_IMAGE} AS build
+ARG DSDCC_JOBS=2
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        g++ make cmake libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=dsdcc . /src
+COPY dsdcc/oracle-dsdcc.cpp /d/oracle-dsdcc.cpp
+RUN cmake -S /src -B /b -DCMAKE_BUILD_TYPE=Release -DUSE_MBELIB=OFF -DBUILD_TOOL=ON \
+        -DCMAKE_INSTALL_PREFIX=/opt/dsdcc \
+    && cmake --build /b -j"${DSDCC_JOBS}" \
+    && cmake --install /b \
+    && g++ -std=c++11 -O1 -I/opt/dsdcc/include/dsdcc -o /opt/dsdcc/bin/dsdcc-state /d/oracle-dsdcc.cpp \
+        -L/opt/dsdcc/lib -ldsdcc -Wl,-rpath,/opt/dsdcc/lib \
+    && strip --strip-unneeded /opt/dsdcc/bin/dsdccx /opt/dsdcc/bin/dsdcc-state /opt/dsdcc/lib/libdsdcc.so.1.9.0 \
+    && test -x /opt/dsdcc/bin/dsdccx && test -x /opt/dsdcc/bin/dsdcc-state
+
+FROM ${DSDCC_BASE_IMAGE}
+RUN useradd --system --uid 10005 --home-dir /nonexistent --shell /usr/sbin/nologin dsdcc
+COPY --from=build /opt/dsdcc/bin/dsdccx /opt/dsdcc/bin/dsdcc-state /opt/dsdcc/bin/
+COPY --from=build /opt/dsdcc/lib/libdsdcc.so.1 /opt/dsdcc/lib/libdsdcc.so.1.9.0 /opt/dsdcc/lib/
+ENV LD_LIBRARY_PATH=/opt/dsdcc/lib
+USER dsdcc
+WORKDIR /tmp
+ENTRYPOINT ["/opt/dsdcc/bin/dsdcc-state"]
