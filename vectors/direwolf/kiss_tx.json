@@ -1,0 +1,1228 @@
+{
+ "image": "dvt-direwolf:local",
+ "kissutil_encoder": [
+  {
+   "case": "ku-pos-digi",
+   "direction": "kissutil-tnc2-to-kiss",
+   "dw_kiss_hex": "c00082a0a4a64040e09c6086829898eeae92888a62406303f021303030302e30304e2f30303030302e3030453e74657374c0",
+   "kiss_match": true,
+   "ours_kiss_hex": "c00082a0a4a64040e09c6086829898eeae92888a62406303f021303030302e30304e2f30303030302e3030453e74657374c0",
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "tnc2": "N0CALL-7>APRS,WIDE1-1:!0000.00N/00000.00E>test"
+  },
+  {
+   "case": "ku-digi-used",
+   "direction": "kissutil-tnc2-to-kiss",
+   "dw_kiss_hex": "c0009c60a88aa6a8e29c6086829898fe9c6088928e40e4ae92888a64406303f068656c6c6fc0",
+   "kiss_match": true,
+   "ours_kiss_hex": "c0009c60a88aa6a8e29c6086829898fe9c6088928e40e4ae92888a64406303f068656c6c6fc0",
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "tnc2": "N0CALL-15>N0TEST-1,N0DIG-2*,WIDE2-1:hello"
+  },
+  {
+   "case": "ku-escapes",
+   "direction": "kissutil-tnc2-to-kiss",
+   "dw_kiss_hex": "c00082a0a4a64040e09c6086829898e103f06ddbdc78dbdd79dbdddcdbdddd7ac0",
+   "kiss_match": true,
+   "ours_kiss_hex": "c00082a0a4a64040e09c6086829898e103f06ddbdc78dbdd79dbdddcdbdddd7ac0",
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "tnc2": "N0CALL>APRS:m<0xc0>x<0xdb>y<0xdb><0xdc><0xdb><0xdd>z"
+  },
+  {
+   "case": "ku-status",
+   "direction": "kissutil-tnc2-to-kiss",
+   "dw_kiss_hex": "c00082a088ae6270e09c6086829898e103f03e737461747573c0",
+   "kiss_match": true,
+   "ours_kiss_hex": "c00082a088ae6270e09c6086829898e103f03e737461747573c0",
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "tnc2": "N0CALL>APDW18:>status"
+  }
+ ],
+ "records": [
+  {
+   "case": "data-ui",
+   "dw_client_rx_hex": "",
+   "dw_copy_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869",
+     "port": 0
+    }
+   ],
+   "dw_copy_equals_sent": true,
+   "dw_copy_hex": "c00082a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869c0",
+   "dw_messages": [
+    ">>> Data frame to KISS client application, channel 0, total length = 41",
+    ">>> Data frame to KISS client application, channel 0, total length = 41"
+   ],
+   "dw_received": [
+    {
+     "channel": 0,
+     "hex": "c00082a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869c0",
+     "kind": "Data frame",
+     "length": 41
+    }
+   ],
+   "dw_unwrapped_hex": [
+    "82a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869"
+   ],
+   "kissutil_frames": [
+    "[0] N0CALL-7>APRS:!0000.00N/00000.00E>hi"
+   ],
+   "kissutil_refused": [],
+   "note": "canonical UI data frame, port 0",
+   "ours_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869",
+     "port": 0
+    }
+   ],
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "sent_hex": "c00082a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869c0"
+  },
+  {
+   "case": "data-escapes",
+   "dw_client_rx_hex": "",
+   "dw_copy_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03f061c062db63dbdcdbdd",
+     "port": 0
+    }
+   ],
+   "dw_copy_equals_sent": true,
+   "dw_copy_hex": "c00082a0a4a64040e09c6086829898ef03f061dbdc62dbdd63dbdddcdbddddc0",
+   "dw_messages": [
+    ">>> Data frame to KISS client application, channel 0, total length = 32",
+    ">>> Data frame to KISS client application, channel 0, total length = 32"
+   ],
+   "dw_received": [
+    {
+     "channel": 0,
+     "hex": "c00082a0a4a64040e09c6086829898ef03f061dbdc62dbdd63dbdddcdbddddc0",
+     "kind": "Data frame",
+     "length": 32
+    }
+   ],
+   "dw_unwrapped_hex": [
+    "82a0a4a64040e09c6086829898ef03f061c062db63dbdcdbdd"
+   ],
+   "kissutil_frames": [
+    "[0] N0CALL-7>APRS:a\u00c0b\u00dbc\u00db\u00dc\u00db\u00dd"
+   ],
+   "kissutil_refused": [],
+   "note": "information bytes C0, DB, DB DC, DB DD escaped",
+   "ours_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03f061c062db63dbdcdbdd",
+     "port": 0
+    }
+   ],
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "sent_hex": "c00082a0a4a64040e09c6086829898ef03f061dbdc62dbdd63dbdddcdbddddc0"
+  },
+  {
+   "case": "data-port1",
+   "dw_client_rx_hex": "",
+   "dw_copy_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03f07031",
+     "port": 1
+    }
+   ],
+   "dw_copy_equals_sent": true,
+   "dw_copy_hex": "c01082a0a4a64040e09c6086829898ef03f07031c0",
+   "dw_messages": [
+    ">>> Data frame to KISS client application, channel 1, total length = 21",
+    ">>> Data frame to KISS client application, channel 1, total length = 21",
+    "Invalid transmit channel 1 from KISS client app.",
+    "Are you using AX.25 for Linux?  It might be trying to use a modified",
+    "version of KISS which uses the channel field differently than the",
+    "original KISS protocol specification.  The solution might be to use",
+    "a command like \"kissparms -c 1 -p radio\" to set CRC none mode.",
+    "Another way of doing this is pre-loading the \"kiss\" kernel module with CRC disabled:",
+    "sudo /sbin/modprobe -q mkiss crc_force=1"
+   ],
+   "dw_received": [
+    {
+     "channel": 1,
+     "hex": "c01082a0a4a64040e09c6086829898ef03f07031c0",
+     "kind": "Data frame",
+     "length": 21
+    },
+    {
+     "channel": 1,
+     "hex": "1082a0a4a64040e09c6086829898ef03f07031",
+     "kind": "Data frame",
+     "length": 19
+    }
+   ],
+   "dw_unwrapped_hex": [
+    "82a0a4a64040e09c6086829898ef03f07031"
+   ],
+   "kissutil_frames": [
+    "[1] N0CALL-7>APRS:p1"
+   ],
+   "kissutil_refused": [],
+   "note": "port nibble 1 on a one-channel TNC",
+   "ours_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03f07031",
+     "port": 1
+    }
+   ],
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "sent_hex": "c01082a0a4a64040e09c6086829898ef03f07031c0"
+  },
+  {
+   "case": "param-txdelay",
+   "dw_client_rx_hex": "",
+   "dw_copy_decode": [],
+   "dw_copy_equals_sent": false,
+   "dw_copy_hex": "",
+   "dw_messages": [
+    "KISS protocol set TXDELAY = 30 (*10mS units = 300 mS), chan 0"
+   ],
+   "dw_received": [
+    {
+     "channel": 0,
+     "hex": "c0011ec0",
+     "kind": "TXDELAY",
+     "length": 4
+    }
+   ],
+   "dw_unwrapped_hex": [
+    "1e"
+   ],
+   "kissutil_frames": [],
+   "kissutil_refused": [],
+   "note": "TXDELAY 30 (10 ms units)",
+   "ours_decode": [
+    {
+     "cmd": 1,
+     "data_hex": "1e",
+     "port": 0
+    }
+   ],
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "sent_hex": "c0011ec0"
+  },
+  {
+   "case": "param-p",
+   "dw_client_rx_hex": "",
+   "dw_copy_decode": [],
+   "dw_copy_equals_sent": false,
+   "dw_copy_hex": "",
+   "dw_messages": [
+    "KISS protocol set Persistence = 63, chan 0"
+   ],
+   "dw_received": [
+    {
+     "channel": 0,
+     "hex": "c0023fc0",
+     "kind": "P",
+     "length": 4
+    }
+   ],
+   "dw_unwrapped_hex": [
+    "3f"
+   ],
+   "kissutil_frames": [],
+   "kissutil_refused": [],
+   "note": "persistence 63",
+   "ours_decode": [
+    {
+     "cmd": 2,
+     "data_hex": "3f",
+     "port": 0
+    }
+   ],
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "sent_hex": "c0023fc0"
+  },
+  {
+   "case": "param-slottime",
+   "dw_client_rx_hex": "",
+   "dw_copy_decode": [],
+   "dw_copy_equals_sent": false,
+   "dw_copy_hex": "",
+   "dw_messages": [
+    "KISS protocol set SlotTime = 10 (*10mS units = 100 mS), chan 0"
+   ],
+   "dw_received": [
+    {
+     "channel": 0,
+     "hex": "c0030ac0",
+     "kind": "SlotTime",
+     "length": 4
+    }
+   ],
+   "dw_unwrapped_hex": [
+    "0a"
+   ],
+   "kissutil_frames": [],
+   "kissutil_refused": [],
+   "note": "slot time 10 (10 ms units)",
+   "ours_decode": [
+    {
+     "cmd": 3,
+     "data_hex": "0a",
+     "port": 0
+    }
+   ],
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "sent_hex": "c0030ac0"
+  },
+  {
+   "case": "param-txtail",
+   "dw_client_rx_hex": "",
+   "dw_copy_decode": [],
+   "dw_copy_equals_sent": false,
+   "dw_copy_hex": "",
+   "dw_messages": [
+    "KISS protocol set TXtail = 5 (*10mS units = 50 mS), chan 0"
+   ],
+   "dw_received": [
+    {
+     "channel": 0,
+     "hex": "c00405c0",
+     "kind": "TXtail",
+     "length": 4
+    }
+   ],
+   "dw_unwrapped_hex": [
+    "05"
+   ],
+   "kissutil_frames": [],
+   "kissutil_refused": [],
+   "note": "TXtail 5 (10 ms units)",
+   "ours_decode": [
+    {
+     "cmd": 4,
+     "data_hex": "05",
+     "port": 0
+    }
+   ],
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "sent_hex": "c00405c0"
+  },
+  {
+   "case": "param-fullduplex-1",
+   "dw_client_rx_hex": "",
+   "dw_copy_decode": [],
+   "dw_copy_equals_sent": false,
+   "dw_copy_hex": "",
+   "dw_messages": [
+    "KISS protocol set FullDuplex = 1, chan 0"
+   ],
+   "dw_received": [
+    {
+     "channel": 0,
+     "hex": "c00501c0",
+     "kind": "FullDuplex",
+     "length": 4
+    }
+   ],
+   "dw_unwrapped_hex": [
+    "01"
+   ],
+   "kissutil_frames": [],
+   "kissutil_refused": [],
+   "note": "full duplex on",
+   "ours_decode": [
+    {
+     "cmd": 5,
+     "data_hex": "01",
+     "port": 0
+    }
+   ],
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "sent_hex": "c00501c0"
+  },
+  {
+   "case": "param-fullduplex-0",
+   "dw_client_rx_hex": "",
+   "dw_copy_decode": [],
+   "dw_copy_equals_sent": false,
+   "dw_copy_hex": "",
+   "dw_messages": [
+    "KISS protocol set FullDuplex = 0, chan 0"
+   ],
+   "dw_received": [
+    {
+     "channel": 0,
+     "hex": "c00500c0",
+     "kind": "FullDuplex",
+     "length": 4
+    }
+   ],
+   "dw_unwrapped_hex": [
+    "00"
+   ],
+   "kissutil_frames": [],
+   "kissutil_refused": [],
+   "note": "full duplex off",
+   "ours_decode": [
+    {
+     "cmd": 5,
+     "data_hex": "00",
+     "port": 0
+    }
+   ],
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "sent_hex": "c00500c0"
+  },
+  {
+   "case": "param-sethardware",
+   "dw_client_rx_hex": "c00644495245574f4c4620312e38c0",
+   "dw_copy_decode": [],
+   "dw_copy_equals_sent": false,
+   "dw_copy_hex": "",
+   "dw_messages": [
+    "KISS protocol set hardware \"TNC:\", chan 0",
+    "Packet content before adding KISS framing and any escapes:",
+    ">>> SetHardware to KISS client application, channel 0, total length = 15"
+   ],
+   "dw_received": [
+    {
+     "channel": 0,
+     "hex": "c006544e433ac0",
+     "kind": "SetHardware",
+     "length": 7
+    }
+   ],
+   "dw_unwrapped_hex": [
+    "544e433a"
+   ],
+   "kissutil_frames": [],
+   "kissutil_refused": [],
+   "note": "SetHardware with a text argument",
+   "ours_decode": [
+    {
+     "cmd": 6,
+     "data_hex": "544e433a",
+     "port": 0
+    }
+   ],
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "sent_hex": "c006544e433ac0"
+  },
+  {
+   "case": "param-port1-txdelay",
+   "dw_client_rx_hex": "",
+   "dw_copy_decode": [],
+   "dw_copy_equals_sent": false,
+   "dw_copy_hex": "",
+   "dw_messages": [
+    "KISS protocol set TXDELAY = 30 (*10mS units = 300 mS), chan 1"
+   ],
+   "dw_received": [
+    {
+     "channel": 1,
+     "hex": "c0111ec0",
+     "kind": "TXDELAY",
+     "length": 4
+    }
+   ],
+   "dw_unwrapped_hex": [
+    "1e"
+   ],
+   "kissutil_frames": [],
+   "kissutil_refused": [],
+   "note": "TXDELAY for port 1",
+   "ours_decode": [
+    {
+     "cmd": 1,
+     "data_hex": "1e",
+     "port": 1
+    }
+   ],
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "sent_hex": "c0111ec0"
+  },
+  {
+   "case": "cmd-unknown-7",
+   "dw_client_rx_hex": "",
+   "dw_copy_decode": [],
+   "dw_copy_equals_sent": false,
+   "dw_copy_hex": "",
+   "dw_messages": [
+    "KISS Invalid command 7",
+    "Troubleshooting tip:",
+    "Use \"-d kn\" option on direwolf command line to observe",
+    "all communication with the client application."
+   ],
+   "dw_received": [
+    {
+     "channel": 0,
+     "hex": "c00701c0",
+     "kind": "Invalid 7",
+     "length": 4
+    },
+    {
+     "channel": 0,
+     "hex": "0701",
+     "kind": "Invalid 7",
+     "length": 2
+    }
+   ],
+   "dw_unwrapped_hex": [
+    "01"
+   ],
+   "kissutil_frames": [],
+   "kissutil_refused": [],
+   "note": "command nibble 7 (undefined)",
+   "ours_decode": [
+    {
+     "cmd": 7,
+     "data_hex": "01",
+     "port": 0
+    }
+   ],
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "sent_hex": "c00701c0"
+  },
+  {
+   "case": "cmd-return",
+   "dw_client_rx_hex": "",
+   "dw_copy_decode": [],
+   "dw_copy_equals_sent": false,
+   "dw_copy_hex": "",
+   "dw_messages": [
+    "KISS protocol end KISS mode - Ignored."
+   ],
+   "dw_received": [
+    {
+     "channel": 15,
+     "hex": "c0ffc0",
+     "kind": "Return",
+     "length": 3
+    }
+   ],
+   "dw_unwrapped_hex": [
+    ""
+   ],
+   "kissutil_frames": [],
+   "kissutil_refused": [],
+   "note": "Return (0xFF)",
+   "ours_decode": [
+    {
+     "cmd": 15,
+     "data_hex": "",
+     "port": 15
+    }
+   ],
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "sent_hex": "c0ffc0"
+  },
+  {
+   "case": "frame-empty",
+   "dw_client_rx_hex": "",
+   "dw_copy_decode": [],
+   "dw_copy_equals_sent": false,
+   "dw_copy_hex": "",
+   "dw_messages": [],
+   "dw_received": [],
+   "dw_unwrapped_hex": [],
+   "kissutil_frames": [],
+   "kissutil_refused": [],
+   "note": "two FEND, no frame",
+   "ours_decode": [],
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "sent_hex": "c0c0"
+  },
+  {
+   "case": "frame-type-only",
+   "dw_client_rx_hex": "",
+   "dw_copy_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "",
+     "port": 0
+    }
+   ],
+   "dw_copy_equals_sent": true,
+   "dw_copy_hex": "c000c0",
+   "dw_messages": [
+    ">>> Data frame to KISS client application, channel 0, total length = 3",
+    ">>> Data frame to KISS client application, channel 0, total length = 3",
+    "Frame length 0 not in allowable range of 15 to 2123.",
+    "ERROR - Invalid KISS data frame from client app."
+   ],
+   "dw_received": [
+    {
+     "channel": 0,
+     "hex": "c000c0",
+     "kind": "Data frame",
+     "length": 3
+    }
+   ],
+   "dw_unwrapped_hex": [
+    ""
+   ],
+   "kissutil_frames": [],
+   "kissutil_refused": [
+    "Frame length 0 not in allowable range of 15 to 2123.",
+    "ERROR - Invalid KISS data frame from TNC."
+   ],
+   "note": "data frame with no data",
+   "ours_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "",
+     "port": 0
+    }
+   ],
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "sent_hex": "c000c0"
+  },
+  {
+   "case": "frame-short-3",
+   "dw_client_rx_hex": "",
+   "dw_copy_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "010203",
+     "port": 0
+    }
+   ],
+   "dw_copy_equals_sent": true,
+   "dw_copy_hex": "c000010203c0",
+   "dw_messages": [
+    ">>> Data frame to KISS client application, channel 0, total length = 6",
+    ">>> Data frame to KISS client application, channel 0, total length = 6",
+    "Frame length 3 not in allowable range of 15 to 2123.",
+    "ERROR - Invalid KISS data frame from client app."
+   ],
+   "dw_received": [
+    {
+     "channel": 0,
+     "hex": "c000010203c0",
+     "kind": "Data frame",
+     "length": 6
+    }
+   ],
+   "dw_unwrapped_hex": [
+    "010203"
+   ],
+   "kissutil_frames": [],
+   "kissutil_refused": [
+    "Frame length 3 not in allowable range of 15 to 2123.",
+    "ERROR - Invalid KISS data frame from TNC."
+   ],
+   "note": "data frame of 3 bytes (not an AX.25 frame)",
+   "ours_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "010203",
+     "port": 0
+    }
+   ],
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "sent_hex": "c000010203c0"
+  },
+  {
+   "case": "frame-14-addresses-only",
+   "dw_client_rx_hex": "",
+   "dw_copy_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef",
+     "port": 0
+    }
+   ],
+   "dw_copy_equals_sent": true,
+   "dw_copy_hex": "c00082a0a4a64040e09c6086829898efc0",
+   "dw_messages": [
+    ">>> Data frame to KISS client application, channel 0, total length = 17",
+    ">>> Data frame to KISS client application, channel 0, total length = 17",
+    "Frame length 14 not in allowable range of 15 to 2123.",
+    "ERROR - Invalid KISS data frame from client app."
+   ],
+   "dw_received": [
+    {
+     "channel": 0,
+     "hex": "c00082a0a4a64040e09c6086829898efc0",
+     "kind": "Data frame",
+     "length": 17
+    }
+   ],
+   "dw_unwrapped_hex": [
+    "82a0a4a64040e09c6086829898ef"
+   ],
+   "kissutil_frames": [],
+   "kissutil_refused": [
+    "Frame length 14 not in allowable range of 15 to 2123.",
+    "ERROR - Invalid KISS data frame from TNC."
+   ],
+   "note": "two addresses and nothing else (14 bytes)",
+   "ours_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef",
+     "port": 0
+    }
+   ],
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "sent_hex": "c00082a0a4a64040e09c6086829898efc0"
+  },
+  {
+   "case": "frame-15-control-only",
+   "dw_client_rx_hex": "",
+   "dw_copy_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03",
+     "port": 0
+    }
+   ],
+   "dw_copy_equals_sent": true,
+   "dw_copy_hex": "c00082a0a4a64040e09c6086829898ef03c0",
+   "dw_messages": [
+    ">>> Data frame to KISS client application, channel 0, total length = 18",
+    ">>> Data frame to KISS client application, channel 0, total length = 18"
+   ],
+   "dw_received": [
+    {
+     "channel": 0,
+     "hex": "c00082a0a4a64040e09c6086829898ef03c0",
+     "kind": "Data frame",
+     "length": 18
+    }
+   ],
+   "dw_unwrapped_hex": [
+    "82a0a4a64040e09c6086829898ef03"
+   ],
+   "kissutil_frames": [
+    "[0] N0CALL-7>APRS:"
+   ],
+   "kissutil_refused": [],
+   "note": "two addresses and a control byte (15 bytes)",
+   "ours_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03",
+     "port": 0
+    }
+   ],
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "sent_hex": "c00082a0a4a64040e09c6086829898ef03c0"
+  },
+  {
+   "case": "no-leading-fend",
+   "dw_client_rx_hex": "",
+   "dw_copy_decode": [],
+   "dw_copy_equals_sent": false,
+   "dw_copy_hex": "",
+   "dw_messages": [],
+   "dw_received": [
+    {
+     "channel": null,
+     "hex": "0082a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869",
+     "kind": "Rejected Noise",
+     "length": 39
+    }
+   ],
+   "dw_unwrapped_hex": [],
+   "kissutil_frames": [],
+   "kissutil_refused": [],
+   "note": "no opening FEND on a new connection",
+   "ours_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869",
+     "port": 0
+    }
+   ],
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "sent_hex": "0082a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869c0"
+  },
+  {
+   "case": "double-fend",
+   "dw_client_rx_hex": "",
+   "dw_copy_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869",
+     "port": 0
+    }
+   ],
+   "dw_copy_equals_sent": false,
+   "dw_copy_hex": "c00082a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869c0",
+   "dw_messages": [
+    ">>> Data frame to KISS client application, channel 0, total length = 41",
+    ">>> Data frame to KISS client application, channel 0, total length = 41"
+   ],
+   "dw_received": [
+    {
+     "channel": 0,
+     "hex": "c00082a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869c0",
+     "kind": "Data frame",
+     "length": 41
+    }
+   ],
+   "dw_unwrapped_hex": [
+    "82a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869"
+   ],
+   "kissutil_frames": [
+    "[0] N0CALL-7>APRS:!0000.00N/00000.00E>hi"
+   ],
+   "kissutil_refused": [],
+   "note": "two FEND in front of the frame",
+   "ours_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869",
+     "port": 0
+    }
+   ],
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "sent_hex": "c0c00082a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869c0"
+  },
+  {
+   "case": "garbage-before",
+   "dw_client_rx_hex": "",
+   "dw_copy_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869",
+     "port": 0
+    }
+   ],
+   "dw_copy_equals_sent": false,
+   "dw_copy_hex": "c00082a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869c0",
+   "dw_messages": [
+    ">>> Data frame to KISS client application, channel 0, total length = 41",
+    ">>> Data frame to KISS client application, channel 0, total length = 41"
+   ],
+   "dw_received": [
+    {
+     "channel": null,
+     "hex": "4142",
+     "kind": "Rejected Noise",
+     "length": 2
+    },
+    {
+     "channel": 0,
+     "hex": "c00082a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869c0",
+     "kind": "Data frame",
+     "length": 41
+    }
+   ],
+   "dw_unwrapped_hex": [
+    "82a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869"
+   ],
+   "kissutil_frames": [
+    "[0] N0CALL-7>APRS:!0000.00N/00000.00E>hi"
+   ],
+   "kissutil_refused": [],
+   "note": "bytes 41 42 before the opening FEND",
+   "ours_decode": [
+    {
+     "cmd": 1,
+     "data_hex": "42",
+     "port": 4
+    },
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869",
+     "port": 0
+    }
+   ],
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "sent_hex": "4142c00082a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869c0"
+  },
+  {
+   "case": "bad-escape",
+   "dw_client_rx_hex": "",
+   "dw_copy_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869",
+     "port": 0
+    }
+   ],
+   "dw_copy_equals_sent": false,
+   "dw_copy_hex": "c00082a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869c0",
+   "dw_messages": [
+    "KISS protocol error.  Found 0x41 after FESC.",
+    ">>> Data frame to KISS client application, channel 0, total length = 41",
+    ">>> Data frame to KISS client application, channel 0, total length = 41"
+   ],
+   "dw_received": [
+    {
+     "channel": 0,
+     "hex": "c00082a0a4a64040e09c6086829898ef03f0db4121303030302e30304e2f30303030302e3030453e6869c0",
+     "kind": "Data frame",
+     "length": 43
+    }
+   ],
+   "dw_unwrapped_hex": [
+    "82a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869"
+   ],
+   "kissutil_frames": [
+    "[0] N0CALL-7>APRS:!0000.00N/00000.00E>hi"
+   ],
+   "kissutil_refused": [],
+   "note": "FESC followed by 0x41 (neither TFEND nor TFESC) inside the information field",
+   "ours_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03f04121303030302e30304e2f30303030302e3030453e6869",
+     "port": 0
+    }
+   ],
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "sent_hex": "c00082a0a4a64040e09c6086829898ef03f0db4121303030302e30304e2f30303030302e3030453e6869c0"
+  },
+  {
+   "case": "bad-escape-then-good",
+   "dw_client_rx_hex": "",
+   "dw_copy_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869",
+     "port": 0
+    },
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03f06166746572",
+     "port": 0
+    }
+   ],
+   "dw_copy_equals_sent": false,
+   "dw_copy_hex": "c00082a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869c0c00082a0a4a64040e09c6086829898ef03f06166746572c0",
+   "dw_messages": [
+    "KISS protocol error.  Found 0x41 after FESC.",
+    ">>> Data frame to KISS client application, channel 0, total length = 41",
+    ">>> Data frame to KISS client application, channel 0, total length = 41",
+    ">>> Data frame to KISS client application, channel 0, total length = 24",
+    ">>> Data frame to KISS client application, channel 0, total length = 24"
+   ],
+   "dw_received": [
+    {
+     "channel": 0,
+     "hex": "c00082a0a4a64040e09c6086829898ef03f0db4121303030302e30304e2f30303030302e3030453e6869c0",
+     "kind": "Data frame",
+     "length": 43
+    },
+    {
+     "channel": 0,
+     "hex": "c00082a0a4a64040e09c6086829898ef03f06166746572c0",
+     "kind": "Data frame",
+     "length": 24
+    }
+   ],
+   "dw_unwrapped_hex": [
+    "82a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869",
+    "82a0a4a64040e09c6086829898ef03f06166746572"
+   ],
+   "kissutil_frames": [
+    "[0] N0CALL-7>APRS:!0000.00N/00000.00E>hi",
+    "[0] N0CALL-7>APRS:after"
+   ],
+   "kissutil_refused": [],
+   "note": "the same, followed by a good frame in the same stream",
+   "ours_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03f04121303030302e30304e2f30303030302e3030453e6869",
+     "port": 0
+    },
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03f06166746572",
+     "port": 0
+    }
+   ],
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "sent_hex": "c00082a0a4a64040e09c6086829898ef03f0db4121303030302e30304e2f30303030302e3030453e6869c0c00082a0a4a64040e09c6086829898ef03f06166746572c0"
+  },
+  {
+   "case": "truncated-then-frame",
+   "dw_client_rx_hex": "",
+   "dw_copy_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869",
+     "port": 0
+    }
+   ],
+   "dw_copy_equals_sent": false,
+   "dw_copy_hex": "c00082a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869c0",
+   "dw_messages": [
+    ">>> Data frame to KISS client application, channel 0, total length = 41",
+    ">>> Data frame to KISS client application, channel 0, total length = 41"
+   ],
+   "dw_received": [
+    {
+     "channel": 0,
+     "hex": "c00082a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869c0",
+     "kind": "Data frame",
+     "length": 41
+    },
+    {
+     "channel": null,
+     "hex": "0082a0a4a64040e09c6086829898ef03f06166746572",
+     "kind": "Rejected Noise",
+     "length": 22
+    }
+   ],
+   "dw_unwrapped_hex": [
+    "82a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869"
+   ],
+   "kissutil_frames": [
+    "[0] N0CALL-7>APRS:!0000.00N/00000.00E>hi"
+   ],
+   "kissutil_refused": [],
+   "note": "a frame without its closing FEND directly followed by a complete frame",
+   "ours_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869",
+     "port": 0
+    },
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03f06166746572",
+     "port": 0
+    }
+   ],
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "sent_hex": "c00082a0a4a64040e09c6086829898ef03f021303030302e30304e2f30303030302e3030453e6869c00082a0a4a64040e09c6086829898ef03f06166746572c0"
+  },
+  {
+   "case": "fend-in-info",
+   "dw_client_rx_hex": "",
+   "dw_copy_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03f02130",
+     "port": 0
+    }
+   ],
+   "dw_copy_equals_sent": false,
+   "dw_copy_hex": "c00082a0a4a64040e09c6086829898ef03f02130c0",
+   "dw_messages": [
+    ">>> Data frame to KISS client application, channel 0, total length = 21",
+    ">>> Data frame to KISS client application, channel 0, total length = 21"
+   ],
+   "dw_received": [
+    {
+     "channel": 0,
+     "hex": "c00082a0a4a64040e09c6086829898ef03f02130c0",
+     "kind": "Data frame",
+     "length": 21
+    },
+    {
+     "channel": null,
+     "hex": "3030302e30304e2f30303030302e3030453e6869",
+     "kind": "Rejected Noise",
+     "length": 20
+    }
+   ],
+   "dw_unwrapped_hex": [
+    "82a0a4a64040e09c6086829898ef03f02130"
+   ],
+   "kissutil_frames": [
+    "[0] N0CALL-7>APRS:!0"
+   ],
+   "kissutil_refused": [],
+   "note": "an unescaped FEND in the middle of the information field",
+   "ours_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03f02130",
+     "port": 0
+    },
+    {
+     "cmd": 0,
+     "data_hex": "30302e30304e2f30303030302e3030453e6869",
+     "port": 3
+    }
+   ],
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "sent_hex": "c00082a0a4a64040e09c6086829898ef03f02130c03030302e30304e2f30303030302e3030453e6869c0"
+  },
+  {
+   "case": "info-256",
+   "dw_client_rx_hex": "",
+   "dw_copy_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03f078787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+     "port": 0
+    }
+   ],
+   "dw_copy_equals_sent": true,
+   "dw_copy_hex": "c00082a0a4a64040e09c6086829898ef03f078787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878c0",
+   "dw_messages": [
+    ">>> Data frame to KISS client application, channel 0, total length = 275",
+    ">>> Data frame to KISS client application, channel 0, total length = 275"
+   ],
+   "dw_received": [
+    {
+     "channel": 0,
+     "hex": "c00082a0a4a64040e09c6086829898ef03f078787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878c0",
+     "kind": "Data frame",
+     "length": 275
+    }
+   ],
+   "dw_unwrapped_hex": [
+    "82a0a4a64040e09c6086829898ef03f078787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+   ],
+   "kissutil_frames": [
+    "[0] N0CALL-7>APRS:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   ],
+   "kissutil_refused": [],
+   "note": "256 information bytes",
+   "ours_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03f078787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+     "port": 0
+    }
+   ],
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "sent_hex": "c00082a0a4a64040e09c6086829898ef03f078787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878c0"
+  },
+  {
+   "case": "info-1024",
+   "dw_client_rx_hex": "",
+   "dw_copy_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03f078787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+     "port": 0
+    }
+   ],
+   "dw_copy_equals_sent": true,
+   "dw_copy_hex": "c00082a0a4a64040e09c6086829898ef03f078787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878c0",
+   "dw_messages": [
+    ">>> Data frame to KISS client application, channel 0, total length = 1043",
+    ">>> Data frame to KISS client application, channel 0, total length = 1043"
+   ],
+   "dw_received": [
+    {
+     "channel": 0,
+     "hex": "c00082a0a4a64040e09c6086829898ef03f078787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878c0",
+     "kind": "Data frame",
+     "length": 1043
+    }
+   ],
+   "dw_unwrapped_hex": [
+    "82a0a4a64040e09c6086829898ef03f078787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+   ],
+   "kissutil_frames": [
+    "[0] N0CALL-7>APRS:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   ],
+   "kissutil_refused": [],
+   "note": "1024 information bytes",
+   "ours_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03f078787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+     "port": 0
+    }
+   ],
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "sent_hex": "c00082a0a4a64040e09c6086829898ef03f078787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878c0"
+  },
+  {
+   "case": "info-2029",
+   "dw_client_rx_hex": "",
+   "dw_copy_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03f078787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+     "port": 0
+    }
+   ],
+   "dw_copy_equals_sent": true,
+   "dw_copy_hex": "c00082a0a4a64040e09c6086829898ef03f078787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878c0",
+   "dw_messages": [
+    ">>> Data frame to KISS client application, channel 0, total length = 2048",
+    ">>> Data frame to KISS client application, channel 0, total length = 2048"
+   ],
+   "dw_received": [
+    {
+     "channel": 0,
+     "hex": "c00082a0a4a64040e09c6086829898ef03f078787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878c0",
+     "kind": "Data frame",
+     "length": 2048
+    }
+   ],
+   "dw_unwrapped_hex": [
+    "82a0a4a64040e09c6086829898ef03f078787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+   ],
+   "kissutil_frames": [
+    "[0] N0CALL-7>APRS:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   ],
+   "kissutil_refused": [],
+   "note": "2029 information bytes: 2048 bytes from FEND to FEND (MAX_KISS_LEN counts both FEND and the type byte)",
+   "ours_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03f078787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+     "port": 0
+    }
+   ],
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "sent_hex": "c00082a0a4a64040e09c6086829898ef03f078787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878c0"
+  },
+  {
+   "case": "info-2030",
+   "dw_client_rx_len": 0,
+   "dw_copy_decode": [
+    {
+     "cmd": 0,
+     "data_len": 2238,
+     "port": 0
+    }
+   ],
+   "dw_copy_equals_sent": false,
+   "dw_copy_len": 2242,
+   "dw_messages": [
+    "KISS frame should end with FEND.",
+    "KISS frame should not have FEND in the middle.",
+    ">>> Data frame to KISS client application, channel 0, total length = 2242",
+    ">>> Data frame to KISS client application, channel 0, total length = 2242",
+    "Frame length 2238 not in allowable range of 15 to 2123.",
+    "ERROR - Invalid KISS data frame from client app."
+   ],
+   "dw_received": [
+    {
+     "channel": 0,
+     "hex_len": 2049,
+     "kind": "Data frame",
+     "length": 2049
+    }
+   ],
+   "dw_unwrapped_len": [
+    2238
+   ],
+   "kissutil_frames": [],
+   "kissutil_refused": [
+    "Frame length 2238 not in allowable range of 15 to 2123.",
+    "ERROR - Invalid KISS data frame from TNC."
+   ],
+   "note": "2030 information bytes: 2049 bytes FEND to FEND, one more than the TNC's KISS buffer",
+   "ours_decode": [
+    {
+     "cmd": 0,
+     "data_hex": "82a0a4a64040e09c6086829898ef03f07878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+     "port": 0
+    }
+   ],
+   "schema": "dvt-direwolf-kiss-tx/1",
+   "sent_hex": "c00082a0a4a64040e09c6086829898ef03f07878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878c0",
+   "volatile": true
+  }
+ ],
+ "schema": "dvt-direwolf-kiss-tx/1",
+ "tool": "Dire Wolf Release 1.8.1, November 2025"
+}

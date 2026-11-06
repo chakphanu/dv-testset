@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: MIT
+# Dire Wolf (wb2osz/direwolf, GPL-2.0-or-later) as the independent AX.25 / APRS / KISS
+# reference (HWFREE1 item 3, docs/direwolf-cases.md): gen_packets and atest for the
+# AX.25 frame bytes and the 1200 baud AFSK audio, direwolf for the real KISS bytes of
+# its TCP port, kissutil for the TNC2 view of KISS frames. A separate image: the GPL
+# programs run as processes, dv-testset itself stays MIT and copies none of their code.
+#
+# Source is the named build context "src" (fetched by scripts/pre-fetch-direwolf.sh at
+# DIREWOLF_REPO @ DIREWOLF_COMMIT of .env.example): .cache/direwolf
+# Build by hand, inside scripts/contained.sh --name build, never while the rig runs:
+#   docker build -f rig/Dockerfile.direwolf --build-arg DIREWOLF_BASE_IMAGE=$DIREWOLF_BASE_IMAGE \
+#     --build-arg MAKE_JOBS=$DVT_BUILD_JOBS --build-context src=.cache/direwolf \
+#     -t dvt-direwolf:local rig
+#
+# Build choices (each one read in CMakeLists.txt, docs/direwolf-cases.md):
+#  * on Linux only ALSA is REQUIRED (libasound2-dev); gpsd, hamlib, libgpiod, udev and
+#    Avahi are optional find_package calls and are left out (no sound card, no GPS, no
+#    CM108 PTT, no DNS-SD): headless;
+#  * only the targets the oracle uses are built and installed, stripped: direwolf,
+#    gen_packets, atest, kissutil, decode_aprs; the data files direwolf and decode_aprs
+#    read at start (symbols, tocalls) go to /usr/share/direwolf;
+#  * README.md and CHANGES.md are copied because the CPack include of CMakeLists.txt checks they exist;
+#  * git is not installed: the version module falls back to its own text;
+#  * the final image adds python3 (the minimal package lacks json and wave; the driver rig/direwolf-entry.py is ours) and
+#    libasound2 (direwolf links it; alsa.conf provides the "null" PCM);
+#  * run it with --network none (loopback only), see dvtest.oracle_direwolf.
+ARG DIREWOLF_BASE_IMAGE
+FROM ${DIREWOLF_BASE_IMAGE} AS build
+ARG MAKE_JOBS=4
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc g++ make cmake libc6-dev libasound2-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=src CMakeLists.txt LICENSE CHANGES.md README.md /src/
+COPY --from=src cmake /src/cmake
+COPY --from=src conf /src/conf
+COPY --from=src data /src/data
+COPY --from=src external /src/external
+COPY --from=src src /src/src
+COPY --from=src man /src/man
+COPY --from=src scripts /src/scripts
+COPY --from=src doc /src/doc
+RUN cmake -S /src -B /build -DCMAKE_BUILD_TYPE=Release -DUNITTEST=OFF \
+    && cmake --build /build -j"${MAKE_JOBS}" --target direwolf gen_packets atest kissutil decode_aprs \
+    && for f in direwolf gen_packets atest kissutil decode_aprs; do \
+         strip --strip-unneeded "/build/src/$f" && test -x "/build/src/$f"; done \
+    && mkdir -p /out/usr/share/direwolf \
+    && cp /src/data/tocalls.yaml /src/data/symbols-new.txt /src/data/symbolsX.txt /out/usr/share/direwolf/
+
+FROM ${DIREWOLF_BASE_IMAGE}
+RUN apt-get update && apt-get install -y --no-install-recommends python3 libasound2 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10003 --home-dir /nonexistent --shell /usr/sbin/nologin direwolf
+COPY --from=build /build/src/direwolf /build/src/gen_packets /build/src/atest /build/src/kissutil /build/src/decode_aprs /usr/local/bin/
+COPY --from=build /out/usr/share/direwolf /usr/share/direwolf
+COPY direwolf-entry.py /direwolf/entry.py
+RUN chmod 755 /direwolf/entry.py
+USER direwolf
+WORKDIR /tmp
+ENTRYPOINT ["python3", "-I", "/direwolf/entry.py"]
