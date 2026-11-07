@@ -262,3 +262,73 @@ seeds (three stations and one object in room C) are placed inside the basemap's 
   the browser container (without it the case checks the list and skips the pixel part).
 * ETag: that a DExtra link changes the state's client list, that a D-STAR over adds a last-heard entry, and that the validator is a weak ETag (`W/` prefix, as the first case asserts).
 
+
+## D-PRS cases (`cases/test_dp7_dprs.py`, written, not run on a rig)
+
+Requested by the DV-Router product owner for positions that arrive as a D-PRS GPS-A line in D-STAR slow data. Files: `cases/test_dp7_dprs.py` (the cases),
+`cases/dprs_support.py` (decoders of the APRS compressed and Mic-E positions written from the APRS 1.0.1 text, the printable Mic-E encoder, D-PRS
+line builders and parsers, the scan of M17 stream packets for GNSS META), `cases/unit/test_dprs_support.py` (38 offline tests; the spec examples,
+the distinctness of the callsigns). Reused, not duplicated: `cases/test_dp15_positions.py` (`ambiguity_case`, `send_dstar`, `feeds`, `collect`, `aprsc_login`,
+the fixtures `hub`, `web_ctx`, `shape`, `aprsc`), `cases/position_support.py`, `cases/data_support.py`, `dvtest/aprs_cases.py` (the compressed encoder and the
+Mic-E destination / information encoders, extended only by the printable speed and course form), `dvtest/dstar_sd.py`, `dvtest/proto/m17.py`, `dvtest/proto/m17v3.py`
+(GNSS META layout and decoder). Notes of a run: `out/<run>/dp7-dprs.txt` (RECORD / FINDING).
+
+| Case | Statement | Steps | Asserted | Recorded |
+|------|-----------|-------|----------|----------|
+| DP7-dprs-a `[level 1,3,4]` | a D-PRS position keeps its ambiguity level (level 2 is DP7-c `d-prs level 2`) | D-PRS line `!4903.50N/07201.75W>` with `level` blanked digits from `N0PQ1/3/4` (`tp.send_dstar`) | the level-2 checks (`tp.ambiguity_case`): source 1, body `ambiguity` = level on the public SSE, the anonymous public state and the operator feed, centre within 2 e7 units, the page text of `format_coordinate` equals the text of the sent precision (`49.05833`/`49.059`/`49.0`/`49` style); the DP7-FIND1 text is prefixed when no position appears | the texts |
+| DP7-dprs-b `[compressed]` | a compressed position in a D-PRS line is a position | `N0PQC>API510,DSTAR*:!/5L!!<*e7>7P[` (APRS101 ch. 9) | source 1, ambiguity 0, lat/lon of the exact base-91 decode (49.5 N, -72.75000394) within `POSITION_E7` (200) on the three surfaces | symbol (sent `/>`), comment, the stored e7 |
+| DP7-dprs-b `[mic-e]` | a Mic-E position in a D-PRS line is a position | `N0PQE>S32UVT,DSTAR*:` + `` `(_fn"Oj/ `` (APRS101 ch. 10) | source 1, ambiguity 0, 33 25.64 N 112 07.74 W (334273333, -1121290000 e7) within 200 on the three surfaces | symbol (sent `/j`), comment, the stored e7 |
+| DP7-dprs-c `[level 1..4]` | an ambiguous D-PRS position gives NO M17 GNSS META in its room; an unambiguous one does | one M17 client (`N0PQL`, CONN, module B) listens throughout. CONTROL: D-PRS over of `N0PQB<l>` with 10.5 N 20.25 E, 3.4 s, then 6 s of tail. Then the over of `N0PQA<l>` with the ambiguous box, same listener, same wait | control: stream packets whose TYPE announces GNSS (legacy `0x0025`, v3 `0x2010`) with nonzero META (or, FINDING, a nonzero META that decodes as the control position under another TYPE) - without it the case FAILS with a FINDING (the negative has no control). Ambiguous: at least half as many stream packets as the control (the listener listened), no packet with GNSS TYPE and nonzero META, no packet of another TYPE whose META decodes as a GNSS position within 1 degree of the box; then the ambiguous position is in the anonymous public state with ambiguity = level (else the absence is a drop, DP7-FIND1, not the rule) | TYPES seen, packet counts, decoded GNSS positions of the control |
+| DP7-dprs-d `[ride-along level 1..4]` | the ride-along re-applies the level that was sent | second D-STAR client `N0PQR` of module B decodes (`dstar_sd.Decoder`) the slow data of the over of `N0PQD<l>` | every D-PRS line of that callsign at the listener has a valid CRC and `!` or `=` followed by `4903.50N/07201.75W>` with `level` blanked digits exactly as sent; no such line is a FINDING and a failure | number of overs, lines, whether the line is byte-identical to the one sent |
+| DP7-dprs-d `[uplink level 1..4]` | the APRS-IS uplink re-applies the level | path `room:B -> edge:aprsis` (`dp7-aprsis-up.toml`); the private aprsc tester login reads the line of `N0PQU<l>` | the same text check on the uplinked information field, as the uplink half of the level-2 case | the line at the aprsc |
+
+Skips: no positions (`positions = false`) skips every case; the uplink case skips without the room-to-APRS-IS path and, through the `aprsc` fixture, without
+`DVT_APRS=on`, `DVT_APRSC` or an enabled `[edges.aprsis]`. Every callsign above is the base callsign of exactly one position (the controller admits 1 per 30 s
+per base callsign, dedupes on (type, guard callsign, body) for 60 s; the private aprsc dedupes for 30 s): a unit test checks that they are distinct from the
+callsigns of `cases/test_dp15_positions.py`. Level 2 is run in DP7-dprs-c and DP7-dprs-d as well (the room-side level-2 case already exists).
+
+Run (prefix and `R` as above; the M17 listener needs a transcoder, `DVT_TRANSCODER_FAKE=1` is enough; estimated 20 to 25 minutes, UNVERIFIED):
+
+```
+DVT_SUT_CONFIG_EXTRA=R/web.toml:R/admin.toml:R/totp-required.toml:R/data-ident.toml:R/dp15-aprsis.toml:R/dp7-aprsis-up.toml \
+scripts/run.sh -m rig --capture --profile web,aprs -- cases/test_dp7_dprs.py
+```
+
+Without the uplink (`--profile web`, `DVT_SUT_CONFIG_EXTRA=R/web.toml:R/admin.toml:R/totp-required.toml:R/data-ident.toml`) the four uplink cases skip with the reason.
+Validate collection without a rig: `python3 -m pytest cases/test_dp7_dprs.py --collect-only -q`; the helpers: `python3 -m pytest -m unit cases/unit/test_dprs_support.py -q`.
+
+### Vectors and their source
+
+The vectors come from the APRS Protocol Reference 1.0.1 (29 August 2000, `APRS101.PDF`, read as text); no number comes from DV-Router code. The decoders in
+`cases/dprs_support.py` are written from the formulas of the same chapters and cross-checked in `cases/unit/test_dprs_support.py` against the worked examples:
+
+| Vector | Where in APRS101 | What the text states | What the test derives |
+|--------|------------------|----------------------|-----------------------|
+| `/5L!!<*e7>7P[` (verbatim) | ch. 9, "Compressed Lat/Long Position Report Format" example list and the "13-character compressed location field" | 49 30 N, 72 45 W (-72.75), course 88, speed 36.2 knots, T byte `[` = 58 + 33 | YYYY = 15427503 -> exactly 49.5; XXXX = 20427156 -> -72.75000394 (the text rounds it); `1.08 ** 47 - 1` = 36.23 |
+| `/5L!!<*e7>{?!`, `/5L!!<*e7OS]S` (verbatim) | ch. 9, same example list | radio range about 20 miles; altitude `S]` = 10004 feet | unit tests only |
+| `` `(_fn"Oj/ `` (verbatim, 9 bytes) | ch. 10, "Example of Decoding the Information Field Data" | with offset +100 and West: longitude 112 07.74 W, speed 20 knots, course 251, jeep symbol `j/` | exact decode 112.129 W |
+| `S32U6T` (verbatim, destination of the worked table) | ch. 10, "Destination Address Field Encoding" example | latitude 33 25.64 N, standard bits 1/0/0 (M3 Returning), North, offset +0, West | digits 3 3 2 5 6 4 |
+| `S32UVT` (DERIVED) | the same table | the fifth byte of the table example is `6` (offset +0), but the information example needs +100 degrees (112 = 100 + 12); the consistent destination has `V` there | UNVERIFIED which of the two a decoder takes; the case sends `S32UVT` |
+| `T4SQZZ`, `` `(_f `` (verbatim) | ch. 10, "Mic-E Position Ambiguity" | two ambiguous digits, longitude 112 degrees 7 minutes | unit test only |
+
+## UNVERIFIED (D-PRS cases)
+
+* WHERE the M17 GNSS META of a D-PRS position appears. The case looks at the cross-mode M17 stream packets (54 bytes, `M17 `) a CONN client of the room receives
+  during and 6 s after the D-STAR over: GNSS TYPE = legacy voice TYPE with null-encryption subtype 1 (`0x0025`) or v3 META type 1 (`0x2010`), META in the layout of
+  `dvtest/proto/m17v3.py` (`decode_gnss`). If DV-Router carries it in an M17P packet, in a separate stream, only on the next over, or only for positions of M17 origin, the CONTROL
+  of DP7-dprs-c fails with a FINDING text and the negative is not evaluated. The decoded control position is recorded, not asserted (resolution 1e-5 degrees).
+* That the M17 listener hears the D-STAR over at all (needs the transcoder; the case fails with that reason when fewer than 20 stream packets arrive).
+* That the 3.4 s over plus 6 s tail is long enough for the GNSS META of the control to arrive (the first GNSS packet time is not measured; the inbox times are real arrival times, the
+  number of GNSS packets is recorded).
+* The ride-along shape: that a second D-STAR client receives the talker's slow data with the D-PRS line (a D-STAR to D-STAR over keeps its slow data, DP15-1d), and, if the product re-emits
+  a rendered line (for an M17 / web origin or after a policy change), that it still starts with `!` or `=` and has the 19 byte latitude and longitude texts in the same places. A listener
+  without any D-PRS line of the talker is a failure with a FINDING; the line destination and path are recorded, not asserted.
+* The ident `stream` of a D-STAR talker for the uplink path (`min_ident = "stream"`), as in the level-2 case; the uplink report type `!` or `=` for a plain position.
+* A compressed or Mic-E position in a D-PRS line (data.md 696 says the GPS-A info field goes through the APRS position parser; the DP5a "Built scope" paragraph describes an own uncompressed `!`/`=` decoder).
+  The Mic-E line needs the destination field of the D-PRS line (`CALL>S32UVT,DSTAR*:`); that DV-Router passes it to the parser, and that a D-PRS source accepts a destination other than `API510`, is unverified.
+  A failure is reported as `FINDING DP7-DPRS-COMPRESSED` / `DP7-DPRS-MICE`.
+* The symbol of the stored position (`/>` for the compressed example, `/j` for Mic-E): recorded, a difference is a FINDING note, not an assertion.
+* The Mic-E destination `S32UVT` (see the table above; derived from the spec's destination table rules, not printed verbatim) and the printable speed / course encoding (`n"O`), which the spec's example
+  uses and `dvtest.aprs_cases.mice_info` does not.
+* The `ambiguity` field of the operator feed body (as for the level cases above), and the DP7-FIND1 status of the D-PRS ambiguity path (the first rig run dropped an ambiguous D-PRS position:
+  DP7-dprs-a, -c and -d then fail with that finding; -b and the control of -c are independent of it).
