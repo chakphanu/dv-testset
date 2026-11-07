@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/dp7-cases.md): [data] position_optout. Exact base callsigns
+# (no wildcard, config.md "data.position_optout"; the SSID is not part of the entry, N0OPT-7 and n0opt match N0OPT)
+# whose positions and objects are dropped at the room controller and, for RF transit and the IS-to-RF courtesy posit,
+# at the data worker (data.md 13.4). N0OPT serves the D-STAR, M17, RF and APRS-IS cases; N0DMP is the callsign of the
+# DMR id 1023230 in rig/config/dmrid.dat (the DMR cases can only use callsigns the rig's registry knows).
+# Merged into the [data] table of data-ident.toml (dvtest/sut_config.py), so the order does not matter.
+[data]
+position_optout = ["N0OPT", "N0DMP"]

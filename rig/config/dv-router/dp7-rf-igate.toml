@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/dp7-cases.md): the whole-packet RF-to-APRS-IS TRANSIT path from
+# the port rf-a (data.md 8.2: a `transit` path joins two edges, no item and no controller is involved). ONLY with
+# dp7-rf.toml AND dp15-aprsis.toml (the launcher refuses a path whose endpoint is not enabled). DP7: the worker applies
+# [data] positions, position_optout and the account hidden set to a spatial transit packet too (data.md 9.3, 13.4), so
+# a position of an opted-out base callsign heard on rf-a never reaches the private aprsc, while another callsign's does.
+[[data.path]]
+name = "dp7-igate"
+from = "edge:ax25/rf-a"
+to = "edge:aprsis"
+types = ["transit"]
+per_min = 20

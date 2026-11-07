@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/dp7-cases.md): the opt-in UPLINK of room positions to APRS-IS
+# (data.md 9.5): room B -> edge:aprsis, positions only, origin class 0, `min_ident = "stream"` (a position must have
+# ridden in the station's own over: a D-STAR D-PRS beacon of the talker). ONLY with dp15-aprsis.toml (the launcher refuses
+# a path whose endpoint is not enabled). The uplinked line re-applies the ambiguity of the body (blanked minute digits);
+# a position of an opted-out or hidden base callsign never gets here (dropped at the controller). per_call_secs 60 is the
+# documented one-per-callsign-per-minute limit, the cases use a distinct callsign per beacon.
+[[data.path]]
+name = "dp7-aprsis-up"
+from = "room:B"
+to = "edge:aprsis"
+types = ["position"]
+classes = [0]
+min_ident = "stream"
+per_call_secs = 60
+per_min = 20

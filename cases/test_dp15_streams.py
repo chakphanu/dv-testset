@@ -5,14 +5,15 @@ reaches the listeners of a module with a D-STAR QSO running. Specification: docs
 wording, bounds, status and run command: docs/dp15-cases.md.
 
   DP15-1a  D-STAR TX message -> the talker's `status` on the web within the ceiling
-  DP15-1b  D-PRS GPS-A beacon -> one `position` (operator feed); a line with a foreign source is rejected (spoof)
+  DP15-1b  D-PRS GPS-A beacon -> one `position` (operator feed AND, since DP7, the anonymous public state and SSE); a line with a
+           foreign source is rejected (spoof)
   DP15-1c  a text with one block missing never gives a status or a partial one
   DP15-1d  D3: the native D-STAR to D-STAR slow data is byte identical (worker alive; killed: needs the kill action)
   DP15-2a  M17 SMS during a D-STAR QSO: M17 clients at once, D-STAR clients after a pause of 2 s
   DP15-2b  the same with a web sender (the render path) and the M17 voice bytes against a control run
   DP15-2c  META text of an M17 talker -> D-STAR text blocks in the cross-mode egress; a D-STAR over is untouched
-  DP15-2d  M17 packet mode APRS payload (specifier 0x02) -> a position
-  DP15-4a  YSF GPS fix -> one position       DP15-4b  DMRG -> one position (and `unbound` outside a stream)
+  DP15-2d  M17 packet mode APRS payload (specifier 0x02) -> a position (operator feed and, since DP7, the anonymous surfaces)
+  DP15-4a  YSF GPS fix -> one position       DP15-4b  DMRG -> one position (and `unbound` outside a stream); both public since DP7
   DP15-4c  DMRA -> a status, never the displayed callsign
   DP15-7a  the synthetic text over as an XLX peer receives it (wire shape and timing)
 
@@ -23,6 +24,10 @@ reason when its prerequisite is missing. Observations go to stdout and out/<run>
 what was seen, "FINDING" = differs from the documented behaviour). Bounds: cases/data_support.py (the answer of
 the DV-Router lead). The controller limits per base callsign (status 1 per 10 s, position 1 per 30 s) are
 respected by data_support.PACER, so the cases wait for each other instead of rate limiting each other.
+
+DP7 (image dv-router:wip-ac750c7): every admitted position is PUBLIC, so 1b, 2d, 4a and 4b ASSERT the anonymous visibility (public
+SSE data topic, anonymous public state) that they only recorded before, next to the unchanged operator-scope assertions; the DP7
+cases proper (drop switches, ambiguity, object kill) are cases/test_dp15_positions.py, docs/dp7-cases.md.
 
 NOT RUN ON A RIG yet (written against the sources only).
 """
@@ -42,6 +47,8 @@ from dvtest.audio import signals  # noqa: E402
 from dvtest.proto import dextra, dmr, m17, xlx, ysf, ysf_gps  # noqa: E402
 
 import data_support as ds  # noqa: E402
+import position_support as ps  # noqa: E402
+from position_support import check_position, operator_baseline, position_rows, wait_operator_rows  # noqa: E402
 from data_support import (  # noqa: E402
     AT_ONCE_S, IDLE_GAP_S, PACER, STATUS_CEILING_S, SseWatch, ambe, build_over, dstar_listener, hub_session,
     m17_client, m17_voice_payloads, m17p_packets, over_by_my, plain_fields, pump_for, send_over, send_over_thread, sms_packet,
@@ -54,8 +61,6 @@ XLX_ROOM = "D"                  # a module of xlx-peer-tester.toml (XLX996 serve
 LOG = "dp15-streams.txt"
 SETTING = "require_ident=%s" % os.environ.get("DVT_REQUIRE_IDENT", "true")
 TEXT_OVER_LATE_S = IDLE_GAP_S + 0.6 + 1.5      # voice end + idle gap + slot (600 ms) + pipeline (lead: no number)
-OPERATOR_WAIT_S = 15.0
-POSITION_E7 = 200               # tolerance of a coordinate, 2e-5 degrees (the DMRG step is 1.1e-5)
 LAT, LON = 10.5, 20.25          # 10 deg 30.00 N, 20 deg 15.00 E (every position of the cases)
 LAT_E7, LON_E7 = 105000000, 202500000
 TALKER_CALL, OTHER_CALL = "N0TEST", "N0CALL"     # D-STAR / M17 / YSF callsigns; DMR ids 1023008 / 1023007 map to them
@@ -98,64 +103,26 @@ def ds_display(text):
     return slowdata.display_text(text)
 
 
-def near(value, want, tol=POSITION_E7):
-    return abs(value - want) <= tol
-
-
-def position_rows(rows, callsign=None):
-    return [r for r in rows if r.get("item_type") == "position" and (callsign is None or r.get("callsign", "").split("-")[0] == callsign)]
-
-
 def status_rows(rows, callsign=None):
     return [r for r in rows if r.get("item_type") == "status" and (callsign is None or r.get("callsign", "").split("-")[0] == callsign)]
 
 
-def operator_baseline(op):
-    """The id of the newest event of the admin feed (0 when there is none), to read only what follows."""
-    _items, last = web.operator_events(op, limit=1)
-    return int(last or 0)
-
-
-def wait_operator_rows(op, baseline, pred, timeout=OPERATOR_WAIT_S, poll=1.0, enough=1):
-    """(matching rows, all rows after the baseline) of the operator feed once `enough` rows match pred or after timeout."""
-    end = time.monotonic() + timeout
-    seen = {}
-    while True:
-        items, _last = web.operator_events(op, after=baseline)
-        for item in items:
-            seen[item.get("id")] = item
-        hits = [r for r in seen.values() if pred(r)]
-        if len(hits) >= enough or time.monotonic() >= end:
-            return hits, list(seen.values())
-        time.sleep(poll)
-
-
-def check_position(row, source, symbol=None, comment=None, lat_e7=LAT_E7, lon_e7=LON_E7, tol=POSITION_E7):
-    body = row["body"]
-    assert isinstance(body, dict), "position body is %r" % (body,)
-    assert near(body["lat_e7"], lat_e7, tol) and near(body["lon_e7"], lon_e7, tol), \
-        "position %s,%s e7, want about %s,%s" % (body["lat_e7"], body["lon_e7"], lat_e7, lon_e7)
-    assert body["source"] == source, "position source %r, want %r" % (body["source"], source)
-    if symbol is not None:
-        assert body["symbol"] == symbol, "symbol %r, want %r" % (body["symbol"], symbol)
-    if comment is not None:
-        assert body["comment"] == comment, "comment %r, want %r" % (body["comment"], comment)
-
-
-def record_anonymous_view(target, case, web_ctx, watch, since, rows_user):
-    """RECORD (never assert) what the public surfaces and the user history show of positions (owner: APRS data is
-    public; the rule is being revised in DP7)."""
-    on_sse = [o for _t, o in watch.data_events(since) if o.get("item_type") == "position"]
-    try:
-        state = web_ctx.anon().get("/api/v1/public/state", pace=True).text()
-    except web.WebError as exc:
-        state = "(unreadable: %s)" % exc
-    in_state = "lat_e7" in state
+def assert_anonymous_view(target, case, web_ctx, watch, since, callsign, rows_user, source, **expect):
+    """DP7 (data.md 13.4, owner decision 2026-11-07): "every admitted position is public". The position of the base callsign is
+    ASSERTED on the anonymous surfaces: a `position` event on the anonymous public SSE data topic (`watch`, opened before the send) and a
+    row in the anonymous public state (rooms[].positions, the data of #/positions), both with the allow-listed keys, the expected
+    source and ambiguity 0 (a fix). The user message history still never carries a position (web.md, data.md 13.2)."""
+    on_sse = ps.sse_rows(watch, callsign, since, "position")
+    row, _rows = ps.wait_public_row(web_ctx.anon(), callsign, timeout=ps.PUBLIC_WAIT_S, room=MODULE, item_type="position")
     in_history = position_rows(rows_user)
-    note(target, case, "RECORD", "anonymous public SSE position events %d; public/state mentions lat_e7: %s; user message "
-         "history position rows %d (documented: none, web.md 1178)" % (len(on_sse), in_state, len(in_history)))
-    if in_history:
-        note(target, case, "FINDING", "GET /api/v1/user/rooms/%s/messages carried %d position rows (web.md: never)" % (MODULE, len(in_history)))
+    note(target, case, "RECORD", "anonymous public SSE position events %d; anonymous public state row %s; user message history position rows %d "
+         "(documented: none)" % (len(on_sse), None if row is None else {k: row.get(k) for k in ("callsign", "protocol", "ident", "via")}, len(in_history)))
+    assert on_sse, "no position event of %s on the anonymous public SSE data topic (DP7: positions are public)" % callsign
+    assert row is not None, "no position row of %s in the anonymous public state (rooms[].positions; DP7: positions are public)" % callsign
+    for surface in (on_sse[0], row):
+        ps.check_public_row(surface)
+        check_position(surface, source=source, ambiguity=0, **expect)
+    assert not in_history, "GET /api/v1/user/rooms/%s/messages carried %d position rows (web.md: never)" % (MODULE, len(in_history))
 
 
 def web_post(poster, room, text, pace=True):
@@ -214,12 +181,13 @@ def test_dp15_1a_tx_message_becomes_the_status(rig, target, hub, web_ctx):
 # ================================================================ 1b: D-PRS -> position
 
 def test_dp15_1b_dprs_beacon_is_a_position(rig, target, hub, web_ctx):
-    """data.md 15.5: "a D-PRS GPS-A beacon appears as the talker's position (users only)". The over carries the TX
-    message and a D-PRS line `$$CRC...,N0TEST>API510,DSTAR*:!1030.00N/02015.00E>test` in the free slots. Asserted:
-    ONE position row of the talker in the operator feed (source 1, 10.5 N 20.25 E, symbol /> ) within the ceiling of
-    the superframe that completes the line. Recorded only: what anonymous clients and the user history show
-    (the lead: positions are on the admin/operator scope today, the public rule is being revised in DP7). Then
-    a line whose source is another station is rejected as `spoof`: no position, the reject counter moves."""
+    """data.md 15.5: "a D-PRS GPS-A beacon appears as the talker's position" (the "users only" of the first DP15 runs is
+    replaced by DP7: every admitted position is public). The over carries the TX message and a D-PRS line
+    `$$CRC...,N0TEST>API510,DSTAR*:!1030.00N/02015.00E>test` in the free slots. Asserted: ONE position row of the talker in the
+    operator feed (source 1, 10.5 N 20.25 E, symbol /> ) within the ceiling of the superframe that completes the line, AND the
+    same position on the anonymous public SSE and in the anonymous public state (allow-listed keys, ambiguity 0), and none in
+    the user message history. Then a line whose source is another station is rejected as `spoof`: no position, the reject
+    counter moves."""
     case = "1b"
     PACER.wait(TALKER_CALL, "position")
     PACER.wait(TALKER_CALL, "status")
@@ -254,7 +222,7 @@ def test_dp15_1b_dprs_beacon_is_a_position(rig, target, hub, web_ctx):
     assert hits[0].get("room") == MODULE, hits[0]
     assert len(position_rows(rows, TALKER_CALL)) == 1, "%d position rows for one over" % len(position_rows(rows, TALKER_CALL))
     assert latency <= STATUS_CEILING_S, "position %.3f s after the line was complete, ceiling %.1f s" % (latency, STATUS_CEILING_S)
-    record_anonymous_view(target, case, web_ctx, anon_sse, t_header, web.room_messages(web_ctx.reader, MODULE))
+    assert_anonymous_view(target, case, web_ctx, anon_sse, t_header, TALKER_CALL, web.room_messages(web_ctx.reader, MODULE), source=1, symbol="/>")
     # -- spoof: the line's source is not the talker
     PACER.wait(TALKER_CALL, "status")
     hub.settle()                                                  # a quiet baseline for the reject counter
@@ -564,22 +532,27 @@ def test_dp15_2c_m17_meta_text_rides_into_the_dstar_egress(rig, target, hub, web
 def test_dp15_2d_m17_packet_aprs_is_a_position(rig, target, hub, web_ctx):
     """data.md 15.5 (M17): "an APRS payload in M17 packet mode (specifier 0x02) produces a position". A direct M17
     client (link N0TEST, SRC N0TEST-7) sends an M17P packet with the TNC2 text `N0TEST-7>APDVT1:!1030.00N/02015.00E>test`
-    (the APRS source equals the SRC, so the identity stays): one position row (source 5) in the operator feed."""
+    (the APRS source equals the SRC, so the identity stays): one position row (source 5) in the operator feed, and, since DP7,
+    on the anonymous public SSE and in the anonymous public state."""
     case = "2d"
     PACER.wait(TALKER_CALL, "position")
     baseline = operator_baseline(web_ctx.op)
     info = "N0TEST-7>APDVT1:!1030.00N/02015.00E>test".encode("ascii")
     packet = m17.m17p_packet(0x02, info, src="N0TEST-7")
-    with m17_client(sutip(rig), callsign=TALKER_CALL, module=MODULE) as sender:
-        sender.client.send(sender.dest, packet)
-        PACER.offered(TALKER_CALL, "position")
-        pump_for(1.0, sender)
-    hits, rows = wait_operator_rows(web_ctx.op, baseline, lambda r: r.get("item_type") == "position"
-                                    and r.get("callsign", "").startswith(TALKER_CALL))
-    note(target, case, "RECORD", "operator rows %d, position rows %s" % (len(rows), [(r.get("callsign"), r.get("protocol")) for r in position_rows(rows)]))
-    assert hits, "no position in the operator feed for the M17 APRS packet"
-    check_position(hits[0], source=5)
-    assert len(position_rows(rows)) == 1, "%d position rows for one packet" % len(position_rows(rows))
+    with SseWatch(web_ctx.anon(), ps.PUBLIC_EVENTS) as anon_sse:
+        assert anon_sse.ready(), "the public SSE gave no hello: %s" % anon_sse.error
+        t_send = time.monotonic()
+        with m17_client(sutip(rig), callsign=TALKER_CALL, module=MODULE) as sender:
+            sender.client.send(sender.dest, packet)
+            PACER.offered(TALKER_CALL, "position")
+            pump_for(1.0, sender)
+        hits, rows = wait_operator_rows(web_ctx.op, baseline, lambda r: r.get("item_type") == "position"
+                                        and r.get("callsign", "").startswith(TALKER_CALL))
+        note(target, case, "RECORD", "operator rows %d, position rows %s" % (len(rows), [(r.get("callsign"), r.get("protocol")) for r in position_rows(rows)]))
+        assert hits, "no position in the operator feed for the M17 APRS packet"
+        check_position(hits[0], source=5)
+        assert len(position_rows(rows)) == 1, "%d position rows for one packet" % len(position_rows(rows))
+        assert_anonymous_view(target, case, web_ctx, anon_sse, t_send, TALKER_CALL, web.room_messages(web_ctx.reader, MODULE), source=5)
 
 
 # ================================================================ 4a: YSF GPS
@@ -587,28 +560,34 @@ def test_dp15_2d_m17_packet_aprs_is_a_position(rig, target, hub, web_ctx):
 def test_dp15_4a_ysf_gps_fix_is_one_position(rig, target, hub, web_ctx):
     """data.md 15.5 (YSF, DMR): "a GPS fix in a YSF over ... gives one position". A YSF client (N0CALL) sends an over
     of 16 packets whose FN 6/7 frames carry the GPS record (short magic 22 62, FT-1D, 10.5 N 20.25 E) twice (FN
-    cycles 0..7 twice): ONE position row (source 3, symbol `/[`, comment FT-1D)."""
+    cycles 0..7 twice): ONE position row (source 3, symbol `/[`, comment FT-1D) in the operator feed and, since DP7, on the
+    anonymous public SSE and in the anonymous public state (ambiguity 0: a GPS fix claims none)."""
     case = "4a"
     PACER.wait(OTHER_CALL, "position")
     baseline = operator_baseline(web_ctx.op)
     client = ysf.YsfClient("0.0.0.0", callsign=OTHER_CALL, module=MODULE)
     try:
-        assert client.link(sutip(rig)), "YSF link to %s failed" % sutip(rig)
-        packets = ysf_gps.gps_stream_packets([ysf.SILENCE] * 80, OTHER_CALL, LAT, LON, ysf_gps.RADIO_FT1D, dgid=client.dgid)
-        client.keepalive()
-        client.client.send(client.dest, packets[0])
-        client.client.pump(0.3)
-        client.client.paced(client.dest, packets[1:], ysf.PACKET_GAP)
-        PACER.offered(OTHER_CALL, "position")
-        client.client.pump(1.0)
+        with SseWatch(web_ctx.anon(), ps.PUBLIC_EVENTS) as anon_sse:
+            assert anon_sse.ready(), "the public SSE gave no hello: %s" % anon_sse.error
+            t_send = time.monotonic()
+            assert client.link(sutip(rig)), "YSF link to %s failed" % sutip(rig)
+            packets = ysf_gps.gps_stream_packets([ysf.SILENCE] * 80, OTHER_CALL, LAT, LON, ysf_gps.RADIO_FT1D, dgid=client.dgid)
+            client.keepalive()
+            client.client.send(client.dest, packets[0])
+            client.client.pump(0.3)
+            client.client.paced(client.dest, packets[1:], ysf.PACKET_GAP)
+            PACER.offered(OTHER_CALL, "position")
+            client.client.pump(1.0)
+            hits, rows = wait_operator_rows(web_ctx.op, baseline, lambda r: r.get("item_type") == "position"
+                                            and r.get("callsign", "").startswith(OTHER_CALL))
+            note(target, case, "RECORD", "operator rows %d, position rows %s" % (len(rows), [(r.get("callsign"), r.get("protocol")) for r in position_rows(rows)]))
+            assert hits, "no position in the operator feed for the YSF GPS over"
+            check_position(hits[0], source=3, symbol="/[", comment="FT-1D")
+            assert len(position_rows(rows, OTHER_CALL)) == 1, "%d position rows for one over" % len(position_rows(rows, OTHER_CALL))
+            assert_anonymous_view(target, case, web_ctx, anon_sse, t_send, OTHER_CALL, web.room_messages(web_ctx.reader, MODULE),
+                                  source=3, symbol="/[", comment="FT-1D")
     finally:
         client.close()
-    hits, rows = wait_operator_rows(web_ctx.op, baseline, lambda r: r.get("item_type") == "position"
-                                    and r.get("callsign", "").startswith(OTHER_CALL))
-    note(target, case, "RECORD", "operator rows %d, position rows %s" % (len(rows), [(r.get("callsign"), r.get("protocol")) for r in position_rows(rows)]))
-    assert hits, "no position in the operator feed for the YSF GPS over"
-    check_position(hits[0], source=3, symbol="/[", comment="FT-1D")
-    assert len(position_rows(rows, OTHER_CALL)) == 1, "%d position rows for one over" % len(position_rows(rows, OTHER_CALL))
 
 
 # ================================================================ 4b, 4c: DMR
@@ -622,7 +601,8 @@ def dmr_link(ip, callsign):
 def test_dp15_4b_dmrg_is_one_position(rig, target, hub, web_ctx):
     """data.md 15.5 (YSF, DMR): "a DMRG in a DMR over gives one position". DMR id 1023008 (N0TEST in the rig's dmrid.dat)
     sends a voice stream and, inside it, one DMRG datagram (10.5 N 20.25 E, error estimate 7 = unknown accuracy):
-    ONE position row (source 4, symbol `/-`, callsign from the registry). A DMRG sent when no stream is open
+    ONE position row (source 4, symbol `/-`, callsign from the registry) in the operator feed and, since DP7, on the
+    anonymous public SSE and in the anonymous public state. A DMRG sent when no stream is open
     is rejected `unbound` (reject counter, no position)."""
     case = "4b"
     PACER.wait(TALKER_CALL, "position")
@@ -631,15 +611,19 @@ def test_dp15_4b_dmrg_is_one_position(rig, target, hub, web_ctx):
     rid = DMR_ID[TALKER_CALL]
     client = dmr_link(sutip(rig), TALKER_CALL)
     try:
-        frames = signals.prng_frames(2, 30, seed="dp15/4b")
-        dmr.talk_with_side_packets(client, frames, {3: [dmr.dmrg_packet(rid, LAT, LON)]}, stream_id=clients.fresh_stream_id("dmr"))
-        PACER.offered(TALKER_CALL, "position")
-        hits, rows = wait_operator_rows(web_ctx.op, baseline, lambda r: r.get("item_type") == "position"
-                                        and r.get("callsign", "").startswith(TALKER_CALL))
-        note(target, case, "RECORD", "operator rows %d, position rows %s" % (len(rows), [(r.get("callsign"), r.get("protocol")) for r in position_rows(rows)]))
-        assert hits, "no position in the operator feed for the DMRG"
-        check_position(hits[0], source=4, symbol="/-")
-        assert len(position_rows(rows, TALKER_CALL)) == 1, "%d position rows for one DMRG" % len(position_rows(rows, TALKER_CALL))
+        with SseWatch(web_ctx.anon(), ps.PUBLIC_EVENTS) as anon_sse:
+            assert anon_sse.ready(), "the public SSE gave no hello: %s" % anon_sse.error
+            t_send = time.monotonic()
+            frames = signals.prng_frames(2, 30, seed="dp15/4b")
+            dmr.talk_with_side_packets(client, frames, {3: [dmr.dmrg_packet(rid, LAT, LON)]}, stream_id=clients.fresh_stream_id("dmr"))
+            PACER.offered(TALKER_CALL, "position")
+            hits, rows = wait_operator_rows(web_ctx.op, baseline, lambda r: r.get("item_type") == "position"
+                                            and r.get("callsign", "").startswith(TALKER_CALL))
+            note(target, case, "RECORD", "operator rows %d, position rows %s" % (len(rows), [(r.get("callsign"), r.get("protocol")) for r in position_rows(rows)]))
+            assert hits, "no position in the operator feed for the DMRG"
+            check_position(hits[0], source=4, symbol="/-")
+            assert len(position_rows(rows, TALKER_CALL)) == 1, "%d position rows for one DMRG" % len(position_rows(rows, TALKER_CALL))
+            assert_anonymous_view(target, case, web_ctx, anon_sse, t_send, TALKER_CALL, web.room_messages(web_ctx.reader, MODULE), source=4, symbol="/-")
         # negative twin: no stream is open now
         unbound = hub.total("dv_pkt_reject_total", reason="unbound")
         baseline = operator_baseline(web_ctx.op)

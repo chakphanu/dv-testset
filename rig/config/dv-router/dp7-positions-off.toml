@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/dp7-cases.md): [data] positions = false. The room controller
+# and the data worker then drop EVERY position and object from EVERY source (D-STAR D-PRS, M17 packet APRS, YSF GPS,
+# DMRG, RF-heard APRS): data.md 13.4 "Private means dropped before publication", the controller answers denied/13
+# (counted as result="optout"). Text and status stay admitted (the control of the cases).
+# Separate run: use it INSTEAD of dp7-position-optout.toml. Merged into the [data] table of data-ident.toml (a plain
+# table of a later extra is merged key by key, dvtest/sut_config.py), so the order does not matter.
+[data]
+positions = false

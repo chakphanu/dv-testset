@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/dp7-cases.md): the AX.25 edge with ONE KISS TCP port rf-a bound
+# to room B, for the DP7 RF cases (cases/test_dp15_positions.py). The tester plays the TNC (dvtest/kiss_tnc.py): the edge is
+# the kiss-tcp CLIENT and connects to <TESTER_IP>:8101. A port bound to a room (`room = "B"`) publishes the positions,
+# objects and statuses of the stations it hears straight into room B (config.md, [[edges.ax25.port]] `room`; no
+# [[data.path]] is needed for them). Receive only: tx_enable false.
+# Use it INSTEAD of dp15-rf.toml (both define [edges.ax25]); it has no `rf-in` text path.
+# The station callsign N0TEST-1 is required for RF-to-IS transit (dp7-rf-igate.toml).
+[edges.ax25]
+enable = true
+callsign = "N0TEST-1"
+tx_enable = false
+alias_calls = []
+
+[[edges.ax25.port]]
+name = "rf-a"
+kind = "kiss-tcp"
+host = "<TESTER_IP>"
+port = 8101
+channel = 0
+room = "B"
+tx = false
+reconnect = { min_secs = 1, max_secs = 5 }
