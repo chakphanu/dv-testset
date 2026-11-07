@@ -13,8 +13,8 @@ Vectors come from the APRS Protocol Reference 1.0.1 (29 August 2000), NOT from a
 * chapter 10, "Mic-E Destination Address Field Encoding" example: latitude 33 25.64 N, standard message bits 1/0/0
   (M3 Returning), North, West. The spec's worked table prints the destination as `S32U6T`, whose fifth byte `6` means a
   longitude offset of +0; the information-field example below needs +100 degrees (112 = 100 + 12), which is byte `V`.
-  The two examples of the spec disagree on this one byte: the cases send the consistent `S32UVT` (DERIVED from the table
-  rules, listed UNVERIFIED in docs/dp7-cases.md) and the unit tests decode both forms.
+  The two examples of the spec disagree on this one byte. Both destinations are valid frames: the main Mic-E case sends the
+  consistent `S32UVT` (33 25.64 N, 112 07.74 W) and a second case sends `S32U6T` taken literally (33 25.64 N, 12 07.74 W).
 * chapter 10, "Example of Decoding the Information Field Data": the nine bytes `` `(_fn"Oj/ `` (data type `` ` ``, d+28 = `(`,
   m+28 = `_`, h+28 = `f`, SP+28 = `n`, DC+28 = `"`, SE+28 = `O`, symbol code `j`, table `/`) with offset +100 decode to
   longitude 112 07.74 W, speed 20 knots, course 251 (the printable one of the two encodings the spec allows).
@@ -43,6 +43,7 @@ SPEC_MICE_DEST = "S32UVT"                            # consistent with the infor
 SPEC_MICE_INFO = b"`(_fn\"Oj/"                        # chapter 10 information field example, 9 bytes
 SPEC_MICE_LAT = Fraction(33) + Fraction(2564, 6000)               # 33 25.64 N
 SPEC_MICE_LON = -(Fraction(112) + Fraction(774, 6000))           # 112 07.74 W
+SPEC_MICE_LON_OFFSET0 = -(Fraction(12) + Fraction(774, 6000))      # the same information field with destination S32U6T: 12 07.74 W
 SPEC_MICE_AMBIGUITY_DEST = "T4SQZZ"                  # chapter 10, Mic-E Position Ambiguity
 SPEC_MICE_AMBIGUITY_INFO = b"`(_f"                   # the longitude bytes the spec pairs with it
 
@@ -222,7 +223,8 @@ GNSS_V3_TYPE = m17v3.v3_type(m17v3.PAYLOAD_VOICE3200, 0, False, m17v3.META_GNSS)
 
 
 def is_gnss_type(type_):
-    """True when a stream TYPE announces GNSS META: the v3 TYPE (top nibble not 0) with META type 1, or the legacy TYPE (top nibble
+    """True when a stream TYPE announces GNSS META (M17 specification, the TYPE field of the LSF: legacy encryption subtype 1 with no encryption,
+    "GNSS position data"; v3 META type 1; production uses the legacy form, v3 only where a P26j gate enables it): the v3 TYPE (top nibble not 0) with META type 1, or the legacy TYPE (top nibble
     0) of a voice stream with no encryption and subtype 1."""
     if type_ >> 12:
         return m17v3.parse_v3_type(type_)["meta"] == m17v3.META_GNSS
@@ -257,6 +259,52 @@ def gnss_scan(packets, near=None, within=1.0):
                 and abs(decoded["lat"] - near[0]) <= within and abs(decoded["lon"] - near[1]) <= within:
             stray.append(pkt)
     return {"total": len(packets), "typed": typed, "stray": stray, "positions": positions}
+
+
+def lsf_view(packets):
+    """The LSF META view of parsed M17 stream packets, per stream id. In an M17 stream over IP every 54 byte packet carries a copy of the LSF
+    (DST, SRC, TYPE, META; the LICH chunks of the air interface are not on this plane), so the LSF META a listener sees is read from
+    the copies in the stream's own frames. Returns {stream_id: {"packets", "lsfs" (distinct (TYPE, META) in order of first appearance),
+    "typed" (the packets whose TYPE announces GNSS META and whose META is not all zero: {"fn", "at", "type", "decoded" or None})}}.
+    Text META (TYPE 0x0005) and zero META are in "lsfs" only."""
+    streams = {}
+    for pkt in packets:
+        view = streams.setdefault(pkt["stream_id"], {"packets": 0, "lsfs": [], "typed": []})
+        view["packets"] += 1
+        key = (pkt["type"], bytes(pkt["meta"]))
+        if key not in view["lsfs"]:
+            view["lsfs"].append(key)
+        if is_gnss_type(pkt["type"]) and any(pkt["meta"]):
+            view["typed"].append({"fn": pkt["fn"], "at": pkt.get("at"), "type": pkt["type"], "decoded": decode_gnss_or_none(pkt["meta"])})
+    return streams
+
+
+def gnss_in_lsf(packets, lat, lon, tol_e7=POSITION_ERROR_E7):
+    """Looks in the LSF META of the stream(s) in `packets` for a GNSS position equal to (lat, lon) degrees within `tol_e7` (1e-7 degrees).
+    Returns {"streams" (lsf_view), "typed" (all GNSS-typed LSF copies), "decoded" (those whose META decodes with the lat/lon valid bit),
+    "matches" (decoded within tol_e7 of lat, lon), "off" (decoded but too far: [(lat, lon)])}."""
+    streams = lsf_view(packets)
+    typed = [t for view in streams.values() for t in view["typed"]]
+    decoded = [t for t in typed if t["decoded"] and t["decoded"]["validity"] & m17v3.V_LATLON]
+    matches, off = [], []
+    for t in decoded:
+        d = t["decoded"]
+        if abs(d["lat"] - lat) * 1e7 <= tol_e7 and abs(d["lon"] - lon) * 1e7 <= tol_e7:
+            matches.append(t)
+        else:
+            off.append((d["lat"], d["lon"]))
+    return {"streams": streams, "typed": typed, "decoded": decoded, "matches": matches, "off": off}
+
+
+def m17p_packets(inbox, times=None, start=0):
+    """Parsed M17 packet-mode datagrams (parse_m17p dicts, plus "at") of a client inbox from index `start`."""
+    out = []
+    for index in range(start, len(inbox)):
+        data = inbox[index]
+        parsed = m17.parse_m17p(data, trailer=False) if bytes(data).startswith(b"M17P") else None
+        if parsed:
+            out.append(dict(parsed, at=times[index]) if times is not None else parsed)
+    return out
 
 
 def stream_packets(inbox, times=None, start=0):

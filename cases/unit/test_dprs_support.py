@@ -113,7 +113,8 @@ def test_mice_spec_bytes_one_by_one():
 def test_mice_spec_table_destination_alone_gives_12_degrees():
     # taking the spec's printed table destination literally (offset +0), the same information bytes are 12 07.74 W: the spec's inconsistency
     got = dp.mice_decode(dp.SPEC_MICE_DEST_SPEC, dp.SPEC_MICE_INFO)
-    assert got["lon"] == -(Fraction(12) + Fraction(774, 6000))
+    assert got["lon"] == -(Fraction(12) + Fraction(774, 6000)) == dp.SPEC_MICE_LON_OFFSET0
+    assert got["lat"] == dp.SPEC_MICE_LAT and dp.e7(got["lon"]) == -121290000
 
 
 def test_mice_spec_ambiguity_example():
@@ -285,7 +286,7 @@ def test_stream_packets_skips_foreign_datagrams_and_keeps_times():
 # ------------------------------------------------------------------ the cases' constants
 
 def test_case_callsigns_are_distinct_from_every_other_position_case():
-    mine = (list(td.A_CALL.values()) + [td.COMPRESSED_CALL, td.MICE_CALL] + list(td.GNSS_CONTROL_CALL.values())
+    mine = (list(td.A_CALL.values()) + [td.COMPRESSED_CALL, td.MICE_CALL, td.MICE0_CALL] + list(td.GNSS_CONTROL_CALL.values())
             + list(td.GNSS_AMBIGUOUS_CALL.values()) + list(td.RIDE_CALL.values()) + list(td.UPLINK_CALL.values()))
     assert len(mine) == len(set(mine))
     others = []
@@ -303,3 +304,53 @@ def test_case_callsigns_are_distinct_from_every_other_position_case():
 def test_vectors_do_not_contain_a_forbidden_simple_data_character():
     for blob in (dp.SPEC_COMPRESSED, dp.SPEC_MICE_INFO, dp.SPEC_MICE_DEST.encode()):
         assert not set(blob) & dstar_sd.FORBIDDEN_SIMPLE
+
+
+# ------------------------------------------------------------------ the LSF META view of a stream
+
+def lsf_packet(stream_id, fn, type_, meta, at=None):
+    pkt = m17.parse_stream(m17.stream_packet(stream_id, fn, bytes(16), src="N0TEST", type_=type_, meta=meta))
+    return dict(pkt, at=at) if at is not None else pkt
+
+
+def test_lsf_view_groups_copies_per_stream_and_ignores_text_meta():
+    gnss = m17v3.gnss_meta(lat=10.5, lon=20.25)
+    text = m17.meta_text_blocks("DVT DPRS 0001")[0]
+    pkts = [lsf_packet(1, 0, 0x0005, bytes(14)), lsf_packet(1, 1, 0x0005, text), lsf_packet(1, 2, 0x0005, text),
+            lsf_packet(1, 3, dp.GNSS_LEGACY_TYPE, gnss, at=5.0), lsf_packet(2, 0, 0x0005, bytes(14))]
+    view = dp.lsf_view(pkts)
+    assert set(view) == {1, 2} and view[1]["packets"] == 4 and len(view[1]["lsfs"]) == 3
+    assert len(view[1]["typed"]) == 1 and view[1]["typed"][0]["fn"] == 3 and view[1]["typed"][0]["at"] == 5.0
+    assert view[2]["typed"] == []
+
+
+def test_gnss_in_lsf_matches_the_position_within_the_tolerance():
+    pkts = [lsf_packet(7, n, dp.GNSS_LEGACY_TYPE, m17v3.gnss_meta(lat=10.5, lon=20.25)) for n in range(3)]
+    got = dp.gnss_in_lsf(pkts, 10.5, 20.25, ps.POSITION_E7)
+    assert len(got["typed"]) == 3 and len(got["matches"]) == 3 and got["off"] == []
+    # the raw GNSS step (1e-5 degrees in latitude, 2e-5 in longitude) stays inside the 2e-5 degree tolerance for this position
+    d = got["matches"][0]["decoded"]
+    assert abs(d["lat"] - 10.5) * 1e7 <= ps.POSITION_E7 and abs(d["lon"] - 20.25) * 1e7 <= ps.POSITION_E7
+
+
+def test_gnss_in_lsf_reports_wrong_undecodable_and_untyped():
+    far = lsf_packet(7, 0, dp.GNSS_LEGACY_TYPE, m17v3.gnss_meta(lat=49.0, lon=-72.0))
+    got = dp.gnss_in_lsf([far], 10.5, 20.25)
+    assert got["matches"] == [] and len(got["off"]) == 1
+    bad = bytearray(m17v3.gnss_meta(lat=10.5, lon=20.25))
+    bad[13] = 1                                                   # a reserved byte set: decode_gnss refuses
+    got = dp.gnss_in_lsf([lsf_packet(7, 0, dp.GNSS_LEGACY_TYPE, bytes(bad))], 10.5, 20.25)
+    assert len(got["typed"]) == 1 and got["decoded"] == [] and got["matches"] == []
+    no_pos = lsf_packet(7, 0, dp.GNSS_LEGACY_TYPE, m17v3.gnss_meta(altitude=100.0))        # lat/lon valid bit clear
+    assert dp.gnss_in_lsf([no_pos], 10.5, 20.25)["matches"] == []
+    untyped = lsf_packet(7, 0, 0x0005, m17v3.gnss_meta(lat=10.5, lon=20.25))
+    got = dp.gnss_in_lsf([untyped], 10.5, 20.25)
+    assert got["typed"] == [] and got["matches"] == []
+
+
+def test_m17p_packets_parses_packet_mode_datagrams_only():
+    m17p = m17.m17p_packet(0x02, b"N0TEST>APDVT1:!1030.00N/02015.00E>x", src="N0TEST")
+    inbox = [b"PONG", m17p, m17.stream_packet(1, 0, bytes(16))]
+    assert len(dp.m17p_packets(inbox, [1.0, 2.0, 3.0])) == 1
+    assert dp.m17p_packets(inbox, [1.0, 2.0, 3.0])[0]["at"] == 2.0
+    assert dp.m17p_packets(inbox, start=2) == []

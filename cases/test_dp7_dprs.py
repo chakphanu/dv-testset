@@ -8,9 +8,11 @@ by the ride-along and the APRS-IS uplink. Specification: DV-Router docs/design/d
   DP7-dprs-a  ambiguity levels 1, 3 and 4 of a D-PRS position are carried with that level, the box centre and the page text of the SENT
               precision on the public SSE, the anonymous public state and the operator feed (the checks of the level-2 case)
   DP7-dprs-b  a COMPRESSED position (APRS101 ch. 9 example `/5L!!<*e7>7P[`, 49.5 N 72.75 W) and a Mic-E position (APRS101 ch. 10 example,
-              33 25.64 N 112 07.74 W) in a D-PRS line are admitted as positions with the decoded coordinates
-  DP7-dprs-c  for every ambiguity level 1..4 an M17 listener of the room receives NO M17 GNSS META for the ambiguous D-PRS position, while
-              an UNAMBIGUOUS D-PRS position of another station in the same room, sent first on the same listener, DOES produce one
+              33 25.64 N 112 07.74 W, destination S32UVT = longitude offset +100) in a D-PRS line are admitted as positions with the decoded
+              coordinates; the same information field with destination S32U6T (offset 0) is a valid frame too: 33 25.64 N 12 07.74 W
+  DP7-dprs-c  for every ambiguity level 1..4 an M17 listener of the room gets NO GNSS META in the LSF META of the cross-mode M17 voice STREAM
+              (the stream-plane ride-along of the fix) for the ambiguous D-PRS position, while an UNAMBIGUOUS D-PRS position of another station in
+              the same room, sent first on the same listener, DOES produce one with its coordinates
   DP7-dprs-d  the D-PRS ride-along (the slow data another D-STAR listener receives) and the APRS-IS uplink (the line at the private aprsc)
               re-apply the SAME ambiguity level that was sent: blanked digits (spaces), neither refined nor coarsened
 
@@ -20,7 +22,7 @@ other position case: a unit test checks it) because the controller admits 1 posi
 callsign, body) for 60 s and the private aprsc dedupes for 30 s.
 
 NOT RUN ON A RIG (written against the sources and the design only). Shapes that could not be verified are listed in docs/dp7-cases.md
-("D-PRS cases", UNVERIFIED): where the M17 GNSS META of a D-PRS position appears, the ride-along shape, the Mic-E destination handling of a
+("D-PRS cases", UNVERIFIED): the TYPE and META of the stream LSF that carries the GNSS ride-along, the D-STAR ride-along shape, the Mic-E destination handling of a
 D-PRS line.
 """
 import sys
@@ -49,7 +51,7 @@ SETTING = tp.SETTING
 
 # one base callsign per case (the controller admits 1 position per 30 s per base callsign)
 A_CALL = {1: "N0PQ1", 3: "N0PQ3", 4: "N0PQ4"}                       # DP7-dprs-a
-COMPRESSED_CALL, MICE_CALL = "N0PQC", "N0PQE"                       # DP7-dprs-b
+COMPRESSED_CALL, MICE_CALL, MICE0_CALL = "N0PQC", "N0PQE", "N0PQF"        # DP7-dprs-b (Mic-E with offset +100, Mic-E with offset 0)
 GNSS_CONTROL_CALL = {1: "N0PQB1", 2: "N0PQB2", 3: "N0PQB3", 4: "N0PQB4"}      # DP7-dprs-c, the unambiguous control of each level
 GNSS_AMBIGUOUS_CALL = {1: "N0PQA1", 2: "N0PQA2", 3: "N0PQA3", 4: "N0PQA4"}    # DP7-dprs-c, the ambiguous position
 RIDE_CALL = {1: "N0PQD1", 2: "N0PQD2", 3: "N0PQD3", 4: "N0PQD4"}              # DP7-dprs-d ride-along
@@ -168,10 +170,10 @@ def test_dp7_dprs_b_compressed_position(rig, target, hub, web_ctx, shape):
 
 def test_dp7_dprs_b_mice_position(rig, target, hub, web_ctx, shape):
     """APRS 1.0.1 chapter 10: the Mic-E example. The D-PRS line is `CALL>S32UVT,DSTAR*:` + the nine byte information field of the spec's decode
-    example (`` `(_fn"Oj/ ``): destination digits 3 3 2 5 6 4 = 33 25.64 N, North, longitude offset +100, West; longitude 112 07.74 W; message
-    M3 Returning; speed 20 knots, course 251, symbol `/j` (a jeep). Admitted as source 1, ambiguity 0, at 33.42733 N 112.129 W within the
-    position tolerance on all three surfaces. The destination is the consistent form `S32UVT` (the spec's table prints `S32U6T`, offset +0:
-    UNVERIFIED which one a decoder takes, docs/dp7-cases.md)."""
+    example (`` `(_fn"Oj/ ``): destination digits 3 3 2 5 6 4 = 33 25.64 N, North, West, and the fifth character `V` (P-Z) = longitude offset
+    +100 degrees, so the longitude byte `(` is 100 + 12 = 112 degrees, 07.74 minutes W; message M3 Returning; speed 20 knots, course 251, symbol
+    `/j` (a jeep). Admitted as source 1, ambiguity 0, at 33.42733 N 112.129 W within the position tolerance on all three surfaces. The expected
+    values are computed by dprs_support.mice_decode from the Mic-E rules, not taken from the product."""
     case = "DP7-dprs-b[mic-e]"
     if not shape.positions:
         pytest.skip("this run has positions = false")
@@ -183,29 +185,61 @@ def test_dp7_dprs_b_mice_position(rig, target, hub, web_ctx, shape):
     decoded_position_case(target, web_ctx, case, "mice", MICE_CALL, rig, dp.SPEC_MICE_INFO, decoded, dest=dp.SPEC_MICE_DEST)
 
 
+def test_dp7_dprs_b_mice_offset_zero_position(rig, target, hub, web_ctx, shape):
+    """The same Mic-E information field with the destination `S32U6T` (the fifth character `6` is a digit with flag 0 = longitude offset +0
+    degrees) is also a valid frame: it must be admitted, not rejected, and decode with the longitude byte `(` as 12 degrees: 33 25.64 N,
+    12 07.74 W (the expected value is computed by dprs_support.mice_decode from the Mic-E longitude rules: d+28 = 40, minus 28 = 12, no +100;
+    minutes 67 - 60 = 7, hundredths 74). NOTE: the destination PRINTED in APRS101 chapter 10 (`S32U6T`, "offset +0") is inconsistent with the
+    longitude example of the same chapter (112 degrees needs +100, i.e. `S32UVT`); this case takes the destination literally, as a receiver
+    must, and the main case (test_dp7_dprs_b_mice_position) is the one that reproduces the specification's 112 07.74 W."""
+    case = "DP7-dprs-b[mic-e offset 0]"
+    if not shape.positions:
+        pytest.skip("this run has positions = false")
+    decoded = dp.mice_decode(dp.SPEC_MICE_DEST_SPEC, dp.SPEC_MICE_INFO)
+    assert decoded["lat"] == dp.SPEC_MICE_LAT and decoded["lon"] == dp.SPEC_MICE_LON_OFFSET0      # 33 25.64 N, 12 07.74 W
+    note(target, case, "RECORD", "sent %r, decoded %.6f,%.6f speed %d course %d symbol %s%s" % (
+        dp.dprs_payload(MICE0_CALL, dp.SPEC_MICE_INFO, dest=dp.SPEC_MICE_DEST_SPEC), float(decoded["lat"]), float(decoded["lon"]), decoded["speed"],
+        decoded["course"], decoded["table"], decoded["code"]))
+    decoded_position_case(target, web_ctx, case, "mice", MICE0_CALL, rig, dp.SPEC_MICE_INFO, decoded, dest=dp.SPEC_MICE_DEST_SPEC)
+
+
 # ---------------------------------------------------------------- DP7-dprs-c: no M17 GNSS META for an ambiguous position
 
 def gnss_over(rig, mlist, call, info, near):
-    """One D-PRS over with the M17 listener `mlist` pumped; returns the M17 stream packets the listener got during it and the scan."""
+    """One D-PRS over with the M17 listener `mlist` pumped. Returns the M17 STREAM packets the listener got during it (each carries a copy of
+    the stream's LSF, read by dp.lsf_view / dp.gnss_in_lsf), the M17 packet-mode datagrams (not where the GNSS META is expected: kept to
+    explain a missing control), and the scan for GNSS-typed and stray GNSS META."""
     n0 = len(mlist.client.inbox)
     ran = run_over(rig, call, info, watchers=[mlist])
     packets = dp.stream_packets(mlist.client.inbox, mlist.client.inbox_times, n0)
+    m17p = dp.m17p_packets(mlist.client.inbox, mlist.client.inbox_times, n0)
     scan = dp.gnss_scan(packets, near=near)
-    return types.SimpleNamespace(run=ran, packets=packets, scan=scan)
+    return types.SimpleNamespace(run=ran, packets=packets, m17p=m17p, scan=scan, m17p_scan=dp.gnss_scan(m17p, near=near))
+
+
+def lsf_text(view):
+    """For the log: per stream id the packet count, the number of distinct (TYPE, META) LSF copies and the TYPES."""
+    return "; ".join("stream %#06x: %d packets, %d distinct LSF META, TYPES %s, GNSS-typed %d" % (
+        sid, v["packets"], len(v["lsfs"]), sorted({hex(t) for t, _m in v["lsfs"]}), len(v["typed"])) for sid, v in sorted(view.items())) or "no stream"
 
 
 @pytest.mark.parametrize("level", [1, 2, 3, 4])
 def test_dp7_dprs_c_ambiguous_position_gives_no_m17_gnss_meta(rig, target, hub, web_ctx, shape, level):
-    """Product owner's rule (DV-Router): a position is passed to the M17 listeners of its room as GNSS META only when it is exact; an
-    ambiguous one (a box, not a point) must not be sent as a precise GNSS fix. One M17 client of module B listens throughout.
-    1) CONTROL: a D-PRS over of N0PQB<level> with a full precision position (10.5 N 20.25 E): the listener must receive M17 stream packets whose
-       TYPE announces GNSS META (legacy voice/null-subtype-1 TYPE, or v3 META type 1) with a nonzero META. If it does not, the product emits no GNSS
-       META for D-PRS positions at all (or this shape is wrong) and the negative proves nothing: the case FAILS with the finding.
-    2) the same listener, the same room, then an over of N0PQA<level> with the ambiguous position (4903.50N/07201.75W with `level` blanked digits):
-       the listener must get cross-mode voice (the liveness proof, as many packets as the control within a factor of 2) and NO packet with GNSS TYPE
-       and nonzero META, and no packet with another TYPE whose META decodes as a GNSS position within 1 degree of the box. Both overs are watched for
-       the same time (the over, then 6 s). 3) The ambiguous position was admitted (public state, ambiguity = level): without it the absence is
-       explained by a drop (DP7-FIND1), not by the rule."""
+    """DV-Router (data.md, the stream plane): a D-PRS fix rides along as GNSS META in the LSF META field of the cross-mode M17 voice STREAM
+    the room's M17 listeners receive during the D-STAR over (legacy GNSS META in production; v3 only where a P26j gate enables it); it is NOT
+    a packet. Only an exact position is sent so; an ambiguous one (a box, not a point) must not be. One M17 client of module B listens throughout
+    and the LSF copies in the frames of every stream it receives are read (dp.lsf_view; the TYPE announces the META type, the GNSS layout is
+    dvtest.proto.m17v3.decode_gnss, written from the M17 specification).
+    1) CONTROL: a D-PRS over of N0PQB<level> with a full precision position (10.5 N 20.25 E): the LSF META of the voice stream must carry a
+       GNSS-typed META with the lat/lon valid bit whose coordinates equal the position within ps.POSITION_E7 (2e-5 degrees; the raw GNSS step is
+       1e-5 degrees in latitude, 2e-5 in longitude). If it does not (no GNSS TYPE, undecodable, wrong coordinates, a position only in an M17P
+       packet, or a position under another TYPE) the case FAILS with a FINDING that says which: nothing is accepted silently and the negative has
+       no control.
+    2) the same listener, the same room, an over of N0PQA<level> with the ambiguous position (4903.50N/07201.75W with `level` blanked digits):
+       the listener must get cross-mode voice (at least half the control's stream packets: it listened) and NO GNSS-typed LSF META with nonzero
+       content in any stream (text META may change), no other TYPE whose META decodes as a GNSS position within 1 degree of the box, and no
+       M17P packet carrying one. Both overs are watched for the same time (the over, then 6 s). 3) The ambiguous position was admitted (public
+       state, ambiguity = level): without it the absence is explained by a drop (DP7-FIND1), not by the rule."""
     case = "DP7-dprs-c[level %d]" % level
     if not shape.positions:
         pytest.skip("this run has positions = false")
@@ -213,31 +247,47 @@ def test_dp7_dprs_c_ambiguous_position_gives_no_m17_gnss_meta(rig, target, hub, 
     ambiguous_info = ps.position_info(ps.APRS_LAT, ps.APRS_LON, level, "/>", "dp7c%d" % level)
     with m17_client(rig.xlxd_sut, callsign=M17_LISTENER, module=MODULE) as mlist:
         control = gnss_over(rig, mlist, GNSS_CONTROL_CALL[level], control_info, near=(ps.LAT, ps.LON))
-        note(target, case, "RECORD", "control: %d M17 stream packets, %d with GNSS TYPE and META, %d stray, GNSS positions %s, TYPES seen %s" % (
-            len(control.packets), len(control.scan["typed"]), len(control.scan["stray"]), [(round(a, 5), round(b, 5)) for a, b in control.scan["positions"]][:3],
-            sorted({hex(p["type"]) for p in control.packets})))
+        look = dp.gnss_in_lsf(control.packets, ps.LAT, ps.LON, ps.POSITION_E7)
+        note(target, case, "RECORD", "control: %d M17 stream packets (%s); GNSS-typed LSF copies %d, decodable with a position %d, matching %d, off %s; "
+             "stray %d; M17P datagrams %d (position-like %d); first GNSS fn/time %s" % (
+                 len(control.packets), lsf_text(look["streams"]), len(look["typed"]), len(look["decoded"]), len(look["matches"]),
+                 [(round(a, 5), round(b, 5)) for a, b in look["off"]][:3], len(control.scan["stray"]), len(control.m17p),
+                 len(control.m17p_scan["typed"]) + len(control.m17p_scan["stray"]),
+                 None if not look["typed"] else (look["typed"][0]["fn"], None if look["typed"][0]["at"] is None else round(look["typed"][0]["at"] - control.run.t0, 2))))
         assert len(control.packets) >= MIN_VOICE_PACKETS, \
             "%s: the M17 listener got %d cross-mode stream packets of the control over (transcoder up, DVT_TRANSCODER_FAKE=1? M17 module %s?)" % (
                 case, len(control.packets), MODULE)
-        if not (control.scan["typed"] or control.scan["stray"]):
-            text = ("FINDING DP7-DPRS-GNSS: the unambiguous D-PRS position of %s (10.5 N 20.25 E) produced NO M17 GNSS META on a listener of the room "
-                    "(%d stream packets, TYPES %s, META nonzero in %d). The negative of this case has no control; the shape (where DV-Router puts a "
-                    "position as M17 GNSS META) is UNVERIFIED in docs/dp7-cases.md" % (
-                        GNSS_CONTROL_CALL[level], len(control.packets), sorted({hex(p["type"]) for p in control.packets}),
-                        sum(1 for p in control.packets if any(p["meta"]))))
+        if not look["matches"]:
+            if look["off"]:
+                why = "GNSS META in the LSF but at the wrong place %s" % [(round(a, 5), round(b, 5)) for a, b in look["off"]][:3]
+            elif look["typed"]:
+                why = "GNSS-typed LSF META that does not decode as a position (reserved bytes or the lat/lon valid bit clear)"
+            elif control.scan["stray"]:
+                why = "the position is in the LSF META of %d stream packets under a TYPE that does not announce GNSS (%s)" % (
+                    len(control.scan["stray"]), sorted({hex(p["type"]) for p in control.scan["stray"]}))
+            elif control.m17p_scan["typed"] or control.m17p_scan["stray"]:
+                why = "the position only arrives as an M17P packet-mode datagram, not in the LSF META of the voice stream"
+            else:
+                why = "no GNSS META anywhere (no GNSS TYPE in the stream LSF, no position in any META, no M17P position)"
+            text = ("FINDING DP7-DPRS-GNSS: the unambiguous D-PRS position of %s (10.5 N 20.25 E) did not appear as GNSS META in the LSF META of the M17 "
+                    "voice stream on a listener of the room: %s. %s. The negative of this case has no control." % (
+                        GNSS_CONTROL_CALL[level], why, lsf_text(look["streams"])))
             note(target, case, "FINDING", text)
             raise AssertionError(text)
         near = (float(ps.APRS_LAT), float(ps.APRS_LON))
         ambiguous = gnss_over(rig, mlist, GNSS_AMBIGUOUS_CALL[level], ambiguous_info, near=near)
-    note(target, case, "RECORD", "ambiguous: %d M17 stream packets, %d with GNSS TYPE and META, %d stray, TYPES seen %s" % (
-        len(ambiguous.packets), len(ambiguous.scan["typed"]), len(ambiguous.scan["stray"]), sorted({hex(p["type"]) for p in ambiguous.packets})))
+    amb_look = dp.lsf_view(ambiguous.packets)
+    note(target, case, "RECORD", "ambiguous: %d M17 stream packets (%s); GNSS-typed with nonzero META %d, stray %d; M17P datagrams %d" % (
+        len(ambiguous.packets), lsf_text(amb_look), len(ambiguous.scan["typed"]), len(ambiguous.scan["stray"]), len(ambiguous.m17p)))
     assert len(ambiguous.packets) * 2 >= len(control.packets), \
         "%s: the listener got %d stream packets of the ambiguous over against %d of the control: it did not listen, the absence proves nothing" % (
             case, len(ambiguous.packets), len(control.packets))
-    assert not ambiguous.scan["typed"], "%s: an ambiguous D-PRS position (level %d) produced M17 GNSS META: %d packets, positions %s" % (
+    assert not ambiguous.scan["typed"], "%s: an ambiguous D-PRS position (level %d) produced GNSS META in the LSF of the voice stream: %d copies, positions %s" % (
         case, level, len(ambiguous.scan["typed"]), [(round(a, 5), round(b, 5)) for a, b in ambiguous.scan["positions"]][:3])
-    assert not ambiguous.scan["stray"], "%s: a GNSS position near the ambiguous box rides in M17 META with another TYPE: %d packets (types %s)" % (
+    assert not ambiguous.scan["stray"], "%s: a GNSS position near the ambiguous box rides in the LSF META under another TYPE: %d packets (types %s)" % (
         case, len(ambiguous.scan["stray"]), sorted({hex(p["type"]) for p in ambiguous.scan["stray"]}))
+    assert not (ambiguous.m17p_scan["typed"] or ambiguous.m17p_scan["stray"]), \
+        "%s: an M17P packet carries a GNSS position of the ambiguous box" % case
     row, _rows = ps.wait_public_row(web_ctx.anon(), GNSS_AMBIGUOUS_CALL[level], ps.PUBLIC_WAIT_S, room=MODULE)
     note(target, case, "RECORD", "the ambiguous position in the anonymous public state: %s" % (None if row is None else row["body"]))
     assert row is not None, ("%s: no absence evidence: the ambiguous D-PRS position of %s is not in the public state either (dropped, DP7-FIND1?), "
