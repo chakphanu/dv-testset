@@ -410,3 +410,16 @@ is the original proposal, kept for the reasoning.
 
 Commands and numbers in this file are from the run directories named above (H4: see its own section); the
 tool scope was `scripts/contained.sh --name test` with one scenario at a time.
+
+## H7 / H8: the moved session event series (XCOBS1 follow-up), real process control
+
+Written from DV-Router's answer (transcoding.md 290 / 353 / 365), run so far only on `wip-0348b98` binaries (old reading: the two
+results are still `dv_xcode_sessions_total{result="failed"|"drain_timeout"}`, the case maps them to the events series).
+
+| Case | Steps | Expected | Observed on `wip-0348b98` |
+|------|-------|----------|---------------------------|
+| `test_session_failed_when_the_worker_ends_the_session` | opened session, 100-unit over (2 s), SIGTERM to `dv-codec-ambed` at 0.8 s | failed 1, opened unchanged (1), no open_failed, drain_timeout 0, listener hears fewer than 100 units | failed 1, opened 1, listener 41 of 100, launcher alive |
+| `test_drain_timeout_when_the_worker_is_stopped` | opened session, 60-unit over (1.2 s), SIGSTOP at 0.5 s, SIGCONT 1.0 s after the unkey | drain_timeout 1, failed 0, attempts 1 / opened 1 / open_failed 0 | drain_timeout 1, failed 0, opened 1, frames in sent 60, published 26, dropped 34 |
+
+The workers are found by `comm` `dv-codec-ambed` among the descendants of the system under test. On XCOBS1 images the cases read
+`dv_xcode_session_events_total` and also check `requested == opened + open_failed`.

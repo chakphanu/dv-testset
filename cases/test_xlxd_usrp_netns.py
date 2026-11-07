@@ -75,6 +75,19 @@ SCENARIOS = {
                           open_delays=[1.5, 0.05], steps=["listenB", "usrp:100:20", "usrpShortB"],
                           cases="test_open_refused_", profile="dvrouter",
                           metrics_wait={"usrp:100:20": ["open_failed", 1], "usrpShortB": ["settled", 2]}),
+    # H7 (XCOBS1, dv_xcode_session_events_total{result="failed"}): a 100-unit over (2 s) on an opened
+    # session; 0.8 s into it the codec worker (dv-codec-ambed, a child of the launcher) gets SIGTERM:
+    # "worker shutdown ends every session with SessionEnded (shutdown)" (transcoding.md:365)
+    "session_failed": dict(usrp=True, mode="extended", max_outputs=4, open_delay=0.05,
+                           steps=["listenB", "usrpsig:100:20:TERM:800"], cases="test_session_failed_",
+                           profile="dvrouter", metrics_wait={"usrpsig:100:20:TERM:800": ["event:failed", 1]}),
+    # H8 (dv_xcode_session_events_total{result="drain_timeout"}): a 60-unit over (1.2 s) on an opened
+    # session; 0.5 s into it the worker gets SIGSTOP, the over ends (EndSession, 400 ms drain deadline,
+    # transcoding.md:353), SIGCONT 1.0 s after the unkey
+    "drain_timeout": dict(usrp=True, mode="extended", max_outputs=4, open_delay=0.05,
+                          steps=["listenB", "usrpsig:60:20:STOP:500:1000"], cases="test_drain_timeout_",
+                          profile="dvrouter",
+                          metrics_wait={"usrpsig:60:20:STOP:500:1000": ["event:drain_timeout", 1]}),
 }
 TIMEOUT = 120
 
@@ -228,12 +241,56 @@ def _inside(spec, run_dir):
         peer.sendto(usrp.unkey(count), (XLXD_IP, 34001))
         result["usrp_tx"].append([first, last, fake.now()])
 
+    def worker_pids():
+        """PIDs of the codec workers (comm dv-codec-ambed) among the descendants of the system under test."""
+        parents, names = {}, {}
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit():
+                continue
+            try:
+                with open("/proc/%s/stat" % entry) as handle:
+                    text = handle.read()
+            except OSError:
+                continue
+            left, right = text.index("("), text.rindex(")")
+            names[int(entry)] = text[left + 1:right]
+            parents[int(entry)] = int(text[right + 2:].split()[1])
+        found = []
+        for pid, name in names.items():
+            if name != "dv-codec-ambed":
+                continue
+            node = pid
+            while node > 1 and node != xlxd.pid:
+                node = parents.get(node, 0)
+            if node == xlxd.pid:
+                found.append(pid)
+        return sorted(found)
+
+    def signal_workers(name):
+        pids = worker_pids()
+        for pid in pids:
+            os.kill(pid, getattr(signal, "SIG" + name))
+        result.setdefault("signals", []).append([fake.now(), name, pids])
+
+    def usrp_over_signalled(count, gap, name, at_ms, cont_ms):
+        """usrp_over with signal `name` sent to the codec workers at_ms after the first frame;
+        cont_ms (when given) is the time after the unkey at which they get SIGCONT."""
+        timer = threading.Timer(at_ms / 1000.0, signal_workers, args=(name,))
+        timer.start()
+        usrp_over(count, gap)
+        if cont_ms is not None:
+            time.sleep(cont_ms / 1000.0)
+            signal_workers("CONT")
+        timer.join()
+
     def session_wait_value(samples, label):
         """Value the scrape waits on. "settled" is the number of sessions that
         reached a terminal result in either generation of the metric: XCOBS1
         (requested, opened, open_failed: opened + open_failed) or before it
         (opened counted the CreateSessions sent, no requested family)."""
         from dvtest import metrics
+        if label.startswith("event:"):
+            return metrics.total(samples, "dv_xcode_session_events_total", result=label[6:])
         if label != "settled":
             return metrics.total(samples, "dv_xcode_sessions_total", result=label)
         requested = metrics.total(samples, "dv_xcode_sessions_total", result="requested")
@@ -281,6 +338,10 @@ def _inside(spec, run_dir):
             elif step.startswith("usrp:"):
                 _name, count, gap_ms = step.split(":")
                 usrp_over(int(count), int(gap_ms) / 1000.0)
+            elif step.startswith("usrpsig:"):
+                parts = step.split(":")
+                usrp_over_signalled(int(parts[1]), int(parts[2]) / 1000.0, parts[3], int(parts[4]),
+                                    int(parts[5]) if len(parts) > 5 else None)
             elif step == "badB":
                 # TLV/text frame from the configured peer: must be dropped
                 peer.sendto(usrp.frame(0, usrp.TYPE_TEXT, b"\x08\x00"), (XLXD_IP, 34001))
@@ -714,6 +775,9 @@ def xcode_counters(run, step):
     for result in ("failed", "drain_timeout"):
         out["events_" + result] = hub_counter(run, step, "dv_xcode_session_events_total", result=result)
     out.update(normalise_sessions(out))
+    if out["xcobs1"] is False:              # before XCOBS1 the two results lived in dv_xcode_sessions_total
+        out["events_failed"] = out["sessions_failed"]
+        out["events_drain_timeout"] = out["sessions_drain_timeout"]
     for dir_, result in (("in", "sent"), ("in", "skipped"), ("in", "pre_ready_dropped"),
                          ("out", "published"), ("out", "dropped")):
         out["frames_%s_%s" % (dir_, result)] = hub_counter(run, step, "dv_xcode_frames_total",
@@ -891,6 +955,77 @@ def test_open_refused_late_std_given_up(runs, target):
     assert second["attempts"] == 2 and second["failed"] == 1 and second["ok"] == 1, second
     check_session_accounting(second)
     assert second["frames_out_published"] == SHORT_BURST, second
+
+
+# ---- H7 / H8 (XCOBS1): the moved series dv_xcode_session_events_total, with real process control
+
+def signalled_observed(run, step):
+    """What the signalled-over scenarios record: signals sent to the workers, the over, what the
+    listener heard, the hub counters after the step."""
+    rx = [r for r in run["dstar_rx"] if r[4]]
+    return {
+        "signals": run.get("signals", []),
+        "usrp_tx": run["usrp_tx"][0] if run["usrp_tx"] else None,
+        "opens": len(run["opens"]),
+        "dstar_voice_frames": len(rx),
+        "dstar_end_frames": len([r for r in run["dstar_rx"] if r[3]]),
+        "counters": xcode_counters(run, step),
+        "xlxd_alive": run.get("xlxd_alive"),
+    }
+
+
+def test_session_failed_when_the_worker_ends_the_session(runs, target):
+    """H7: during an over on an opened session the codec worker gets SIGTERM; its shutdown ends every
+    session (SessionEnded shutdown, transcoding.md:365), so dv_xcode_session_events_total{result="failed"}
+    is 1, opened stays 1, there is no open_failed for the attempt, drain_timeout stays 0, and the target
+    stream of the over ends at once (transcoding.md 'Failure': StreamEnd), so the listener hears fewer
+    than all units. A difference from these lines is a finding, not a reason to adapt the case. Skipped
+    under the xlxd profile."""
+    spec = netns_spec(target)
+    if spec is None:
+        pytest.skip("DV-Router profile spec only (the scenario is not launched under xlxd)")
+    run = get(runs, "session_failed")
+    assert run["listen_ack"] and run["listen_ack"][0], "the D-STAR listener was not acked on module B"
+    step = "usrpsig:100:20:TERM:800"
+    seen = signalled_observed(run, step)
+    (Path(run["run_dir"]) / "observed.json").write_text(json.dumps(seen, indent=1))
+    term = [sig for sig in seen["signals"] if sig[1] == "TERM"]
+    assert term and term[0][2], "no dv-codec-ambed process found under the system under test: %s" % seen["signals"]
+    counters = seen["counters"]
+    if counters["attempts"] is None:
+        pytest.fail("no hub snapshot after the step (METRICS_WAIT %s s): %s" % (METRICS_WAIT, counters))
+    assert counters["events_failed"] == 1, counters
+    assert counters["attempts"] == 1 and counters["ok"] == 1 and counters["failed"] == 0, counters
+    assert counters["events_drain_timeout"] == 0, counters
+    assert seen["opens"] >= 1
+    assert seen["dstar_voice_frames"] < 100, \
+        "listener heard %d of 100 units although the worker ended the session at 0.8 s" % seen["dstar_voice_frames"]
+    assert seen["xlxd_alive"], "the launcher exited"
+
+
+def test_drain_timeout_when_the_worker_is_stopped(runs, target):
+    """H8: during an over on an opened session the codec worker gets SIGSTOP; at the unkey the controller
+    sends EndSession with the 400 ms drain deadline (transcoding.md:353) and the outputs never arrive, so
+    dv_xcode_session_events_total{result="drain_timeout"} is 1; SIGCONT 1.0 s after the unkey, and
+    nothing else moves: attempts 1, opened 1, open_failed 0, failed 0. A difference from these lines is
+    a finding, not a reason to adapt the case. Skipped under the xlxd profile."""
+    spec = netns_spec(target)
+    if spec is None:
+        pytest.skip("DV-Router profile spec only (the scenario is not launched under xlxd)")
+    run = get(runs, "drain_timeout")
+    assert run["listen_ack"] and run["listen_ack"][0], "the D-STAR listener was not acked on module B"
+    step = "usrpsig:60:20:STOP:500:1000"
+    seen = signalled_observed(run, step)
+    (Path(run["run_dir"]) / "observed.json").write_text(json.dumps(seen, indent=1))
+    names = [sig[1] for sig in seen["signals"]]
+    assert names == ["STOP", "CONT"] and all(sig[2] for sig in seen["signals"]), seen["signals"]
+    counters = seen["counters"]
+    if counters["attempts"] is None:
+        pytest.fail("no hub snapshot after the step (METRICS_WAIT %s s): %s" % (METRICS_WAIT, counters))
+    assert counters["events_drain_timeout"] == 1, counters
+    assert counters["events_failed"] == 0, counters
+    assert counters["attempts"] == 1 and counters["ok"] == 1 and counters["failed"] == 0, counters
+    assert seen["xlxd_alive"], "the launcher exited"
 
 
 if __name__ == "__main__" and len(sys.argv) == 4 and sys.argv[1] == "--inside":

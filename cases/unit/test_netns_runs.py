@@ -154,8 +154,8 @@ def test_for_profile_drops_scenarios_of_another_profile():
     assert netns_runs.for_profile(names, scenarios, "xlxd") == ["slow_open"]
     assert netns_runs.for_profile([], scenarios, "xlxd") == []
     assert [n for n, spec in scenarios.items() if "profile" in spec] == \
-        ["slow_open_listener", "pre_ready_overflow", "open_late_std"]
-    # H5 / H6: every scenario that only the DV-Router profile can judge is dropped under xlxd
+        ["slow_open_listener", "pre_ready_overflow", "open_late_std", "session_failed", "drain_timeout"]
+    # H5 to H8: every scenario that only the DV-Router profile can judge is dropped under xlxd
     assert netns_runs.for_profile(list(scenarios), scenarios, "xlxd") == \
         [n for n in scenarios if "profile" not in scenarios[n]]
     assert netns_runs.for_profile(list(scenarios), scenarios, "dvrouter") == list(scenarios)

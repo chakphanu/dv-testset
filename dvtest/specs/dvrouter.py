@@ -107,6 +107,9 @@ SPEC = {
         "open_late_std": {"opens": [[24, 5, [1]], [24, 5, [1]]], "open_lag_s": 0.3,
                           "open_wait_s": 1.05, "reprobe_within_s": 1.2, "cs_within_s": 0.3,
                           "frames_heard": 5, "give_up_s": 3.0},
+        # H7 / H8 (XCOBS1): the moved session event series with real process control (transcoding.md:353, :365)
+        "session_failed": {"frames": 100, "signal": "TERM", "at_ms": 800},
+        "drain_timeout": {"frames": 60, "signal": "STOP", "at_ms": 500, "cont_ms": 1000, "drain_ms": 400},
     },
     # netns transcoder-lifecycle cases (test_xlxd_transcoder_lifecycle, B13/B14);
     # DV-Router docs/design/transcoding.md: one CAPS per connection, opens on

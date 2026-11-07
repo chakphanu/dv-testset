@@ -93,6 +93,47 @@ def test_public_state_has_no_moving_uptime(anon):
     assert not missing, "public state lost %s (ETAG1 keeps them)" % missing
 
 
+def _find(node, key):
+    """First value of `key` anywhere in a JSON tree, else None."""
+    if isinstance(node, dict):
+        if key in node:
+            return node[key]
+        for value in node.values():
+            got = _find(value, key)
+            if got is not None:
+                return got
+    elif isinstance(node, list):
+        for item in node:
+            got = _find(item, key)
+            if got is not None:
+                return got
+    return None
+
+
+def test_admin_status_keeps_the_uptime_values(anon, admin_session):
+    """ETAG1 / admin.md 'Status fields' (278): GET /api/v1/admin/status, block `live`: uptime_s and node_uptime_s are present
+    and increase between two requests a few seconds apart, started_ms / node_started_ms equal the public state's values,
+    uptime_source is present; the response has no ETag and Cache-Control no-store. Role viewer (the lowest floor of the route)."""
+    admin = admin_session("viewer")
+    path = admin.path("/status")
+    first = admin.get(path, expect=200)
+    time.sleep(3.0)
+    second = admin.get(path, expect=200)
+    a, b = json.loads(first.body), json.loads(second.body)
+    live_a = a.get("live") if isinstance(a.get("live"), dict) else a
+    live_b = b.get("live") if isinstance(b.get("live"), dict) else b
+    for key in ("uptime_s", "node_uptime_s"):
+        assert key in live_a and key in live_b, "admin status lacks %s in block live: %s" % (key, sorted(live_a)[:20])
+        assert live_b[key] > live_a[key], "%s did not increase: %s then %s" % (key, live_a[key], live_b[key])
+    assert "uptime_source" in live_b, "admin status lacks uptime_source"
+    public = json.loads(anon.get("/api/v1/public/state", expect=200).body)
+    for key in ("started_ms", "node_started_ms"):
+        assert live_b.get(key) is not None, "admin status lacks %s" % key
+        assert live_b[key] == _find(public, key), "%s differs from the public state: %s vs %s" % (key, live_b[key], _find(public, key))
+    assert "etag" not in {k.lower() for k in second.headers}, "admin status carries an ETag: %s" % second.headers.get("etag")
+    assert "no-store" in second.headers.get("cache-control", "").lower(), "Cache-Control %r" % second.headers.get("cache-control")
+
+
 # ================================================================ ETAG1: the strict case, both ways
 
 SETTLE_S = 60.0                 # an earlier case may still be moving the state (links expiring): wait for a quiet pair
