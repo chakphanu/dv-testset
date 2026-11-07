@@ -75,6 +75,7 @@ of each case is in `out/<run>/asl-lab/loadavg.jsonl`; cases run under load above
 | T4 | A, B each dial the edge and A dials B directly | pass | pass | pass | pass | pass (OUT unset, `20261103T231326Z`) | `.../t4-loop/` | app_rpt refuses the third link itself (`T 199901 REMALREADY`) before any packet leaves A: its DNS lookup of B is slower than the edge's L list reaching A. The edge's own guard is not what acts here: see T4b |
 | T4b | loop through the edge: chain A-E-B, then A and B dial the edge together | - | pass | superseded (aborted for wip-71ab207) | pass | pass (OUT unset, `20261103T231326Z`; skips with OUT=1 by design) | `20261103T120058Z/asl-lab/t4b-loop/edge.pcap` | edge drops the youngest branch: see "Loop guard" below |
 | T5 | wrong source address for a statically known node: ACCEPT then HANGUP, no ANSWER; right address answered | pass (2 cases) | pass (2 cases) | pass | pass | pass (2 cases) | (no capture; checked from the client's side) | identity check as designed |
+| T5n | caller behind a NAT: A's IAX2 source is translated on the way out (`address`: other address and port, `port`: own address, other port); `address` ACCEPT then HANGUP, no ANSWER, `port` answered | - | - | - | - | - | (not run) | written, not run on a rig (see "T5n" below) |
 | T6 | outbound rows: permanent transceive to B, monitor to E, established after an edge restart | pass | pass | pass | pass | pass (OUT=1) | | |
 | T6m | monitor row is listen only: no voice, no RADIO_KEY to E while the room talks | XFAIL (finding 3) | pass | pass | pass | pass (OUT=1) | `.../t6-monitor/` | fixed in c199b |
 | T7 | edge restart (SIGUSR1) under A's link: A's link comes back | pass | pass | pass | pass | pass | | launcher backs off 500 ms, 1 s, ... between consecutive restarts of the edge child: a kill-proc in the gap gets "error 3" (the cases keep 3 s apart) |
@@ -141,9 +142,33 @@ heard 1.26 of 3 s). No audio was forwarded twice (B never sent voice into the ed
   `asl-e: command not found` and exit 127 at its end for that reason; the pytest results were complete).
 - The tester cannot reach the control channel after its own `run.sh` pytest has ended, even under `--keep`.
 
+## T5n: the caller behind a NAT (ASL1a6, status: written, not run on a rig)
+
+Source: dv-router `decisions-fable-20261107.md` section 6 ("T5 with a real NAT in the path, reuse the netns NAT builders of
+web-nat-cases"). Expected outcome (dv-router `docs/design/allstar.md`, "Identity": source IP compared with the static address, UDP
+port ignored; refusal = ACCEPT then HANGUP, never ANSWER): node A (199901, static address `<net>.42`) is refused when the edge
+sees another source address, and answered when it sees A's own address (also when only the port differs).
+
+```
+DVT_ASL_EDGE_NAT=1 XLXD_SUT_IMAGE=<dv-router image> DVT_SUT_PROFILE=dvrouter DVT_SUT_LAUNCH=native \
+  DVT_SUT_CONFIG=<dv-router.toml template> \
+  scripts/run.sh --profile asl-edge -m asl_lab -- cases/test_asl_edge.py -k t5n
+```
+
+| Part | Status |
+|------|--------|
+| case `test_t5n_caller_behind_a_nat_is_refused_before_answer_and_right_address_answered`, sidecar `asl-nat-a` (profile `asl-nat`), `dvtest/asl_nat.py`, `dvtest/tools/asl_nat.py` | written; collects; unit tests (57) pass; NOT run on a rig: no result, no pcap |
+| namespace source NAT (one SNAT rule for A's IAX2 socket towards the edge, alias `<net>.46`, ports 4569 -> 44569) | what is built; no packet forging, no raw socket |
+| routed NAT (A or a new node on a second network behind `nat-router`) | blocked: needs a second network with a route sidecar for the node and DNS through the router, the lab agent's TCP port forwarded through the router (its forwards are fixed to one browser address), and a profile of its own because T6/T8/netem dial A at `<net>.42`; details in `docs/asl-lab.md` "T5n" |
+
+Evidence to collect when it runs: `out/<run>/asl-lab/t5n-nat/edge.pcap` (NEW from `<net>.46:44569`, ACCEPT, HANGUP, no ANSWER; then NEW
+from `<net>.42:44569`, ACCEPT, ANSWER), `scenario.json` notes (`expected_source`, `link_up`, `snat_packets_*`, `edge_reaction` with the
+ACCEPT-to-HANGUP time; the design note's real-node refusal measured 1.5 ms in `minimal-new`). This section and the table row are
+to be rewritten to the run id and result after the first run.
+
 ## Not covered
 
-- T5 with a real NAT in the path; T11 with real source-address spoofing (see the table).
+- T5 with a ROUTED NAT (a second network and a router between a lab node and the edge): blocked, the precise missing pieces are in `docs/asl-lab.md` "T5n". The namespace-NAT variant T5n is written, not run. T11 with real source-address spoofing is a separate task and not built (see the table).
 - DNS lookup of nodes through the lab zone by the edge: static rows cover every node a case dials; the
   `-lookup` snippet only sets the domain. A lookup case without static rows is open.
 

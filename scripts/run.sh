@@ -40,6 +40,9 @@
 #                      /etc/dv-router/asl-secrets. Alone it starts tester, xlxd-sut, transcoder-sut, the four lab
 #                      hosts and netem sidecars for the edge and the lab nodes (control: netem edge|asl <args>).
 #                      The tester gets DVT_ASL_EDGE=on. Select with -m asl_lab; docs/asl-edge-results.md
+#                      DVT_ASL_EDGE_NAT=1 adds the profile asl-nat: service asl-nat-a (the image of the NAT profile) shares
+#                      asl-a's namespace and holds one SNAT rule for its IAX2 socket towards the edge (case T5n,
+#                      docs/asl-lab.md "T5n"; alias address .46, control tcp <net>.42:9101, tester only)
 #   --profile asl-ext  EXTERNAL, the only profile that leaves the rig: the real AllStarLink node 400169 (service asl-ext,
 #                      .45), outbound only, registered with the real registry and dialling real nodes listen-only
 #                      (cases/test_asl_ext.py, docs/asl-edge-results.md "External dial T12"). It must be the only
@@ -448,7 +451,7 @@ compose_all=(docker compose -p "${COMPOSE_PROJECT_NAME:-dvt}" "${compose_files[@
   --profile capture-nxdn --profile p25 --profile capture-p25 --profile interlink
   --profile capture-interlink --profile load --profile netem --profile g3
   --profile urfd --profile capture-urfd --profile mrefd --profile capture-mrefd --profile web --profile browser
-  --profile webload --profile nat --profile asl-lab --profile asl-ext)
+  --profile webload --profile nat --profile asl-lab --profile asl-ext --profile asl-nat)
 
 if [ "$down_only" = 1 ]; then
   take_lock
@@ -457,6 +460,7 @@ if [ "$down_only" = 1 ]; then
 fi
 
 profiles=(--profile core)
+has_asl_nat=0
 has_allstar=0
 has_nxdn=0
 has_p25=0
@@ -521,6 +525,12 @@ for p in "${wanted[@]}"; do
       has_asl_lab=1
       profiles+=(--profile asl-lab --profile netem)
       export DVT_ASL_LAB=on DVT_ASL_EDGE=on
+      # DVT_ASL_EDGE_NAT=1: the source NAT sidecar of asl-a (case T5n)
+      if [ "${DVT_ASL_EDGE_NAT:-}" = 1 ]; then
+        profiles+=(--profile asl-nat)
+        has_asl_nat=1
+        export DVT_ASL_EDGE_NAT
+      fi
       ;;
     asl-ext)
       # the real node 400169 on the real network: alone, explicit go, secret file checked (mode, never content)
@@ -1095,6 +1105,7 @@ cat ".cache/xlxd/${XLXD_REF_DIR:-ref}.fetched" ".cache/xlxd/${XLXD_SUT_DIR:-sut}
   [ "$lab_only" = 0 ] || to_build=(tester asl-reg asl-a asl-b asl-e)
   [ "$has_asl_ext" = 0 ] || to_build=(tester asl-ext)
   [ "$has_asl_edge" = 0 ] || to_build+=(asl-tap netem-xlxd-sut netem-asl-a netem-asl-b netem-asl-e)
+  [ "$has_asl_nat" = 0 ] || to_build+=(asl-nat-a)
   # the lab image is built FROM the allstar image (Dockerfile.allstar, the ASL3 package pins): build that first
   if [ "$has_asl_lab" = 1 ] && ! docker image inspect "${ASL_LAB_BASE_IMAGE:-dvt-allstar:local}" > /dev/null 2>&1; then
     "${compose[@]}" --profile allstar build allstar
@@ -1108,6 +1119,8 @@ cat ".cache/xlxd/${XLXD_REF_DIR:-ref}.fetched" ".cache/xlxd/${XLXD_SUT_DIR:-sut}
 # everything was built above; up never builds (a prebuilt image is never replaced)
 if [ "$has_asl_edge" = 1 ]; then
   "${compose[@]}" up -d --no-build tester transcoder-sut xlxd-sut asl-reg asl-a asl-b asl-e asl-tap netem-xlxd-sut netem-asl-a netem-asl-b netem-asl-e
+  # after the lab: the NAT sidecar joins asl-a's namespace (the case T5n skips with a reason when it is not up)
+  [ "$has_asl_nat" = 0 ] || "${compose[@]}" up -d --no-build asl-nat-a
 elif [ "$has_asl_ext" = 1 ]; then
   "${compose[@]}" up -d --no-build tester asl-ext
 elif [ "$lab_only" = 1 ]; then

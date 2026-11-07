@@ -205,6 +205,7 @@ fake transcoder) to the lab; results and cases are in `docs/asl-edge-results.md`
 | netem sidecars | `netem-xlxd-sut`, `netem-asl-a/b/e` | control actions `netem edge <args\|off>` (the edge's egress) and `netem asl <args\|off>` (the three lab nodes'); `RigControl.netem()` |
 | control allow-lists | `kill-proc xlxd-sut dv-edge-allstar KILL\|USR1`, `proc-stat xlxd-sut dv-edge-allstar`, `restart\|stop\|start\|kill asl-reg\|asl-a\|asl-b\|asl-e` | `scripts/lib/killproc.sh`, `scripts/lib/procstat.sh`, `dvtest/control.py`, unit tests agree |
 | lab zone | node 2999 -> `<net>.11` | `DVT_ASL_ZONE`, so app_rpt nodes find the edge by number |
+| source NAT sidecar (optional) | `asl-nat-a` in asl-a's namespace, alias `<net>.46`, control `<net>.42:9101` | `DVT_ASL_EDGE_NAT=1`, profile `asl-nat`, case T5n (below) |
 
 Secret files of the edge (fixture content `test-secret-not-real`): `run.sh` writes them to
 `out/<run>/asl-secrets/` (directory mode 700, files mode 600, regular, no symlink, as the edge demands) and mounts
@@ -214,6 +215,67 @@ the directory read-only at `/etc/dv-router/asl-secrets` with the SUT running as 
 The control channel (kill-proc, proc-stat, netem, restart) only exists while `run.sh` runs its pytest: the host
 watcher stops with that run even under `--keep`. Cases that need it run inside one `run.sh -- cases/...` call;
 a kept rig can still be driven by `docker compose exec tester` for everything else.
+
+### T5n: the caller behind a NAT (profile asl-nat, status: written, not run on a rig)
+
+Decision: dv-router `decisions-fable-20261107.md` section 6 (ASL1a6): T5 gets a variant with a real NAT in the path, built
+from the NAT tools of the web profile, no packet forging. The edge's rule (dv-router `docs/design/allstar.md`, "Identity",
+lines 785-797): the SOURCE IP of a NEW is compared with the static / registered address of the claimed node, the UDP source
+port is ignored; a validated refusal is ACCEPT followed by HANGUP, never ANSWER. T5 (`test_t5_wrong_source_ip_is_refused_before_answer`)
+already shows that for a client at another address; T5n shows it for a REAL app_rpt node whose packets are translated on the
+way out, which is what a NAT does to a caller.
+
+```
+DVT_ASL_EDGE_NAT=1 XLXD_SUT_IMAGE=<dv-router image> DVT_SUT_PROFILE=dvrouter DVT_SUT_LAUNCH=native \
+  DVT_SUT_CONFIG=<dv-router.toml template> \
+  scripts/run.sh --profile asl-edge -m asl_lab -- cases/test_asl_edge.py -k t5n          # seconds of test time; duration not measured
+```
+
+`DVT_ASL_EDGE_NAT=1` adds the compose profile `asl-nat` (`run.sh` builds and starts one more service, `asl-nat-a`; without the
+variable the case skips with the reason). No control channel (`DVT_RIG_CONTROL`) and no outbound rows are needed.
+
+What is in the path. `asl-nat-a` is a sidecar in the network namespace of asl-a (like the netem sidecars), image `dvt-nat:local`
+of the NAT profile (`rig/Dockerfile.nat`: iptables, conntrack, iproute2; first build uses the distro mirror, the only internet
+use, as for the nat profile), `cap_drop: ALL`, `cap_add: NET_ADMIN`, read-only, limits-small. `python -m dvtest.tools.asl_nat`
+(`dvtest/asl_nat.py`) adds the alias address `<net>.46` to asl-a's interface and keeps ONE rule in the nat table chain
+`DVT_ASL_NAT`: SNAT for asl-a's IAX2 socket (`-s <net>.42 -d <net>.11 -p udp --sport 4569 --dport 4569`, nothing else: DNS and the
+lab agent are untouched) with `--to-source`:
+
+| Mode | Rule target | What the edge sees as the source of A | Expected |
+|------|-------------|----------------------------------------|----------|
+| `address` | `<net>.46:44569` | another address and another port | ACCEPT, HANGUP, no ANSWER; A has no link |
+| `port` | `<net>.42:44569` | A's own address, another port | ANSWER; A has its link (the port is ignored by design) |
+| `off` | none | `<net>.42:4569` | the plain lab: `test_t5_right_source_ip_is_accepted` |
+
+Asterisk sends from its own socket; only netfilter rewrites the source on the way out and the destination of the edge's replies
+on the way in (conntrack; the UDP conntrack entries are deleted at every mode change so that the next datagram is a new flow). The
+tester drives it over JSON lines on `<net>.42:9101` (tester address only; ops `snat`, `status`, `reset`; `DVT_ASL_NAT_CTL`).
+Nothing forges a packet: there is no raw socket and no sender other than the real app_rpt node.
+
+The case (`cases/test_asl_edge.py::test_t5n_caller_behind_a_nat_is_refused_before_answer_and_right_address_answered`), one
+scenario `t5n-nat` with the edge's tap capture: `quiet`; mode `address`, A dials the edge (`rpt fun 199901 *32999`), A must have no
+link after 8 s; `quiet`; mode `port`, A dials again and must reach ESTABLISHED; always `reset` at the end. Assertions, from
+`edge.pcap` (`asl_nat.edge_reaction`): the NEWs came from the translated source address and port (`<net>.46`, 44569 and
+`<net>.42`, 44569); for `<net>.46` at least one NEW, an ACCEPT to it, a HANGUP after the first ACCEPT and no ANSWER; for
+`<net>.42` an ANSWER; the SNAT rule counted packets in both phases (`snat_packets_*`). Notes are in `scenario.json`
+(`expected_source`, `link_up`, `edge_reaction` with the ACCEPT-to-HANGUP time).
+
+What this is not (the open part, status "blocked" for the routed variant): a NAT router between a second network and the lab.
+Missing for that, precisely: (1) asl-a (or a new app_rpt node with its own edge static row and zone entry) on an internal
+second network with a default route through a router, as `rig/compose.nat.yml` does for the browser, which needs a route
+sidecar for the node and `rig/compose.yml` changes for DNS (asl-reg at `<net>.41` reachable through the router); (2) the
+tester's access to the node's lab agent (TCP 8099) through router forwards (the router of the web profile forwards two fixed
+ports to one browser address, `dvtest/nat.py` `make_topology(forwards=...)`, `Router` DNAT, so a second target needs a router
+change); (3) every other case that dials A at `<net>.42` (T6 outbound rows, T8, netem sidecars) would break or need a
+profile of its own. That is more than a small compose change, so it is not done. What the namespace NAT leaves out: no second
+hop, no router mapping timeout, no filtering of unsolicited inbound datagrams (the edge's own outbound rows dial `<net>.42`
+directly and are not translated), and A's own tcpdump sees the translated source because it captures after POSTROUTING.
+Unit tests: `cases/unit/test_asl_nat.py` (rules, protocol, sidecar state machine, capture reader, compose and `run.sh` lint).
+
+Not checked without a rig: that Asterisk's `chan_iax2` keeps working with a second address on the interface and a rewritten
+source (the kernel does both; no packet capture exists yet), that the edge's tap sees the NEW with the translated source
+before ACCEPT, that the first `rpt fun` after the mode change is not swallowed by a call-token round that started before it,
+the 8 s window for "no link", the image build of `asl-nat-a`, and the allowed-address list of the sidecar's control port.
 
 ### Registration cases R1-R7, R13, R14: one edge process only
 
@@ -348,7 +410,7 @@ noted. Nodes: A 199901, B 199902, E 299901, the tester 299902.
 | 6 | an IAX2 phone client without a registrar | The tester's client (`dvtest.proto.iax2.Client`, stdlib, user `acct` md5, no `register`, CALLING_NAME `N0TEST`, CALLING_NUMBER `1999` in the `legacy-key` recording: a caller id number, not the edge's node, which is 2999): no REGREQ is needed, Asterisk accepts the NEW (AUTHREQ 3, AUTHREP 5, ACCEPT 7, ANSWER 9). It keys with RADIO_KEY (74) and unkeys with RADIO_UNKEY (390); no DTMF is sent or needed. CALLING_NAME is carried and ignored (the recording and the link list use the number: `L T1999`). The `acct` NEW has no CALLTOKEN IE; Asterisk's own client opens with the empty one. The REGREQ sequence of a registering client (with and without secret) is in `registration/reg`: REGREQ (USERNAME, REFRESH 60, empty CALLTOKEN), REGREQ with token, REGAUTH, REGREQ with MD5_RESULT, REGACK (refresh 180) or REGREJ. | `legacy-key/e` 1-9, 74, 390; `registration/reg` |
 
 Not answered by the lab (no edge exists): the 10 minute hold (T1), TOT (T2), `check_ip` with a
-rewritten source (T5, only the wrong-address refusal above), redial and restart cases, netem, flood.
+rewritten source (T5, only the wrong-address refusal above; the edge now has T5n), redial and restart cases, netem, flood.
 
 ## Surprises
 

@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pytest
 
-from dvtest import asl_lab, asl_register, iax2_frames, webload
+from dvtest import asl_lab, asl_nat, asl_register, iax2_frames, nat, webload
 from dvtest.control import RigControl
 from dvtest.proto import iax2, iax2_reg
 from dvtest.tools import asl_reg_log
@@ -169,6 +169,93 @@ def test_t5_right_source_ip_is_accepted(lab):
         a.wait_link(edge.node, timeout=15)
     finally:
         a.disconnect_links()
+
+
+# ------------------------------------------------------------------ T5n: the caller behind a NAT
+
+@pytest.fixture(scope="module")
+def asl_nat_ctl(lab):
+    """The source NAT sidecar of asl-a (rig service asl-nat-a, DVT_ASL_EDGE_NAT=1 with --profile asl-edge). Skips with
+    the reason when it is not part of the run; waits up to 30 s for its control port (it starts after the lab). A
+    restart of the asl-a container through the control channel (no case here does it; T8 restarts asl-b) would leave
+    the sidecar without its namespace: the fixture then fails with the control port that does not answer."""
+    client = asl_nat.client_from_env(os.environ)
+    if client is None:
+        pytest.skip("no source NAT sidecar: DVT_ASL_EDGE_NAT=1 scripts/run.sh --profile asl-edge ... (profile asl-nat)")
+    deadline, last = time.monotonic() + 30, None
+    while time.monotonic() < deadline:
+        try:
+            status = client.status()
+            if status.get("snat_packets") is not None:
+                break
+            last = status
+        except (OSError, ValueError, nat.NatError) as exc:
+            last = exc
+        time.sleep(1)
+    else:
+        pytest.fail("the asl-nat-a control port did not answer: %s" % (last,))
+    yield client
+    try:
+        client.reset()
+    except (OSError, ValueError, nat.NatError):
+        pass
+
+
+def test_t5n_caller_behind_a_nat_is_refused_before_answer_and_right_address_answered(lab, asl_nat_ctl):
+    """T5n (ASL1a6, decisions-fable-20261107.md section 6): the edge identifies a public caller by its SOURCE IP
+    against the static / registered address of the claimed node (allstar.md, "Identity": the UDP port is ignored; a
+    validated refusal is ACCEPT then HANGUP, never ANSWER). Node A (real app_rpt, 199901, static row <net>.42) dials
+    the edge twice, with a source NAT for its IAX2 socket in the path (the sidecar of dvtest/asl_nat.py):
+
+      1. mode `address`: the edge sees <alias>:44569, not <net>.42: ACCEPT, HANGUP, no ANSWER, and A has no link;
+      2. mode `port`: the edge sees <net>.42:44569 (address right, port changed): ANSWER and A has its link.
+
+    Evidence is the edge-side pcap: source address and port of the NEWs, the ACCEPT / HANGUP / ANSWER between the
+    edge and that address, and the time from ACCEPT to HANGUP. The plain case (no NAT) is test_t5_right_source_ip_is_accepted.
+    The NAT is always switched off again."""
+    quiet(lab)
+    a, edge = lab.node("a"), lab.node("edge")
+    expect = {}
+    link_up = {}
+    try:
+        with lab.scenario("t5n-nat", capture=["edge"]) as sc:
+            for phase, mode in (("refused", "address"), ("answered", "port")):
+                ans = asl_nat_ctl.mode(mode)
+                expect[phase] = tuple(ans["source"])
+                a.cli("rpt fun %s *3%s" % (a.node, edge.node))
+                try:
+                    a.wait_link(edge.node, timeout=8 if phase == "refused" else 15)
+                    link_up[phase] = True
+                except asl_lab.LabError:
+                    link_up[phase] = False
+                time.sleep(1.0)
+                sc.note("snat_packets_" + phase, asl_nat_ctl.status()["snat_packets"])
+                quiet(lab)
+                time.sleep(1.0)
+            sc.note("expected_source", {k: list(v) for k, v in expect.items()})
+            sc.note("link_up", link_up)
+    finally:
+        try:
+            asl_nat_ctl.reset()
+        except (OSError, ValueError, nat.NatError):
+            pass
+    doc = iax2_frames.extract(sc.dir / "edge.pcap", ports=(lab.port,))
+    refused = asl_nat.edge_reaction(doc, edge.ip, expect["refused"][0])
+    answered = asl_nat.edge_reaction(doc, edge.ip, expect["answered"][0])
+    meta_path = sc.dir / "scenario.json"
+    meta = json.loads(meta_path.read_text())
+    meta["notes"]["edge_reaction"] = {"refused_source": refused, "answered_source": answered}
+    meta_path.write_text(json.dumps(meta, indent=1, sort_keys=True) + "\n")
+    # the NAT was really in the path: the rule translated packets and the edge saw the translated source
+    assert meta["notes"]["snat_packets_refused"] and meta["notes"]["snat_packets_answered"], "the SNAT rule translated nothing: %s" % meta["notes"]
+    assert refused["new_ports"] == [expect["refused"][1]], "the edge saw NEWs from ports %s, expected %s" % (refused["new_ports"], expect["refused"][1])
+    assert answered["new_ports"] == [expect["answered"][1]], "the edge saw NEWs from ports %s" % (answered["new_ports"],)
+    # 1. wrong address: ACCEPT then HANGUP, never ANSWER
+    assert refused["refused"], "caller address %s != static address of 199901: expected ACCEPT then HANGUP, no ANSWER: %s" % (expect["refused"][0], refused)
+    assert not refused["answered"] and not link_up["refused"], "the edge answered a caller from the wrong address: %s" % refused
+    # 2. right address (port changed): answered
+    assert answered["answered"] and not answered["refused"], "address right, port changed: expected ANSWER: %s" % answered
+    assert link_up["answered"], "A has no link to the edge although the edge answered"
 
 
 # ------------------------------------------------------------------ T10: IAX2 client account

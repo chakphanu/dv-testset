@@ -71,7 +71,7 @@
 # TRANSCODER_SUT_IMAGE; transcoder-ref stays the real image.
 #
 # Fixed addresses: xlxd-ref .10, xlxd-sut .11, transcoder-ref .20,
-# transcoder-sut .21, tester .30, allstar .40, asl-reg .41 / asl-a .42 / asl-b .43 / asl-e .44 (profile asl-lab), asl-ext .45 (profile asl-ext), web-proxy .90, browser .91 (profile nat: nat-router .92,
+# transcoder-sut .21, tester .30, allstar .40, asl-reg .41 / asl-a .42 / asl-b .43 / asl-e .44 (profile asl-lab), asl-ext .45 (profile asl-ext), .46 (alias address of asl-nat-a, profile asl-nat), web-proxy .90, browser .91 (profile nat: nat-router .92,
 # alias .93, coturn .94, nat-ref-a .95, nat-ref-b .96; the browser is then at <DVT_NAT_NET>.91 behind the router),
 # webload .97 (profile webload).
 
@@ -461,6 +461,9 @@ services:
       DVT_ASL_EDGE_REG: ${DVT_ASL_EDGE_REG:-}
       DVT_ASL_SUT_LOG: ${DVT_ASL_SUT_LOG:-}       # optional case R13: an edge log file (docker timestamps) visible in the tester; docs/asl-lab.md
       DVT_ASL_EDGE_LOOKUP: ${DVT_ASL_EDGE_LOOKUP:-}
+      # profile asl-nat (case T5n): the source NAT sidecar of asl-a (control address = asl-a, port 9101)
+      DVT_ASL_EDGE_NAT: ${DVT_ASL_EDGE_NAT:-}
+      DVT_ASL_NAT_CTL: ${DVT_NET:-172.30.0}.42:9101
       # image-generation knobs (docs/rig.md "Image generations"); empty = the default, the behaviour of dv-router:wip-c165c93; 0 = wip-71ab207
       DVT_ASL_PHONE_REG: ${DVT_ASL_PHONE_REG:-}
       DVT_ASL_REG_HTTP_PORT: ${DVT_ASL_HTTP_REG_PORT:-8082}
@@ -1198,6 +1201,36 @@ services:
       asl-e: {condition: service_started, restart: false}
     environment:
       DVT_NETEM_ARGS: ${DVT_NETEM_ARGS_ASL:-}
+
+  # profile asl-nat (DVT_ASL_EDGE_NAT=1 with --profile asl-edge; case T5n, docs/asl-lab.md "T5n"): a source NAT for the
+  # IAX2 socket of asl-a towards the edge, in asl-a's own network namespace (dvtest/asl_nat.py: one SNAT rule in the
+  # nat table, the alias address .46 on asl-a's interface). Same image and tools as the web profile's NAT router
+  # (Dockerfile.nat); NET_ADMIN is its only capability; control: JSON lines on asl-a's address, port 9101, tester only.
+  # Not a routed NAT (no second network): see the docs for what that leaves out.
+  asl-nat-a:
+    <<: *nat
+    profiles: [asl-nat]
+    network_mode: "service:asl-a"
+    depends_on:
+      asl-a: {condition: service_started, restart: false}
+    command:
+      - python
+      - -m
+      - dvtest.tools.asl_nat
+      - --listen
+      - ${DVT_NET:-172.30.0}.42:9101
+      - --allow
+      - ${DVT_NET:-172.30.0}.30
+      - --local-ip
+      - ${DVT_NET:-172.30.0}.42
+      - --alias-ip
+      - ${DVT_NET:-172.30.0}.46
+      - --peer-ip
+      - ${DVT_NET:-172.30.0}.11
+      - --port
+      - "${DVT_ASL_IAX_PORT:-4569}"
+      - --map-port
+      - "44569"
 
   # ---- load (profile load): one client node per module ----
   # Each replica gets a dynamic address from <net>.128/25; DVT_LOAD_CMD (run
