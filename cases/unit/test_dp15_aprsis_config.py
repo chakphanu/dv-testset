@@ -101,12 +101,12 @@ def test_pins_and_dockerfile():
 
 def test_run_sh_knows_the_profile_and_mounts_the_passcode_directory():
     run = (ROOT / "scripts/run.sh").read_text()
-    assert "--profile nat --profile aprs --profile asl-lab" in run
+    assert "--profile nat --profile aprs --profile dw --profile asl-lab" in run
     assert re.search(r"^    aprs\)\n(?:.*\n){1,4}      export DVT_APRS=on", run, re.M)
     assert "python3 -m dvtest.aprs_passcode --dvr" in run and 'chmod 600 "$out/aprs-secrets/passcode"' in run
     assert "aprs-secrets:/etc/dv-router/aprs-secrets:ro" in run
     assert "rig/config/dv-router/dp15-aprsis.toml" in run and "DVT_SUT_LAUNCH=native" in run
-    assert "nat, aprs or a comma list" in run
+    assert "nat, aprs, dw or a comma list" in run
     assert subprocess.run(["bash", "-n", str(ROOT / "scripts/run.sh")]).returncode == 0
 
 

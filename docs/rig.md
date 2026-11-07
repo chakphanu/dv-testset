@@ -49,6 +49,7 @@ internet, and every address is fixed.
 | urfd | 172.30.0.70 | urfd | URFd (`URF999`, modules A-Z), a second reference reflector; see "URFd as the reference" |
 | mrefd | 172.30.0.80 | mrefd | mrefd (`M17-REF`, modules `MNOP`), the M17 Project reflector, with interlink peers M17-DVT / M17-DVU at the tester; see "mrefd as an extra reference" |
 | aprsc | 172.30.0.47 | aprs | a PRIVATE aprsc (APRS-IS server), standalone, client port TCP 14580, no uplink, no internet; the server side of the APRS-IS cases of DV-Router; see "Private APRS-IS server (profile aprs)" |
+| dw-a / dw-b | 172.30.0.48 / .49 | dw | two real Dire Wolf TNCs on a modem loop (KISS TCP 8001 each, audio relayed over UDP 7355, no hardware); the TNC side of the DP15 RF tier B cases; see "Dire Wolf TNCs on a modem loop (profile dw)" |
 | webload | 172.30.0.97 | webload | WebRTC load generator (aiortc), control server :3100 for the tester only; see "Web load profile" |
 | web-proxy | 172.30.0.90 (aliases `dvt-web`, `dvt-admin`) | web | TLS reverse proxy: HTTPS 443 to dv-svc-web of the SUT (`<net>.11:8081`) and HTTPS 8443 to dv-svc-admin (`<net>.11:8080`), self-signed CA in `out/<run>/web/ca.pem`; see "Web profile" |
 | browser | 172.30.0.91 | browser | Playwright browsers (`playwright run-server`, chromium + firefox + WebKit) for the browser cases, used with `web`; see "Browser profile" |
@@ -739,6 +740,23 @@ scripts/contained.sh --name build -- docker build -f rig/Dockerfile.aprsc --buil
   `edge:aprsis -> room:B`, addressee `XLX999B`) is added by `run.sh` when `--profile aprs` is given and it is not listed in `DVT_SUT_CONFIG_EXTRA`. The
   profile needs `DVT_SUT_LAUNCH=native`. The tester gets `DVT_APRS=on` and `DVT_APRSC=<net>.47`.
 * The tester client is `dvtest/aprsis_client.py` (stdlib sockets: login with the computed passcode, filter, TNC2 message lines, a reader thread).
+
+## Dire Wolf TNCs on a modem loop (profile dw)
+
+The DP15 RF cases of tier B ([dp15-cases.md](dp15-cases.md), `cases/test_dp15_rf_dw.py`) connect DV-Router's AX.25 edge to REAL TNCs. The services
+`dw-a` (172.30.0.48) and `dw-b` (172.30.0.49) are two containers of `dvt-direwolf:local` (Dire Wolf 1.8.1, pinned `DIREWOLF_*` in `.env.example`, source fetched once by
+`scripts/pre-fetch-direwolf.sh` into `.cache/direwolf`, built by `rig/Dockerfile.direwolf`, 180 MB; to build by hand, inside the build scope and never while the rig
+runs, see the header of the Dockerfile). Each runs `entry.py loop` ([direwolf-cases.md](direwolf-cases.md), "Modem loop"): one Dire Wolf with KISS TCP on 8001 (clients: the
+edge and the tester, three at most), audio in on UDP 7355, and the audio it transmits relayed as UDP to the other one's port 7355. So a frame sent into one KISS port
+is modulated, demodulated by the other and handed to the other's KISS clients, without a sound card or any privilege.
+
+* Internal rig network only, nothing published, `read_only` root with a tmpfs `/tmp` (the FIFO and the configuration), `cap_drop: [ALL]`, `no-new-privileges`, the `x-limits-small`
+  set (a node uses about 10 MB and 11 processes), `restart: "no"`; the node starts its Dire Wolf again if it exits. The log goes to stdout: `out/<run>/logs/dw-a.log`, `dw-b.log`.
+* Needs `DVT_SUT_LAUNCH=native`; `run.sh --profile web,dw` adds `rig/config/dv-router/dp15-rf-dw.toml` to `DVT_SUT_CONFIG_EXTRA` when it is not listed (the edge's ports `rf-a` / `rf-b`
+  point at `<NET>.48:8001` / `<NET>.49:8001`; the token `<DP15_TX_ENABLE>` and the file `dp15-rf-out.toml` work as in tier A). The tester gets `DVT_DW=on`, `DVT_DW_A`, `DVT_DW_B`.
+* Free host numbers: .48 and .49 (.46 is the alias address of `asl-nat-a`, .47 is `aprsc`). The loop without the rig: `python3 -m dvtest.oracle_direwolf loop`.
+* Traps: `KISSPORT 0` must come first in a Dire Wolf configuration that sets a port (otherwise the built-in 8001 stays); a TNC does not hear what arrives while its own transmission is
+  still "on the air" (the cases pause); the UDP audio between the containers has no loss protection (an internal bridge dropped nothing in the tests).
 
 ## Control channel
 

@@ -46,6 +46,10 @@
 #            namespace), nat-ref-a / nat-ref-b (.95 / .96, UDP reflectors of the classification self-test),
 #            coturn (.94, TURN, per-run secret). The tester reaches the browser server at <net>.92:3000
 #            (DNAT) and gets DVT_NAT=on
+#   dw       two real Dire Wolf TNCs on a modem loop (dw-a .48, dw-b .49; image dvt-direwolf:local) for
+#            the DP15 RF cases of tier B (cases/test_dp15_rf_dw.py, docs/dp15-cases.md): DV-Router's AX.25
+#            edge and the tester are KISS TCP clients of both (port 8001); what one transmits the other
+#            demodulates (audio relayed over UDP, docs/direwolf-cases.md "Modem loop"); the tester gets DVT_DW=on
 #   capture  sniffers on xlxd-ref, xlxd-sut, transcoder-sut (capture-allstar: on
 #            allstar, capture-nxdn: on nxdn-*, capture-p25: on p25-*)
 #
@@ -73,7 +77,7 @@
 # Fixed addresses: xlxd-ref .10, xlxd-sut .11, transcoder-ref .20,
 # transcoder-sut .21, tester .30, allstar .40, asl-reg .41 / asl-a .42 / asl-b .43 / asl-e .44 (profile asl-lab), asl-ext .45 (profile asl-ext), .46 (alias address of asl-nat-a, profile asl-nat), web-proxy .90, browser .91 (profile nat: nat-router .92,
 # alias .93, coturn .94, nat-ref-a .95, nat-ref-b .96; the browser is then at <DVT_NAT_NET>.91 behind the router),
-# webload .97 (profile webload), aprsc .47 (profile aprs; .46 is taken by the alias address of asl-nat-a).
+# webload .97 (profile webload), aprsc .47 (profile aprs; .46 is taken by the alias address of asl-nat-a), dw-a .48 / dw-b .49 (profile dw).
 
 name: dvt
 
@@ -388,6 +392,10 @@ services:
       # profile aprs (cases/test_dp15_aprsis.py): on when the private aprsc runs; its address (docs/dp15-cases.md)
       DVT_APRS: ${DVT_APRS:-off}
       DVT_APRSC: ${DVT_NET:-172.30.0}.47
+      # profile dw (cases/test_dp15_rf_dw.py): on when the two Dire Wolf TNCs run; their addresses (KISS TCP port 8001)
+      DVT_DW: ${DVT_DW:-off}
+      DVT_DW_A: ${DVT_NET:-172.30.0}.48
+      DVT_DW_B: ${DVT_NET:-172.30.0}.49
       # profile browser (cases/browser_fixtures.py): on when the browser service runs
       DVT_BROWSER: ${DVT_BROWSER:-off}
       # profile webload (cases/test_web_load.py): on when the load generator runs
@@ -918,6 +926,54 @@ services:
       - ./config/aprsc/aprsc.conf:/etc/aprsc/aprsc.conf:ro
     networks:
       rig: {ipv4_address: "${DVT_NET:-172.30.0}.47"}
+
+  # ---- profile dw: two real Dire Wolf TNCs on a modem loop for the DP15 RF cases of tier B (docs/dp15-cases.md,
+  # cases/test_dp15_rf_dw.py). Image dvt-direwolf:local (rig/Dockerfile.direwolf, source .cache/direwolf from
+  # scripts/pre-fetch-direwolf.sh), entry.py loop: one Dire Wolf per container, KISS TCP on 8001 (the AX.25 edge of the SUT
+  # and the tester are its clients; 3 clients at most), audio in on udp 7355, and the audio the TNC TRANSMITS goes (ALSA file
+  # PCM -> FIFO -> relay) as UDP to the audio input of the other one: a frame sent into dw-a's KISS port is demodulated by
+  # dw-b and handed to dw-b's KISS clients, and the other way round. No sound card, no hardware, rig network only, nothing
+  # published. Read-only root, tmpfs /tmp (FIFO, configuration), no capabilities, uid 10003. The log goes to stdout
+  # (out/<run>/logs/dw-a.log). Each address is the other one's DW_PEER.
+  dw-a: &dw
+    <<: *limits-small
+    profiles: [dw]
+    init: true
+    restart: "no"
+    image: dvt-direwolf:local
+    build:
+      context: .
+      dockerfile: Dockerfile.direwolf
+      args:
+        <<: *build-jobs
+        DIREWOLF_BASE_IMAGE: ${DIREWOLF_BASE_IMAGE:-error-set-direwolf-base-image-see-env-example}
+      additional_contexts:
+        src: ../.cache/direwolf
+    command: ["loop"]
+    environment:
+      DW_NAME: a
+      DW_MYCALL: N0TEST-8
+      DW_KISS_PORT: "8001"
+      DW_AUDIO_PORT: "7355"
+      DW_PEER: ${DVT_NET:-172.30.0}.49:7355
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.48"}
+
+  dw-b:
+    <<: *dw
+    environment:
+      DW_NAME: b
+      DW_MYCALL: N0TEST-9
+      DW_KISS_PORT: "8001"
+      DW_AUDIO_PORT: "7355"
+      DW_PEER: ${DVT_NET:-172.30.0}.48:7355
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.49"}
 
   # Load generator of the web load test (profile webload, together with web): many receive-only WebRTC
   # listeners (aiortc, pinned in .env.example) through the real HTTP signalling relay. A control server

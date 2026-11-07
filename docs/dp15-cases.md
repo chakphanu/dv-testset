@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: MIT -->
-# DP15 cases: stream metadata (groups 1, 2, 4), the worker lifecycle (3), RF tier A (6) and the XLX peer wire (7a)
+# DP15 cases: stream metadata (groups 1, 2, 4), the worker lifecycle (3), RF tiers A and B (6) and the XLX peer wire (7a)
 
 Status: the first rig run (image `dv-router:wip-0348b98`, native, `DVT_SUT_GEN=compat1`; streams 8 passed / 6 failed, worker
 0 / 2, RF tier A with `DVT_DP15_TX_ENABLE=false` 4 passed / 2 failed / 3 skipped) found no DV-Router defect: every failure
@@ -139,7 +139,7 @@ The tester plays the KISS TNCs: `dvtest/kiss_tnc.py` (`FakeKissTnc`) listens on 
 after every connect (TXDELAY 30, P 63, SlotTime 10, TXtail 3, FullDuplex 0 in 10 ms units = the `kiss` defaults), reads the UI frames
 the TNC injects (what a modem hears, built with `dvtest/ax25.py`) and writes the frames it transmits. The fake TNC records the
 parameter frames per connection, the transmitted data frames with arrival times, and any other KISS command (the edge never
-writes SetHardware or Return). No audio, no Dire Wolf; tier B (a real Dire Wolf loop, units U6/U7) is NOT written.
+writes SetHardware or Return). No audio, no Dire Wolf; tier B (two real Dire Wolf TNCs on a modem loop) is the next section.
 
 Snippets (`docs/rig.md`): `rig/config/dv-router/dp15-rf.toml` (the edge enabled, station callsign `N0TEST-1`, ports `rf-a`
 `<TESTER_IP>:8101` and `rf-b` `<TESTER_IP>:8102`, reconnect 1 to 5 s, the path `rf-in` from all ports to room B for text addressed to
@@ -212,6 +212,74 @@ Assumptions about the AX.25 edge that could not be verified without a rig (all f
 * The tester can accept TCP connections from the SUT on 8101 and 8102 on the rig network (nothing blocks them: the network is internal and the
   tester publishes nothing); not tried.
 
+### RF through AX.25 / KISS, tier B: real Dire Wolf TNCs on a modem loop (group 6): `cases/test_dp15_rf_dw.py`
+
+**What is real.** The AX.25 edge of DV-Router is the `kiss-tcp` client of two Dire Wolf 1.8.1 processes (rig services `dw-a`
+172.30.0.48 and `dw-b` 172.30.0.49, profile `dw`, image `dvt-direwolf:local`, 180 MB, one process per container, KISS TCP port 8001).
+The KISS bytes are Dire Wolf's own (its decoder reads the edge's parameter and data frames, its encoder writes what it
+demodulated), and the **modem is real**: a frame sent into one TNC's KISS port is modulated by Dire Wolf's AFSK 1200 baud modulator
+(300 ms TXDELAY flags from the edge's KISS parameter, CSMA, the frame with its FCS), the samples leave through the ALSA file PCM into a
+FIFO, a relay of ours sends them as UDP datagrams to the other container, and the other Dire Wolf's demodulator decodes them and hands the
+frame to its KISS clients. It is the full modem loop (not "tier B-lite", the KISS-level relay that was the fallback): VERIFIED outside the rig,
+two real instances, both directions, byte for byte, in one container and in two containers on an internal network
+([direwolf-cases.md](direwolf-cases.md), "Modem loop"). What is NOT real: no radio, no noise, no collision (the two directions do not interfere),
+the audio leaves 4 times faster than real time, and a TNC is deaf for about the air time of its own last transmission (the cases pause).
+
+Roles: the tester is the second KISS client of each TNC (`dvtest/kiss_client.py`; Dire Wolf serves three at a time), the edge's port `rf-a`
+is dw-a (transmit and receive), `rf-b` is dw-b (receive only). "RF heard by DV-Router" is a frame the tester sends into dw-b: dw-b
+transmits, dw-a hears it and gives it to the edge. DV-Router's own transmission leaves dw-a; dw-b hears it, gives it to the tester (the
+observation) and to the edge on `rf-b` (its own frame: an own identity, ignored). Snippet `rig/config/dv-router/dp15-rf-dw.toml`: the
+same ports `rf-a` / `rf-b`, the same path `rf-in`, the same `<DP15_TX_ENABLE>` token and the same split as tier A (`dp15-rf-out.toml`
+unchanged), with `host = "<NET>.48"` / `"<NET>.49"`, `port = 8001`. `run.sh --profile web,dw` adds the snippet when it is not listed. Tier A skips itself
+when the rendered config points at the TNCs (and the other way round).
+
+| Shape | Env / snippets | Cases that run |
+|-------|----------------|----------------|
+| RF-OFF (receive only) | `DVT_DP15_TX_ENABLE=false`, `dp15-rf-dw.toml` | 6l, 6a, 6b `[tx_enable=false]` |
+| RF-ON | `DVT_DP15_TX_ENABLE=true`, `dp15-rf-dw.toml` AND `dp15-rf-out.toml` | 6l, 6a, 6c |
+
+Run commands (two runs; one rig at a time; the image `dvt-direwolf:local` is built by `run.sh` from `.cache/direwolf`, once `scripts/pre-fetch-direwolf.sh` ran):
+
+```
+XLXD_SUT_IMAGE=dv-router:wip-0348b98 DVT_SUT_PROFILE=dvrouter DVT_SUT_LAUNCH=native DVT_SUT_GEN=compat1 \
+DVT_SUT_CONFIG=<template> DVT_TRANSCODER_FAKE=1 DVT_REQUIRE_IDENT=true DVT_DP15_TX_ENABLE=false \
+DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/admin.toml:rig/config/dv-router/totp-required.toml:\
+rig/config/dv-router/data-ident.toml:rig/config/dv-router/dp15-rf-dw.toml \
+scripts/run.sh -m rig --capture --profile web,dw -- cases/test_dp15_rf_dw.py
+
+XLXD_SUT_IMAGE=dv-router:wip-0348b98 DVT_SUT_PROFILE=dvrouter DVT_SUT_LAUNCH=native DVT_SUT_GEN=compat1 \
+DVT_SUT_CONFIG=<template> DVT_TRANSCODER_FAKE=1 DVT_REQUIRE_IDENT=true DVT_DP15_TX_ENABLE=true \
+DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/admin.toml:rig/config/dv-router/totp-required.toml:\
+rig/config/dv-router/data-ident.toml:rig/config/dv-router/dp15-rf-dw.toml:rig/config/dv-router/dp15-rf-out.toml \
+scripts/run.sh -m rig --capture --profile web,dw -- cases/test_dp15_rf_dw.py
+```
+
+Config check (host side, throw-away container, `--network none`; `valid` for both shapes, done with `dv-router:wip-0348b98`): `DVT_DP15_TX_ENABLE=false python3 -m
+dvtest.tools.config_check --image dv-router:wip-0348b98 --template <template> --gen compat1 --extra rig/config/dv-router/data-ident.toml --extra rig/config/dv-router/dp15-rf-dw.toml`,
+and with `true` plus `--extra rig/config/dv-router/dp15-rf-out.toml`. The loop without the rig: `python3 -m dvtest.oracle_direwolf loop`.
+
+Wall time estimate (UNVERIFIED), after the 1 to 2 minutes of rig start: RF-OFF about 4 minutes (the fixture's probe frames until the edge counts one, 6l about 20 s,
+6a about 45 s with the 12 s baseline, 6b about 40 s); RF-ON about 4 minutes (6c waits 31 s after the last frame on the air). Notes: `out/<run>/dp15-rf-dw.txt`; the TNC logs `out/<run>/logs/dw-a.log`, `dw-b.log`.
+
+| Case | Steps | Assert | Status |
+|------|-------|--------|--------|
+| DP15-6l (control) | the tester sends a frame addressed to nobody into dw-b, 8 s later one into dw-a | it comes out of the other TNC's KISS port, same bytes, channel 0, within 20 s, both ways; the latencies are recorded | written, not run on a rig |
+| DP15-6a | the tester sends `N0TEST-7>APDVT1,WIDE1-1::XLX999B  :DVT nnnn{3` into dw-b (as tier A's 6a, but through the air) | the frame comes out of dw-a unchanged; one M17 SMS within 1.0 s and one D-STAR text over within idle gap + 2.1 s of the moment it left dw-a; one SSE `text` event, one history row; nothing comes out of dw-b for the rest of the case (no RF ack: dw-a would have to transmit); `dv_pkt_items_total{kind=text,result=accepted}` and `dv_edge_modem_total{port=rf-a,result=rx}` rise | written, not run on a rig |
+| DP15-6b off | RF-OFF shape: a web user posts a text to module B | the room gets it; 12 s with nothing demodulated by either TNC; `dv_edge_modem_total{result=tx}` unchanged | written, not run on a rig |
+| DP15-6c | RF-ON shape: a web text | ONE frame comes out of dw-b: UI frame from `N0TEST-1` to `APZDVR`, no digipeaters, `:XLX999B  :<text>`, no `{id`, text <= 67 characters and containing the body; nothing comes out of dw-a (rf-b never transmits); `dv_edge_modem_total{port=rf-a,result=tx}` rises; ONE history row (the edge's own frame heard on rf-b is not delivered again) | written, not run on a rig |
+
+Assumptions that could not be verified without the rig (all in addition to those of tier A):
+
+* The edge counts a frame heard through the loop as `dv_edge_modem_total{port=rf-a,result=rx}` even when no path takes it (the fixture sends probe frames to
+  the addressee `N0PRB` and waits for the counter, up to 120 s; when it never rises the cases go on and say so in the notes; 6a asserts the counter itself).
+* Dire Wolf accepts the edge's five KISS parameter frames as it accepted ours (VERIFIED for hand built frames, `direwolf-cases.md`: each is logged and none is copied), and TXDELAY 300 ms
+  from the edge makes a 0.7 to 1.0 s transmission (no assertion on the length).
+* The edge does not mind that its own frame comes back on `rf-b` (an own identity, data.md 9.1; the cases assert one history row) and does not use received frames for any
+  PTT or channel-busy logic (KISS has no carrier-detect signal).
+* A web text becomes a frame at dw-b within `TX_WAIT_S + LOOP_WAIT_S` (45 s); the fence of the PTT snapshot is the suspect when it does not (see the tier A assumptions).
+* 6l transmits two probe frames from the tester through the TNCs; they are addressed to nobody and from callsigns of their own, so the room's text bucket is untouched.
+* The compose services start in seconds; the fixture waits up to 120 s for the KISS ports and the loop.
+
 ### APRS-IS against a private aprsc (group 5): `cases/test_dp15_aprsis.py`
 
 The server side is the rig service `aprsc` (profile `aprs`, 172.30.0.47, aprsc 3.0.0 pinned in `.env.example`, standalone, no internet; build, config, logins and
@@ -262,7 +330,7 @@ Nothing here has run on a rig; what was run is the aprsc image (login verified w
 
 | Case | Reason |
 |------|--------|
-| DP15-6 tier B | the real Dire Wolf loop (units U6, U7): not written; tier A above runs the same obligations with a fake TNC. Also not written: a low `tx_budget` run for 6d, an RF ack with `alias_calls` (the room name `XLX999B` cannot be an AX.25 source; answer 8) |
+| DP15-6d, 6e, 6s on tier B | not written: 6d checks frame times against the budget (the audio adds nothing), 6e needs the same audio in two Dire Wolf instances (no hardware-free way short of a tee; the dedupe is DV-Router's, tier A covers it), 6s reads what the fake TNC records (Dire Wolf only logs the parameters). Also not written: a low `tx_budget` run for 6d, an RF ack with `alias_calls` (the room name `XLX999B` cannot be an AX.25 source; answer 8) |
 | DP15-7b, 7c (receiving side), 7d | need a second DV-Router node as XLX peer (U8; the lead confirms a plain `[[edges.xlx.peer]]` row works and the text over needs no transcoder, answer 11) |
 | 7a parts | `xlx_text_overs = false` (live config edit), preemption of a text over by peer voice, and "the sending node's own XLX listener does not get its own text over back" are not written |
 

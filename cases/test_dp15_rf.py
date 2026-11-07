@@ -2,7 +2,7 @@
 """DV-Router data-channel cases of data.md 15.5 for RF through the AX.25 edge, tier A (DP15 group 6): the tester plays
 the KISS TNCs (dvtest/kiss_tnc.py) the edge connects to as a kiss-tcp CLIENT, so the cases need no Dire Wolf and no
 audio. Specification: docs/dp15-plan.md section 3.6; case table, bounds, status and the run commands (two runs: RF
-transmit off and on): docs/dp15-cases.md. Tier B (a real Dire Wolf loop) is not covered here.
+transmit off and on): docs/dp15-cases.md. Tier B (a real Dire Wolf loop) is cases/test_dp15_rf_dw.py.
 
   DP15-6a  a message to the room name on RF reaches the room (D-STAR text over, M17 SMS, web); NO RF ack appears: the
            room name XLX999B has 7 characters and cannot be an AX.25 source (data.md 9.4)
@@ -97,6 +97,13 @@ def port_row(ax, name):
     return next((p for p in ax["port"] if p.get("name") == name), None)
 
 
+def dw_config(ax):
+    """True when the edge's port rf-a points at the Dire Wolf TNC dw-a of the rig (rig/config/dv-router/dp15-rf-dw.toml, tier B:
+    cases/test_dp15_rf_dw.py): the fake TNCs of this file would listen for an edge that never connects to them."""
+    row = port_row(ax, "rf-a")
+    return bool(row) and bool(os.environ.get("DVT_DW_A")) and row.get("host") == os.environ["DVT_DW_A"]
+
+
 @pytest.fixture(scope="module")
 def rf(target, hub):
     """Two fake KISS TNCs on the ports rf-a and rf-b of the rendered config, connected to by the AX.25 edge. Skips when the
@@ -105,6 +112,8 @@ def rf(target, hub):
     if got is None:
         pytest.skip("the rendered config has no enabled [edges.ax25]: add rig/config/dv-router/dp15-rf.toml to DVT_SUT_CONFIG_EXTRA")
     ax, paths = got
+    if dw_config(ax):
+        pytest.skip("the rendered config points the AX.25 edge at the Dire Wolf TNCs (dp15-rf-dw.toml): tier B, cases/test_dp15_rf_dw.py")
     rows = {name: port_row(ax, name) for name in ("rf-a", "rf-b")}
     if not all(r and r.get("kind") == "kiss-tcp" and r.get("port") for r in rows.values()):
         pytest.skip("the [edges.ax25] config lacks the kiss-tcp ports rf-a and rf-b of dp15-rf.toml")

@@ -76,6 +76,14 @@
 #                      and its path rows) unless listed; the fixture passcode of its login N0TEST-5 is computed
 #                      (dvtest/aprs_passcode.py) and written to out/<utc>/aprs-secrets/passcode (mode 600), mounted
 #                      read-only at /etc/dv-router/aprs-secrets (nothing secret: a function of a synthetic callsign)
+#   --profile dw       two real Dire Wolf TNCs on a modem loop (dw-a .48, dw-b .49; image dvt-direwolf:local, built from
+#                      .cache/direwolf, run scripts/pre-fetch-direwolf.sh once) for the DP15 RF cases of tier B
+#                      (cases/test_dp15_rf_dw.py, docs/dp15-cases.md): what one TNC transmits the other demodulates
+#                      (audio relayed over UDP, no hardware), no internet. Needs DVT_SUT_LAUNCH=native; adds
+#                      rig/config/dv-router/dp15-rf-dw.toml (the AX.25 edge with kiss-tcp ports to both) unless listed.
+#                      Use with web (--profile web,dw: the cases post room text through the web service). The tester
+#                      gets DVT_DW=on, DVT_DW_A, DVT_DW_B. RF transmit stays off unless DVT_DP15_TX_ENABLE=true (then
+#                      also name rig/config/dv-router/dp15-rf-out.toml in DVT_SUT_CONFIG_EXTRA)
 #   --profile webload  the WebRTC load generator (webload, .97: aiortc, control server on :3100 for the tester
 #                      only) of the W8 load case, used together with web (--profile web,webload; exit 2
 #                      without it); the tester gets DVT_WEBLOAD=on and DVT_WEBLOAD_URL (docs/web-load-cases.md,
@@ -383,6 +391,20 @@ if [ "$has_aprs" = 1 ]; then
   esac
   export DVT_SUT_CONFIG_EXTRA
 fi
+# --profile dw: the two Dire Wolf TNCs; the AX.25 edge of DV-Router (kiss-tcp client) is part of the native config
+has_dw=0
+case ",$profile," in *,dw,*) has_dw=1 ;; esac
+if [ "$has_dw" = 1 ]; then
+  [ "${DVT_SUT_LAUNCH:-direct}" = native ] \
+    || { echo "run.sh: --profile dw needs DVT_SUT_LAUNCH=native (the AX.25 edge is DV-Router's)" >&2; exit 2; }
+  [ -f .cache/direwolf/CMakeLists.txt ] \
+    || { echo "run.sh: .cache/direwolf missing; run scripts/pre-fetch-direwolf.sh" >&2; exit 2; }
+  case ":${DVT_SUT_CONFIG_EXTRA:-}:" in
+    *:rig/config/dv-router/dp15-rf-dw.toml:*) ;;
+    *) DVT_SUT_CONFIG_EXTRA="${DVT_SUT_CONFIG_EXTRA:+$DVT_SUT_CONFIG_EXTRA:}rig/config/dv-router/dp15-rf-dw.toml" ;;
+  esac
+  export DVT_SUT_CONFIG_EXTRA
+fi
 # --profile nat: needs web and browser; rig/config/dv-router/turn.toml in DVT_SUT_CONFIG_EXTRA switches the SUT's TURN on
 has_nat=0
 has_turn=0
@@ -472,7 +494,7 @@ compose_all=(docker compose -p "${COMPOSE_PROJECT_NAME:-dvt}" "${compose_files[@
   --profile capture-nxdn --profile p25 --profile capture-p25 --profile interlink
   --profile capture-interlink --profile load --profile netem --profile g3
   --profile urfd --profile capture-urfd --profile mrefd --profile capture-mrefd --profile web --profile browser
-  --profile webload --profile nat --profile aprs --profile asl-lab --profile asl-ext --profile asl-nat)
+  --profile webload --profile nat --profile aprs --profile dw --profile asl-lab --profile asl-ext --profile asl-nat)
 
 if [ "$down_only" = 1 ]; then
   take_lock
@@ -591,6 +613,11 @@ for p in "${wanted[@]}"; do
       profiles+=(--profile aprs)
       export DVT_APRS=on
       ;;
+    dw)
+      # checked above (native launch, the snippet, the source)
+      profiles+=(--profile dw)
+      export DVT_DW=on
+      ;;
     nat)
       # checked above (needs web and browser); the browser moves behind the router (rig/compose.nat.yml)
       profiles+=(--profile nat)
@@ -603,7 +630,7 @@ for p in "${wanted[@]}"; do
     mrefd)
       has_mrefd=1
       ;;
-    *) echo "run.sh: --profile takes core, allstar, asl-lab, asl-edge, asl-ext, nxdn, p25, interlink, load, g3, urfd, mrefd, web, browser, webload, nat, aprs or a comma list" >&2; exit 2 ;;
+    *) echo "run.sh: --profile takes core, allstar, asl-lab, asl-edge, asl-ext, nxdn, p25, interlink, load, g3, urfd, mrefd, web, browser, webload, nat, aprs, dw or a comma list" >&2; exit 2 ;;
   esac
 done
 # native launch reads no xlxd.* file: these settings only change the reference side
