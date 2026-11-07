@@ -304,6 +304,13 @@ counts the CreateSessions sent (`xcode.rs` `open_pending`), so a failed open is 
 `open_failed` (see H6). The hub exposes the xcode counters only after the controller's next 10 s
 telemetry record, about 10 s after the over (`status.md`, "Telemetry").
 
+XCOBS1 (images after `wip-ac750c7`, announced by DV-Router, not yet run here): `dv_xcode_sessions_total{result}`
+becomes `requested`, `opened`, `open_failed`; each attempt is counted once in `requested` and once in exactly
+one of `opened` or `open_failed`. The former `failed` and `drain_timeout` results moved to
+`dv_xcode_session_events_total{result}`. H5 then reads requested 1, opened 1, open_failed 0; H6 after over 1
+requested 1, opened 0, open_failed 1 and after over 2 requested 2, opened 1, open_failed 1. The case reads both
+generations through `normalise_sessions` (attempts, ok, failed) and waits on "settled" (opened + open_failed).
+
 Command (alone, `wip-0348b98` binaries):
 
 ```

@@ -391,3 +391,14 @@ def test_lifecycle_restarted_transcoder_not_pinged_in_a_starved_run(tmp_path):
     run = dict(run_with_log(tmp_path, OS11), pinged=True, up_pinged=[False], xlxd_alive=True)
     with pytest.raises(pytest.fail.Exception, match="environment: task limit exhausted"):
         module.get({"s": run}, "s")
+
+
+def test_normalise_sessions_reads_both_metric_generations():
+    module = load("test_xlxd_usrp_netns")
+    old = {"sessions_opened": 2, "sessions_open_failed": 1, "sessions_requested": 0}
+    assert module.normalise_sessions(old) == {"attempts": 2, "ok": 1, "failed": 1, "xcobs1": False}
+    new = {"sessions_opened": 1, "sessions_open_failed": 1, "sessions_requested": 2}
+    assert module.normalise_sessions(new) == {"attempts": 2, "ok": 1, "failed": 1, "xcobs1": True}
+    quiet = {"sessions_opened": 1, "sessions_open_failed": 0, "sessions_requested": 1}
+    assert module.normalise_sessions(quiet)["ok"] == 1
+    assert module.normalise_sessions({"sessions_opened": None})["attempts"] is None

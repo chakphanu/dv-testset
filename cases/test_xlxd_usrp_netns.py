@@ -64,16 +64,17 @@ SCENARIOS = {
     # controller buffers before SessionReady are in hand, the oldest go.
     # "metrics_wait": after that step the hub counters are read in the namespace,
     # once dv_xcode_sessions_total{result=<label>} has reached the minimum
+    # ("settled" = opened + open_failed, see session_wait_value)
     "pre_ready_overflow": dict(usrp=True, mode="extended", max_outputs=4, open_delay=1.0,
                                steps=["listenB", "usrp:200:2"], cases="test_pre_ready_cap_",
-                               profile="dvrouter", metrics_wait={"usrp:200:2": ["opened", 1]}),
+                               profile="dvrouter", metrics_wait={"usrp:200:2": ["settled", 1]}),
     # H6: the first STD comes 1.5 s after its OPEN (later than the 1050 ms
     # OPEN wait), the second one at once; a 100-unit over (2 s) first, a short
     # one after it
     "open_late_std": dict(usrp=True, mode="extended", max_outputs=4, open_delay=0.05,
                           open_delays=[1.5, 0.05], steps=["listenB", "usrp:100:20", "usrpShortB"],
                           cases="test_open_refused_", profile="dvrouter",
-                          metrics_wait={"usrp:100:20": ["open_failed", 1], "usrpShortB": ["opened", 2]}),
+                          metrics_wait={"usrp:100:20": ["open_failed", 1], "usrpShortB": ["settled", 2]}),
 }
 TIMEOUT = 120
 
@@ -227,6 +228,20 @@ def _inside(spec, run_dir):
         peer.sendto(usrp.unkey(count), (XLXD_IP, 34001))
         result["usrp_tx"].append([first, last, fake.now()])
 
+    def session_wait_value(samples, label):
+        """Value the scrape waits on. "settled" is the number of sessions that
+        reached a terminal result in either generation of the metric: XCOBS1
+        (requested, opened, open_failed: opened + open_failed) or before it
+        (opened counted the CreateSessions sent, no requested family)."""
+        from dvtest import metrics
+        if label != "settled":
+            return metrics.total(samples, "dv_xcode_sessions_total", result=label)
+        requested = metrics.total(samples, "dv_xcode_sessions_total", result="requested")
+        opened = metrics.total(samples, "dv_xcode_sessions_total", result="opened")
+        if requested > 0:
+            return opened + metrics.total(samples, "dv_xcode_sessions_total", result="open_failed")
+        return opened
+
     def scrape(step, result_label, minimum):
         """The xcode / room data counters of the hub as [step, t, lines]. The
         controllers put their counters on the fabric every 10 s (status.md),
@@ -240,8 +255,7 @@ def _inside(spec, run_dir):
                 with urllib.request.urlopen(HUB_METRICS, timeout=2) as reply:
                     text = reply.read().decode("utf-8", "replace")
                 lines = [ln for ln in text.splitlines() if ln.startswith(METRIC_PREFIXES)]
-                if metrics.total(metrics.parse("\n".join(lines)), "dv_xcode_sessions_total",
-                                 result=result_label) >= minimum:
+                if session_wait_value(metrics.parse("\n".join(lines)), result_label) >= minimum:
                     break
             except Exception as exc:            # a missing hub is a finding, not a crash
                 lines = ["error: %s" % exc]
@@ -659,13 +673,33 @@ def hub_counter(run, step, name, **labels):
     return None
 
 
+def normalise_sessions(raw):
+    """Session counters in one meaning for both generations of the metric.
+    XCOBS1 (images after wip-ac750c7): dv_xcode_sessions_total{result} has
+    requested (every attempt once), opened and open_failed (each attempt ends
+    in exactly one of the two); failed / drain_timeout moved to
+    dv_xcode_session_events_total. Before it: "opened" counted the
+    CreateSessions sent, a failed open included, and open_failed counted the
+    failed ones. Returns attempts, ok (opened for real) and failed; all None
+    when the snapshot is missing."""
+    if raw.get("sessions_opened") is None:
+        return {"attempts": None, "ok": None, "failed": None, "xcobs1": None}
+    failed = raw.get("sessions_open_failed") or 0
+    if (raw.get("sessions_requested") or 0) > 0:
+        return {"attempts": raw["sessions_requested"], "ok": raw["sessions_opened"],
+                "failed": failed, "xcobs1": True}
+    return {"attempts": raw["sessions_opened"], "ok": raw["sessions_opened"] - failed,
+            "failed": failed, "xcobs1": False}
+
+
 def xcode_counters(run, step):
     """The transcoding counters of the hub after the step: sessions by result
     (dv_xcode_sessions_total) and frames by direction and result
     (dv_xcode_frames_total)."""
     out = {}
-    for result in ("opened", "open_failed", "failed", "drain_timeout"):
+    for result in ("requested", "opened", "open_failed", "failed", "drain_timeout"):
         out["sessions_" + result] = hub_counter(run, step, "dv_xcode_sessions_total", result=result)
+    out.update(normalise_sessions(out))
     for dir_, result in (("in", "sent"), ("in", "skipped"), ("in", "pre_ready_dropped"),
                          ("out", "published"), ("out", "dropped")):
         out["frames_%s_%s" % (dir_, result)] = hub_counter(run, step, "dv_xcode_frames_total",
@@ -745,7 +779,7 @@ def test_pre_ready_cap_oldest_units_dropped(runs, target):
     # the counter of the drop
     counters = seen["counters"]
     assert counters["frames_in_pre_ready_dropped"] == want["dropped"], counters
-    assert counters["sessions_opened"] == 1 and counters["sessions_open_failed"] == 0, counters
+    assert counters["attempts"] == 1 and counters["ok"] == 1 and counters["failed"] == 0, counters
     assert counters["frames_out_published"] == kept, counters
 
 
@@ -823,9 +857,10 @@ def test_open_refused_late_std_given_up(runs, target):
         "listener heard %d frames, %d headers of the refused over" % (seen["over1_dstar_frames"],
                                                                       seen["over1_dstar_headers"])
     # the counters (:346): a failed open, nothing sent to the transcoder, nothing published. Note:
-    # result="opened" counts the CreateSessions sent (xcode.rs open_pending), the failed one included
+    # before XCOBS1 result="opened" counted the CreateSessions sent, the failed one included;
+    # normalise_sessions reads both generations
     first = seen["counters_after_over1"]
-    assert first["sessions_open_failed"] == 1 and first["sessions_opened"] == 1, first
+    assert first["attempts"] == 1 and first["failed"] == 1 and first["ok"] == 0, first
     assert first["frames_in_sent"] == 0 and first["frames_out_published"] == 0, first
     # the room recovers: the next over opens at once and is heard in full
     assert abs(seen["std2_delay_s"] - scenario["open_delays"][1]) <= 0.15, seen["std2_delay_s"]
@@ -837,7 +872,7 @@ def test_open_refused_late_std_given_up(runs, target):
     reqs = requests(run, run["opens"][1][6])
     assert all(len(r) == 322 and r[0] == 5 and r[2:] == USRP_PCM for r in reqs)
     second = seen["counters_after_over2"]
-    assert second["sessions_opened"] == 2 and second["sessions_open_failed"] == 1, second
+    assert second["attempts"] == 2 and second["failed"] == 1 and second["ok"] == 1, second
     assert second["frames_out_published"] == SHORT_BURST, second
 
 
