@@ -67,9 +67,16 @@ def test_public_validator_on_an_idle_node(anon, path):
         [(e1 == e2, ident) for e1, e2, _d, ident in pairs]))
     for e1, e2, diffs, ident in pairs:
         assert not (ident and e1 != e2), "%s: identical bodies, different ETags (%s vs %s): validator computation defect" % (path, e1, e2)
-    # now_ms is the one leaf that moves by design (web.md: the validator is a hash of the body without now_ms)
-    moving = [(p, str(x)[:60], str(y)[:60]) for _e1, _e2, diffs, _i in pairs for p, x, y in diffs if p != "/now_ms"]
-    assert not moving, "%s changes on an idle node besides now_ms: %s" % (path, moving[:12])
+    # now_ms is the one leaf that moves by design (web.md: the validator is a hash of the body without now_ms). Any other
+    # leaf that moves is a real change of the node (an event, a link expiring) and must move the ETag with it; a pair
+    # in which only now_ms moved must keep the ETag. Real changes are recorded, they do not fail an idle diagnostic.
+    for e1, e2, diffs, _ident in pairs:
+        moved = [(p, str(x)[:60], str(y)[:60]) for p, x, y in diffs if p != "/now_ms"]
+        if moved:
+            print("[RECORD] etag-diag %s: real change in the window %s, ETag %s -> %s" % (path, moved[:6], e1, e2))
+            assert e1 != e2, "%s: leaves changed %s but the ETag did not (%s)" % (path, moved[:6], e1)
+        else:
+            assert e1 == e2, "%s: only now_ms moved but the ETag changed (%s -> %s)" % (path, e1, e2)
 
 
 def _keys(node, found=None):
