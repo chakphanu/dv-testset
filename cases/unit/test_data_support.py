@@ -45,6 +45,24 @@ def test_pacer_gaps_cover_the_controller_limits_plus_the_offer_delay_of_an_over(
     assert ds.MIN_GAP_S["position"] - 1.6 > 30.0 and ds.MIN_GAP_S["status"] - 1.6 > 10.0
 
 
+def test_pacer_offered_restamps_the_call_with_the_real_offer():
+    """Second DP15 rig run: 2c's pacer call was 8.6 s before its D-PRS position reached the controller, so 2d (34 s after
+    the call, offer 1.2 s later) was 26.6 s behind it: `rate`. After offered() the next wait counts from the offer."""
+    clock = Clock()
+    pacer = ds.Pacer(clock=clock, sleep=clock.sleep)
+    pacer.wait("N0TEST", "position")                        # t = 100: the call of 2c
+    clock.now += 8.6                                        # two DExtra links, the header, the line
+    pacer.offered("N0TEST", "position")                     # t = 108.6: the real offer
+    clock.now += 2.0
+    assert pacer.wait("N0TEST-7", "position") == pytest.approx(ds.MIN_GAP_S["position"] - 2.0)
+    assert clock.now - 108.6 == pytest.approx(ds.MIN_GAP_S["position"])
+    assert ds.MIN_GAP_S["position"] > 30.0
+    # an earlier time never moves the stamp back; an offer of another kind or callsign is not touched
+    pacer.offered("N0TEST", "position", at=50.0)
+    assert pacer.last[("N0TEST", "position")] == pytest.approx(clock.now)
+    assert ("N0TEST", "status") not in pacer.last and pacer.wait("N0CALL", "position") == 0.0
+
+
 def test_timeline_first_and_render():
     tl = ds.Timeline()
     tl.add("a", 1, at=tl.t0 + 1.0)

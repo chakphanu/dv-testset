@@ -55,11 +55,15 @@ TEXT_OVER_S = 0.44
 TOKEN_RENDER_S = 2.0
 # controller limits per base callsign: status 1 per 10 s, position and object 1 per 30 s (burst 1); room text bucket
 # 1 per 5 s, burst 4; web account 1 per 5 s, burst 2. The pacer waits these plus a margin of 1 s plus OFFER_DELAY_S.
-# OFFER_DELAY_S: the pacer stamps the CALL, but a D-STAR over reaches the controller only when its slow data text or
-# D-PRS line is complete (header settle 0.3 s plus up to 3 superframes of 0.42 s, about 1.6 s) while a datagram
-# (M17 packet, SMS) is offered at once. First DP15 rig run: 2c's D-PRS position was offered 1.6 s after its pacer
-# call and 2d's M17 APRS packet right after its own call 31 s later, so 29.4 s apart: `rate` (limit 30 s), no
-# position row. The margin must cover the longest over so the later offer is never earlier than the limit.
+# OFFER_DELAY_S: the pacer stamps the CALL, but the offer to the controller comes later: a D-STAR over only when its
+# slow data text or D-PRS line is complete (header settle 0.3 s plus up to 3 superframes, about 1.6 s) after the case
+# linked its DExtra clients (each `dstar_listener` costs about 3.7 s: link plus the 1.2 s client list refresh), while a
+# datagram (M17 packet, SMS) is offered right after its own link. Second DP15 rig run (20261107T083645Z, measured in
+# the capture and the hub dumps): 2c's D-PRS position was offered 8.6 s after its pacer call (08:41:25.1 call,
+# 08:41:32.5 header, accepted about 08:41:33.7), 2d's M17 APRS packet 1.2 s after its call 34 s later (08:42:00.3):
+# 26.6 s apart, `rate` (limit 30 s). A constant margin cannot cover that, so the cases call Pacer.offered() right
+# after the send and the next wait() counts from the real offer; OFFER_DELAY_S stays as the margin for the cases that
+# only stamp the call.
 OFFER_DELAY_S = 3.0
 MIN_GAP_S = {"status": 11.0 + OFFER_DELAY_S, "position": 31.0 + OFFER_DELAY_S, "text": 6.0}
 
@@ -317,6 +321,15 @@ class Pacer:
                 slept = need
         self.last[key] = self.clock()
         return slept
+
+    def offered(self, callsign, kind, at=None):
+        """The item of (base callsign, kind) really went to the controller at `at` (default now): the later of this and
+        the stamp of wait() counts for the next wait(). wait() stamps the CALL, but the offer follows after the case
+        built its links and sent the over (a D-STAR case with two DExtra clients needs about 8 s: 3.7 s per link plus
+        1.2 s of the module's client list refresh), so calling this right after the send closes that gap."""
+        key = (callsign.upper().split("-")[0], kind)
+        stamp = self.clock() if at is None else at
+        self.last[key] = max(self.last.get(key, stamp), stamp)
 
 
 PACER = Pacer()

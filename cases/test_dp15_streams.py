@@ -184,6 +184,7 @@ def test_dp15_1a_tx_message_becomes_the_status(rig, target, hub, web_ctx):
     with SseWatch(web_ctx.anon(), "/api/v1/public/events") as sse, dl(rig, TALKER_CALL) as talker:
         assert sse.ready(), "the public SSE gave no hello: %s" % sse.error
         t_header, stamps = send_over(talker, packets)
+        PACER.offered(TALKER_CALL, "status")
         t_sf_end = stamps[20]                                    # the 21st voice frame: the first superframe is complete
         hit = sse.wait_data(lambda o: o.get("item_type") == "status" and o.get("callsign", "").startswith(TALKER_CALL),
                             timeout=STATUS_CEILING_S + 5.0, since=t_header)
@@ -234,6 +235,8 @@ def test_dp15_1b_dprs_beacon_is_a_position(rig, target, hub, web_ctx):
             dl(rig, TALKER_CALL) as talker:
         assert op_stream.ready() and anon_sse.ready(), "SSE streams gave no hello: %s %s" % (op_stream.error, anon_sse.error)
         t_header, stamps = send_over(talker, packets)
+        PACER.offered(TALKER_CALL, "position")
+        PACER.offered(TALKER_CALL, "status")
         t_line_done = stamps[min(complete_sf * 21 + 20, len(stamps) - 2)]
         hit = op_stream.wait_data(lambda o: o.get("item_type") == "position" and o.get("callsign", "").startswith(TALKER_CALL),
                                   timeout=STATUS_CEILING_S + 8.0, since=t_header)
@@ -262,6 +265,7 @@ def test_dp15_1b_dprs_beacon_is_a_position(rig, target, hub, web_ctx):
     rejects = hub.total("dv_pkt_reject_total", reason="spoof")
     with dl(rig, TALKER_CALL) as talker:
         send_over(talker, packets)
+        PACER.offered(TALKER_CALL, "status")
         pump_for(2.0, talker)
     _hits, rows = wait_operator_rows(web_ctx.op, baseline, lambda r: False, timeout=8.0)
     assert not position_rows(rows), "a line with a foreign source became a position: %s" % position_rows(rows)
@@ -300,6 +304,7 @@ def test_dp15_1c_a_missing_text_block_gives_no_status(rig, target, hub, web_ctx)
     with SseWatch(web_ctx.anon(), "/api/v1/public/events") as sse, dl(rig, OTHER_CALL) as talker:
         assert sse.ready()
         t_header, _stamps = send_over(talker, packets)
+        PACER.offered(OTHER_CALL, "status")
         hit = sse.wait_data(lambda o: o.get("item_type") == "status" and o.get("callsign", "").startswith(OTHER_CALL),
                             timeout=STATUS_CEILING_S + 5.0, since=t_header)
     assert hit is not None and hit[1].get("body", "").strip() == text, "the control over gave no status: %s" % (hit,)
@@ -329,6 +334,8 @@ def test_dp15_1d_native_dstar_slow_data_is_byte_identical(rig, target, hub, rig_
             note(target, case, "RECORD", "killed the data worker: %s" % (killed,))
             time.sleep(0.2)
         send_over(talker, packets)
+        PACER.offered(TALKER_CALL, "status")
+        PACER.offered(TALKER_CALL, "position")
         pump_for(1.5, talker, listener)
         overs = slowdata.overs(listener.client.inbox)
     got = over_by_my(overs, TALKER_CALL)
@@ -506,6 +513,7 @@ def test_dp15_2c_m17_meta_text_rides_into_the_dstar_egress(rig, target, hub, web
         talker.client.send(talker.dest, packets[0])
         talker.client.pump(0.3)
         talker.client.paced(talker.dest, packets[1:], 0.040, dlist.client)
+        PACER.offered(OTHER_CALL, "status")
         pump_for(2.0, dlist)
         overs = slowdata.overs(dlist.client.inbox)
     over = [o for o in overs if o["voice"]]
@@ -541,6 +549,8 @@ def test_dp15_2c_m17_meta_text_rides_into_the_dstar_egress(rig, target, hub, web
     sid, packets = build_over(TALKER_CALL, fields, frames)
     with dl(rig, TALKER_CALL) as talker2, dl(rig, OTHER_CALL) as listener2:
         send_over(talker2, packets)
+        PACER.offered(TALKER_CALL, "status")
+        PACER.offered(TALKER_CALL, "position")
         pump_for(1.5, talker2, listener2)
         overs2 = slowdata.overs(listener2.client.inbox)
     got = over_by_my(overs2, TALKER_CALL)
@@ -562,6 +572,7 @@ def test_dp15_2d_m17_packet_aprs_is_a_position(rig, target, hub, web_ctx):
     packet = m17.m17p_packet(0x02, info, src="N0TEST-7")
     with m17_client(sutip(rig), callsign=TALKER_CALL, module=MODULE) as sender:
         sender.client.send(sender.dest, packet)
+        PACER.offered(TALKER_CALL, "position")
         pump_for(1.0, sender)
     hits, rows = wait_operator_rows(web_ctx.op, baseline, lambda r: r.get("item_type") == "position"
                                     and r.get("callsign", "").startswith(TALKER_CALL))
@@ -588,6 +599,7 @@ def test_dp15_4a_ysf_gps_fix_is_one_position(rig, target, hub, web_ctx):
         client.client.send(client.dest, packets[0])
         client.client.pump(0.3)
         client.client.paced(client.dest, packets[1:], ysf.PACKET_GAP)
+        PACER.offered(OTHER_CALL, "position")
         client.client.pump(1.0)
     finally:
         client.close()
@@ -621,6 +633,7 @@ def test_dp15_4b_dmrg_is_one_position(rig, target, hub, web_ctx):
     try:
         frames = signals.prng_frames(2, 30, seed="dp15/4b")
         dmr.talk_with_side_packets(client, frames, {3: [dmr.dmrg_packet(rid, LAT, LON)]}, stream_id=clients.fresh_stream_id("dmr"))
+        PACER.offered(TALKER_CALL, "position")
         hits, rows = wait_operator_rows(web_ctx.op, baseline, lambda r: r.get("item_type") == "position"
                                         and r.get("callsign", "").startswith(TALKER_CALL))
         note(target, case, "RECORD", "operator rows %d, position rows %s" % (len(rows), [(r.get("callsign"), r.get("protocol")) for r in position_rows(rows)]))
@@ -686,6 +699,7 @@ def test_dp15_4c_dmra_is_a_status_and_never_the_callsign(rig, target, hub, web_c
             side = {3: dmr.dmra_packets(rid, alias)}
             t0 = time.monotonic()
             dmr.talk_with_side_packets(client, frames, side, stream_id=clients.fresh_stream_id("dmr"))
+            PACER.offered(TALKER_CALL, "status")
             hit = sse.wait_data(lambda o: o.get("item_type") == "status" and o.get("callsign", "").startswith(TALKER_CALL),
                                 timeout=6.0, since=t0)
             probe.stop.set()
