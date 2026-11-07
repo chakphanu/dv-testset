@@ -2,13 +2,27 @@
 """Diagnostic for the public state validator (ETag) on an IDLE node (wip-ac750c7 DP7 question): three pairs of GETs a few seconds apart, the bodies
 diffed field by field, the ETags compared, then HEAD / conditional HEAD / conditional GET. Records only; fails when the bodies are identical but
 the ETags differ (a validator computation defect) or when a changing field is found (the field name goes to the notes as a FINDING).
-Run: the web profile as in docs/web-api-cases.md with cases/test_web_etag_diag.py."""
+Run: the web profile as in docs/web-api-cases.md with cases/test_web_etag_diag.py.
+
+ETAG1 (the next image): `test_public_etag_idle_and_after_a_real_change` is the strict case, both ways, for the state and the last-heard
+routes: (1) on an UNCHANGED node the ETag is identical across requests several seconds apart (whatever else in the body moves: the
+case records which leaves moved and asserts only the observable, an equal validator) and the conditional GET / HEAD give 304; (2) after a
+REAL change made by a protocol client (a DExtra link, an M17 position, a D-STAR over) the ETag changes, a conditional request with the OLD
+ETag gets 200 with the new one, and with the NEW ETag 304. No field name is asserted. Written against web.md ("weak ETag, hash of the body
+without now_ms") and the ETAG1 request; NOT RUN yet. Needs the rig (protocol clients) as well as the web profile; the position trigger needs
+the data worker (data-ident.toml) and skips with the reason otherwise."""
+import contextlib
 import json
+import sys
 import time
+import types
+from pathlib import Path
 
 import pytest
 
-from dvtest import web
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from dvtest import web  # noqa: E402
 
 pytestmark = [pytest.mark.rig, pytest.mark.web]
 
@@ -55,3 +69,122 @@ def test_public_validator_on_an_idle_node(anon, path):
         assert not (ident and e1 != e2), "%s: identical bodies, different ETags (%s vs %s): validator computation defect" % (path, e1, e2)
     assert all(not diffs for _e1, _e2, diffs, _i in pairs), "%s changes on an idle node: %s" % (
         path, [(p, str(x)[:60], str(y)[:60]) for _e1, _e2, diffs, _i in pairs for p, x, y in diffs[:6]][:12])
+
+
+# ================================================================ ETAG1: the strict case, both ways
+
+SETTLE_S = 60.0                 # an earlier case may still be moving the state (links expiring): wait for a quiet pair
+SAMPLE_GAP_S = 4.0
+IDLE_SAMPLES = 4                # 12 s of idle sampling
+CHANGE_S = 25.0                 # a protocol client's change shows up in the public routes within this
+TRIGGER_CALL = {"link": "N0PEL", "position": "N0PEP", "over": "N0PEO"}
+
+
+def _etag_of(resp):
+    return resp.headers.get("etag", "")
+
+
+def settle(anon, path):
+    """Polls until two requests 3 s apart carry the same ETag (the node is quiet); returns that ETag, else None after SETTLE_S."""
+    end = time.monotonic() + SETTLE_S
+    last = _etag_of(anon.get(path, expect=200))
+    while time.monotonic() < end:
+        time.sleep(3.0)
+        current = _etag_of(anon.get(path, expect=200))
+        if current and current == last:
+            return current
+        last = current
+    return None
+
+
+@contextlib.contextmanager
+def trigger_link(rig):
+    """A DExtra client linked to module B: the public client list (state) changes while it is linked."""
+    import data_support as ds
+    with ds.dstar_listener(rig.xlxd_sut, module="B", callsign=TRIGGER_CALL["link"]):
+        yield
+
+
+@contextlib.contextmanager
+def trigger_position(rig):
+    """One M17 packet-mode position (needs the data worker): the room's retained position list changes."""
+    import position_support as ps
+    import test_dp15_positions as p1
+    p1.send_m17(types.SimpleNamespace(rig=rig, rf=None), TRIGGER_CALL["position"], ps.LAT, ps.LON, comment="etag")
+    yield
+
+
+@contextlib.contextmanager
+def trigger_over(rig):
+    """A D-STAR voice over of 40 frames from a linked DExtra client: the last-heard list gets an entry."""
+    import data_support as ds
+    base = TRIGGER_CALL["over"]
+    with ds.dstar_listener(rig.xlxd_sut, module="B", callsign=base) as talker:
+        _sid, packets = ds.build_over(base, ds.plain_fields(40), ds.ambe(40, "etag"))
+        ds.send_over(talker, packets)
+        ds.pump_for(1.0, talker)
+        yield
+
+
+TRIGGERS = {"link": trigger_link, "position": trigger_position, "over": trigger_over}
+
+
+def wait_etag_change(anon, path, old, seconds=CHANGE_S):
+    """(new response, seconds) once the route's ETag differs from `old`, else (last response, None)."""
+    t0 = time.monotonic()
+    while True:
+        resp = anon.get(path, expect=200)
+        if _etag_of(resp) and _etag_of(resp) != old:
+            return resp, time.monotonic() - t0
+        if time.monotonic() - t0 >= seconds:
+            return resp, None
+        time.sleep(1.0)
+
+
+@pytest.mark.parametrize("path,trigger", [("/api/v1/public/state", "link"), ("/api/v1/public/state", "position"),
+                                          ("/api/v1/public/lastheard", "over")])
+def test_public_etag_idle_and_after_a_real_change(rig, anon, path, trigger):
+    # -- 1. an unchanged node: one validator, 304 for it
+    base = settle(anon, path)
+    assert base, ("%s never had a stable ETag: two requests 3 s apart differed for %.0f s on a node that nothing talks to (ETAG1: the "
+                  "validator must not move on an idle node)" % (path, SETTLE_S))
+    samples = [anon.get(path, expect=200)]
+    for _ in range(IDLE_SAMPLES - 1):
+        time.sleep(SAMPLE_GAP_S)
+        samples.append(anon.get(path, expect=200))
+    etags = [_etag_of(r) for r in samples]
+    moved = _walk(json.loads(samples[0].body), json.loads(samples[-1].body))
+    print("[RECORD] etag %s idle: etags %s; leaves that moved in the body over %.0f s (not asserted): %s" % (
+        path, etags, SAMPLE_GAP_S * (IDLE_SAMPLES - 1), [(p, str(x)[:40], str(y)[:40]) for p, x, y in moved[:8]]))
+    assert len(set(etags)) == 1 and etags[0], "%s: the ETag moved on an idle node over %.0f s: %s (leaves that moved: %s)" % (
+        path, SAMPLE_GAP_S * (IDLE_SAMPLES - 1), etags, [p for p, _x, _y in moved[:8]])
+    assert etags[0] == base, "%s: the settled ETag %s differs from the idle samples %s" % (path, base, etags)
+    assert etags[0].startswith("W/"), "%s: the validator is documented as a weak ETag: %r" % (path, etags[0])
+    cond = anon.get(path, headers={"If-None-Match": etags[0]})
+    assert cond.status == 304 and cond.body == b"" and _etag_of(cond) == etags[0], "%s idle conditional GET: HTTP %d" % (path, cond.status)
+    head = anon.request("HEAD", path)
+    assert head.status == 200 and _etag_of(head) == etags[0], "%s idle HEAD: HTTP %d etag %r (GET etag %r)" % (path, head.status, _etag_of(head), etags[0])
+    cond_head = anon.request("HEAD", path, headers={"If-None-Match": etags[0]})
+    assert cond_head.status == 304, "%s idle conditional HEAD: HTTP %d" % (path, cond_head.status)
+    # -- 2. a real change by a protocol client: the validator moves, the old one no longer matches
+    with TRIGGERS[trigger](rig):
+        fresh, seconds = wait_etag_change(anon, path, etags[0])
+        if seconds is None and trigger == "position":
+            pytest.skip("a position did not change %s within %.0f s: the data worker is probably not on (data-ident.toml)" % (path, CHANGE_S))
+        new = _etag_of(fresh)
+        print("[RECORD] etag %s after a %s: %s -> %s after %s s" % (path, trigger, etags[0], new, None if seconds is None else round(seconds, 1)))
+        assert seconds is not None, "%s: the ETag did not change within %.0f s of a real change (%s by a protocol client): still %s" % (
+            path, CHANGE_S, trigger, new)
+        old_cond = anon.get(path, headers={"If-None-Match": etags[0]})
+        assert old_cond.status == 200 and _etag_of(old_cond) and _etag_of(old_cond) != etags[0], \
+            "%s: a conditional GET with the OLD ETag after the change: HTTP %d etag %r" % (path, old_cond.status, _etag_of(old_cond))
+        # the NEW validator matches (one retry: a client list refresh may move the state between the two requests)
+        for attempt in range(2):
+            current = anon.get(path, expect=200)
+            new_cond = anon.get(path, headers={"If-None-Match": _etag_of(current)})
+            if new_cond.status == 304:
+                break
+        assert new_cond.status == 304, "%s: a conditional GET with the CURRENT ETag %s after the change: HTTP %d (want 304)" % (
+            path, _etag_of(current), new_cond.status)
+        old_head = anon.request("HEAD", path, headers={"If-None-Match": etags[0]})
+        assert old_head.status == 200, "%s: conditional HEAD with the OLD ETag after the change: HTTP %d (want 200)" % (path, old_head.status)
