@@ -9,7 +9,7 @@ cases marked "written, not run on a rig" in the tables below have either not run
 Specification and the other groups: [dp15-plan.md](dp15-plan.md). Source of the 15.5 wording:
 DV-Router `docs/design/data.md` lines 2442-2450.
 
-Case file `cases/test_dp15_streams.py`, shared helpers `cases/data_support.py` (moved out of
+Case file `cases/test_dp15_streams.py` (APRS-IS: `cases/test_dp15_aprsis.py`, below), shared helpers `cases/data_support.py` (moved out of
 `cases/test_data_ident.py` without a change of behaviour), builders in `dvtest/proto/ysf_gps.py`,
 `dvtest/proto/dmr.py` (DMRG, DMRA), `dvtest/proto/m17.py` (legacy META text), `dvtest/dstar_sd.py`
 (`tx_message_fields`, `text_gps_fields`, `over_packets`, `aprs_position_payload`), web readers in `dvtest/web.py`
@@ -212,12 +212,57 @@ Assumptions about the AX.25 edge that could not be verified without a rig (all f
 * The tester can accept TCP connections from the SUT on 8101 and 8102 on the rig network (nothing blocks them: the network is internal and the
   tester publishes nothing); not tried.
 
+### APRS-IS against a private aprsc (group 5): `cases/test_dp15_aprsis.py`
+
+The server side is the rig service `aprsc` (profile `aprs`, 172.30.0.47, aprsc 3.0.0 pinned in `.env.example`, standalone, no internet; build, config, logins and
+the passcode scheme: [rig.md](rig.md), "Private APRS-IS server"). DV-Router's APRS-IS edge logs in as `N0TEST-5`
+(`rig/config/dv-router/dp15-aprsis.toml`, which also carries the path row `aprsis-down` `edge:aprsis -> room:B`, addressee `XLX999B`), the tester as `N0TEST-7`
+with `dvtest/aprsis_client.py` (login with the computed passcode, TNC2 message lines). Both cases skip with the reason when the aprsc service is not up
+(`DVT_APRS` not `on`, or no answer on `<net>.47:14580`) and `pytest.fail` when the edge never reports `dv_edge_aprsis_verified` = 1.
+
+One rig run, profile `web,aprs` (the cases read the web API):
+
+```
+scripts/pre-fetch-aprsc.sh            # once, the only internet use
+XLXD_SUT_IMAGE=dv-router:wip-0348b98 DVT_SUT_PROFILE=dvrouter DVT_SUT_LAUNCH=native DVT_SUT_GEN=compat1 \
+DVT_SUT_CONFIG=<template> DVT_TRANSCODER_FAKE=1 DVT_REQUIRE_IDENT=true \
+DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/admin.toml:rig/config/dv-router/totp-required.toml:\
+rig/config/dv-router/data-ident.toml:rig/config/dv-router/dp15-aprsis.toml \
+scripts/run.sh -m rig --capture --profile web,aprs -- cases/test_dp15_aprsis.py
+```
+
+* Snippet order as for the streams run: the web snippets first, then `data-ident.toml` (the order no longer matters since commit 4b35fc3), then
+  `dp15-aprsis.toml`; `run.sh --profile aprs` appends it when it is not listed. `dp15-paths.toml` is not needed.
+* `run.sh` writes the fixture passcode of `N0TEST-5` (a function of the callsign, not a secret) to `out/<run>/aprs-secrets/passcode` (mode 600), mounts it read-only
+  at `/etc/dv-router/aprs-secrets` and starts the SUT as the host user. `.cache/aprsc` must exist (`scripts/pre-fetch-aprsc.sh`); the image is built by
+  `run.sh` at the start of the run (or by hand, [rig.md](rig.md)).
+* Config check of the snippets (host side, throw-away container, `--network none`):
+  `python3 -m dvtest.tools.config_check --image dv-router:wip-0348b98 --template <template> --gen compat1 --extra rig/config/dv-router/data-ident.toml --extra rig/config/dv-router/dp15-aprsis.toml` prints `valid` (done, also in the web-first order above).
+* Estimated wall time (UNVERIFIED): the two cases about 4 minutes (5a: 12 s quiet baseline, listeners, the text over after the idle gap, 6 s of quiet, up to 25 s for the
+  worker counters; 5b: the same plus the 40 s wait for the repeat); the whole run 8 to 12 minutes with the rig start, the web enrolment and, the first time, the aprsc image build.
+* Notes: stdout and `out/<run>/dp15-aprsis.txt`; the server log is `out/<run>/logs/aprsc.log`. With `--capture` the TCP stream between `xlxd-sut` and `aprsc` (port 14580) is in
+  `capture/xlxd-sut.pcapng`: the only place where the line DV-Router itself WROTE (before the server added its q construct) can be read.
+
+| Case | 15.5 wording (`data.md:2448`) | Steps | Assert | Record |
+|------|-------------------------------|-------|--------|--------|
+| DP15-5a | "a message to XLX999B from a client on a private aprsc reaches the room (D-STAR text over, M17 SMS, web) and is acked once" | wait for `dv_edge_aprsis_verified` = 1; D-STAR listener (N0CALL) and M17 listener (N0TEST) on module B, public SSE open; the tester logs in on aprsc (verified) and sends `N0TEST-7>APDVT1,TCPIP*::XLX999B  :DVT <nonce>{51`; collect 20 s plus 6 s of quiet | ONE D-STAR text over `N0TEST...: <body>` with header UR `CQCQCQ`, suffix `APRS`; ONE M17 SMS carrying the body; ONE `text` row in the room history; ONE ack line `XLX999B>APZDVR,TCPIP*,q..,N0TEST-5::N0TEST-7 :ack51` within 3 s, whose path before the server's q construct is exactly `TCPIP*` and which has exactly one q construct (DV-Router wrote none: the tester's own line also has none); `dv_pkt_ack_total{result=ack}` +1 and `dv_pkt_items_total{kind=text,result=accepted}` +1 | latencies, the q token (`qAS` in the smoke test of the image; the DV-Router lead expects the server's choice, `qAS` or `qAO`; not asserted), the public SSE text event (a missing one is a FINDING, not a failure), counter deltas |
+| DP15-5b | "a repeated message is acked again and not delivered twice" | as 5a with its own body and id 52; the identical line is sent again 40 s after the first (after aprsc's 30 s duplicate window, inside the controller's 60 s window); the listeners keep pumping | two ack lines in all, byte for byte equal, the second within 3 s of the repeat and more than 30 s after the first; still ONE text over, ONE SMS, ONE web row; `dv_pkt_ack_total{result=ack}` +1 and `{result=repeated}` +1; `dv_pkt_items_total{kind=text,result=accepted}` +1 | whether `dv_pkt_items_total{text,duplicate}` or `dv_room_data_total{duplicate}` moved by 1 (a FINDING if neither) |
+
+Why 40 s: the controller dedupes by (type, guard callsign including SSID, body) for 60 s; the ack for a duplicate is byte for byte the same as the first, and aprsc drops an identical
+packet inside its own 30 s window, so a repeat sooner than 30 s is acked by DV-Router (`repeated`) but the second ack never reaches the client. A repeat after 60 s would be delivered again
+(a documented consequence). Not tested: the 2 s repeat of the plan (it only proves the server's dupecheck), the unverified login, `qAC` on an uplink and NOGATE (DP15-5c to 5e of the plan; they need
+class 0 positions on an uplink path).
+
+Honest limits: the line DV-Router writes is not visible to the case (aprsc adds the q construct on receipt and forwards the result), so "no q construct on the sent line" is inferred from the forwarded ack
+(path before the q is exactly `TCPIP*`, one q construct); the pcapng above shows the raw line. The check of `dv_edge_aprsis_verified` is skipped (a fixed 10 s wait) on an image without that family.
+Nothing here has run on a rig; what was run is the aprsc image (login verified with the computed passcode, a message forwarded with `qAC`, the ack with `qAS`, an identical ack inside 30 s dropped, a wrong passcode
+`unverified`) in a throw-away container with `--network none`, and the unit tests (`cases/unit/test_aprs_passcode.py`, `test_aprsis_client.py` against a fake server, `test_dp15_aprsis_config.py`).
+
 ### Not written, and why
 
 | Case | Reason |
 |------|--------|
 | DP15-6 tier B | the real Dire Wolf loop (units U6, U7): not written; tier A above runs the same obligations with a fake TNC. Also not written: a low `tx_budget` run for 6d, an RF ack with `alias_calls` (the room name `XLX999B` cannot be an AX.25 source; answer 8) |
-| DP15-5a, 5b | need a private aprsc image and rig service (units U4, U5) |
 | DP15-7b, 7c (receiving side), 7d | need a second DV-Router node as XLX peer (U8; the lead confirms a plain `[[edges.xlx.peer]]` row works and the text over needs no transcoder, answer 11) |
 | 7a parts | `xlx_text_overs = false` (live config edit), preemption of a text over by peer voice, and "the sending node's own XLX listener does not get its own text over back" are not written |
 
@@ -226,7 +271,7 @@ Assumptions about the AX.25 edge that could not be verified without a rig (all f
 Only the room row `dp15-b-to-c` (room B to room C, class 0 text, 10 per minute) is in it. The launcher refuses a
 `[[data.path]]` whose endpoint is not enabled, also with `enable = false`: `data.path[0]: APRS-IS endpoint is not
 enabled` (config check, `dv-router:wip-0348b98`). So the gateway rows of the plan move into the snippets that enable their
-edge: `rf-in` into `dp15-rf.toml` and `rf-out` into `dp15-rf-out.toml` (RF tier A, above), `aprsis-down` into the APRS-IS snippet (unit U5). No case depends on the room path; 2b records whether
+edge: `rf-in` into `dp15-rf.toml` and `rf-out` into `dp15-rf-out.toml` (RF tier A, above), `aprsis-down` into `dp15-aprsis.toml` (APRS-IS, group 5 below). No case depends on the room path; 2b records whether
 room C received the forwarded copy.
 
 ## Byte layouts and how they were established
