@@ -19,7 +19,7 @@ from collections import Counter
 from datetime import datetime
 
 from .. import divergences, pcap, target
-from ..target import DEFAULT_SUBNET, HOST_OFFSETS
+from ..target import CHECK_HOST_OFFSETS, DEFAULT_SUBNET, HOST_OFFSETS
 from . import ambed, dcs, dextra, dmr, dplus, iax2, m17, nxdn, p25, usrp, xlx, ysf
 from .common import ERROR, FAMILY, WARN, Report, flow_of
 
@@ -40,7 +40,7 @@ def rig_config(subnet=None):
     """Rig hosts and USRP links from the repository (rig/config)."""
     subnet = subnet or os.environ.get("DVT_SUBNET") or DEFAULT_SUBNET
     net = ipaddress.ip_network(subnet, strict=False)
-    hosts = {key: str(net.network_address + off) for key, off in HOST_OFFSETS.items()}
+    hosts = {key: str(net.network_address + off) for key, off in {**HOST_OFFSETS, **CHECK_HOST_OFFSETS}.items()}
     prefix = str(net.network_address).rsplit(".", 1)[0]
     links = usrp.endpoints_from(os.path.join(ROOT, "rig", "config", "xlxd.usrp.in"), prefix)
     return {"hosts": hosts, "usrp": links, "subnet": str(net)}

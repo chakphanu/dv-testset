@@ -24,7 +24,9 @@ DVT_TRANSCODER_FAKE=1 DVT_RIG_CONTROL=1 scripts/run.sh -m rig --capture --profil
 Every case skips with the reason when its prerequisite is missing. Observations go to stdout and
 out/<run>/dp15-peer.txt ("RECORD" = what was seen, "FINDING" = differs from the documented behaviour).
 
-NOT RUN ON A RIG yet (written against the sources only).
+First rig run (20261107T111542Z): 7c and 7d passed; 7b failed on the node 1 assertion only, because node 1's delta covered the
+whole case, including the relayed stream of the second talker (a harness error, not a product finding). 7b now reads node 1
+before the second talker keys. NOT RERUN since that fix.
 """
 import os
 import sys
@@ -96,6 +98,35 @@ def delta(after, before):
 def moved(delta_map):
     """The non-zero entries, for printing."""
     return {k: int(v) if float(v).is_integer() else v for k, v in sorted(delta_map.items()) if v}
+
+
+def own_over_problems(d1, recorder=True):
+    """What node 1 (the sending node) did for its OWN synthetic text over alone, measured before anything else keys: the
+    design (data.md 7.6) is the local exclusion, so no floor, no closed stream, no published unit and no record. A list of
+    sentences, empty when the exclusion holds. `recorder` is False when the hub has no recorder family."""
+    out = []
+    for key in ("rts.grant", "closed", "units.published"):
+        if d1.get(key, 0):
+            out.append("%s moved by %s" % (key, d1[key]))
+    if recorder and (d1.get("rec.records", 0) or d1.get("rec.bytes", 0)):
+        out.append("the recorder stored the own text over (records %s, bytes %s)" % (d1.get("rec.records", 0), d1.get("rec.bytes", 0)))
+    return out
+
+
+def relayed_stream_problems(d1, frames):
+    """What node 1 shows for the stream of the SECOND talker (a local D-STAR talker on node 2, relayed over the XLX peer
+    link to node 1 as ordinary voice from a peer), as the delta since the snapshot taken after the text over: exactly one
+    grant, one closed stream, and about `frames` published units (header + voice frames; a frame or two of slack for the
+    last frame and the stream guard). A list of sentences, empty when it matches."""
+    out = []
+    if d1.get("rts.grant", 0) != 1:
+        out.append("grants %s, want 1" % d1.get("rts.grant", 0))
+    if d1.get("closed", 0) != 1:
+        out.append("closed streams %s, want 1" % d1.get("closed", 0))
+    units = d1.get("units.published", 0)
+    if not frames - 3 <= units <= frames + 2:
+        out.append("published units %s, want about %s" % (units, frames))
+    return out
 
 
 def m17_streams(datagrams):
@@ -269,8 +300,11 @@ def test_dp15_7b_remote_floor_of_the_text_over(nodes, target):
                 break
         t_over_end = time.monotonic()
         overs_first = slowdata.overs(listener.client.inbox)
-        # let the denied stream settle, then key again after the over ended
+        # let the denied stream settle, then read node 1 BEFORE the second talker keys: its counters so far are those of the
+        # text over alone (the design: no floor on the sending node). The links keep being pumped while the hub settles
+        # (a DExtra client times out in about 30 s of silence)
         ds.pump_for(GRANT_SLACK_S + 2.0, listener, talker)
+        mid1 = settle(read_counts(nodes.hub1), sleep=lambda seconds: ds.pump_for(seconds, listener, talker))
         sid2, packets2 = build_over(TALKER_CALL, plain_fields(TALKER_FRAMES_LONG), ambe(TALKER_FRAMES_LONG, "7b2"), module=ROOM)
         t_talk2 = time.monotonic()
         stamps2 = ds.send_over(talker, packets2)[1]
@@ -278,12 +312,15 @@ def test_dp15_7b_remote_floor_of_the_text_over(nodes, target):
         overs_all = slowdata.overs(listener.client.inbox)
     _after, ok = wait_for(read_counts(nodes.hub2), lambda c: c["rts.grant"] - base2["rts.grant"] >= 2
                           and c["rts.deny"] + c["rts.busy_delayed"] - base2["rts.deny"] - base2["rts.busy_delayed"] >= 1)
+    _after1, ok1 = wait_for(read_counts(nodes.hub1), lambda c: c["rts.grant"] - mid1["rts.grant"] >= 1)
     final1, final2 = settle(read_counts(nodes.hub1)), settle(read_counts(nodes.hub2))
     d1, d2 = delta(final1, base1), delta(final2, base2)
+    d1_over, d1_second = delta(mid1, base1), delta(final1, mid1)
     note(target, case, "RECORD", "SMS sent; header of %s at the talker %.3f s later; talker keyed %.3f s after it; the over end at the "
          "listener %.3f s after the SMS; second talker %.3f s after the first key" % (
              REFLECTOR_1, t_hdr - t_sms, t_talk - t_hdr, t_over_end - t_sms, t_talk2 - t_talk))
-    note(target, case, "RECORD", "node 2 hub delta %s; node 1 hub delta %s" % (moved(d2), moved(d1)))
+    note(target, case, "RECORD", "node 2 hub delta %s; node 1 hub delta %s (the text over alone %s, then the relayed second talker %s)" % (
+        moved(d2), moved(d1), moved(d1_over), moved(d1_second)))
     texts = ds.texts_of(overs_first)
     assert any(x["text"].rstrip().endswith(body) and x["text"].startswith(SENDER_CALL + ": ") for _s, x in texts), \
         "the listener on node 2 got no whole text over %r...%r: %s" % (SENDER_CALL + ": ", body, [x["text"] for _s, x in texts])
@@ -303,8 +340,15 @@ def test_dp15_7b_remote_floor_of_the_text_over(nodes, target):
         heard, len(packets2) - 1))
     assert heard >= TALKER_FRAMES_LONG - 3, "the second talker's over reached the listener with %d of %d frames" % (heard, TALKER_FRAMES_LONG + 1)
     assert stamps2, "the second talker sent nothing"
-    # the sending node took no floor for its own text over
-    assert d1["rts.grant"] == 0 and d1["closed"] == 0, "node 1 room %s granted/closed a stream for its own text over: %s" % (ROOM, moved(d1))
+    # the sending node took no floor for its own text over (read before the second talker keyed) ...
+    problems = own_over_problems(d1_over, recorder=bool(mid1["has.recorder"]))
+    assert not problems, "node 1 room %s took part in its own text over (before the second talker keyed): %s; delta %s" % (
+        ROOM, "; ".join(problems), moved(d1_over))
+    # ... and then saw exactly the relayed stream of the second talker, as ordinary voice from the XLX peer
+    assert ok1, "node 1 room %s counted no grant for the relayed stream of the second talker within %.0f s: %s" % (
+        ROOM, COUNTER_WAIT_S, moved(d1_second))
+    problems = relayed_stream_problems(d1_second, len(packets2))
+    assert not problems, "node 1 room %s, relayed stream of the second talker: %s; delta %s" % (ROOM, "; ".join(problems), moved(d1_second))
 
 
 # ================================================================ 7c: recording

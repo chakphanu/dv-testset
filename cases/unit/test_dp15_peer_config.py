@@ -258,3 +258,31 @@ def test_the_case_constants_agree_with_the_rig():
     assert peer.ROOM == "D" and peer.ROOM_LABEL == "d" and peer.REFLECTOR_1 == "XLX999"
     assert peer.TALKER_FRAMES_LONG > 50 > peer.TALKER_FRAMES                  # the short stream guard: only the denied talk is short
     assert peer.SENDER_CALL != peer.TALKER_CALL
+
+
+# 7b: node 1 is read twice (the text over alone, then the relayed second talker); the numbers are those of the first rig run
+# (20261107T111542Z): the whole-case delta of node 1 was grant 1, closed 1, units 61, rec.records 1 (the relayed stream)
+
+def test_own_over_problems_accepts_a_text_over_alone_and_names_what_moved():
+    quiet = {"textover.sent": 1, "data.all": 1, "items.all": 2, "raw.sent": 1}      # 7c: node 1 delta of the text over alone
+    assert peer.own_over_problems(quiet) == []
+    bad = peer.own_over_problems({"rts.grant": 1, "closed": 1, "units.published": 61, "rec.records": 1, "rec.bytes": 8654})
+    assert len(bad) == 4 and "rts.grant moved by 1" in bad[0] and any("recorder" in x for x in bad)
+    assert peer.own_over_problems({"rec.records": 1}, recorder=False) == []
+
+
+def test_relayed_stream_problems_wants_one_grant_one_close_and_the_frames():
+    first_run = {"rts.grant": 1, "closed": 1, "units.published": 61}
+    assert peer.relayed_stream_problems(first_run, 61) == []
+    assert peer.relayed_stream_problems({"rts.grant": 1, "closed": 1, "units.published": 59}, 61) == []
+    assert len(peer.relayed_stream_problems({"rts.grant": 2, "closed": 0, "units.published": 83}, 61)) == 3
+    assert peer.relayed_stream_problems({}, 61) == ["grants 0, want 1", "closed streams 0, want 1", "published units 0, want about 61"]
+
+
+def test_the_first_run_whole_case_delta_splits_into_the_two_checks():
+    base = {"rts.grant": 0, "closed": 0, "units.published": 0, "rec.records": 0, "rec.bytes": 0, "textover.sent": 0}
+    mid = dict(base, **{"textover.sent": 1})
+    final = dict(mid, **{"rts.grant": 1, "closed": 1, "units.published": 61, "rec.records": 1, "rec.bytes": 8654})
+    assert peer.own_over_problems(peer.delta(mid, base)) == []
+    assert peer.relayed_stream_problems(peer.delta(final, mid), 61) == []
+    assert peer.own_over_problems(peer.delta(final, base)) != []          # what the first run asserted over the whole case

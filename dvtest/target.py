@@ -67,6 +67,15 @@ HOST_OFFSETS = {"xlxd_ref": 10, "xlxd_sut": 11, "xlxd_peer_sut": 12, "xlxd_peer_
                 "ambed_ref": 20, "ambed_sut": 21,
                 "tester": 30, "allstar": 40, "nxdn_ref": 50, "nxdn_sut": 51,
                 "p25_ref": 60, "p25_sut": 61, "urfd": 70, "mrefd": 80, "web_proxy": 90}
+# Rig hosts the wire checker (dvtest.check.rig_config) accepts as peers but that
+# are not Target fields (no case addresses them through Target): profile
+# twonode dvr-peer .16 / transcoder-peer .17, asl-lab asl-reg .. asl-e .41-.44,
+# asl-ext .45, the T5n alias address .46 (asl-nat), aprsc .47, dw-a .48 / dw-b .49.
+# cases/unit/test_check_rig_hosts.py ties this table and HOST_OFFSETS to the
+# addresses of rig/compose.yml, so a new service cannot be forgotten silently.
+CHECK_HOST_OFFSETS = {"dvr_peer": 16, "ambed_peer": 17,
+                      "asl_reg": 41, "asl_a": 42, "asl_b": 43, "asl_e": 44, "asl_ext": 45,
+                      "asl_nat_alias": 46, "aprsc": 47, "dw_a": 48, "dw_b": 49}
 KEYS = ("subnet", "xlxd_ref", "xlxd_sut", "xlxd_peer_sut", "xlxd_peer_ref", "xlxd_peer2_sut", "xlxd_peer2_ref",
         "ambed_ref", "ambed_sut", "tester", "allstar",
         "nxdn_ref", "nxdn_sut", "p25_ref", "p25_sut", "urfd", "mrefd", "web_proxy", "ref_kind",

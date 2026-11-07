@@ -877,6 +877,13 @@ After the rig is down, `--capture` also runs `scripts/dvcheck.sh` on the run
 directory (`out/<utc>/check.txt`); a failing check fails a run whose pytest
 passed.
 
+The checker takes a peer for a rig host when its address is in `HOST_OFFSETS` or
+`CHECK_HOST_OFFSETS` (`dvtest/target.py`; the second holds the hosts of the profiles
+twonode, asl-lab, asl-ext, asl-nat, aprs and dw). A service added to
+`rig/compose.yml` must be added to one of them (or to the excuse table of
+`cases/unit/test_check_rig_hosts.py`, which fails otherwise); without it every
+datagram to that host is an `unknown_peer` error (the first twonode run: 581).
+
 Decode with `scripts/tshark.sh` (tshark in the capture image, no host
 install, dissectors from `tools/wireshark/dvtest.lua` loaded): see
 `.agents/skills/dv-capture/SKILL.md` and `docs/protocols/`. Captures stay in
