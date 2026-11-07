@@ -43,7 +43,8 @@ output formats and facts, cited by file and line of the pinned commit.
 | `dvtest/oracle_direwolf.py` | case tables (17 + 2 RX lines, 43 TX byte strings, 4 kissutil lines; `run --only tx` rewrites `kiss_tx.json` alone), debug-log parsers, record builders, the thin `docker run` call, `python3 -m dvtest.oracle_direwolf run` |
 | `dvtest/aprs_expect.py` | the generator's EXACT expected values for all 93 APRS cases (`expect` in every record) and the compare policy (`compare`, `position_within_half_precision`); see "APRS compare policy" |
 | `dvtest/aprs_cases.py`, `dvtest/oracle_aprs.py` | 76 spec-derived APRS information strings (one group per APRS type) with their small encoders (compressed, Mic-E); the `aprs` job, the `decode_aprs` output parser and the record builder, `python3 -m dvtest.oracle_aprs run` |
-| `rig/Dockerfile.direwolf`, `rig/direwolf-entry.py`, `scripts/pre-fetch-direwolf.sh`, `.env.example` (`DIREWOLF_*`) | the image `dvt-direwolf:local`, its driver (ours, Python) and the one-time source fetch |
+| `rig/Dockerfile.direwolf`, `rig/direwolf-entry.py`, `scripts/pre-fetch-direwolf.sh`, `.env.example` (`DIREWOLF_*`) | the image `dvt-direwolf:local`, its driver (ours, Python; also the modem loop service `entry.py loop` and the job `looptest`) and the one-time source fetch |
+| `cases/unit/test_direwolf_loop.py` | unit tests of the pure parts of the modem loop (sample aligned datagrams, configuration text, FIFO relay, KISS reader) |
 | `vectors/direwolf/rx_frames.json`, `kiss_tx.json`, `aprs_decode.json`, `vectors/airtime/anchors.json`, `afsk_bound.json` | the vectors (JSON text only, no audio) |
 | `cases/unit/test_ax25.py`, `test_airtime.py`, `test_oracle_direwolf.py`, `test_oracle_aprs.py`, `test_dvr_differences.py` | unit tests; the first and the last also read the Dire Wolf vectors |
 
@@ -79,6 +80,62 @@ output formats and facts, cited by file and line of the pinned commit.
   * `ADEVICE stdin null` works: the receive audio comes from a pipe that must stay open (EOF
     ends the program), the transmit audio goes nowhere. The text "null" output means the
     AFSK audio of a transmitted frame is NOT available for decoding (no stdout audio device).
+
+## Modem loop: two Dire Wolf instances without hardware (VERIFIED, 2026-11-07)
+
+The DP15 tier B RF cases (`docs/dp15-cases.md`) need a transmit on one real Dire Wolf to be heard by another. Both
+directions of the question were read in the pinned source (`.cache/direwolf/src/audio.c`, facts only):
+
+| Direction | What 1.8.1 accepts | Used for the loop |
+|-----------|--------------------|-------------------|
+| audio in | an ALSA capture device, `stdin` (or `-`), `udp:<port>` (datagrams of at most 2000 bytes, raw 16 bit samples, bound on all addresses) | `udp:7355` |
+| audio out | an ALSA PCM name only ("Only soundcard is supported"); no stdout, pipe or UDP | the ALSA `file` PCM |
+
+The ALSA `file` PCM (`ADEVICE udp:7355 file:/tmp/dw/tx-a.raw`; the `pcm.file` of `/usr/share/alsa/alsa.conf`, plugin
+code inside libasound2, slave `null`, raw format) writes every sample Dire Wolf transmits to a path. The path is a FIFO.
+A relay of ours (`Relay` in `rig/direwolf-entry.py`, stdlib Python) reads the FIFO and sends the samples as
+1024-byte UDP datagrams to the audio input of the peer: so Dire Wolf A's modulator output reaches Dire Wolf B's
+demodulator, in both directions, in one container (self test) or in two containers (rig services `dw-a` / `dw-b`).
+**No change to the image** (still 180 MB; `libasound2` already carried the plugin), no sound card, no privilege.
+
+What the relay must do (each point was an experiment, not a guess):
+
+* open the FIFO read/write, so there is never an end of file, and Dire Wolf's open for writing never blocks;
+* keep the datagrams sample aligned (an odd split would turn every later sample into noise);
+* pace the datagrams at 4 times real time: Dire Wolf writes a whole frame at once (no sound card to wait for), a
+  600-byte frame is 400 KB of audio; the FIFO (64 KB) gives the back pressure, the UDP receive buffer never dropped
+  a datagram (`/proc/net/udp` drops 0 in every run);
+* send 0.3 s of silence after the last sample, so the receiving modem sees the carrier go away (a real radio does).
+
+Evidence (`python3 -m dvtest.oracle_direwolf loop`, a throw-away container, `--network none`, the repository limits):
+
+| Run | Result |
+|-----|--------|
+| first spike, FIFO read by a bridge into the other instance's `stdin`, 1 frame A to B | the frame came out of B's KISS port byte for byte (`B [0.3] N0TEST-7>APDVT1::XLX999B  :DVT spike1{3`, audio 60 KB) |
+| two instances, UDP audio, 8 frames of 40 information bytes, alternating A to B and B to A, 0.3 s apart | 8 of 8 equal; latency from the KISS write to the KISS read 0.5 to 1.6 s (CSMA wait, TXDELAY, the frame itself 0.7 s of audio) |
+| 4 frames of 600 information bytes (629 bytes, 4.5 s of audio each), one direction | 4 of 4 equal, latency 2.6 to 5.5 s |
+| the same, alternating, 8 s between frames; and 4 s between frames | 4 of 4 and 4 of 4 equal |
+| two containers of the final image on an internal Docker network with the compose limits (256 MB, 0.5 CPU, 128 pids), 3 frames of 300 bytes A to B, B to A, A to B | 3 of 3 equal, 1.7 to 2.0 s; each container 9.5 MB and 11 processes at rest, 0.2 % CPU |
+| `atest` on the audio the relay copied (job `tap`) | every transmission decodes, `audio level = 199`: a clean full-scale signal (Dire Wolf warns "input level too high" at each frame; harmless) |
+
+Traps found:
+
+* **A node is deaf to what arrives while its own transmission would still be on the air.** With 600-byte frames and
+  2 s between the frames, the frame in the other direction was transmitted (the relay carried it, `atest` decodes it)
+  but the node that had just transmitted printed nothing and sent nothing to its KISS clients; with 4 s or more between
+  the frames every frame arrived. The cause was not traced to a source line; it fits a half duplex TNC (the KISS
+  FullDuplex parameter that DV-Router writes is 0) that counts the nominal air time of its own frame. The tier B cases therefore
+  keep a pause of 30 s or more between a transmission and a frame in the other direction (their spacing is 31 s anyway).
+* `KISSPORT 8002` in the configuration file ADDS a port to the built-in default 8001; the second instance of a
+  container then fights for 8001. `KISSPORT 0` first removes the default.
+* A KISS client socket made with `create_connection(timeout=3)` keeps that timeout for `recv()`: the reader thread dies
+  after 3 s of quiet and the client "never receives" (a test bug, not Dire Wolf).
+* The loop is per DIRECTION: A transmits, B hears. A node does not hear its own transmission and Dire Wolf does not give a
+  client its own transmitted frame back (unless `KISSCOPY`, which copies a frame one KISS client sends to the others;
+  `DW_KISSCOPY=1` of the entry script; not used by the rig).
+
+Not shown: a loop with noise, fading or two transmissions at once (no collision model); the timing is not that of a radio
+(the audio leaves 4 times faster than real time).
 
 ## Facts read from the oracle
 
@@ -383,8 +440,8 @@ LoRa airtime anchors: the four `external` rows are ACCEPTED AS QUOTED by the DV-
 - Nothing has run against DV-Router. No DV-Router adapter, edge or config was touched. DV-Router's rules in the
   sections above are the lead's statements, checked by us against the quoted lines of its read-only source tree
   (kiss.rs 4-80, tcp.rs 373-379 and 417-419, airtime.rs 56-71 and 142-145); no DV-Router binary was run.
-- Dire Wolf's own TX audio for a KISS frame is not captured, so "KISS bytes in, AFSK audio
-  out, decoded again" is not closed; the KISS to TNC2 decode is by `kissutil` and the log.
+- "KISS bytes in, AFSK audio out, decoded again" is closed by the modem loop above (the relay copy of a node's
+  transmit audio decodes with `atest`); the KISS to TNC2 decode of the earlier vectors is still by `kissutil` and the log.
 - The AFSK model is checked against one tool's output (its own length); no radio.
 - Dire Wolf is one implementation: where it differs from the AX.25 / KISS specifications (the
   c/r bits, the silently dropped ninth digipeater, the recovery from bad escapes) the vectors

@@ -23,7 +23,9 @@
 #  * git is not installed: the version module falls back to its own text;
 #  * the final image adds python3 (the minimal package lacks json and wave; the driver rig/direwolf-entry.py is ours) and
 #    libasound2 (direwolf links it; alsa.conf provides the "null" PCM);
-#  * run it with --network none (loopback only), see dvtest.oracle_direwolf.
+#  * run it with --network none (loopback only), see dvtest.oracle_direwolf;
+#  * the same image is the modem loop of the DP15 tier B rig (services dw-a / dw-b, `entry.py loop`, docs/direwolf-cases.md
+#    "Modem loop"): nothing was added for it, the ALSA `file` PCM that writes transmit audio into a FIFO is part of libasound2.
 ARG DIREWOLF_BASE_IMAGE
 FROM ${DIREWOLF_BASE_IMAGE} AS build
 ARG MAKE_JOBS=4

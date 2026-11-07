@@ -3,6 +3,12 @@
 """Driver inside dvt-direwolf:local (docs/direwolf-cases.md). Ours; the Dire Wolf programs
 (GPL-2.0-or-later) are only started as processes: gen_packets, atest, direwolf, kissutil.
 
+Two ways to run it:
+  * `entry.py` with ONE JSON job on stdin and ONE JSON result on stdout (the modes below);
+  * `entry.py loop` as a long-running service (compose services dw-a / dw-b, profile dw): one Dire Wolf
+    whose transmit audio is relayed to a peer's receive audio over UDP (tier B of the DP15 RF cases, see
+    "Modem loop" below).
+
 Reads ONE JSON job on stdin, writes ONE JSON result on stdout. No network (the
 container runs with --network none; everything is on loopback), no files outside
 /tmp (the container is read-only with a tmpfs there).
@@ -31,11 +37,32 @@ Jobs (field "mode"):
       a file holding ONE line of space separated hex bytes (an AX.25 frame without FCS;
       the hex input path of decode_aprs keeps the information bytes exact). Result per
       case: name, rc, output (its stdout, ANSI colour codes removed, Latin-1 text).
+  looptest  {"frames": 6, "info_len": 40}
+      the modem loop without hardware, all on loopback of this one container: two Dire Wolf
+      instances A (KISS 8001, audio in udp 7355) and B (KISS 8002, audio in udp 7356), each one's
+      transmit audio relayed to the other's audio input (the same code as the service). Frames
+      alternate A -> B and B -> A (order "ab"; "ba", or "a>b" / "b>a" for one direction only);
+      result per frame: direction, sent_hex, received_hex, equal, latency_s, plus the two Dire
+      Wolf logs, the relay byte counts and the kernel's UDP drop counters. A node does not hear
+      what arrives while its own transmission would still be on the air (half duplex): the next
+      frame of the other direction needs a "gap" of about the air time of the last one (4 s for
+      600 information bytes). "tap" adds what `atest` decodes from each node's transmit audio.
+
+Modem loop (docs/dp15-cases.md, tier B). Dire Wolf 1.8.1 can READ audio from a sound card, `stdin` or
+`udp:<port>` but can only WRITE audio to an ALSA PCM. The ALSA `file` plugin (inside libasound, name
+`file:<path>`, slave `null`) writes every transmitted sample to a path; with a FIFO there, a relay of
+ours reads it and sends it, as raw 16 bit mono UDP datagrams, to the peer's `udp:` input. Nothing else
+is needed in the image, no sound card, no privileges. Environment of `entry.py loop`:
+  DW_MYCALL (N0TEST-8), DW_KISS_PORT (8001), DW_AUDIO_PORT (7355, udp audio input),
+  DW_PEER ("host:port" of the peer's audio input, required), DW_KISSCOPY ("1" copies a frame
+  one KISS client sends to the other KISS clients, as the heard-on-two-ports case needs).
 """
 import json
 import os
 import pty
 import re
+import select
+import signal
 import socket
 import struct
 import subprocess
@@ -392,10 +419,320 @@ def mode_aprs(job):
     return {"cases": results}
 
 
-MODES = {"versions": mode_versions, "rx": mode_rx, "tx": mode_tx, "aprs": mode_aprs}
+# ------------------------------------------------------------------ modem loop (tier B)
+
+UDP_CHUNK = 1024            # bytes per audio datagram (even; Dire Wolf reads at most 2000 from one datagram)
+RELAY_SPEED = 4.0           # datagrams leave at this multiple of real time (a UDP receive buffer is a few hundred KB)
+TAIL_S = 0.3                # silence after the last transmitted sample: the receiving modem sees the carrier go away
+IDLE_S = 0.08               # no sample for this long = the transmission has ended
+LOOP_DIR = "/tmp/dw"
+
+
+def split_chunks(buf, size=UDP_CHUNK):
+    """(chunks, rest): `buf` cut into pieces of `size` bytes (a multiple of 2, so a datagram never splits a 16 bit
+    sample); `rest` is what does not fill a piece, with an odd byte kept so the next call stays sample aligned."""
+    if size < 2 or size % 2:
+        raise ValueError("chunk size must be even")
+    cut = len(buf) - len(buf) % size
+    return [buf[i:i + size] for i in range(0, cut, size)], buf[cut:]
+
+
+def loop_conf(mycall, kiss_port, audio_in, fifo, kisscopy=False):
+    """Dire Wolf configuration text of one loop node: audio in from the UDP port, audio out through the ALSA file
+    plugin into `fifo`, one channel, 1200 baud AFSK, KISS TCP on `kiss_port` only (no AGW port; `KISSPORT 0`
+    removes the built-in default 8001, which would otherwise stay next to the configured one)."""
+    lines = ["ADEVICE udp:%d file:%s" % (audio_in, fifo), "ACHANNELS 1", "CHANNEL 0", "MYCALL %s" % mycall,
+             "MODEM 1200", "AGWPORT 0", "KISSPORT 0", "KISSPORT %d" % kiss_port]
+    if kisscopy:
+        lines.append("KISSCOPY")
+    return "\n".join(lines) + "\n"
+
+
+class Relay(threading.Thread):
+    """Reads raw samples from a FIFO (opened read/write, so there is no end of file when Dire Wolf closes or has not
+    yet opened its side) and hands them to `send(datagram)` in sample aligned pieces, paced at `speed` times real time.
+    After the transmission (no sample for IDLE_S) it sends TAIL_S of silence once."""
+
+    def __init__(self, fifo, send, rate=RATE, speed=RELAY_SPEED, tail_s=TAIL_S, idle_s=IDLE_S, chunk=UDP_CHUNK, tap=None):
+        super().__init__(daemon=True)
+        self.tap = tap                          # optional file object: a copy of every sample relayed (debug, atest)
+        self.fifo, self.send, self.rate, self.speed = fifo, send, rate, speed
+        self.tail_s, self.idle_s, self.chunk = tail_s, idle_s, chunk
+        self.bytes_in = 0
+        self.datagrams = 0
+        self.stop_flag = threading.Event()
+        self.fd = os.open(fifo, os.O_RDWR)
+
+    def _emit(self, chunks):
+        step = self.chunk / (2.0 * self.rate * self.speed)
+        for piece in chunks:
+            self.send(piece)
+            self.datagrams += 1
+            time.sleep(step)
+
+    def run(self):
+        rest = b""
+        active = False
+        last = 0.0
+        while not self.stop_flag.is_set():
+            ready, _w, _x = select.select([self.fd], [], [], 0.05)
+            if ready:
+                data = os.read(self.fd, 65536)
+                self.bytes_in += len(data)
+                if self.tap is not None:
+                    self.tap.write(data)
+                    self.tap.flush()
+                chunks, rest = split_chunks(rest + data, self.chunk)
+                self._emit(chunks)
+                active, last = True, time.monotonic()
+            elif active and time.monotonic() - last >= self.idle_s:
+                if rest:                        # the last partial piece, padded with silence
+                    chunks, _r = split_chunks(rest + b"\0" * (self.chunk - len(rest)), self.chunk)
+                    self._emit(chunks)
+                    rest = b""
+                silence = b"\0\0" * int(self.rate * self.tail_s)
+                self._emit(split_chunks(silence, self.chunk)[0])
+                active = False
+
+    def stop(self):
+        self.stop_flag.set()
+        self.join(2.0)
+        try:
+            os.close(self.fd)
+        except OSError:
+            pass
+
+
+class LoopNode:
+    """One Dire Wolf of the modem loop: the process (log through a pty), the FIFO, the relay to the peer."""
+
+    def __init__(self, name, mycall, kiss_port, audio_in, peer, kisscopy=False, workdir=LOOP_DIR, echo_log=False, speed=RELAY_SPEED, tap=False):
+        self.name, self.kiss_port, self.audio_in, self.peer = name, kiss_port, audio_in, peer
+        self.workdir = workdir
+        self.fifo = os.path.join(workdir, "tx-%s.raw" % name)
+        self.conf = os.path.join(workdir, "dw-%s.conf" % name)
+        self.echo_log = echo_log
+        os.makedirs(workdir, exist_ok=True)
+        if os.path.exists(self.fifo):
+            os.unlink(self.fifo)
+        os.mkfifo(self.fifo, 0o600)
+        with open(self.conf, "w") as fh:
+            fh.write(loop_conf(mycall, kiss_port, audio_in, self.fifo, kisscopy))
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.peer_host, self.peer_port, self.target = peer[0], int(peer[1]), None
+        self.tap_path = os.path.join(workdir, "tap-%s.raw" % name) if tap else None
+        self.relay = Relay(self.fifo, self._send, speed=speed, tap=open(self.tap_path, "wb") if tap else None)
+        self.proc = None
+        self.log = None
+        self._forward = None
+
+    def _send(self, datagram):
+        try:
+            if self.target is None:              # resolved once, when the peer exists (an IP literal always does)
+                self.target = (socket.gethostbyname(self.peer_host), self.peer_port)
+            self.sock.sendto(datagram, self.target)
+        except OSError:
+            pass                                 # the peer is not up yet: its audio would be lost anyway
+
+    def start(self):
+        self.relay.start()
+        master, slave = pty_pair()
+        self.proc = subprocess.Popen(["direwolf", "-c", self.conf, "-r", str(RATE), "-t", "0"],
+                                     stdin=subprocess.DEVNULL, stdout=slave, stderr=slave)
+        os.close(slave)
+        self.log = Tail(master)
+        if self.echo_log:
+            self._forward = threading.Thread(target=self._pump_log, args=(master,), daemon=True)
+            self._forward.start()
+        return self
+
+    def _pump_log(self, master):
+        pos = 0
+        while self.proc is not None and self.proc.poll() is None:
+            data = self.log.since(pos)
+            pos += len(data)
+            if data:
+                sys.stdout.write("[%s] %s" % (self.name, clean(data)))
+                sys.stdout.flush()
+            time.sleep(0.2)
+
+    def ready(self, wait=10.0):
+        end = time.time() + wait
+        while time.time() < end:
+            if b"Ready to accept KISS TCP client" in self.log.since(0):
+                return True
+            if self.proc.poll() is not None:
+                return False
+            time.sleep(0.1)
+        return False
+
+    def stop(self):
+        self.relay.stop()
+        if self.proc is not None and self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+        self.sock.close()
+
+
+def kiss_connect(port, wait=8.0):
+    end = time.time() + wait
+    while True:
+        try:
+            s = socket.create_connection(("127.0.0.1", port), timeout=5)
+            s.settimeout(None)
+            return s
+        except OSError:
+            if time.time() > end:
+                raise
+            time.sleep(0.3)
+
+
+def kiss_frames(raw):
+    """Frames (bytes without the type byte) of data commands in a KISS byte stream (FEND 0x00 ... FEND)."""
+    out, cur, inside = [], bytearray(), False
+    esc = False
+    for b in raw:
+        if b == 0xC0:
+            if inside and len(cur) > 1 and cur[0] == 0x00:
+                out.append(bytes(cur[1:]))
+            cur, inside, esc = bytearray(), True, False
+        elif inside:
+            if esc:
+                cur.append({0xDC: 0xC0, 0xDD: 0xDB}.get(b, b))
+                esc = False
+            elif b == 0xDB:
+                esc = True
+            else:
+                cur.append(b)
+    return out
+
+
+def test_frame(src, seq, info_len):
+    """AX.25 UI frame bytes src>APDVT1 with an APRS message to XLX999B; used by the loop test only."""
+    def addr(call, ssid, last):
+        return bytes(ord(c) << 1 for c in call.ljust(6)) + bytes([0x60 | (ssid << 1) | (1 if last else 0)])
+    text = ("loop%d " % seq + "x" * info_len)[:info_len]
+    return addr("APDVT1", 0, False) + addr(src, 7, True) + b"\x03\xf0" + (":%-9s:%s{%d" % ("XLX999B", text, seq)).encode("ascii")
+
+
+def udp_drops():
+    """{local port: datagrams the kernel dropped for lack of receive buffer} of the UDP sockets of this container."""
+    out = {}
+    try:
+        with open("/proc/net/udp") as fh:
+            rows = fh.read().splitlines()[1:]
+    except OSError:
+        return out
+    for row in rows:
+        cols = row.split()
+        if len(cols) >= 13:
+            out[int(cols[1].split(":")[1], 16)] = [int(cols[12]), cols[4]]
+    return out
+
+
+def atest_taps(nodes):
+    """job "tap": what `atest` decodes from the audio each node transmitted (a WAV header is put in front of the raw samples)."""
+    out = {}
+    for node in nodes:
+        wav = node.tap_path[:-4] + ".wav"
+        with open(node.tap_path, "rb") as fh:
+            raw = fh.read()
+        with open(wav, "wb") as fh:
+            fh.write(b"RIFF" + struct.pack("<I", 36 + len(raw)) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, RATE, RATE * 2, 2, 16)
+                     + b"data" + struct.pack("<I", len(raw)) + raw)
+        done = run(["atest", "-B", "1200", wav])
+        out[node.name] = clean(done.stdout)[-1500:]
+    return out
+
+
+def mode_looptest(job):
+    count = int(job.get("frames", 6))
+    info_len = int(job.get("info_len", 40))
+    speed = float(job.get("speed", RELAY_SPEED))
+    order = job.get("order", "ab")
+    tap = bool(job.get("tap"))
+    a = LoopNode("a", "N0TEST-8", 8001, 7355, ("127.0.0.1", 7356), workdir=LOOP_DIR, speed=speed, tap=tap)
+    b = LoopNode("b", "N0TEST-9", 8002, 7356, ("127.0.0.1", 7355), workdir=LOOP_DIR, speed=speed, tap=tap)
+    results = []
+    try:
+        a.start()
+        b.start()
+        if not (a.ready() and b.ready()):
+            return {"error": "a Dire Wolf did not open its KISS port", "log_a": clean(a.log.since(0)), "log_b": clean(b.log.since(0))}
+        ca, cb = kiss_connect(8001), kiss_connect(8002)
+        ta, tb = SockTail(ca), SockTail(cb)
+        time.sleep(0.5)
+        for seq in range(count):
+            if order in ("ab", "ba"):
+                to_b = (seq % 2 == 0) == (order == "ab")     # A -> B, then B -> A, ... (order "ba": the other way round)
+            else:
+                to_b = order == "a>b"                           # always the same direction ("a>b" or "b>a")
+            dst_tail, src_sock = (tb, ca) if to_b else (ta, cb)
+            frame = test_frame("N0TEST", seq, info_len)
+            mark = dst_tail.mark()
+            t0 = time.time()
+            src_sock.sendall(b"\xc0\x00" + frame.replace(b"\xdb", b"\xdb\xdd").replace(b"\xc0", b"\xdb\xdc") + b"\xc0")
+            got = []
+            end = t0 + 15.0
+            while time.time() < end and not got:
+                got = kiss_frames(dst_tail.since(mark))
+                time.sleep(0.05)
+            latency = time.time() - t0
+            results.append({"seq": seq, "direction": "a->b" if to_b else "b->a", "sent_hex": frame.hex(),
+                            "received_hex": got[0].hex() if got else "", "frames_received": len(got),
+                            "equal": bool(got) and got[0] == frame, "latency_s": round(latency, 3)})
+            time.sleep(float(job.get("gap", 0.3)))
+        for s in (ca, cb):
+            try:
+                s.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            s.close()
+        return {"frames": results, "relay_a": {"bytes": a.relay.bytes_in, "datagrams": a.relay.datagrams},
+                "relay_b": {"bytes": b.relay.bytes_in, "datagrams": b.relay.datagrams}, "udp_drops": udp_drops(),
+                "log_a": clean(a.log.since(0)), "log_b": clean(b.log.since(0)),
+                "atest": atest_taps([n for n in (a, b) if n.tap_path])}
+    finally:
+        a.stop()
+        b.stop()
+
+
+def run_loop_service():
+    """`entry.py loop`: one node of the loop, until SIGTERM. A Dire Wolf that exits is started again."""
+    env = os.environ
+    peer = env.get("DW_PEER", "")
+    if ":" not in peer:
+        sys.stderr.write("entry.py loop: DW_PEER=host:port (the peer's audio input) is required\n")
+        return 2
+    host, port = peer.rsplit(":", 1)
+    stop = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_a: stop.set())
+    signal.signal(signal.SIGINT, lambda *_a: stop.set())
+    name = env.get("DW_NAME", "n")
+    while not stop.is_set():
+        node = LoopNode(name, env.get("DW_MYCALL", "N0TEST-8"), int(env.get("DW_KISS_PORT", "8001")),
+                        int(env.get("DW_AUDIO_PORT", "7355")), (host, int(port)),
+                        kisscopy=env.get("DW_KISSCOPY", "0") == "1", echo_log=True)
+        node.start()
+        print("loop node %s: kiss tcp %s, audio in udp %s, audio out to %s" % (name, node.kiss_port, node.audio_in, peer), flush=True)
+        while not stop.is_set() and node.proc.poll() is None:
+            stop.wait(0.5)
+        node.stop()
+        if not stop.is_set():
+            print("loop node %s: direwolf exited with %s, starting it again" % (name, node.proc.returncode), flush=True)
+            stop.wait(1.0)
+    return 0
+
+
+MODES = {"versions": mode_versions, "rx": mode_rx, "tx": mode_tx, "aprs": mode_aprs, "looptest": mode_looptest}
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "loop":
+        return run_loop_service()
     job = json.loads(sys.stdin.read() or "{}")
     mode = job.get("mode")
     if mode not in MODES:

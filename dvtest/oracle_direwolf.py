@@ -21,6 +21,12 @@ The pure functions (case tables, record builders, comparisons) are unit tested
 without Docker (cases/unit/test_oracle_direwolf.py); run_job() needs the image.
 
     python3 -m dvtest.oracle_direwolf run --out-dir vectors/direwolf
+
+A third command checks the modem loop of the DP15 tier B rig (docs/dp15-cases.md) without a rig: two Dire Wolf
+instances in one throw-away container, each one's transmit audio relayed to the other's audio input, frames sent into
+one KISS port and read from the other:
+
+    python3 -m dvtest.oracle_direwolf loop [--frames 6] [--gap 5]
 """
 import argparse
 import json
@@ -371,6 +377,17 @@ def run_job(job, image=IMAGE, timeout=RUN_TIMEOUT):
     return json.loads(done.stdout.decode("utf-8"))
 
 
+def loop_verdict(result):
+    """(ok, lines) for the result of the job `looptest`: every frame came out of the other instance's KISS port equal to
+    what went in, the loop passed at least one frame in each direction."""
+    if result.get("error"):
+        return False, ["error: %s" % result["error"]]
+    frames = result.get("frames") or []
+    lines = ["%d %s %s %.3f s" % (f["seq"], f["direction"], "equal" if f["equal"] else "MISSING/DIFFERENT", f["latency_s"]) for f in frames]
+    ok = bool(frames) and all(f["equal"] for f in frames) and {f["direction"] for f in frames} >= {"a->b", "b->a"}
+    return ok, lines
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="oracle_direwolf", description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -378,7 +395,17 @@ def main(argv=None):
     run.add_argument("--out-dir", default="vectors/direwolf")
     run.add_argument("--only", choices=("rx", "tx"), default=None,
                      help="run and write one direction only (the other file is left as it is)")
+    loop = sub.add_parser("loop", help="check the modem loop of two Dire Wolf instances (tier B) in one throw-away container")
+    loop.add_argument("--frames", type=int, default=6)
+    loop.add_argument("--info-len", type=int, default=40)
+    loop.add_argument("--gap", type=float, default=5.0, help="seconds between frames (a node is deaf for about its own air time)")
     args = parser.parse_args(argv)
+    if args.cmd == "loop":
+        result = run_job({"mode": "looptest", "frames": args.frames, "info_len": args.info_len, "gap": args.gap})
+        ok, lines = loop_verdict(result)
+        print("\n".join(lines))
+        print("loop %s" % ("OK" if ok else "FAILED"))
+        return 0 if ok else 1
     os.makedirs(args.out_dir, exist_ok=True)
     version = run_job({"mode": "versions"})
     rx = run_job(rx_job()) if args.only != "tx" else None
