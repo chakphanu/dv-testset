@@ -128,8 +128,11 @@
 # (cases/crossmode_fake.py); the wire cases (-m wire) are not meant for it.
 #
 # DVT_SUT_LAUNCH selects how a prebuilt XLXD_SUT_IMAGE starts: direct (default,
-# its own entrypoint, argv "XLX999 OWN_IP TRANSCODER_IP"), import (through the
-# dv-xlxd-import shim) or native (DV-Router with its own TOML). native needs
+# its own entrypoint, argv "XLX999 OWN_IP TRANSCODER_IP"), native (DV-Router
+# with its own TOML) or import (DEPRECATED: only for images before COMPAT1b
+# part 2; the product's import hand-off, dv-router running dv-xlxd-import
+# --exec itself, is being removed; use native). For a DV-Router image `direct`
+# is the same hand-off, so DV-Router runs use native. native needs
 # DVT_SUT_CONFIG=<path to a dv-router.toml TEMPLATE> (exit 2 when missing or
 # unreadable). run.sh renders it into out/<utc>/xlxd-config/xlxd-sut/dv-router.toml
 # (python3 -m dvtest.sut_config), replacing <OWN_IP> (<net>.11), <TRANSCODER_IP>
@@ -251,15 +254,17 @@ case "${DVT_USRP_DYNAMIC:-}" in
   *) echo "run.sh: DVT_USRP_DYNAMIC must be 1 or unset" >&2; exit 2 ;;
 esac
 # DVT_SUT_LAUNCH: how a prebuilt xlxd-sut image starts. direct = its own
-# entrypoint with "CALLSIGN OWN_IP TRANSCODER_IP"; import = through the
-# converter shim dv-xlxd-import --exec (DV-Router), same three words;
+# entrypoint with "CALLSIGN OWN_IP TRANSCODER_IP"; import = DEPRECATED (only
+# for images before COMPAT1b part 2, the import hand-off is being removed):
+# through the converter shim dv-xlxd-import --exec (DV-Router), same three words;
 # native = "--config FILE XLX999 OWN_IP TRANSCODER_IP" with FILE rendered from
 # the template DVT_SUT_CONFIG (header; the render is checked after the subnet
 # is known, below).
 case "${DVT_SUT_LAUNCH:-direct}" in
   direct) ;;
   import) [ -n "${XLXD_SUT_IMAGE:-}" ] \
-            || { echo "run.sh: DVT_SUT_LAUNCH=import needs XLXD_SUT_IMAGE (a prebuilt image with the shim)" >&2; exit 2; } ;;
+            || { echo "run.sh: DVT_SUT_LAUNCH=import needs XLXD_SUT_IMAGE (a prebuilt image with the shim)" >&2; exit 2; }
+          echo "run.sh: warning: DVT_SUT_LAUNCH=import is DEPRECATED (only for images before COMPAT1b part 2; the product's import hand-off is being removed): use DVT_SUT_LAUNCH=native" >&2 ;;
   native) [ -n "${XLXD_SUT_IMAGE:-}" ] \
             || { echo "run.sh: DVT_SUT_LAUNCH=native needs XLXD_SUT_IMAGE (a prebuilt DV-Router image)" >&2; exit 2; }
           [ -n "${DVT_SUT_CONFIG:-}" ] \
@@ -361,8 +366,8 @@ if [ "$has_turn" = 1 ] && [ "$has_nat" = 0 ]; then
   echo "run.sh: rig/config/dv-router/turn.toml needs --profile nat (coturn and the secret file come with it)" >&2; exit 2
 fi
 # Native launch reads no xlxd.usrp, so the USRP endpoints (A 34001, B 34002, C 34003) that the AllStar
-# application cases need come from rig/config/dv-router/usrp-rig.toml, the rows the importer makes in the
-# import launch. Added whenever DVT_SUT_USRP is on (--profile allstar and --profile load set it; the profile
+# application cases need come from rig/config/dv-router/usrp-rig.toml (the rows the deprecated import
+# launch derived from xlxd.usrp). Added whenever DVT_SUT_USRP is on (--profile allstar and --profile load set it; the profile
 # loop below does the same default) unless it is listed already or the template has endpoint rows itself.
 # usrp_snippet=1 = the SUT has USRP endpoints (the "DVT_SUT_USRP is ignored" warning below does not apply).
 usrp_snippet=0
@@ -799,7 +804,7 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
       printf '  %s:\n    image: "%s"\n' "$svc" "$img"
       printf '    command: ["--config", "/etc/dv-router/dv-router.toml", "XLX999", "%s.%s", "%s.%s"]\n' "$net" "$3" "$net" "$4"
     elif [ "$svc" = xlxd-sut ] && [ "${DVT_SUT_LAUNCH:-direct}" = import ]; then
-      # the shim converts the mounted /xlxd files, then execs dv-router (same three words)
+      # DEPRECATED: the shim converts the mounted /xlxd files, then execs dv-router (same three words)
       printf '  %s:\n    image: "%s"\n    entrypoint: ["/usr/local/bin/dv-xlxd-import"]\n' "$svc" "$img"
       printf '    command: ["--exec", "--dir", "/xlxd", "XLX999", "%s.%s", "%s.%s", "--", "/usr/local/bin/dv-router"]\n' \
         "$net" "$3" "$net" "$4"

@@ -27,8 +27,8 @@ def peer_sides(target, env=None):
         reasons.append("sut: xlxd has no M17 peering" if target.sut_profile == specs.DEFAULT
                        else "sut: profile %s has no M17 peering" % target.sut_profile)
     elif env.get("DVT_SUT_LAUNCH") == "import":
-        reasons.append("sut: the legacy xlxd importer has no M17 interlink input; run the peer cases with "
-                       "the native-config launch")
+        reasons.append("sut: the deprecated import launch has no M17 interlink input; run the peer cases with "
+                       "DVT_SUT_LAUNCH=native")
     else:
         sides["sut"] = (target.xlxd_sut, (specs.rule(target, "m17") or {}).get("designation"))
     if target.ref_kind != "mrefd":

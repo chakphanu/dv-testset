@@ -265,8 +265,13 @@ Contract for such an image:
 | Value | xlxd-sut starts as |
 |-------|--------------------|
 | `direct` (default) | the image's own entrypoint with `XLX999 <net>.11 <net>.21` |
-| `import` | `dv-xlxd-import --exec --dir /xlxd ...` (legacy converter of DV-Router), same three words |
-| `native` | the image's own entrypoint with `--config /etc/dv-router/dv-router.toml XLX999 <net>.11 <net>.21` |
+| `native` | the image's own entrypoint with `--config /etc/dv-router/dv-router.toml XLX999 <net>.11 <net>.21` (use this for every DV-Router run) |
+| `import` | DEPRECATED, only for images before COMPAT1b part 2: `dv-xlxd-import --exec --dir /xlxd ...` (the converter shim of DV-Router), same three words; the product's import hand-off is being removed, `run.sh` prints a warning |
+
+For a DV-Router image `direct` is the same import hand-off (the product hands the bare
+words to the converter), so it goes away together with `import`: run DV-Router with `native`.
+The converter itself (`dv-tool-xlxd-import`, an operator migrating from xlxd) stays; the
+netns cases use it as a plain tool, see "netns cases" below.
 
 `native` needs `XLXD_SUT_IMAGE` and `DVT_SUT_CONFIG=<path to a dv-router.toml
 TEMPLATE>` (exit 2 when either is missing or the file is not readable).
@@ -300,7 +305,24 @@ the combination with `echo-usrp-peer.toml` (both bind `<OWN_IP>:34003`).
 `DVT_XLXD_BLACKLIST` is set in this mode (`DVT_SUT_USRP` is no longer ignored,
 so it draws no warning for `on` or `off`) and refuses
 `DVT_UNSERVED_MODULE=M|N` (exit 2). The tester sees the mode in
-`DVT_SUT_LAUNCH` (the M17 peer cases skip with `import` only).
+`DVT_SUT_LAUNCH` (the M17 peer cases skip with the deprecated `import` only).
+
+### netns cases with a DV-Router build (`scripts/dvr-import-wrap.sh`)
+
+`cases/test_xlxd_usrp_netns.py` and `cases/test_xlxd_transcoder_lifecycle.py` run
+`$DVT_XLXD_BIN XLX999 127.0.0.1 127.0.0.2` in a working directory that holds `xlxd.usrp`
+(no docker, no rig). For a DV-Router build `DVT_XLXD_BIN=scripts/dvr-import-wrap.sh` and
+`DVT_DVR_BIN_DIR=<dir>` (the binaries of the image under test, copied out with
+`docker create` / `docker cp <id>:/usr/local/bin/. <dir>`) start it the way an operator migrating
+from xlxd does, without the product's import hand-off:
+
+1. `dv-tool-xlxd-import --dir $PWD --out $PWD/dv-router.toml XLX999 127.0.0.1 127.0.0.2`
+   (the standalone converter, one-shot mode; `dv-xlxd-import` in older builds);
+2. `DV_CONFIG_DIR=$PWD DV_RUN_DIR=$PWD dv-router --config $PWD/dv-router.toml XLX999 127.0.0.1 127.0.0.2`.
+
+The wrapper prints `dvr-import-wrap: path=convert|shim|direct` on stderr (into the scenario's
+`xlxd.log`); `shim` / `direct` are the fallbacks for builds whose converter has no `--out` or
+that have no converter at all. Offline test: `cases/unit/test_dvr_import_wrap.py`.
 
 ### Extending the template (`DVT_SUT_CONFIG_EXTRA`)
 
@@ -328,7 +350,7 @@ another launch mode the variable draws a warning. Snippets in
 | `xlx-peer-tester.toml` | `[[edges.xlx.peer]]` XLX996 at `<TESTER_IP>` on modules `DE`: the tester plays the peer (`dvtest.proto.xlx.XlxPeer`), used by the xlx kind of E9 (`docs/echo-cases.md`) and by P19; use it instead of `xlx-peer.toml`, or next to it |
 | `nxdn-peer-host.toml` / `-bad.toml` | the NXDN probe row of the rig (the tester as NXDN reflector: UDP 41411, TG 31673, module I) named by host name `tester`; `-bad` adds a row `no-such-peer.example.invalid`. For P19 `cases/test_edge_relink.py -k nxdn`, profile `nxdn` |
 | `p25-peer-host.toml` / `-bad.toml` | the rig's P25Reflector `p25-sut` (id 31672, UDP 41000, module G) named by host name; `-bad` adds an unresolvable row. For P19 `-k p25`, profile `p25` |
-| `usrp-rig.toml` | the three static USRP endpoints of the rig, what the importer makes from `xlxd.usrp` in the import launch: A `<OWN_IP>:34001` <-> `<NET>.40:32001` (AllStar node 1901), B `:34002` <-> `<NET>.40:32002` (node 1902), C `:34003` <-> `<TESTER_IP>:32003` (the tester), callsign `N0TEST`, `[edges.usrp] enable = "auto"`. Added by `run.sh` itself when `DVT_SUT_USRP` is on (see above); the `rig_usrp` fixture skips the AllStar application cases with the reason when the rendered config lacks these binds. Independent of the dynamic hub (`DVT_USRP_DYNAMIC=1` pins `edges.usrp.dynamic` through `DV_USRP_DYNAMIC`, UDP 34101) |
+| `usrp-rig.toml` | the three static USRP endpoints of the rig, what the (deprecated) import launch derived from `xlxd.usrp`: A `<OWN_IP>:34001` <-> `<NET>.40:32001` (AllStar node 1901), B `:34002` <-> `<NET>.40:32002` (node 1902), C `:34003` <-> `<TESTER_IP>:32003` (the tester), callsign `N0TEST`, `[edges.usrp] enable = "auto"`. Added by `run.sh` itself when `DVT_SUT_USRP` is on (see above); the `rig_usrp` fixture skips the AllStar application cases with the reason when the rendered config lacks these binds. Independent of the dynamic hub (`DVT_USRP_DYNAMIC=1` pins `edges.usrp.dynamic` through `DV_USRP_DYNAMIC`, UDP 34101) |
 | `web.toml` | the web service, a persistent state dir and the WebRTC edge; added by `--profile web` itself (next section) |
 | `recorder.toml` | the recorder (K14b): `[recorder] dir = "/var/lib/dv-recorder"`, `keep_days = 7`, `max_gb = 1`; naming it in `DVT_SUT_CONFIG_EXTRA` is the switch (see "Recorder" in the web profile section) |
 | `guest.toml` | `[web] guest_listen = true`: anonymous guests may Listen (two per IPv4, no Talk); used by the K22 cases (`docs/web-k22-cases.md`); name it after `web.toml` |

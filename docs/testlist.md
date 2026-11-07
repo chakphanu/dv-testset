@@ -47,7 +47,10 @@ cases (section K); `slow` marks cases that wait for a server timeout. The table 
 Under `DVT_SUT_PROFILE=dvrouter` rows B2, B4, B6, B11 and B12 assert the
 expectations of `dvtest/specs/dvrouter.py` "netns_ambed" (design D5: AMBEd
 outputs opened on demand, extended OPEN only) instead of xlxd's; the dvrouter
-run needs an xlxd-compatible DV-Router binary as `DVT_XLXD_BIN`.
+run needs an xlxd-compatible DV-Router build: `DVT_XLXD_BIN=scripts/dvr-import-wrap.sh` with
+`DVT_DVR_BIN_DIR=<binaries of the image>`; the wrapper converts the case's `xlxd.usrp` with the
+standalone converter and runs `dv-router --config <toml>` (no import hand-off; `docs/rig.md`,
+"netns cases with a DV-Router build").
 
 | # | Check | Case | Status |
 |---|---|---|---|
