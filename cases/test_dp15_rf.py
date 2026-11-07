@@ -40,7 +40,7 @@ from dvtest import airtime, ax25, kiss_tnc, metrics, slowdata, web  # noqa: E402
 
 import data_support as ds  # noqa: E402
 from data_support import (  # noqa: E402
-    IDLE_GAP_S, PACER, ROOM, SseWatch, dstar_listener, header_times, hub_session, m17_client, m17p_packets, pump_for,
+    IDLE_GAP_S, PACER, ROOM, SseWatch, dstar_listener, first_header_times, hub_session, m17_client, m17p_packets, pump_for,
     sms_text, texts_of, write_note)
 
 pytestmark = pytest.mark.rig
@@ -156,7 +156,7 @@ def m17_times(client, body):
 
 def dstar_times(listener, body):
     sids = {sid for sid, got in texts_of(slowdata.overs(listener.client.inbox)) if body in got["text"]}
-    return [at for at, h in header_times(listener) if h["stream_id"] in sids]
+    return [at for at, _h in first_header_times(listener, lambda h: h["stream_id"] in sids)]    # one per over (5 header repeats)
 
 
 def sse_texts(watch, body, since=0.0):

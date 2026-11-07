@@ -35,7 +35,7 @@ from dvtest.proto import dextra  # noqa: E402
 
 import data_support as ds  # noqa: E402
 from data_support import (  # noqa: E402
-    AT_ONCE_S, IDLE_GAP_S, PACER, ROOM, SseWatch, TOKEN_RENDER_S, ambe, build_over, dstar_listener, header_times,
+    AT_ONCE_S, IDLE_GAP_S, PACER, ROOM, SseWatch, TOKEN_RENDER_S, ambe, build_over, dstar_listener, first_header_times,
     hub_session, m17_client, m17_voice_payloads, m17p_packets, over_by_my, pump_for, send_over_thread, sms_text, texts_of,
     write_note)
 
@@ -175,7 +175,7 @@ def m17_text_times(client, body):
 def dstar_text_times(listener, body):
     """Arrival times of the headers of the text overs at `listener` whose decoded text contains `body`."""
     sids = {sid for sid, got in texts_of(slowdata.overs(listener.client.inbox)) if body in got["text"]}
-    return [at for at, h in header_times(listener) if h["stream_id"] in sids]
+    return [at for at, _h in first_header_times(listener, lambda h: h["stream_id"] in sids)]    # one per over (5 header repeats)
 
 
 def pump_until(seconds, listeners, until=None):

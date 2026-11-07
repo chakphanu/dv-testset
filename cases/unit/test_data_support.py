@@ -83,3 +83,26 @@ def test_sse_watch_collects_data_events():
         got = watch.wait_data(lambda o: o.get("item_type") == "status", 2.0)
     assert got is not None and got[1]["callsign"] == "N0TEST"
     assert watch.wait_data(lambda o: False, 0.05) is None
+
+
+def test_first_header_times_counts_an_over_once_although_dextra_repeats_the_header():
+    """First DP15 RF run: DV-Router's DExtra edge sends each header 5 times (xlxd repeatCount 5); counting header
+    datagrams gave 5 text overs for one frame. One entry per stream id, the first arrival."""
+    from types import SimpleNamespace
+
+    from dvtest import dstar_sd
+    from dvtest.proto import dextra
+
+    def over(sid, my):
+        radio = dextra.radio_header(my=my, module="B")
+        return dstar_sd.over_packets(sid, [(i % 21, dextra.SLOW_DATA) for i in range(4)], [bytes(9)] * 4, radio=radio)
+
+    first, second = over(0x1111, "XLX999"), over(0x2222, "N0TEST")
+    inbox = [first[0]] * 5 + first[1:3] + [second[0]] * 5
+    times = [10.0 + i * 0.001 for i in range(len(inbox))]
+    listener = SimpleNamespace(client=SimpleNamespace(inbox=inbox, inbox_times=times))
+    assert len(ds.header_times(listener)) == 10
+    got = ds.first_header_times(listener)
+    assert [h["stream_id"] for _at, h in got] == [0x1111, 0x2222] and got[0][0] == 10.0
+    assert ds.text_headers(listener) == [10.0]
+    assert [h["stream_id"] for _at, h in ds.first_header_times(listener, lambda h: h["stream_id"] == 0x2222)] == [0x2222]

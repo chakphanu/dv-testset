@@ -473,9 +473,23 @@ def header_times(listener):
     return out
 
 
+def first_header_times(listener, pred=None):
+    """[(arrival time of the FIRST header of each stream id, parsed header)] of a listener, optionally filtered by
+    pred(header). DV-Router's DExtra edge sends every header 5 times at the start of an over (xlxd repeatCount 5,
+    crates/edge/dextra/src/wire.rs HEADER_REPEAT): the five datagrams arrive within microseconds and are ONE over.
+    First DP15 RF run: 6a / 6e counted five D-STAR text overs for one frame."""
+    seen, out = set(), []
+    for at, header in header_times(listener):
+        if header["stream_id"] in seen or (pred is not None and not pred(header)):
+            continue
+        seen.add(header["stream_id"])
+        out.append((at, header))
+    return out
+
+
 def text_headers(listener):
-    """Arrival times of the headers of synthetic text overs (MY = the reflector callsign)."""
-    return [at for at, h in header_times(listener) if bytes(h["my"]).rstrip() == b"XLX999"]
+    """Arrival times of the headers of synthetic text overs (MY = the reflector callsign), one per over."""
+    return [at for at, _h in first_header_times(listener, lambda h: bytes(h["my"]).rstrip() == b"XLX999")]
 
 
 def over_by_my(overs, my):
