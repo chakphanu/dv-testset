@@ -38,6 +38,8 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
   DVT_AMBED_STREAM_CAP  optional stream limit the wire case checks
   DVT_XLXD_BIN       local xlxd binary for the netns case (no default)
   DVT_XLXD_REF_BIN   optional reference xlxd binary for the netns case
+  DVT_NETNS_PARALLEL netns scenarios run at the same time (default 1, waves; a DV-Router
+                     scenario peaks near 435 tasks, the scope allows 1024; dvtest/netns_runs.py)
   DVT_REFLECTOR      reflector callsign (XLX999)
   DVT_IAX_SECRET     IAX2 secret of the AllStar node (rig: .local/rig.env)
   DVT_OUT            results directory (out)

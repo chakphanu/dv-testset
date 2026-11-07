@@ -280,11 +280,7 @@ def _launch(binary, name, spec, out_root):
     return run_dir, subprocess.Popen(cmd, stdout=stderr, stderr=subprocess.STDOUT), stderr
 
 
-@pytest.fixture(scope="module")
-def runs(request, xlxd_bin, out_root):
-    selected = {getattr(item, "originalname", item.name) for item in request.session.items}
-    launched = {name: _launch(xlxd_bin, name, spec, out_root) for name, spec in SCENARIOS.items()
-                if any(case.startswith(spec["cases"]) for case in selected)}
+def _collect(launched):
     results = {}
     deadline = time.monotonic() + TIMEOUT
     for name, (run_dir, proc, stderr) in launched.items():
@@ -301,9 +297,32 @@ def runs(request, xlxd_bin, out_root):
     return results
 
 
+@pytest.fixture(scope="module")
+def runs(request, xlxd_bin, out_root):
+    """Result of every scenario a selected case reads, started in waves of
+    DVT_NETNS_PARALLEL (default 1; TIMEOUT is per wave)."""
+    from dvtest import netns_runs
+    selected = netns_runs.selected_names(request.session.items, request.module.__name__)
+    return netns_runs.run_in_waves(
+        netns_runs.scenarios_for(SCENARIOS, selected),
+        lambda name: _launch(xlxd_bin, name, SCENARIOS[name], out_root),
+        _collect, netns_runs.parallel())
+
+
+def environment_check(run):
+    """Fail with the environment text, not a product-sounding one, when the
+    scenario's logs show an exhausted task limit (dvtest/netns_runs.py)."""
+    from dvtest import netns_runs
+    message = netns_runs.starvation_message(run)
+    if message:
+        pytest.fail(message, pytrace=False)
+
+
 def get(runs, name):
     assert name in runs, "scenario %s was not launched" % name
     run = runs[name]
+    if "error" in run or not run.get("pinged") or False in run.get("up_pinged", []):
+        environment_check(run)
     assert "error" not in run, run.get("error")
     assert run["pinged"], "xlxd never sent AMBEDPING to the transcoder"
     assert run["xlxd_alive"], "xlxd exited"

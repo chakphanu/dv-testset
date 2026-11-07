@@ -325,6 +325,42 @@ The wrapper prints `dvr-import-wrap: path=convert|shim|direct` on stderr (into t
 `xlxd.log`); `shim` / `direct` are the fallbacks for builds whose converter has no `--out` or
 that have no converter at all. Offline test: `cases/unit/test_dvr_import_wrap.py`.
 
+Scenarios, waves and the task limit. Both files run one scenario per `-k` group of cases
+("cases" name prefix of each scenario: only the scenarios that a selected case reads are
+launched, in both files). One idle DV-Router scenario (launcher, 8 rooms, edges,
+`dv-codec-ambed`, status, web, ...) peaks near 435 tasks (threads), and `scripts/contained.sh`
+puts the job in a scope with `TasksMax=1024`. Starting all scenarios at once (5 in the USRP
+file, 4 in the lifecycle file) needs about 2200 and starves the launcher (`clone()` fails with
+`os error 11`); the cases then looked like a product fault ("never sent AMBEDPING"). So the
+scenarios start in waves:
+
+| Variable | Meaning |
+|----------|---------|
+| `DVT_NETNS_PARALLEL` | scenarios run at the same time, a positive integer, default `1`. The next wave starts when the previous one is finished; the wait limit (`TIMEOUT`) is per wave. `2` fits the scope on paper (870 of 1024) but leaves no headroom next to pytest and is not safe; do not use more than 1 with a DV-Router build. An xlxd reference run (`DVT_SUT_PROFILE` other than `dvrouter`, real `DVT_XLXD_BIN`) may raise it: results do not depend on it, only the wall time. |
+
+Recipe (the default is the safe one; no scratch plugin is needed any more):
+
+```
+DVT_DVR_BIN_DIR=.cache/dvr-<tag> DVT_XLXD_BIN=scripts/dvr-import-wrap.sh DVT_SUT_PROFILE=dvrouter \
+  scripts/contained.sh --name test -- python3 -m pytest -m netns \
+  cases/test_xlxd_usrp_netns.py -q                    # whole file: 5 scenarios, one after the other
+  # one scenario: add -k test_extended_ (or test_lost_listener_ for the lifecycle file)
+```
+
+Wall time of a whole-file run with the default: the USRP file runs its 5 scenarios one after
+the other instead of together: about 5 x 30 s instead of about 30 s; the lifecycle file
+4 x about 55 s (`lost_and_back`, `listener_lost_and_back`, `fast_swap`, `legacy_swap`), about
+3.5 minutes instead of about 1 minute. Results are the same.
+
+When `xlxd.log` of a scenario shows `Resource temporarily unavailable (os error 11)` or
+`can't spawn worker thread` (or `harness.err` shows `can't start new thread`) and the run did
+not get as far as the first `AMBEDPING`, `get()` fails with
+`environment: task limit exhausted (os error 11 / can't spawn worker thread in xlxd.log)`
+instead of "xlxd never sent AMBEDPING"; that is the harness, not the product. A run that
+pinged is never turned red by an old restart line. Logic and offline tests:
+`dvtest/netns_runs.py`, `cases/unit/test_netns_runs.py`; classification of the red results of
+`wip-0348b98`: `docs/netns-dvrouter-classification.md`.
+
 ### Extending the template (`DVT_SUT_CONFIG_EXTRA`)
 
 The DV-Router template lives outside this repository and is never copied in.

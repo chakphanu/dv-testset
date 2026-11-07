@@ -11,8 +11,8 @@ Answer: neither. Every one of the 20 cases is green when its scenario runs
 alone. The red results came from the harness starting all scenarios at once,
 which exhausts the task limit of the `contained.sh` scope and keeps
 DV-Router's child processes from starting. There is no class (a) change and no
-class (b) finding in this pass. Nothing in `cases/`, `dvtest/` or the specs was
-changed; the proposed harness fixes below are not applied.
+class (b) finding in this pass. The report itself changed no case, library or spec; the
+harness fixes H1 to H3 below were applied afterwards (status at "Harness fixes"), H4 is open.
 
 Scope: `cases/test_xlxd_usrp_netns.py` (13 cases that run, plus
 `test_no_usrp_link_bytes_equal_reference`, skipped without `DVT_XLXD_REF_BIN`)
@@ -82,8 +82,10 @@ DVT_DVR_BIN_DIR=.cache/dvr-<tag> DVT_XLXD_BIN=scripts/dvr-import-wrap.sh DVT_SUT
   cases/test_xlxd_transcoder_lifecycle.py -q -k test_lost_listener_
 ```
 
-USRP file: `-k` does not reduce the scenarios. Until the fixture is fixed
-(proposal H1), keep a scratch plugin OUTSIDE the repository (here
+USRP file: SUPERSEDED by H1 (applied): `-k` now launches only the scenarios of the selected
+cases, so the scratch plugin below is no longer needed; it is kept as the record of how the
+results above were made. Before H1, `-k` did not reduce the scenarios and a scratch plugin
+OUTSIDE the repository (here
 `$SCRATCH/plug/onescen.py`) that drops the other scenarios after collection:
 
 ```
@@ -195,7 +197,26 @@ unavailable` and the backoff. Relevant for the tracker item on thread counts
 (THREADS1): the number to bring down is 435 per instance; on a 1024-task scope
 two instances already leave no headroom.
 
-## Proposed harness fixes (not applied)
+## Harness fixes
+
+Status: H1, H2 and H3 are APPLIED (commit COMMIT_HASH); H4 is not (needs the lead). Shared code
+`dvtest/netns_runs.py`, offline tests `cases/unit/test_netns_runs.py`, recipe and variable in
+`docs/rig.md` ("netns cases with a DV-Router build"). No expectation was changed. The text below
+is the original proposal, kept for the reasoning.
+
+- Applied as: H1 `cases` prefix per USRP scenario (`test_no_usrp_`, `test_legacy_ambed_`,
+  `test_extended_`, `test_one_output_`, `test_slow_open_`), the `runs` fixture of both files
+  launches only the scenarios of the selected tests of its own module; H2 `DVT_NETNS_PARALLEL`
+  (default 1) = scenarios per wave, `TIMEOUT` per wave; H3 `get()` of both files fails with
+  `environment: task limit exhausted (os error 11 / can't spawn worker thread in xlxd.log)`
+  when the scenario did not get as far as its first `AMBEDPING` (lifecycle: or the restarted
+  transcoder was not pinged, or the harness died) and `xlxd.log` shows the signature; a
+  `harness.err` with `can't start new thread` gets the matching text. The lifecycle `listener_run()`
+  goes through `get()`, so it is covered.
+- Cost: with the default 1 the whole USRP file takes 5 scenarios one after the other (about
+  5 x 30 s) and the lifecycle file 4 x about 55 s.
+
+### Original proposal
 
 - H1 (mechanical), `cases/test_xlxd_usrp_netns.py`: give each `SCENARIOS` entry
   a `cases` prefix list as `test_xlxd_transcoder_lifecycle.py` does (lines

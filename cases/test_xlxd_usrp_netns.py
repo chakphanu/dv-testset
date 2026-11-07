@@ -5,7 +5,10 @@ namespaces (unshare -rn, no root, no docker).
 Each scenario runs this file inside its own namespace: xlxd XLX999 on
 127.0.0.1 with the transcoder at 127.0.0.2, a FakeAmbed there, a DExtra
 talker on 127.0.0.3 and a USRP peer on 127.0.0.4. The recorded traffic is
-written as JSON and asserted here. Scenarios run in parallel.
+written as JSON and asserted here. Only the scenarios read by the selected
+cases are launched ("cases" prefix), DVT_NETNS_PARALLEL of them at a time
+(default 1: one DV-Router scenario peaks near 435 tasks, the scope allows
+1024; dvtest/netns_runs.py).
 
 Needs DVT_XLXD_BIN: an xlxd built in the foreground with config paths
 relative to its working directory (scripts/build-xlxd-netns.sh). Optional
@@ -28,18 +31,20 @@ USRP_LINE = "B %s 34001 %s 32001 N0CALL" % (XLXD_IP, USRP_IP)
 VOICE_FRAME = bytes(range(9))
 USRP_PCM = (b"\xe8\x03\x18\xfc") * 80          # +1000, -1000 S16LE
 
-# name: usrp config present, fake ambed mode / max outputs / STD delay, steps
+# name: usrp config present, fake ambed mode / max outputs / STD delay, steps,
+# "cases": name prefix of the cases that read the scenario (only scenarios of
+# selected cases are launched)
 SCENARIOS = {
     "no_usrp": dict(usrp=False, mode="extended", max_outputs=4, open_delay=0.05,
-                    steps=["dstarA"]),
+                    steps=["dstarA"], cases="test_no_usrp_"),
     "legacy_ambed": dict(usrp=True, mode="legacy", max_outputs=4, open_delay=0.05,
-                         steps=["dstarB", "usrpB"]),
+                         steps=["dstarB", "usrpB"], cases="test_legacy_ambed_"),
     "extended": dict(usrp=True, mode="extended", max_outputs=4, open_delay=0.05,
-                     steps=["dstarB", "usrpB", "badB"]),
+                     steps=["dstarB", "usrpB", "badB"], cases="test_extended_"),
     "one_output": dict(usrp=True, mode="extended", max_outputs=1, open_delay=0.05,
-                       steps=["dstarB", "dstarB"]),
+                       steps=["dstarB", "dstarB"], cases="test_one_output_"),
     "slow_open": dict(usrp=True, mode="extended", max_outputs=4, open_delay=1.0,
-                      steps=["usrpShortB"]),
+                      steps=["usrpShortB"], cases="test_slow_open_"),
 }
 TIMEOUT = 120
 
@@ -180,13 +185,20 @@ def _collect(launched):
         path = run_dir / "result.json"
         results[name] = json.loads(path.read_text()) if path.exists() else \
             {"error": (run_dir / "harness.err").read_text()[-2000:]}
+        results[name]["run_dir"] = str(run_dir)
     return results
 
 
 @pytest.fixture(scope="module")
-def runs(xlxd_bin, out_root):
-    launched = {name: _launch(xlxd_bin, name, spec, out_root) for name, spec in SCENARIOS.items()}
-    return _collect(launched)
+def runs(request, xlxd_bin, out_root):
+    """Result of every scenario a selected case reads, started in waves of
+    DVT_NETNS_PARALLEL (default 1)."""
+    from dvtest import netns_runs
+    selected = netns_runs.selected_names(request.session.items, request.module.__name__)
+    return netns_runs.run_in_waves(
+        netns_runs.scenarios_for(SCENARIOS, selected),
+        lambda name: _launch(xlxd_bin, name, SCENARIOS[name], out_root),
+        _collect, netns_runs.parallel())
 
 
 @pytest.fixture(scope="module")
@@ -195,8 +207,20 @@ def ref_run(xlxd_ref_bin, out_root):
     return _collect(launched)["ref_no_usrp"]
 
 
+def environment_check(run):
+    """Fail with the environment text, not a product-sounding one, when the
+    scenario's logs show an exhausted task limit (dvtest/netns_runs.py)."""
+    from dvtest import netns_runs
+    message = netns_runs.starvation_message(run)
+    if message:
+        pytest.fail(message, pytrace=False)
+
+
 def get(runs, name):
+    assert name in runs, "scenario %s was not launched" % name
     run = runs[name]
+    if "error" in run or not run.get("pinged"):
+        environment_check(run)
     assert "error" not in run, run.get("error")
     assert run["pinged"], "xlxd never sent AMBEDPING to the transcoder"
     return run
