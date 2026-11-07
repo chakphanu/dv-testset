@@ -54,8 +54,14 @@ IDLE_GAP_S = 2.0
 TEXT_OVER_S = 0.44
 TOKEN_RENDER_S = 2.0
 # controller limits per base callsign: status 1 per 10 s, position and object 1 per 30 s (burst 1); room text bucket
-# 1 per 5 s, burst 4; web account 1 per 5 s, burst 2. The pacer waits these plus a margin.
-MIN_GAP_S = {"status": 11.0, "position": 31.0, "text": 6.0}
+# 1 per 5 s, burst 4; web account 1 per 5 s, burst 2. The pacer waits these plus a margin of 1 s plus OFFER_DELAY_S.
+# OFFER_DELAY_S: the pacer stamps the CALL, but a D-STAR over reaches the controller only when its slow data text or
+# D-PRS line is complete (header settle 0.3 s plus up to 3 superframes of 0.42 s, about 1.6 s) while a datagram
+# (M17 packet, SMS) is offered at once. First DP15 rig run: 2c's D-PRS position was offered 1.6 s after its pacer
+# call and 2d's M17 APRS packet right after its own call 31 s later, so 29.4 s apart: `rate` (limit 30 s), no
+# position row. The margin must cover the longest over so the later offer is never earlier than the limit.
+OFFER_DELAY_S = 3.0
+MIN_GAP_S = {"status": 11.0 + OFFER_DELAY_S, "position": 31.0 + OFFER_DELAY_S, "text": 6.0}
 
 
 # ---------------------------------------------------------------- findings

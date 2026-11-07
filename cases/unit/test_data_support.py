@@ -37,6 +37,14 @@ def test_pacer_waits_per_base_callsign_and_kind():
     assert pacer.wait("N0TEST", "position") == 0.0
 
 
+def test_pacer_gaps_cover_the_controller_limits_plus_the_offer_delay_of_an_over():
+    """First DP15 rig run: the pacer stamps the call, an over is offered up to about 1.6 s later, a datagram at once:
+    the gaps must exceed the limits (status 10 s, position 30 s) by more than that."""
+    assert ds.MIN_GAP_S["status"] >= 10 + 1.6 + 1 and ds.MIN_GAP_S["position"] >= 30 + 1.6 + 1
+    # worst case: the first offer 1.6 s after its call, the second at once after its call
+    assert ds.MIN_GAP_S["position"] - 1.6 > 30.0 and ds.MIN_GAP_S["status"] - 1.6 > 10.0
+
+
 def test_timeline_first_and_render():
     tl = ds.Timeline()
     tl.add("a", 1, at=tl.t0 + 1.0)
