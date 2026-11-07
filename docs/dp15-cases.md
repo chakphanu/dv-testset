@@ -3,7 +3,8 @@
 
 Status of every case in this file: **written, not run on a rig.** Nothing here was executed against a DV-Router
 image: the cases were collected (`pytest --collect-only`), the byte builders have offline unit tests, and the two
-snippets were checked with `dvtest.tools.config_check` against `dv-router:wip-0348b98`. Expect first-run
+snippets were checked with `dvtest.tools.config_check` against `dv-router:wip-0348b98` (the worker cases `test_dp15_worker.py` and
+the RF cases `test_dp15_rf.py` have offline tests of their helpers and of the fake TNC). Expect first-run
 corrections. Specification and the other groups: [dp15-plan.md](dp15-plan.md). Source of the 15.5 wording:
 DV-Router `docs/design/data.md` lines 2442-2450.
 
@@ -105,10 +106,91 @@ records and does not judge. The lead says the D-STAR text over after the token i
 + idle gap otherwise"; the case asserts the safe upper bound and records the measured value. `no_worker` is asserted only for
 a down window of 1.5 s or more (the edges learn the token state with some delay; UNVERIFIED how long).
 
+### RF through AX.25 / KISS, tier A (group 6): `cases/test_dp15_rf.py`
+
+The tester plays the KISS TNCs: `dvtest/kiss_tnc.py` (`FakeKissTnc`) listens on TCP, the DV-Router AX.25 edge connects to it as a
+`kiss-tcp` CLIENT (`[[edges.ax25.port]] kind = "kiss-tcp"`, `host`, `port`), writes the five KISS parameter frames per channel
+after every connect (TXDELAY 30, P 63, SlotTime 10, TXtail 3, FullDuplex 0 in 10 ms units = the `kiss` defaults), reads the UI frames
+the TNC injects (what a modem hears, built with `dvtest/ax25.py`) and writes the frames it transmits. The fake TNC records the
+parameter frames per connection, the transmitted data frames with arrival times, and any other KISS command (the edge never
+writes SetHardware or Return). No audio, no Dire Wolf; tier B (a real Dire Wolf loop, units U6/U7) is NOT written.
+
+Snippets (`docs/rig.md`): `rig/config/dv-router/dp15-rf.toml` (the edge enabled, station callsign `N0TEST-1`, ports `rf-a`
+`<TESTER_IP>:8101` and `rf-b` `<TESTER_IP>:8102`, reconnect 1 to 5 s, the path `rf-in` from all ports to room B for text addressed to
+`XLX999B`) and `rig/config/dv-router/dp15-rf-out.toml` (the path `rf-out`, room B to `edge:ax25/rf-a`). The token
+`<DP15_TX_ENABLE>` (env `DVT_DP15_TX_ENABLE`, `true` or `false`, default `false`, any other value is exit 2) sets `tx_enable` and the
+`tx` switch of `rf-a` together. **Why the rf-out path is a second file:** DV-Router refuses `tx = true` without `tx_enable = true`
+and a path TO an RF port without effective TX on it (`data.path[N].to: RF TX refused: destination requires effective TX on every
+selected port`, checked with `dv-router:wip-0348b98`), so the room-to-RF row cannot sit in the same file as a token that can be
+`false`. The two run shapes:
+
+| Shape | Env / snippets | Cases that run |
+|-------|----------------|----------------|
+| RF-OFF (receive only) | `DVT_DP15_TX_ENABLE=false`, `dp15-rf.toml` | 6s, 6a, 6b `[tx_enable=false]`, 6e |
+| RF-ON | `DVT_DP15_TX_ENABLE=true`, `dp15-rf.toml` AND `dp15-rf-out.toml` | 6s, 6a, 6b `[port rf-b rx only]`, 6c, 6d, 6e |
+
+The cases read the RENDERED config of the run (`out/<run>/xlxd-config/xlxd-sut/dv-router.toml`) to learn the shape and skip with
+the reason in the other one, or when the run has no AX.25 edge. The fixture starts both TNCs and fails when the edge does not connect
+in 90 s. Notes: `out/<run>/dp15-rf.txt`.
+
+Run commands (two runs; profile `web` because the posters are web accounts; image, template and the fake transcoder as above):
+
+```
+XLXD_SUT_IMAGE=dv-router:wip-0348b98 DVT_SUT_PROFILE=dvrouter DVT_SUT_LAUNCH=native DVT_SUT_GEN=compat1 \
+DVT_SUT_CONFIG=<template> DVT_TRANSCODER_FAKE=1 DVT_DP15_TX_ENABLE=false \
+DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/data-ident.toml:rig/config/dv-router/dp15-rf.toml:\
+rig/config/dv-router/web.toml:rig/config/dv-router/admin.toml:rig/config/dv-router/totp-required.toml \
+scripts/run.sh -m rig --capture --profile web -- cases/test_dp15_rf.py
+
+XLXD_SUT_IMAGE=dv-router:wip-0348b98 DVT_SUT_PROFILE=dvrouter DVT_SUT_LAUNCH=native DVT_SUT_GEN=compat1 \
+DVT_SUT_CONFIG=<template> DVT_TRANSCODER_FAKE=1 DVT_DP15_TX_ENABLE=true \
+DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/data-ident.toml:rig/config/dv-router/dp15-rf.toml:rig/config/dv-router/dp15-rf-out.toml:\
+rig/config/dv-router/web.toml:rig/config/dv-router/admin.toml:rig/config/dv-router/totp-required.toml \
+scripts/run.sh -m rig --capture --profile web -- cases/test_dp15_rf.py
+```
+
+Config check (host side, throw-away container, `--network none`; `valid` for both): `DVT_DP15_TX_ENABLE=false python3 -m
+dvtest.tools.config_check --image dv-router:wip-0348b98 --template <template> --gen compat1 --extra rig/config/dv-router/data-ident.toml
+--extra rig/config/dv-router/dp15-rf.toml`, and the same with `DVT_DP15_TX_ENABLE=true` and `--extra rig/config/dv-router/dp15-rf-out.toml`
+added. `dp15-rf.toml` with `false` plus `dp15-rf-out.toml` is INVALID (the RF TX refusal above). The tool cannot check `web.toml` in any
+combination (it merges before the token substitution).
+
+Wall time estimate (UNVERIFIED): RF-OFF about 5 minutes (two 12 s baselines, 6e waits 31 s), RF-ON about 9 minutes (6c waits for
+the 30 s TX spacing twice, 6d watches 140 s).
+
+| Case | 15.5 wording (`data.md:2449`) | Steps | Assert | Record | Status |
+|------|-------------------------------|-------|--------|--------|--------|
+| DP15-6s | (data.md 10.4: KISS parameters written at connect and on reconnect) | each TNC reads its connection; then rf-a drops it | TXDELAY, P, SlotTime, TXtail, FullDuplex in this order with the `kiss` defaults on channel 0 on both ports; the edge reconnects within 30 s and writes them again; no other KISS command | the parameter lists | written, not run on a rig |
+| DP15-6a | "a message to the room name on RF reaches the room" | rf-a injects `N0TEST-7>APDVT1,WIDE1-1::XLX999B  :DVT nnnn{3`; D-STAR listener, M17 listener, public SSE, room history | exactly one M17 SMS within 1.0 s, one D-STAR text over within idle gap + 2.1 s, one SSE `text` event, one history row in room B; NO frame at either TNC for 8 s (no RF ack: the room name has 7 characters, `alias_calls` is empty); `dv_pkt_items_total{kind=text,result=accepted}` and `dv_edge_modem_total{port=rf-a,result=rx}` rise | latencies, the D-STAR text as displayed, the row's callsign and protocol | written, not run on a rig |
+| DP15-6b off | "room text goes out as a group message only when `tx_enable` ..." (negative half) | RF-OFF shape: a web user posts a text to module B | the room gets it (M17 SMS and D-STAR text over); 12 s with no data frame at either TNC and no KISS command but the parameters; `dv_edge_modem_total{result=tx}` unchanged | counts | written, not run on a rig |
+| DP15-6b port | the same for a port without `tx` | RF-ON shape: one text; rf-a transmits, rf-b is receive only | a frame at rf-a (the control) and none at rf-b | counts | written, not run on a rig |
+| DP15-6c | "room text goes out as a group message only when `tx_enable` and the budget allow" | RF-ON shape: a web text; then, 31 s later, a 100 character text | exactly ONE data frame at rf-a: UI frame from `N0TEST-1` to `APZDVR`, no digipeaters, information field `:XLX999B  :<text>`, no `{id`, text <= 67 characters and containing the posted body; none at rf-b; `dv_edge_modem_total{port=rf-a,result=tx}` rises; the 100 character text: cut to <= 67 characters or refused (recorded which) | frame, scheduler counters | written, not run on a rig |
+| DP15-6d | "never above the duty cycle" | RF-ON shape: six texts from three accounts in about 8 s, 140 s of watching | at most `tx_per_min + tx_burst` (3) frames in any rolling minute; consecutive frames >= the budget's min gap (1 s); DV-Router's airtime upper bound (`dvtest.airtime.afsk_airtime_ns`) of the frames in any budget window within duty x window (5 % x 600 s); none at rf-b | frame times, drop counters | written, not run on a rig. Only the class defaults are exposed (`tx_budget = {}`); a low budget would starve 6c in the same run, so a low-budget run is NOT written |
+| DP15-6e | "a frame heard on two ports is one item" | the same message heard on rf-a and 0.4 s later on rf-b (other via list); 31 s later a different message on rf-b | one M17 SMS, one D-STAR text over, one SSE event and one history row for the first; `dv_pkt_rf_heard_ports_total` and `dv_pkt_rf_duplicates_total` rise (when the families exist); the different message is a second item; no frame transmitted at either TNC | counters | written, not run on a rig |
+
+Assumptions about the AX.25 edge that could not be verified without a rig (all from the DV-Router sources, none executed):
+
+* The edge connects to a TNC that is listening only after it started; the fixture relies on the snippet's `reconnect = 1..5 s` (the
+  default 2..60 s would make the first connection slow, never wrong).
+* TX is fenced until the PTT token snapshot completes; the lead's answer 10 says an empty snapshot (no PTT publisher in the rig) completes
+  within its 2 s probe and allows TX. If the first frame never arrives, 6c fails with "exactly 1 frame, got 0" and the fence is the suspect.
+* The group message is `:XLX999B  :<text>` with NO sender prefix (the worker test `rf_group_uses_configured_name...` shows
+  `:XLX999-1 :Hello` for the body `Hello`); 6c asserts only that the body is contained.
+* The M17 SMS and the D-STAR text over of an RF message show a source display callsign (`N0TEST-7` or `N0TEST`): the cases match on the
+  body only. Bodies are at most 8 characters so `N0TEST-7: ` plus the body fits the 20 character D-STAR display.
+* An RF-heard message to the room is accepted although `require_ident = true`: gateway origins (AX.25, APRS-IS) are exempt (data.md 2.3, 3.1 step 4b).
+* Counter names and labels (`dv_edge_modem_total{port,result}`, `dv_edge_rf_tx_total{result}`, `dv_pkt_rf_heard_ports_total`,
+  `dv_pkt_rf_duplicates_total`) are from data.md 13.1; a missing family is recorded, an existing one asserted.
+* `tx_per_min` is a token bucket (rate `tx_per_min` per minute, burst `tx_burst`); 6d bounds the count by `tx_per_min + tx_burst` in a rolling minute, which holds for
+  that reading and for a plain per-minute counter.
+* The tester can accept TCP connections from the SUT on 8101 and 8102 on the rig network (nothing blocks them: the network is internal and the
+  tester publishes nothing); not tried.
+
 ### Not written, and why
 
 | Case | Reason |
 |------|--------|
+| DP15-6 tier B | the real Dire Wolf loop (units U6, U7): not written; tier A above runs the same obligations with a fake TNC. Also not written: a low `tx_budget` run for 6d, an RF ack with `alias_calls` (the room name `XLX999B` cannot be an AX.25 source; answer 8) |
 | DP15-5a, 5b | need a private aprsc image and rig service (units U4, U5) |
 | DP15-7b, 7c (receiving side), 7d | need a second DV-Router node as XLX peer (U8; the lead confirms a plain `[[edges.xlx.peer]]` row works and the text over needs no transcoder, answer 11) |
 | 7a parts | `xlx_text_overs = false` (live config edit), preemption of a text over by peer voice, and "the sending node's own XLX listener does not get its own text over back" are not written |
@@ -117,8 +199,8 @@ a down window of 1.5 s or more (the edges learn the token state with some delay;
 
 Only the room row `dp15-b-to-c` (room B to room C, class 0 text, 10 per minute) is in it. The launcher refuses a
 `[[data.path]]` whose endpoint is not enabled, also with `enable = false`: `data.path[0]: APRS-IS endpoint is not
-enabled` (config check, `dv-router:wip-0348b98`). So the gateway rows of the plan (`aprsis-down`, `rf-in`, `rf-out`)
-move into the snippets that enable their edge (units U2, U5). No case depends on the room path; 2b records whether
+enabled` (config check, `dv-router:wip-0348b98`). So the gateway rows of the plan move into the snippets that enable their
+edge: `rf-in` into `dp15-rf.toml` and `rf-out` into `dp15-rf-out.toml` (RF tier A, above), `aprsis-down` into the APRS-IS snippet (unit U5). No case depends on the room path; 2b records whether
 room C received the forwarded copy.
 
 ## Byte layouts and how they were established

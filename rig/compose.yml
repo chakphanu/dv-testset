@@ -434,6 +434,8 @@ services:
       DVT_SUT_LAUNCH: ${DVT_SUT_LAUNCH:-direct}
       # [data] require_ident of the native config (rig/config/dv-router/data-ident.toml); cases/test_data_ident.py
       DVT_REQUIRE_IDENT: ${DVT_REQUIRE_IDENT:-true}
+      # <DP15_TX_ENABLE> of rig/config/dv-router/dp15-rf.toml (RF transmit of the AX.25 edge); notes of cases/test_dp15_rf.py
+      DVT_DP15_TX_ENABLE: ${DVT_DP15_TX_ENABLE:-false}
       DVT_XLXD_SUT: ${DVT_NET:-172.30.0}.11
       DVT_AMBED_REF: ${DVT_NET:-172.30.0}.20
       DVT_AMBED_SUT: ${DVT_NET:-172.30.0}.21
