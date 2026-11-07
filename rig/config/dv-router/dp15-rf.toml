@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/rig.md, docs/dp15-cases.md): the AX.25 edge with two KISS TCP
+# ports for the DP15 RF cases of tier A (cases/test_dp15_rf.py). The tester plays the TNCs: the AX.25 edge is the
+# kiss-tcp CLIENT, it connects to <TESTER_IP>:8101 (port rf-a) and <TESTER_IP>:8102 (port rf-b), and after every
+# connect writes the five KISS parameter frames per channel (TXDELAY, P, SlotTime, TXtail, FullDuplex). Use it AFTER
+# data-ident.toml (the data worker must be on).
+#
+# Both ports are heard by the path rf-in (all ports of the edge -> room B, text addressed to XLX999B); the port is
+# in the envelope of every raw unit, so a frame heard on both is one item with heard_ports counted (DP15-6e).
+# reconnect = 1..5 s: the edge starts before the tester listens, so it must retry quickly.
+#
+# <DP15_TX_ENABLE> (env DVT_DP15_TX_ENABLE, true or false, default false) is the master switch tx_enable AND the
+# tx switch of port rf-a: DV-Router refuses `tx = true` without `tx_enable = true` and refuses a path TO an RF port
+# unless both are true ("RF TX refused: destination requires effective TX on every selected port"). Therefore:
+#   DVT_DP15_TX_ENABLE=false (default)  this snippet alone: receive only, no path to RF (DP15-6b off half)
+#   DVT_DP15_TX_ENABLE=true             this snippet AND dp15-rf-out.toml (the path room B -> rf-a); the launcher
+#                                       refuses dp15-rf-out.toml with the token false
+# The launcher also refuses a [[data.path]] to an edge that is not enabled, so the RF rows cannot sit in
+# dp15-paths.toml: they live with the edge enable.
+#
+# Callsign N0TEST-1 is the station callsign of every frame this node would transmit (a synthetic callsign; the base
+# has 6 characters with a digit, as the AX.25 validation wants). The room name XLX999B has 7 characters and cannot be
+# an AX.25 address, so no RF ack exists for it (data.md 9.4): alias_calls stays empty.
+[edges.ax25]
+enable = true
+callsign = "N0TEST-1"
+tx_enable = <DP15_TX_ENABLE>
+alias_calls = []
+
+[[edges.ax25.port]]
+name = "rf-a"
+kind = "kiss-tcp"
+host = "<TESTER_IP>"
+port = 8101
+channel = 0
+tx = <DP15_TX_ENABLE>
+physical = "radio1"
+band = "2m"
+class = "afsk1200-shared"
+tx_budget = {}
+tx_per_min = 2
+tx_burst = 1
+reconnect = { min_secs = 1, max_secs = 5 }
+
+[[edges.ax25.port]]
+name = "rf-b"
+kind = "kiss-tcp"
+host = "<TESTER_IP>"
+port = 8102
+channel = 0
+tx = false
+reconnect = { min_secs = 1, max_secs = 5 }
+
+[[data.path]]
+name = "rf-in"
+from = "edge:ax25"
+to = "room:B"
+types = ["text"]
+addressee = "XLX999B"
+per_min = 30

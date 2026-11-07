@@ -286,6 +286,7 @@ into `out/<run>/xlxd-config/xlxd-sut/dv-router.toml` and mounts it read-only at
 | `<TESTER_IP>` | `<net>.30`, the tester (plays the peers) |
 | `<NET>` | the /24 prefix, e.g. `172.30.0` (rig peers are `<NET>.12` XLX, `<NET>.51` NXDN, `<NET>.61` P25) |
 | `<REQUIRE_IDENT>` | `true` or `false`: `DVT_REQUIRE_IDENT`, default `true` (any other value is exit 2) |
+| `<DP15_TX_ENABLE>` | `true` or `false`: `DVT_DP15_TX_ENABLE`, default `false` (any other value is exit 2); only `dp15-rf.toml` uses it (the AX.25 edge's `tx_enable` and the TX port's `tx`) |
 
 Any other `<UPPER_CASE>` token left over is an error (exit 2, before anything
 starts). Everything else stays as in the other modes: the `/xlxd` file mounts
@@ -345,6 +346,8 @@ another launch mode the variable draws a warning. Snippets in
 |------|------|
 | `data-ident.toml` | `[data] enable = true`, `require_ident = <REQUIRE_IDENT>`, `xlx_text_overs = true`: the data worker on, with the identity policy of the run |
 | `dp15-paths.toml` | `[[data.path]]` `dp15-b-to-c` (class 0 text of room B forwarded to room C); name it after `data-ident.toml`. Only rows valid on the plain template: the launcher refuses a path to an edge that is not enabled (`docs/dp15-cases.md`) |
+| `dp15-rf.toml` | the AX.25 edge for the DP15 RF cases of tier A (`cases/test_dp15_rf.py`, `docs/dp15-cases.md`): `[edges.ax25]` enabled, station callsign `N0TEST-1`, `tx_enable = <DP15_TX_ENABLE>`, two `kiss-tcp` ports to the tester (`rf-a` `<TESTER_IP>:8101` with `tx = <DP15_TX_ENABLE>`, `rf-b` `<TESTER_IP>:8102` receive only; the edge is the CLIENT, the tester plays the TNCs, reconnect 1 to 5 s) and the path `rf-in` (all ports to room B, text to `XLX999B`). Name it after `data-ident.toml` |
+| `dp15-rf-out.toml` | the path `rf-out` (room B to `edge:ax25/rf-a`, text, addressee `XLX999B`, `min_ident = "session"`). ONLY with `dp15-rf.toml` and `DVT_DP15_TX_ENABLE=true`: the launcher refuses a path to an RF port without effective TX |
 | `xlx-peer.toml` | `[[edges.xlx.peer]]` XLX998 at `<NET>.12` on modules `DE` |
 | `xlx-peer-host.toml` | the same peer named by HOST NAME (`xlxd-peer-sut`, resolved by the rig network DNS), for SANSIO4; `xlx-peer-host-bad.toml` adds a second row `no-such-peer.example.invalid` that never resolves (must stay pending, no start-up failure). Use one of the three XLX peer snippets, never two |
 | `xlx-peer2.toml` / `xlx-peer2-host.toml` | the second XLX peer XLX997 (`xlxd-peer2-sut`, `<NET>.14`) by IP / by host name, for `test_interlink_no_xlx_transit` (it needs two XLX peers); add next to `xlx-peer.toml` / `xlx-peer-host*.toml` |

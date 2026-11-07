@@ -144,7 +144,8 @@
 # /xlxd/dmrid.dat and nxdn.csv; the env pins win over the file).
 # DVT_SUT_CONFIG_EXTRA=<file>[:<file>...] appends repo-owned snippets (rig/config/dv-router/)
 # after the rendered template, with the same tokens plus <REQUIRE_IDENT> (env
-# DVT_REQUIRE_IDENT, true or false, default true) and <WEB_PROXY_IP> (<net>.90);
+# DVT_REQUIRE_IDENT, true or false, default true), <DP15_TX_ENABLE> (env
+# DVT_DP15_TX_ENABLE, true or false, default false) and <WEB_PROXY_IP> (<net>.90);
 # a plain [table] the template already has is merged key by key; docs/rig.md.
 # The launcher reads no other xlxd.* file: DVT_NXDN, DVT_P25, DVT_INTERLINK and
 # DVT_XLXD_BLACKLIST only draw a warning (DVT_SUT_USRP=on, set by --profile allstar and load, adds the
@@ -328,6 +329,12 @@ case "${DVT_REQUIRE_IDENT:-true}" in
   true|false) ;;
   *) echo "run.sh: DVT_REQUIRE_IDENT must be true or false" >&2; exit 2 ;;
 esac
+# DVT_DP15_TX_ENABLE (true | false, default false): value of the <DP15_TX_ENABLE> token of the native config
+# (rig/config/dv-router/dp15-rf.toml: [edges.ax25] tx_enable and the TX port's tx; true needs dp15-rf-out.toml too)
+case "${DVT_DP15_TX_ENABLE:-false}" in
+  true|false) ;;
+  *) echo "run.sh: DVT_DP15_TX_ENABLE must be true or false" >&2; exit 2 ;;
+esac
 # --profile web: dv-svc-web is DV-Router's, so the launch is native and the snippet
 # rig/config/dv-router/web.toml is part of the config (added unless already listed)
 has_web=0
@@ -395,7 +402,7 @@ if [ "${DVT_SUT_LAUNCH:-direct}" = native ] && [ "$usrp_val" = on ]; then
 fi
 # DVT_SUT_CONFIG_EXTRA=<file>[:<file>...]: repo-owned snippets (rig/config/dv-router/)
 # appended after the rendered template, token substituted like the template
-cfg_opts=(--require-ident "${DVT_REQUIRE_IDENT:-true}")
+cfg_opts=(--require-ident "${DVT_REQUIRE_IDENT:-true}" --dp15-tx-enable "${DVT_DP15_TX_ENABLE:-false}")
 if [ -n "${DVT_SUT_CONFIG_EXTRA:-}" ]; then
   IFS=: read -r -a cfg_extra_files <<< "$DVT_SUT_CONFIG_EXTRA"
   for f in "${cfg_extra_files[@]}"; do

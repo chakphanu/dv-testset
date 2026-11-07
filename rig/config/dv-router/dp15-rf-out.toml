@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/dp15-cases.md): the path room B -> RF port rf-a of the DP15
+# RF cases (6c, 6d). ONLY together with dp15-rf.toml and DVT_DP15_TX_ENABLE=true: DV-Router refuses a path to an RF
+# port that has no effective TX (tx_enable and the port's tx). Room text of module B goes out as a group message
+# `:XLX999B  :<text>` (9 character addressee, no message id, no ack) from N0TEST-1 to APZDVR.
+#
+# min_ident = "session": a text needs a logged-in web account or a granted session (web users with may_tx).
+# per_min = 30 only widens the path bucket; the port's tx_per_min (2) and the TX scheduler stay the limits.
+[[data.path]]
+name = "rf-out"
+from = "room:B"
+to = "edge:ax25/rf-a"
+types = ["text"]
+addressee = "XLX999B"
+min_ident = "session"
+per_min = 30

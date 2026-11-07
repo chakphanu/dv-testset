@@ -621,3 +621,80 @@ def test_run_sh_writes_no_mmdvm_env_name_from_c2465de_on():
     for gen in sut_config.GENS:
         assert (gen in dmrhb) == (sut_config.env_prefix("mmdvm", gen) == "DV_DMRHB_"), gen
     assert "DV_MMDVM_" not in text.replace("DV_MMDVM_* became", "")
+
+
+# ---- DP15 RF snippets and the <DP15_TX_ENABLE> token
+
+RF_DIR = ROOT / "rig" / "config" / "dv-router"
+RF_BASE = '[node]\ncallsign = "XLX999"\nrooms = "A-Z"\n'
+
+
+def test_dp15_tx_enable_token_default_and_values(monkeypatch):
+    monkeypatch.delenv("DVT_DP15_TX_ENABLE", raising=False)
+    assert "DP15_TX_ENABLE" in sut_config.KNOWN
+    assert sut_config.render("t = <DP15_TX_ENABLE>\n", "172.30.0") == "t = false\n"          # RF transmit is off by default
+    assert sut_config.render("t = <DP15_TX_ENABLE>\n", "172.30.0", dp15_tx_enable="true") == "t = true\n"
+    monkeypatch.setenv("DVT_DP15_TX_ENABLE", "true")
+    assert sut_config.render("t = <DP15_TX_ENABLE>\n", "172.30.0") == "t = true\n"
+    assert sut_config.render("t = <DP15_TX_ENABLE>\n", "172.30.0", dp15_tx_enable="false") == "t = false\n"
+    monkeypatch.setenv("DVT_DP15_TX_ENABLE", "")
+    assert sut_config.render("t = <DP15_TX_ENABLE>\n", "172.30.0") == "t = false\n"
+
+
+@pytest.mark.parametrize("value", ["maybe", "TRUE", "1", "yes", " true"])
+def test_bad_dp15_tx_enable(value):
+    with pytest.raises(sut_config.ConfigError):
+        sut_config.render("x\n", "172.30.0", dp15_tx_enable=value)
+
+
+def test_other_renderings_do_not_change_with_the_dp15_token(monkeypatch):
+    """A text without the token renders the same whatever the token says (no existing rendering moves)."""
+    monkeypatch.delenv("DVT_DP15_TX_ENABLE", raising=False)
+    base = sut_config.render(TEMPLATE, "172.30.0", require_ident="false", extras=[EXTRA_DATA, EXTRA_PEER])
+    assert sut_config.render(TEMPLATE, "172.30.0", require_ident="false", extras=[EXTRA_DATA, EXTRA_PEER], dp15_tx_enable="true") == base
+    monkeypatch.setenv("DVT_DP15_TX_ENABLE", "true")
+    assert sut_config.render(TEMPLATE, "172.30.0", require_ident="false", extras=[EXTRA_DATA, EXTRA_PEER]) == base
+
+
+@pytest.mark.parametrize("value", ["false", "true"])
+def test_dp15_rf_snippet_renders_the_two_kiss_client_ports(value):
+    doc = tomllib.loads(sut_config.render(RF_BASE, "172.30.0", dp15_tx_enable=value, extras=[(RF_DIR / "dp15-rf.toml").read_text()]))
+    on = value == "true"
+    ax25 = doc["edges"]["ax25"]
+    assert ax25["enable"] is True and ax25["tx_enable"] is on and ax25["callsign"] == "N0TEST-1" and ax25["alias_calls"] == []
+    a, b = ax25["port"]
+    assert (a["name"], a["kind"], a["host"], a["port"], a["tx"]) == ("rf-a", "kiss-tcp", "172.30.0.30", 8101, on)
+    assert (b["name"], b["kind"], b["host"], b["port"], b["tx"]) == ("rf-b", "kiss-tcp", "172.30.0.30", 8102, False)
+    assert a["tx_budget"] == {} and a["physical"] == "radio1" and a["channel"] == 0 and b["channel"] == 0
+    assert a["reconnect"] == b["reconnect"] == {"min_secs": 1, "max_secs": 5}
+    (path,) = doc["data"]["path"]
+    assert path == {"name": "rf-in", "from": "edge:ax25", "to": "room:B", "types": ["text"], "addressee": "XLX999B", "per_min": 30}
+
+
+def test_dp15_rf_out_snippet_is_a_room_to_rf_group_path():
+    doc = tomllib.loads(sut_config.render(RF_BASE, "172.30.0", dp15_tx_enable="true",
+                                          extras=[(RF_DIR / "dp15-rf.toml").read_text(), (RF_DIR / "dp15-rf-out.toml").read_text()]))
+    rows = {p["name"]: p for p in doc["data"]["path"]}
+    assert set(rows) == {"rf-in", "rf-out"}
+    assert rows["rf-out"]["from"] == "room:B" and rows["rf-out"]["to"] == "edge:ax25/rf-a"
+    assert rows["rf-out"]["types"] == ["text"] and rows["rf-out"]["addressee"] == "XLX999B" and rows["rf-out"]["min_ident"] == "session"
+    text = (RF_DIR / "dp15-rf.toml").read_text() + (RF_DIR / "dp15-rf-out.toml").read_text()
+    assert not re.search(r"[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}", text)           # no literal address, only <TESTER_IP>
+    assert "dp15-rf.toml" in (ROOT / "docs" / "rig.md").read_text() and "dp15-rf-out.toml" in (ROOT / "docs" / "rig.md").read_text()
+
+
+def test_cli_dp15_tx_enable(tmp_path):
+    src = tmp_path / "t.toml"
+    src.write_text("t = <DP15_TX_ENABLE>\n")
+    run = cli(str(src), str(tmp_path / "o.toml"), "--net", "172.30.0", "--dp15-tx-enable", "true")
+    assert run.returncode == 0, run.stderr
+    assert (tmp_path / "o.toml").read_text() == "t = true\n"
+    run = cli(str(src), "-", "--net", "172.30.0", "--dp15-tx-enable", "maybe")
+    assert run.returncode == 2 and "tx_enable" in run.stderr
+
+
+def test_run_sh_rejects_a_bad_dp15_tx_enable(tmp_path):
+    cfg = tmp_path / "t.toml"
+    cfg.write_text(TEMPLATE)
+    run = run_sh(tmp_path, XLXD_SUT_IMAGE="img:x", DVT_SUT_CONFIG=str(cfg), DVT_DP15_TX_ENABLE="maybe")
+    assert run.returncode == 2 and "DVT_DP15_TX_ENABLE must be true or false" in run.stderr

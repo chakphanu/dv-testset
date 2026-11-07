@@ -15,6 +15,8 @@ Plain text replacement of these tokens (a token is <UPPER_CASE_NAME>):
   <NET>             the /24 prefix, e.g. 172.30.0
   <REQUIRE_IDENT>   true or false: the value of --require-ident, else the env
                     DVT_REQUIRE_IDENT, else true (rig/config/dv-router/data-ident.toml)
+  <DP15_TX_ENABLE>  true or false: the value of --dp15-tx-enable, else the env DVT_DP15_TX_ENABLE, else
+                    false (rig/config/dv-router/dp15-rf.toml: [edges.ax25] tx_enable and the port tx)
   <WEB_PROXY_IP>    the TLS proxy in front of dv-svc-web, <net>.<web_proxy> (rig: .90,
                     profile web; rig/config/dv-router/web.toml)
   <BROWSER_IP>      the browser service, <net>.<browser> (rig: .91, profile browser;
@@ -48,7 +50,7 @@ import tomllib
 from pathlib import Path
 
 TOKEN = re.compile(r"<([A-Z][A-Z0-9_]*)>")
-KNOWN = ("OWN_IP", "TRANSCODER_IP", "TESTER_IP", "NET", "REQUIRE_IDENT", "WEB_PROXY_IP", "BROWSER_IP", "COTURN_IP")
+KNOWN = ("OWN_IP", "TRANSCODER_IP", "TESTER_IP", "NET", "REQUIRE_IDENT", "DP15_TX_ENABLE", "WEB_PROXY_IP", "BROWSER_IP", "COTURN_IP")
 BOOLS = ("true", "false")
 _OCTET = r"(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])"
 _NET = re.compile(r"^%s\.%s\.%s$" % (_OCTET, _OCTET, _OCTET))
@@ -74,6 +76,16 @@ def require_ident_value(value=None):
         value = os.environ.get("DVT_REQUIRE_IDENT") or "true"
     if value not in BOOLS:
         raise ConfigError("require_ident must be true or false (got %r)" % (value,))
+    return value
+
+
+def dp15_tx_enable_value(value=None):
+    """"true" or "false" from `value`, else env DVT_DP15_TX_ENABLE, else "false" (RF transmit stays off unless a run asks
+    for it); ConfigError for anything else."""
+    if value is None:
+        value = os.environ.get("DVT_DP15_TX_ENABLE") or "false"
+    if value not in BOOLS:
+        raise ConfigError("dp15 tx_enable must be true or false (got %r)" % (value,))
     return value
 
 
@@ -276,14 +288,15 @@ def merge_extra(base, extra):
 
 
 def render(text, net, own=11, transcoder=21, tester=30, require_ident=None, extras=(), web_proxy=90, browser=91, coturn=94,
-           gen=None):
+           gen=None, dp15_tx_enable=None):
     """The template text with the tokens replaced; `extras` are texts appended
     after it (each after a newline, in order) before the substitution.
     ConfigError for a bad /24 prefix, a host octet outside 1..254, a bad
     require_ident, an unknown generation (`gen`, else env DVT_SUT_GEN) or an unknown token."""
     if not _NET.match(net):
         raise ConfigError("net must be a /24 prefix like 172.30.0 (got %r)" % net)
-    values = {"NET": net, "REQUIRE_IDENT": require_ident_value(require_ident)}
+    values = {"NET": net, "REQUIRE_IDENT": require_ident_value(require_ident),
+              "DP15_TX_ENABLE": dp15_tx_enable_value(dp15_tx_enable)}
     gen = gen_value(gen)
     text = adapt_text(text, gen)
     for extra in extras:
@@ -309,13 +322,13 @@ def _read(path, what):
 
 
 def render_file(template, output, net, own=11, transcoder=21, tester=30, require_ident=None, extras=(),
-                web_proxy=90, gen=None):
+                web_proxy=90, gen=None, dp15_tx_enable=None):
     """Read TEMPLATE (and the files of `extras`), write OUTPUT (mode 0644; the
     container reads it as any user). Returns the output path; ConfigError when
     a file is missing, unreadable, not UTF-8 or the text has an unknown token."""
     text = _read(template, "template")
     texts = [_read(path, "extra") for path in extras]
-    rendered = render(text, net, own, transcoder, tester, require_ident, texts, web_proxy, gen=gen)
+    rendered = render(text, net, own, transcoder, tester, require_ident, texts, web_proxy, gen=gen, dp15_tx_enable=dp15_tx_enable)
     out = Path(output)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(rendered, encoding="utf-8")
@@ -363,6 +376,7 @@ def main(argv=None):
     ap.add_argument("--tester", type=int, default=30)
     ap.add_argument("--web-proxy", type=int, default=90)
     ap.add_argument("--require-ident", default=None, help="true or false (default: env DVT_REQUIRE_IDENT, else true)")
+    ap.add_argument("--dp15-tx-enable", default=None, help="true or false (default: env DVT_DP15_TX_ENABLE, else false)")
     ap.add_argument("--extra", action="append", default=[], metavar="FILE",
                     help="appended after the template, token substituted (repeatable)")
     args = ap.parse_args(argv)
@@ -370,10 +384,10 @@ def main(argv=None):
         if args.output == "-":
             text = _read(args.template, "template")
             render(text, args.net, args.own, args.transcoder, args.tester, args.require_ident,
-                   [_read(path, "extra") for path in args.extra], args.web_proxy)
+                   [_read(path, "extra") for path in args.extra], args.web_proxy, dp15_tx_enable=args.dp15_tx_enable)
         else:
             render_file(args.template, args.output, args.net, args.own, args.transcoder, args.tester,
-                        args.require_ident, args.extra, args.web_proxy)
+                        args.require_ident, args.extra, args.web_proxy, dp15_tx_enable=args.dp15_tx_enable)
     except (ConfigError, OSError, UnicodeDecodeError) as exc:
         print("sut_config: %s" % exc, file=sys.stderr)
         return 2
