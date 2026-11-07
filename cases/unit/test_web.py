@@ -3,6 +3,7 @@
 client's account flow against a small fake web service over TLS."""
 import json
 import shutil
+import time
 import threading
 import http.server
 
@@ -155,6 +156,16 @@ class Fake(http.server.BaseHTTPRequestHandler):
         return json.loads(self.rfile.read(n) or b"{}")
 
     def do_GET(self):
+        if self.path.startswith("/api/v1/public/events?hang"):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            frame = b"event: hello\ndata: {}\n\n"
+            self.wfile.write(b"%x\r\n" % len(frame) + frame + b"\r\n")
+            self.wfile.flush()
+            time.sleep(6)
+            return
         if self.path.startswith("/api/v1/public/events"):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -344,3 +355,18 @@ def test_room_messages_and_post():
 def test_sse_data_parses_object_or_none():
     assert web.sse_data({"event": "data", "data": '{"item_type": "status"}'}) == {"item_type": "status"}
     assert web.sse_data({"data": "not json"}) is None and web.sse_data({}) is None and web.sse_data({"data": "[1]"}) is None
+
+
+def test_sse_stop_event_ends_a_quiet_stream(fake):
+    url, ca = fake
+    c = web.WebClient(url, ca, pacer=fast_pacer())
+    stop = threading.Event()
+    got = []
+
+    def on_frame(frame):
+        got.append(frame)
+        stop.set()
+
+    t0 = time.monotonic()
+    status, _ctype, frames = c.sse("/api/v1/public/events?hang", max_events=100, timeout=30.0, on_frame=on_frame, stop=stop)
+    assert status == 200 and [f["event"] for f in frames] == ["hello"] and time.monotonic() - t0 < 3.0

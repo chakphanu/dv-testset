@@ -326,14 +326,16 @@ class WebClient:
     def post(self, path, json_body=None, **kw):
         return self.request("POST", path, json_body=json_body if json_body is not None else {}, **kw)
 
-    def sse(self, path, max_events=1, timeout=15.0, until=None, on_frame=None):
+    def sse(self, path, max_events=1, timeout=15.0, until=None, on_frame=None, stop=None):
         """Open an SSE stream and read frames until `max_events` frames, a frame
         whose event name is `until`, the stream's end, or `timeout` seconds in all
         (comment lines and heartbeats do not extend it). Returns
         (status, content_type, frames), frames being {"event", "id", "data",
         "retry"} dicts of the fields present (data joined with newlines). The
         connection is closed afterwards. `on_frame(frame)`, when given, is called as each frame completes (arrival
-        time stamps of a long stream); an exception of the callback is swallowed."""
+        time stamps of a long stream); an exception of the callback is swallowed. `stop`, a threading.Event, ends
+        the read (within about 0.5 s) when it is set, so a watcher thread can give its connection back (the server
+        allows 4 public streams per client address)."""
         self.pacer.wait("public" if path.startswith("/api/v1/public/") else "session")
         conn = http.client.HTTPSConnection(self.host, self.port, timeout=timeout, context=self._ctx)
         frames = []
@@ -348,12 +350,14 @@ class WebClient:
             cur = {}
             while len(frames) < max_events:
                 left = deadline - time.monotonic()
-                if left <= 0:
+                if left <= 0 or (stop is not None and stop.is_set()):
                     break
-                conn.sock.settimeout(left)
+                conn.sock.settimeout(left if stop is None else min(left, 0.5))
                 try:
                     line = resp.readline(65536)
                 except TimeoutError:
+                    if stop is not None and not stop.is_set():
+                        continue
                     break
                 if not line:
                     break

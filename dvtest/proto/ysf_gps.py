@@ -32,8 +32,8 @@ Position bytes (every byte of 5..10 has 0x30 or 0x50 in its high nibble):
 Sources READ for this layout (facts only, no code taken): the DV-Router parser
 crates/lib/pkt/src/ysf.rs:25-123 (record checks, position decode) and the pinned
 YSFClients GPS.cpp (.cache/ysf-research/src/YSFClients/YSFGateway/GPS.cpp:30-31
-magic bytes, :48-117 frame and end marker handling, :150-244 position decode,
-:248-282 radio names). VERIFIED against both; docs/dp15-cases.md lists the lines.
+magic bytes, :99-117 V/D mode 2 frames and end marker, :142-246 transmitGPS position decode,
+:249-282 radio names). VERIFIED against both; docs/dp15-cases.md lists the lines.
 """
 from . import ysf
 

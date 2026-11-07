@@ -65,7 +65,7 @@ def test_sms_packet_and_nonce():
 
 def test_sse_watch_collects_data_events():
     class Client:
-        def sse(self, path, max_events, timeout, on_frame):
+        def sse(self, path, max_events, timeout, on_frame, stop):
             on_frame({"event": "hello", "data": "{}"})
             on_frame({"event": "data", "data": json.dumps({"item_type": "status", "callsign": "N0TEST"})})
             return 200, "text/event-stream", []

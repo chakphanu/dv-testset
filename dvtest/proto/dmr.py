@@ -459,7 +459,7 @@ class DmrClient:
 # ---------------------------------------------------------------- DMRG / DMRA (Homebrew side channels)
 # What a repeater sends beside the voice bursts of the stream of a radio id: GPS ("DMRG", 14 B) and talker
 # alias ("DMRA", 15 B). Layout READ from MMDVMHost DMRNetwork.cpp:259-297 (writeRadioPosition,
-# writeTalkerAlias), DMRSlot.cpp:2061-2088 (position fields), DMRTA.cpp:34-136 (alias formats) of the
+# writeTalkerAlias), DMRSlot.cpp:2059-2090 (logGPSPosition: position fields), DMRTA.cpp:34-130 (alias formats) of the
 # pinned checkout (.cache/dstarsd-mmdvm) and from the DV-Router parser crates/lib/pkt/src/dmr.rs:26-141;
 # VERIFIED against both. docs/dp15-cases.md lists the lines.
 #

@@ -348,6 +348,7 @@ class SseWatch:
         self.client, self.path, self.seconds = client, path, seconds
         self.frames = []
         self.lock = threading.Lock()
+        self.stop = threading.Event()
         self.error = None
         self.thread = threading.Thread(target=self._run, daemon=True)
 
@@ -357,7 +358,7 @@ class SseWatch:
 
     def _run(self):
         try:
-            self.client.sse(self.path, max_events=1 << 30, timeout=self.seconds, on_frame=self._on_frame)
+            self.client.sse(self.path, max_events=1 << 30, timeout=self.seconds, on_frame=self._on_frame, stop=self.stop)
         except Exception as exc:  # noqa: BLE001 - reported through .error
             self.error = exc
 
@@ -366,7 +367,8 @@ class SseWatch:
         return self
 
     def __exit__(self, *exc):
-        self.seconds = 0              # the reader ends at its timeout; the thread is a daemon
+        self.stop.set()               # the reader gives its connection back within about 0.5 s
+        self.thread.join(2.0)
         return False
 
     def ready(self, timeout=10.0):

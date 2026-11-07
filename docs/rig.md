@@ -344,6 +344,7 @@ another launch mode the variable draws a warning. Snippets in
 | File | Adds |
 |------|------|
 | `data-ident.toml` | `[data] enable = true`, `require_ident = <REQUIRE_IDENT>`, `xlx_text_overs = true`: the data worker on, with the identity policy of the run |
+| `dp15-paths.toml` | `[[data.path]]` `dp15-b-to-c` (class 0 text of room B forwarded to room C); name it after `data-ident.toml`. Only rows valid on the plain template: the launcher refuses a path to an edge that is not enabled (`docs/dp15-cases.md`) |
 | `xlx-peer.toml` | `[[edges.xlx.peer]]` XLX998 at `<NET>.12` on modules `DE` |
 | `xlx-peer-host.toml` | the same peer named by HOST NAME (`xlxd-peer-sut`, resolved by the rig network DNS), for SANSIO4; `xlx-peer-host-bad.toml` adds a second row `no-such-peer.example.invalid` that never resolves (must stay pending, no start-up failure). Use one of the three XLX peer snippets, never two |
 | `xlx-peer2.toml` / `xlx-peer2-host.toml` | the second XLX peer XLX997 (`xlxd-peer2-sut`, `<NET>.14`) by IP / by host name, for `test_interlink_no_xlx_transit` (it needs two XLX peers); add next to `xlx-peer.toml` / `xlx-peer-host*.toml` |
