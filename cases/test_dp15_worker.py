@@ -34,6 +34,7 @@ from dvtest import dstar_sd, metrics, slowdata, web, webload  # noqa: E402
 from dvtest.proto import dextra  # noqa: E402
 
 import data_support as ds  # noqa: E402
+from echo_support import Drainer  # noqa: E402
 from data_support import (  # noqa: E402
     AT_ONCE_S, IDLE_GAP_S, PACER, ROOM, SseWatch, TOKEN_RENDER_S, ambe, build_over, dstar_listener, first_header_times,
     hub_session, m17_client, m17_voice_payloads, m17p_packets, over_by_my, pump_for, send_over_thread, sms_text, texts_of,
@@ -196,6 +197,14 @@ def counter(hub, family, **labels):
 
 # ================================================================ 3a: kill during traffic
 
+
+def _wait_until(seconds, until):
+    """Sleep-poll until `until()` is true or `seconds` passed (the receive threads of the listeners run on their own)."""
+    end = time.monotonic() + seconds
+    while time.monotonic() < end and not until():
+        time.sleep(0.02)
+
+
 def test_dp15_3a_kill_the_worker_during_traffic(rig, target, hub, rig_control, web_ctx, worker):
     """data.md 15.5 (worker): "kill the worker during traffic: raw counters, voice untouched, web chat works". A D-STAR
     talker keys a 12.6 s over whose slow data carries the TX message in every superframe; 4 s in, the worker is killed
@@ -222,16 +231,18 @@ def test_dp15_3a_kill_the_worker_during_traffic(rig, target, hub, rig_control, w
             m17_client(sutip(rig), callsign=TALKER_CALL, module=MODULE) as mlist:
         assert sse.ready(), "the public SSE gave no hello: %s" % sse.error
         t_start = time.monotonic()
+        drainer = Drainer(dlist.client, mlist.client)   # stamps the arrival times in its own thread: the main thread is busy with the kill and the POSTs
+        drainer.start()
         thread = send_over_thread(talker, packets, out)
         time.sleep(0.3 + KILL_AT_S)
         killed = kill_worker(rig_control)
         t_kill = killed.t_kill_monotonic
         note(target, case, "RECORD", "killed %s pid %s %.2f s after the header was sent" % (WORKER, killed.pids, t_kill - t_start))
-        pump_for(0.2, dlist, mlist)
+        time.sleep(0.2)
         # web chat while the worker is down (or restarting): accepted, shown by the hub, never rendered
         t_post_gap0, t_post_gap1, status = post(web_ctx.gap, gap_body)
         assert status == 202, "POST while the worker is down answered %s, want 202 (the web path does not need the worker)" % status
-        pump_for(0.5, dlist, mlist)
+        time.sleep(0.5)
         t_down, t_up = wait_cycle(sse, t_kill - 0.5)
         sample, t_new = wait_new_pid(rig_control, worker.pid)
         rows = web.room_messages(web_ctx.reader, MODULE)
@@ -243,11 +254,12 @@ def test_dp15_3a_kill_the_worker_during_traffic(rig, target, hub, rig_control, w
         _a, _b, new_status = post(web_ctx.fresh, new_body, pace=False)
         t_new_post = time.monotonic()
         while thread.is_alive():
-            pump_for(0.05, dlist, mlist)
+            time.sleep(0.05)
         t_header, stamps = out[0]
         t_last = stamps[-1]
-        pump_until(DSTAR_TEXT_S + 4.0 + 6.0, [dlist, mlist], until=lambda: bool(dstar_text_times(dlist, new_body)))
-        pump_for(1.5, dlist, mlist)
+        _wait_until(DSTAR_TEXT_S + 4.0 + 6.0, lambda: bool(dstar_text_times(dlist, new_body)))
+        time.sleep(1.5)
+        drainer.stop()
         overs = slowdata.overs(dlist.client.inbox)
         d_times = [at for at, d in zip(dlist.client.inbox_times, dlist.client.inbox)
                    if (dextra.parse_voice_raw(d) or {}).get("stream_id") == sid]
