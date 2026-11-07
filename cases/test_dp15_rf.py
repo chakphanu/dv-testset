@@ -421,7 +421,9 @@ def test_dp15_6d_never_above_the_duty_cycle(rig, target, hub, rf, web_ctx):
         statuses, len(frames), ["%.1f" % t for t in times], duty * 100, window, min_gap, rf.tx_per_min, rf.tx_burst))
     drops = {k: hub.total("dv_edge_rf_tx_total", result=k) - v for k, v in drops_before.items()}
     note(target, case, "RECORD", "dv_edge_rf_tx_total deltas (counters lag by up to 10 s) %s" % {k: v for k, v in drops.items() if v})
-    assert all(s == 202 for s in statuses), "POST statuses %s" % statuses
+    # the room text bucket of the controller is 1 per 5 s with a burst of 4 (DV-Router answer 12): a 429 for the fifth post
+    # 4.8 s into the burst is the product's own limit, not a defect; the first four must be accepted and nothing else may be refused
+    assert all(s in (202, 429) for s in statuses) and statuses[:4] == [202] * 4, "POST statuses %s" % statuses
     assert frames, "no frame at rf-a at all: the control of this case failed (see 6c)"
     assert sliding_max(times, 60.0) <= rf.tx_per_min + rf.tx_burst, \
         "%d frames inside one minute, bound tx_per_min %d + burst %d" % (sliding_max(times, 60.0), rf.tx_per_min, rf.tx_burst)
