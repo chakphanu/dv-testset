@@ -55,6 +55,16 @@ def thread_busy(path):
     return {tid: (names[tid], pts) for tid, pts in series.items()}
 
 
+def thread_totals(series):
+    """[(ticks, tid, comm, span s)] of the whole sample file, busiest first (ticks = utime + stime used between the
+    first and the last sample of that thread; 100 ticks = 1 s of CPU)."""
+    out = []
+    for tid, (comm, pts) in series.items():
+        if len(pts) >= 2:
+            out.append((pts[-1][1] - pts[0][1], tid, comm, (pts[-1][0] - pts[0][0]) / 1000.0))
+    return sorted(out, reverse=True)
+
+
 def busy_around(series, start_ms, end_ms, margin_ms=100):
     """Ticks used by each thread between start-margin and end+margin (10 ms per tick)."""
     out = {}
@@ -82,6 +92,10 @@ def main(argv=None):
                                                                      gaps_sorted[-1], len(gaps)))
         near = sum(1 for g in gaps if abs(g - 1000) <= 60)
         print("spacings within 60 ms of 1000 ms: %d of %d" % (near, len(gaps)))
+    if args.threads:
+        print("threads of the edge over the whole run (cpu % of one core, ticks, comm/tid):")
+        for ticks, tid, comm, span in thread_totals(thread_busy(args.threads))[:8]:
+            print("  %6.2f%% %7d  %s/%d  (%.0f s sampled)" % (100.0 * ticks / 100.0 / max(span, 1e-9), ticks, comm, tid, span))
     parity = [0, 0]
     for key, (n, _dev) in bins.items():
         parity[(key // 10) % 2] += n
