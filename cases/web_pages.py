@@ -493,3 +493,79 @@ def positions_empty_note(page):
     """fallback: the `No retained positions in this room.` status line."""
     return positions_page(page).get_by_text(POSITIONS_EMPTY_TEXT)
 
+
+# ---- every public dashboard route (the CSP probe, cases/test_web_csp_probe.py, visits all of them)
+# ROUTE_TITLES lists the six routes of the first browser stage; #/map (Map, TWIN1) and #/positions (DP7) came later.
+DASHBOARD_ROUTES = ["/", "/map", "/positions", "/heard", "/modules", "/nodes", "/peers", "/about"]
+
+
+# ---- #/map: the digital-twin building (TWIN1 / TWIN2b; web/site/map.js, map-layout.js, map-building.js, shared/dv.css)
+# SOURCE-DERIVED, NEVER RUN: every name below was read from the page sources of the product image dv-router:wip-1bf347c
+# (files under /usr/share/dv-router/web/site and shared/dv.css, read only, extracted with docker create + docker export), not
+# from a running page. UNVERIFIED selector: the class names (`twin-fading`, `twin-fade-N`, `twin-room-call`, `twin-lamp`) have no
+# data-testid hook; they are the page's own styling classes, so a style refactor in the product breaks them. The cases therefore
+# judge the fade by COMPUTED style (opacity, fill, transition-duration) and use the classes only as a second witness.
+# What the sources say (the case relies on exactly this, docs/web-browser-cases.md "TWIN2b map fade"):
+#   * a room is drawn as <rect data-testid=map-room data-id=R data-state=onair|idle|down class="map-room is-onair|is-idle ...">;
+#   * after an over ends and for 5 s (rooms[].last.end_ms .. +5000 on the server clock) the room keeps data-state=onair, gains the
+#     classes `twin-fading twin-fade-N` (N = floor((now - end_ms) / 1000), 0..4) and the caption reads "Room R: <call> finished.";
+#   * `.map-building .twin-fading` has opacity var(--twin-fade-level) (1, .75, .5, .25, 0 for N = 0..4) with `transition: opacity 1s
+#     linear`; the room tile itself keeps opacity 1 and fades its FILL (color-mix of --twin-room-lit and --twin-room);
+#   * prefers-reduced-motion: reduce => `.twin-fading` opacity .45 for the whole fade, `transition: none`;
+#   * at rest (>= 5 s, plus the page's sampling lag of up to 1.25 s) the room is data-state=idle with none of those classes and
+#     the caption says "No one is on air.".
+MAP_ROUTE = "/map"
+MAP_TITLE = "Map"
+MAP_TESTIDS = {
+    "page": "map-page",             # the route's wrapper (data-mode wide|tower)
+    "building": "map-building",     # the <svg> of the building
+    "room": "map-room",             # one <rect> per module; data-id = room letter, data-state onair | idle | down
+    "caption": "map-caption",       # <p id=map-caption>: the text equivalent of the picture, one source for the sighted and AT
+}
+MAP_FADING_CSS = ".map-building .twin-fading"              # UNVERIFIED selector: every element in a fade step (room tile and art)
+MAP_CALL_TEXT_CSS = ".map-building text.twin-room-call"    # UNVERIFIED selector: the talker's callsign on the room (detail rooms only)
+MAP_LAMP_CSS = ".map-building .twin-lamp"                  # UNVERIFIED selector: the on-air lamp path of the room
+MAP_FADE_CLASS_RE = re.compile(r"\btwin-fade-([0-4])\b")   # UNVERIFIED selector: the fade step class of a fading element
+MAP_FADING_CLASS = "twin-fading"                           # UNVERIFIED selector
+MAP_CAPTION_TALKING = "Room {room}: {call} talking from"   # captionText: "Room R: CALL talking from MODE for T, N listening."
+MAP_CAPTION_FINISHED = "{call} finished"                   # finishedWords: t('{call} finished'); the caption line is "Room R: CALL finished."
+MAP_CAPTION_NO_ONE = "No one is on air."
+
+
+def map_url():
+    return dashboard_url(MAP_ROUTE)
+
+
+def map_page(page):
+    return page.get_by_test_id(MAP_TESTIDS["page"])
+
+
+def map_building(page):
+    return page.get_by_test_id(MAP_TESTIDS["building"])
+
+
+def map_caption(page):
+    return page.get_by_test_id(MAP_TESTIDS["caption"])
+
+
+def map_rooms(page):
+    """All room tiles of the building."""
+    return page.get_by_test_id(MAP_TESTIDS["room"])
+
+
+def map_room(page, room):
+    """One room tile (module letter), scoped by its data-id."""
+    return page.locator("[data-testid='%s'][data-id='%s']" % (MAP_TESTIDS["room"], room))
+
+
+def map_sampler_selectors(room):
+    """CSS selectors the in-page sampler of cases/map_fade_support.py needs (it runs inside the page, one evaluate per sample)."""
+    return {
+        "room": "[data-testid='%s'][data-id='%s']" % (MAP_TESTIDS["room"], room),
+        "room_any": "[data-testid='%s']" % MAP_TESTIDS["room"],
+        "caption": "[data-testid='%s']" % MAP_TESTIDS["caption"],
+        "fading": MAP_FADING_CSS,
+        "call": MAP_CALL_TEXT_CSS,
+        "building": "[data-testid='%s']" % MAP_TESTIDS["building"],
+    }
+

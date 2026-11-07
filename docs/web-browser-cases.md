@@ -292,3 +292,112 @@ DVT_USRP_DYNAMIC=1 XLXD_SUT_IMAGE=dv-router:wip-648e539 DVT_SUT_PROFILE=dvrouter
 About 13 minutes (the 36 s lease cases and the 25 s lease-expiry cases, three engines each). `-k listen`, `-k talk`, `-k reconnect`,
 `-k recordings` select parts; the recorder cases skip without `recorder.toml`, all WebRTC cases that talk skip without
 `DVT_USRP_DYNAMIC=1`. Measurements and observations are also in `out/<run>/web/webrtc-notes.jsonl`.
+
+# CSP probe (finding 3: WebKit `style-src-attr`)
+
+`cases/test_web_csp_probe.py` (3 cases, 9 runs) with `cases/csp_probe_support.py` (the in-page recorder `PROBE_JS` and the pure readers;
+unit tests `cases/unit/test_csp_probe_support.py`, which also runs `node --check` on the recorder when node is installed). **NOT RUN on a
+rig yet.** It is evidence for the product team, not a verdict: it never fails on a violation. It fails only when a page that must load
+cannot be loaded (no response, HTTP 5xx, a navigation error) or when the recorder is missing from a document (the evidence would be void).
+
+Why: finding 3 above says Playwright WebKit reports `style-src-attr` on every page that renders although DASH1 removed every `style=` of
+`web/site`. The probe answers, per page and per engine: which directive governs a style attribute in the served CSP (`style-src-attr`, else
+`style-src`, else `default-src`, from the response header of the document), which exact events fire, which script wrote the inline style (element,
+value, first 8 stack frames), which elements carry a `style` attribute when it fires and at the end, and whether Chromium and Firefox report
+anything at all.
+
+| Case | Pages (each loaded fresh through `about:blank`) |
+|------|-------|
+| `test_csp_probe_anonymous` | `/login.html`, `/register.html`, `/totp.html` (optional), the eight dashboard routes `#/ #/map #/positions #/heard #/modules #/nodes #/peers #/about` (on the Map a room tile is clicked twice), `/ops/` (the denial view), the admin host sign-in (optional, only when the admin host is reachable) |
+| `test_csp_probe_user` | the eight dashboard routes signed in (Listen panel, message composer), the signed-in login page, `/recordings/` (optional: needs a recorder), `/ops/` as a user (denial) |
+| `test_csp_probe_operator` | the six `/ops/` pages, the signed-in login page, the dashboard |
+
+What the recorder keeps (installed with `context.add_init_script`, so it runs before any script of the page; every wrapper calls the original):
+`securitypolicyviolation` events on `document` (violatedDirective, effectiveDirective, blockedURI, sourceFile, lineNumber, columnNumber, sample,
+disposition, originalPolicy, the event target and 3 parents; repeated events with the same key only count up); every write of an inline
+style it can see: `setAttribute` / `setAttributeNS` / `setAttributeNode(NS)` with the name `style`, the `style` property setter, the
+CSSStyleDeclaration setters (`cssText` and each property, `setProperty`; the owning element when the declaration came from `el.style`), markup
+with `style=` given to `innerHTML` / `outerHTML` / `insertAdjacentHTML` / `createContextualFragment` / `DOMParser`, and a MutationObserver on the
+`style` attribute (no stack); each with tag, id, class, 3 parents, value and a stack; `document.querySelectorAll('[style]')` (tag, id, class,
+style attribute, outerHTML first 200 characters) at the first occurrence of each distinct violation and at the end.
+
+Output: `out/<run>/web/csp-probe-<engine>.json` (one file per engine, rewritten after each case: `pages[]` with `status`, `csp_header`,
+`style_governor`, `inline_allowed`, `document_responses`, `violations[]`, `writes[]`, `dumps[]`, `console_csp`; `summary` with the events per
+directive and the distinct (directive, source) pairs), one `[RECORD] csp-probe ...` line per page on stdout, and one `web.finding` line per distinct
+(page, engine, directive, `sourceFile:line:col`) tuple (with the last style write seen before it). For Chromium and Firefox a line
+`NO CSP violation fired on any of the N page(s)` is printed when none did.
+
+Reading it: the served policy is `default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'` (finding above), so a `style=`
+attribute and `setAttribute('style', ...)` are blocked by `default-src` through the fallback chain, while CSSOM writes (`el.style.x = ...`,
+`cssText`) are allowed by CSP3; an engine that reports `style-src-attr` for a CSSOM write is the interesting result, and the `writes[]` stack
+names the caller. First suspect (not established): the vendored `htm-preact-3.1.1.module.js` writes `e.style.cssText = ""` / `cssText = string` for a
+`style` prop; the page sources of `dv-router:wip-1bf347c` contain no `style=` and no `.style` write of their own apart from MapLibre's
+canvas sizing on `#/positions`. The probe's own wrappers sit in the stacks only as dropped frames.
+
+Run (about 6 to 10 minutes; the user and operator cases register one account each, which waits for the register budget):
+
+```sh
+XLXD_SUT_IMAGE=dv-router:wip-1bf347c DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-router DVT_SUT_LAUNCH=native DVT_SUT_GEN=compat1 \
+  DVT_SUT_CONFIG=<template path> DVT_TRANSCODER_FAKE=1 DVT_REQUIRE_IDENT=true \
+  DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/admin.toml:rig/config/dv-router/totp-required.toml \
+  scripts/run.sh -m rig --capture --profile web,browser -- cases/test_web_csp_probe.py
+```
+
+`-k anonymous`, `-k chromium` select parts. `admin.toml` makes the admin sign-in screen reachable; without it that page is skipped with a line.
+
+# TWIN2b map fade
+
+`cases/test_web_map_fade.py` (3 cases, 9 runs), `cases/map_fade_support.py` (the in-page sampler and the pure judges), unit tests
+`cases/unit/test_map_fade_support.py` (the judges against a model of the page built from its sources). **NOT RUN on a rig yet.**
+
+Spec (product owner), on the Map room view (`#/map`) for one over and its end: at t ~ 0 (during the over) the room shows the on-air look and the
+talker; after the end, over 5 s, the room fades from `rooms[].last.end_ms` (public state) with the caption "<call> finished" (call = the talker
+callsign); at ~2.5 s after the end it is in a fade step (a lower-opacity class and/or a computed opacity strictly between full and rest) and the
+caption says "<call> finished"; at >= 6.5 s after the end the room is at rest (the documented sampling lag is up to 1.25 s); a NEW over during the
+fade restores the full on-air look at once (within one sampling step); with prefers-reduced-motion the fade shows a static dimmed state with no CSS
+transition (computed transition-duration 0s).
+
+| Case | What it does and asserts |
+|------|--------------------------|
+| `test_map_room_fades_after_an_over` | a 3 s USRP over from `N0FAD` in room N, then 8.5 s of sampling every 250 ms after `rooms[N].last.end_ms` (read from the public state, tester clock corrected by the skew against `now_ms`). `judge_fade`: >= 2 samples of the on-air look (data-state `onair`, no fade class) during the over with the caption "Room N: N0FAD talking from" and the callsign drawn on the tile; the public state names the talker while it talks; the first fade sample within 0 .. 1.5 s of the end, every fade sample has the caption "Room N: N0FAD finished."; the sample nearest 2.5 s is in a fade step 1 or 2 with a witness (class step >= 1, or art opacity strictly between 0 and 1, or fill strictly between the on-air and the rest colour); step never goes back, art opacity never rises, fill never returns toward on-air; the fade lasts about 5 s; every sample from 6.5 s is at rest (data-state `idle`, no fading element, caption without "finished" and with "No one is on air.") |
+| `test_map_new_over_during_the_fade_restores_the_look` | a 1.5 s over; the moment a sample shows fade step >= 1 the same client sends a 3 s over. `judge_restore`: the on-air look (no fade class, talking caption) is back within 1.6 s of the first frame (stream latency, the 250 ms publication gate and one sample), and from that sample on every sample is the full look (no fade class, no fading art element, talker text opacity >= 0.99, fill within 0.05 of the on-air colour): no dimmed intermediate. Then `judge_fade` runs on the second over's end |
+| `test_map_fade_under_reduced_motion` | `page.emulate_media(reduced_motion="reduce")` before the first navigation, a 2 s over. `judge_reduced`: the page sees the media query; every fade sample has computed art opacity 0.45 (+-0.02) at every step, the room fill constant (spread <= 0.06) and between the on-air and the rest colour, computed `transition-duration` all `0s` on the room tile and on the fading elements, the caption "<call> finished"; at rest from 6.5 s |
+
+Room N (an own module: the other browser cases use H J K L Q W R X Y Z M S T U and B C). Before each over the case waits up to 25 s for a quiet Map
+(no room `onair`, no fading element); otherwise it fails with that reason. Evidence: `out/<run>/web/map-fade-<engine>-<timeline|restart|reduced>.json`
+(every sample with `t` since the end and, for the restart case, `u` since the second over's first frame: data-state, class list, computed fill,
+art opacity min / max, transition durations, caption, tile text, plus the judges' metrics and failures) and `[RECORD] map-fade-series` lines
+(one per sample) and `[RECORD] map-fade ...` summary lines on stdout.
+
+How the page is built (read from `web/site/map-layout.js`, `map-building.js`, `map.js`, `shared/dv.css` of `dv-router:wip-1bf347c`, read only):
+`fading = !onair && controller != down && at >= end_ms && at < end_ms + 5000` with `at` on the server clock; the fade step is
+`floor((at - end_ms) / 1000)`, 0 to 4; the room keeps `data-state=onair` while fading and gets the classes `twin-fading twin-fade-N`;
+`.map-building .twin-fading` has `opacity: var(--twin-fade-level)` (1, .75, .5, .25, 0) and `transition: opacity 1s linear`; the room tile
+itself has `opacity: 1` and fades its FILL (`color-mix(--twin-room-lit, --twin-room)`, also 1 s linear); under `prefers-reduced-motion: reduce`
+`.twin-fading` is `opacity: .45; transition: none` and the tile fill is the static `.45` mix. The page redraws on a 1 s tick behind a 250 ms
+publication gate (`coalesceUpdates`), which is the "sampling lag up to 1.25 s". The caption line is `Room R: <call> finished.`; at rest `No one is on air.`.
+
+Run (about 12 minutes: nine runs of about 15 to 20 s each plus the setup; needs a USRP dynamic hub):
+
+```sh
+DVT_USRP_DYNAMIC=1 XLXD_SUT_IMAGE=dv-router:wip-1bf347c DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-router DVT_SUT_LAUNCH=native DVT_SUT_GEN=compat1 \
+  DVT_SUT_CONFIG=<template path> DVT_TRANSCODER_FAKE=1 DVT_REQUIRE_IDENT=true \
+  DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/admin.toml:rig/config/dv-router/totp-required.toml \
+  scripts/run.sh -m rig --capture --profile web,browser -- cases/test_web_map_fade.py
+```
+
+Without `DVT_USRP_DYNAMIC=1` every case skips with the reason (`usrp_client`). `-k timeline` / `-k restart` / `-k reduced` and `-k chromium` select parts.
+
+## UNVERIFIED (TWIN2b)
+
+Everything below was derived from the page sources, never from a running page or a run of these cases.
+
+1. Selectors: `data-testid` `map-page`, `map-building`, `map-room` (with `data-id` = room letter and `data-state` `onair` / `idle` / `down`), `map-caption` are WEB2-style hooks seen in `map.js` / `map-building.js`. The class names `twin-fading`, `twin-fade-0..4`, `twin-room-call` (the callsign `<text>`), `twin-lamp` and the container `.map-building` have NO hook (marked `# UNVERIFIED selector` in `cases/web_pages.py`); the judges use computed style first.
+2. The room tile's own computed `opacity` stays 1 while it fades (CSS `.map-room.is-onair.twin-fading`); the case therefore reads the opacity of the fading ART elements (`.map-building .twin-fading` that are not a room tile) and the tile's computed `fill`. If the product moves the fade to the tile's opacity the opacity witness is empty and only the class step and the fill remain.
+3. The fill colours: computed `fill` of the tile is parsed as `rgb()` or `color(srgb ...)`; an engine that returns another colour space (oklab, lab) makes the fill witness `None` (the class and opacity witnesses still judge). `lit` and `rest` references are taken from the same run (last on-air sample, last rest sample).
+4. `rooms[N].onair.callsign_base` is the USRP SET_INFO callsign `N0FAD` and `rooms[N].last.end_ms` is set at the unkey; `read_end` accepts the first `end_ms` newer than the over's start. If the hub holds the floor after the unkey (a hang time), `end_ms` and the page move together and nothing changes, but the "t ~ 0" window shifts.
+5. The callsign on the tile is cut to the tile width (`N0FA.`): `tile_call_matches` accepts a truncated text of at least 3 characters; the full callsign is judged in the caption.
+6. Timing: step at 2.5 s must be 1 or 2 (2.5 s minus up to 1.25 s of lag); the first fade sample within 0 .. 1.5 s of the end; rest not before 4.7 s and from 6.5 s. The skew between the tester clock and the router clock (`now_ms` of the state) is measured per run and recorded; browser, tester and router share the host clock on the rig. The page reads time from the server clock (`clock.sync(now_ms)`), the cases from `end_ms`, so a drifting clock in the browser container does not matter, a stale offset in the page would show as a shifted fade.
+7. The restart case sends the second over from the same USRP client 0.2 s .. one sample after the page showed step >= 1 and expects the router to accept it (a new stream on the same module); a refusal appears as "no sample shows the on-air look again".
+8. A hidden or paused page (`document.hidden`) freezes the map (`map-paused`); headless Playwright pages are visible, the sampler records `hidden`.
+9. Playwright WebKit and Firefox may not apply `emulate_media(reduced_motion=...)` the same way; `reduced` is read back from `matchMedia` in every sample and a mismatch fails the case with that reason.
