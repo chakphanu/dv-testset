@@ -37,6 +37,7 @@ import http.client
 import json
 import os
 import secrets
+import socket
 import ssl
 import struct
 import threading
@@ -339,6 +340,7 @@ class WebClient:
         self.pacer.wait("public" if path.startswith("/api/v1/public/") else "session")
         conn = http.client.HTTPSConnection(self.host, self.port, timeout=timeout, context=self._ctx)
         frames = []
+        finished = threading.Event()
         deadline = time.monotonic() + timeout
         try:
             conn.request("GET", path, headers=self._headers("GET", {"Accept": "text/event-stream"}, False))
@@ -348,17 +350,35 @@ class WebClient:
             if resp.status != 200:
                 raise self.error("GET", path, Response(resp.status, {}, resp.read(4096)))
             cur = {}
+            sock = conn.sock
+            if stop is not None:
+                # A socket timeout inside a buffered read leaves the response object unusable ("cannot read from
+                # timed out object"), so a read can never be polled with a short timeout: the first quiet half
+                # second after the hello used to end every watcher. The read blocks for the time that is left
+                # and `stop` ends it from a helper thread by shutting the socket down.
+                def _watch_stop():
+                    while not finished.is_set():
+                        if stop.wait(0.1):
+                            try:
+                                sock.shutdown(socket.SHUT_RDWR)
+                            except OSError:
+                                pass
+                            return
+
+                threading.Thread(target=_watch_stop, daemon=True).start()
             while len(frames) < max_events:
                 left = deadline - time.monotonic()
                 if left <= 0 or (stop is not None and stop.is_set()):
                     break
-                conn.sock.settimeout(left if stop is None else min(left, 0.5))
+                sock.settimeout(left)
                 try:
                     line = resp.readline(65536)
                 except TimeoutError:
-                    if stop is not None and not stop.is_set():
-                        continue
                     break
+                except (OSError, http.client.HTTPException):
+                    if stop is not None and stop.is_set():
+                        break
+                    raise
                 if not line:
                     break
                 line = line.decode("utf-8", "replace").rstrip("\r\n")
@@ -380,6 +400,7 @@ class WebClient:
         except (OSError, http.client.HTTPException) as exc:
             raise WebError("GET %s (SSE): %s: %s" % (path, type(exc).__name__, self.scrub(str(exc))[:200])) from exc
         finally:
+            finished.set()
             conn.close()
 
     # -- account flow

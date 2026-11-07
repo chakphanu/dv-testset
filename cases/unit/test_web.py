@@ -166,6 +166,18 @@ class Fake(http.server.BaseHTTPRequestHandler):
             self.wfile.flush()
             time.sleep(6)
             return
+        if self.path.startswith("/api/v1/public/events?quiet"):
+            # hello, a quiet gap longer than any polling slice, then a data frame
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            for gap, frame in ((0.0, b"event: hello\ndata: {}\n\n"), (1.3, b"event: data\ndata: {\"item_type\": \"status\"}\n\n")):
+                time.sleep(gap)
+                self.wfile.write(b"%x\r\n" % len(frame) + frame + b"\r\n")
+                self.wfile.flush()
+            time.sleep(1)
+            return
         if self.path.startswith("/api/v1/public/events"):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -370,3 +382,33 @@ def test_sse_stop_event_ends_a_quiet_stream(fake):
     t0 = time.monotonic()
     status, _ctype, frames = c.sse("/api/v1/public/events?hang", max_events=100, timeout=30.0, on_frame=on_frame, stop=stop)
     assert status == 200 and [f["event"] for f in frames] == ["hello"] and time.monotonic() - t0 < 3.0
+
+
+def test_sse_watcher_survives_a_quiet_gap_after_the_hello(fake):
+    """Regression (first DP15 rig run): with `stop` the reader polled with a 0.5 s socket timeout, and a timeout
+    inside a buffered read kills the response ("cannot read from timed out object"), so every watcher died half a
+    second after the hello and never saw a data event."""
+    url, ca = fake
+    c = web.WebClient(url, ca, pacer=fast_pacer())
+    stop = threading.Event()
+    seen = []
+
+    def on_frame(frame):
+        seen.append((time.monotonic(), frame.get("event")))
+        if frame.get("event") == "data":
+            stop.set()
+
+    t0 = time.monotonic()
+    _status, _ctype, frames = c.sse("/api/v1/public/events?quiet", max_events=100, timeout=20.0, on_frame=on_frame, stop=stop)
+    assert [f["event"] for f in frames] == ["hello", "data"]
+    assert 1.2 <= seen[1][0] - t0 < 5.0
+
+
+def test_sse_stop_event_ends_a_stream_in_the_middle_of_a_quiet_gap(fake):
+    url, ca = fake
+    c = web.WebClient(url, ca, pacer=fast_pacer())
+    stop = threading.Event()
+    threading.Timer(0.8, stop.set).start()
+    t0 = time.monotonic()
+    _status, _ctype, frames = c.sse("/api/v1/public/events?hang", max_events=100, timeout=30.0, stop=stop)
+    assert [f["event"] for f in frames] == ["hello"] and 0.7 <= time.monotonic() - t0 < 3.0
