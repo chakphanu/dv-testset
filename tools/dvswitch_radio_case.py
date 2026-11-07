@@ -4,7 +4,7 @@
 
 Prerequisites, all local and none committed: the asl-edge rig is up (`scripts/run.sh --profile asl-edge --keep
 ...` with a dv-router image), an Android emulator AVD with the app installed and one account saved as in the
-doc (host <net>.11, username acct, the fixture password, CallerID N0TEST, node 1999, Phone mode OFF), and
+doc (host <net>.11, username acct, the fixture password, CallerID N0TEST, node 2999, Phone mode OFF), and
     DVT_ANDROID_SDK   SDK root (emulator, platform-tools)
     DVT_AVD_HOME      ANDROID_AVD_HOME with the AVD       DVT_AVD_NAME   AVD name (default dvt_dvswitch)
     DVT_EMU_PORT      console port (default 5570)         DVT_COMPOSE    compose prefix (default below)
@@ -132,7 +132,7 @@ def main():
         tap(130, 420)                               # Connect
         time.sleep(7)
         status = line1()
-        if "Node: 1999" in status:
+        if "Node: 2999" in status:
             break
     adb("shell", "input", "swipe", "540", "2221", "540", "2221", "3500")   # PTT held
     time.sleep(1.5)
@@ -142,7 +142,7 @@ def main():
     verdict = json.loads(cap.stdout.read().strip().splitlines()[-1])
     cap.wait()
     s = verdict["summary"]
-    checks = [("app shows the node (connected)", "Node: 1999" in status),
+    checks = [("app shows the node (connected)", "Node: 2999" in status),
               ("ANSWER", s.get("control.ANSWER", 0) >= 1),
               ("AUTHREP md5", s.get("iax.AUTHREP", 0) >= 1),
               ("RADIO_KEY from the app", s.get("control.RADIO_KEY", 0) >= 1),

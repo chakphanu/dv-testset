@@ -13,8 +13,10 @@ the rows after the last start. No I/O here; unit-tested in cases/unit/test_asl_r
 import re
 import tomllib
 
-MIN_INTERVAL_S = 60.0
-REFRESH_GAP_S = (50.0, 90.0)      # a successful refresh (ok, mismatch): max(60, min(interval, refresh)) = 60 s
+MIN_INTERVAL_S = 60.0             # the edge's floor of the initial spread and of a refresh (images before wip-1590f26 accepted "60s")
+LAB_MIN_INTERVAL_S = 120.0        # wip-1590f26 refuses a [edges.allstar.register] interval below 120 s; the lab config uses "120s"
+STANDIN_REFRESH_S = 180.0         # the "refresh" the stand-in registrar answers (rig/asl-lab-registrar.py)
+REFRESH_GAP_S = (50.0, 90.0)      # a successful refresh at interval 60 s (the old lab value); the lab now uses refresh_gap(interval)
 RETRY_GAP_S = (24.0, 36.0)        # a failed attempt: 30 s +/- 20 percent (http 500, no success text, oversize reply)
 SLOW_GAP_S = (44.0, 56.0)         # the 20 s core timeout, then a 24..36 s backoff
 SLOT_TOLERANCE_S = 1.0
@@ -27,6 +29,14 @@ def parse_interval(text):
     if not m:
         raise ValueError("not an interval: %r" % (text,))
     return float(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600}[m.group(2)]
+
+
+def refresh_gap(interval_s, refresh_s=STANDIN_REFRESH_S):
+    """(lo, hi) seconds expected between two requests of a node whose registration succeeded (ok, mismatch): the refresh is
+    max(60, min(interval, refresh)) seconds, so 120 s for the lab's interval "120s" and the stand-in's refresh 180; the window keeps
+    the old shape of REFRESH_GAP_S (-10 s, +30 s around the nominal value)."""
+    nominal = max(MIN_INTERVAL_S, min(interval_s, refresh_s))
+    return nominal - 10.0, nominal + 30.0
 
 
 def schedule(toml_text):

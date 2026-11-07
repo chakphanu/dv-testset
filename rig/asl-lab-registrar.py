@@ -33,7 +33,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 LOG = os.environ.get("DVT_ASL_REG_LOG", "/var/lib/dvt-lab/register/requests.jsonl")
 PORT = int(os.environ.get("DVT_ASL_HTTP_REG_PORT", "8082"))
 SLOW_S = float(os.environ.get("DVT_ASL_REG_SLOW_S", "20"))
-DEFAULT_VARIANTS = "1991=ok,1992=port,1993=http500,1994=notext,1995=slow,1996=oversize"
+DEFAULT_VARIANTS = "2991=ok,2992=port,2993=http500,2994=notext,2995=slow,2996=oversize"
 _lock = threading.Lock()
 
 

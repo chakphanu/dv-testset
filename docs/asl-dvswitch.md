@@ -17,10 +17,10 @@ fixture secret `test-secret-not-real`.
 | Emulator | own AVD (not the user's `Medium_Phone`): Android 36 x86_64 google_apis_playstore image from the SDK, headless (`-no-window -no-audio -no-snapshot-save -wipe-data`), 2 cores, 2048 MB, no sdcard, no Google account; installed with `adb -s emulator-5570 install` only |
 | Permissions answered | microphone allowed, location and notifications denied; no licence or account screen appeared |
 | Edge images | `dv-router:asl-c199b` (negative control), `dv-router:wip-7efdd33` (the ASL1f fix) |
-| Config of the edge | `rig/config/dv-router/allstar-lab.toml`: node 1999 room L, accounts `acct` (talk) and `phone-ro` (listen only), md5 secret fixture |
+| Config of the edge | `rig/config/dv-router/allstar-lab.toml`: node 2999 room L, accounts `acct` (talk) and `phone-ro` (listen only), md5 secret fixture |
 
 Account in the app (Accounts tab): IAX2, host `<net>.11`, port 4569, username `phone-ro` (later `acct`), the fixture
-password, CallerID `N0TEST`, Caller Number empty, node `1999`, public authentication off, and "Phone mode IAX2
+password, CallerID `N0TEST`, Caller Number empty, node `2999`, public authentication off, and "Phone mode IAX2
 connection" on or off as stated. The Config tab has no codec setting (macros, a Voice Call switch, UI options): the
 codec is read from the wire. Pcaps are taken by the lab agent in the edge's namespace
 (`out/<run>/asl-lab/dvswitch/<scenario>/edge.pcap`, `edge.frames.json`); screenshots stay in `out/dvswitch-dev/`
@@ -73,7 +73,7 @@ Timeline of `dvs-nophone-wip7efdd33` (seconds from the first frame):
 | 34.08 | app | Hangup: a new bare NEW probe (call 11044, answered with CALLTOKEN), and on the call **HANGUP with CAUSECODE 0x10 (16, normal clearing) and a CALLTOKEN IE** |
 | 35.11 | app | another bare NEW probe (call 11045) |
 
-The NEW of the real call (89 B), IEs in order: VERSION 2, CALLED_NUMBER `1999`, CALLING_NUMBER (**empty**),
+The NEW of the real call (89 B), IEs in order: VERSION 2, CALLED_NUMBER `1999` (the edge's number when this was recorded; the lab edge is node 2999 since the renumbering, see `docs/asl-lab.md`), CALLING_NUMBER (**empty**),
 CALLING_NAME `N0TEST` (the CallerID field), USERNAME `phone-ro`, CAPABILITY (ulaw | alaw | adpcm | slin),
 FORMAT 0, CODEC_PREFS `48444745` ("HDGE"), CALLTOKEN. No FORMAT2 / CAPABILITY2. Codec on the wire: ulaw (the edge's
 ACCEPT chooses it; voice frames are ulaw, 160 B per 20 ms). Keying: RADIO_KEY / RADIO_UNKEY control frames, **no DTMF and
@@ -108,7 +108,7 @@ account).
    sends); the app registers again about every 60 s (REFRESH) and sends REGREL when it is stopped;
 2. the Status tab says `Registration: Registered` (resource id `status_text`; it says "Unregistered" before) and the Dialer's Connect
    (`send_button`) is enabled;
-3. Connect, PTT 3.5 s, Hangup works like radio mode: the Dialer line shows `ASL-PHONE Node: 1999`, the Status tab `Node: 1999 (Phone)`,
+3. Connect, PTT 3.5 s, Hangup works like radio mode: the Dialer line shows `ASL-PHONE Node: 2999`, the Status tab `Node: 2999 (Phone)`,
    ANSWER, AUTHREP (md5; a registration grants no call privilege, the call still goes NEW / AUTHREQ / AUTHREP), RADIO_KEY from the app,
    more than 20000 bytes of ulaw relayed to node A.
 

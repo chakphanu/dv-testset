@@ -39,7 +39,7 @@ def post(url, node, port=4569, raw=None):
 
 def test_ok_reports_the_sender_and_the_request_port(registrar):
     url, _log = registrar
-    status, data = post(url, "1991", port=4570)
+    status, data = post(url, "2991", port=4570)
     reply = json.loads(data)
     assert status == 200 and reply["ipaddr"] == "127.0.0.1" and reply["port"] == 4570 and reply["refresh"] == 180
     assert "successfully registered" in reply["data"]
@@ -47,16 +47,16 @@ def test_ok_reports_the_sender_and_the_request_port(registrar):
 
 def test_port_variant_answers_another_port(registrar):
     url, _log = registrar
-    reply = json.loads(post(url, "1992", port=4569)[1])
+    reply = json.loads(post(url, "2992", port=4569)[1])
     assert reply["port"] == 4570 and "successfully registered" in reply["data"]
 
 
 def test_http500_notext_oversize(registrar):
     url, _log = registrar
-    assert post(url, "1993")[0] == 500
-    status, data = post(url, "1994")
+    assert post(url, "2993")[0] == 500
+    status, data = post(url, "2994")
     assert status == 200 and "successfully registered" not in json.loads(data)["data"]
-    status, data = post(url, "1996")
+    status, data = post(url, "2996")
     assert status == 200 and len(data) > 4096 and "successfully registered" in json.loads(data)["data"]
 
 
@@ -64,20 +64,20 @@ def test_slow_variant_waits_then_answers(registrar):
     import time
     url, _log = registrar
     t0 = time.monotonic()
-    status, data = post(url, "1995")
+    status, data = post(url, "2995")
     assert status == 200 and time.monotonic() - t0 >= 0.4 and "successfully registered" in json.loads(data)["data"]
 
 
 def test_every_request_is_logged_in_full(registrar):
     url, log = registrar
-    post(url, "1991")
-    post(url, "1993")
+    post(url, "2991")
+    post(url, "2993")
     post(url, "x", raw=b"not json")
     rows = [json.loads(line) for line in log.read_text().splitlines()]
     assert [r["variant"] for r in rows] == ["ok", "http500", "bad-request"]
     first = rows[0]
     assert first["headers"]["Content-Type"] == "application/json" and first["path"] == "/"
-    assert first["body"]["data"]["nodes"]["1991"] == {"node": "1991", "passwd": "test-secret-not-real", "remote": 0}
+    assert first["body"]["data"]["nodes"]["2991"] == {"node": "2991", "passwd": "test-secret-not-real", "remote": 0}
     assert rows[2]["status"] == 400 and rows[2]["raw"] == "not json"
 
 

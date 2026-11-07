@@ -40,7 +40,7 @@ def test_judge_exit_code_two_is_invalid_even_without_the_summary_line():
 
 def test_secret_file_paths():
     text = '''[edges.allstar]
-password_file = "/etc/dv-router/asl-secrets/node-1999.pw"
+password_file = "/etc/dv-router/asl-secrets/node-2999.pw"
 secret_file = "/etc/dv-router/asl-secrets/acct.secret"
 other = "/etc/not-a-file-key"
 # turn_secret_file = "/commented"
@@ -48,7 +48,7 @@ turn_secret_file = "/run/secrets/turn-secret"
 secret_file = "/etc/dv-router/asl-secrets/acct.secret"
 relative_file = "rel/path"
 '''
-    assert cc.secret_file_paths(text) == ["/etc/dv-router/asl-secrets/node-1999.pw", "/etc/dv-router/asl-secrets/acct.secret",
+    assert cc.secret_file_paths(text) == ["/etc/dv-router/asl-secrets/node-2999.pw", "/etc/dv-router/asl-secrets/acct.secret",
                                          "/run/secrets/turn-secret"]
 
 

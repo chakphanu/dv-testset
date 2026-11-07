@@ -1,10 +1,23 @@
 <!-- SPDX-License-Identifier: MIT -->
 # DV-Router AllStar edge against the asl-lab (ASL1 phase 2)
 
-`dv-edge-allstar` running inside the asl-lab (`docs/asl-lab.md`), profile `asl-edge`: the edge is node 1999,
+`dv-edge-allstar` running inside the asl-lab (`docs/asl-lab.md`), profile `asl-edge`: the edge is node 2999 (1999 until wip-1590f26),
 room L, next to the lab's app_rpt nodes A (199901), B (199902) and E (299901). Cases:
 `cases/test_asl_edge.py`, marker `asl_lab`. Interop testing of builds under review: findings go to dv-router as
 pcap and note, never as patches to their source.
+
+**Renumbered for wip-1590f26 (2026-11).** That build refuses `[[edges.allstar.node]] public = true` with a number below 2000 ("public node
+numbers must be at least 2000; private numbers cannot be registered") and a `[edges.allstar.register] interval` below 120 s. The DV-Router lead
+decided to keep the nodes public (so the public-node path stays tested: registry identity, caller IP check) and not to switch to
+`public = false`. The lab therefore uses the edge node **2999** (was 1999), the six registration nodes **2991..2996** (were 1991..1996, same
+answer variants one to one) and the register interval **"120s"** (was "60s"); the lab registrar is our own fake, so any number works, and
+numbers from 2000 up are valid on older images too. The app_rpt lab nodes 199901 / 199902 / 299901 / 299902 are unchanged. Everything below
+that was recorded before this change (runs up to `20261104T001310Z`, the tables, the F-R1 finding, the DVSwitch recordings) names the
+old numbers (1999, 1991..1996, T1999) and the 60 s timing on purpose: they are results of those runs, not of the current config. The registration cases
+now derive their expectations from the rendered config: slot spacing S = 120 / 7 = 17.14 s (node k first at start + k * S), a successful
+refresh max(60, min(120, 180)) = 120 s (window 110..150 s, `asl_register.refresh_gap`), the fixture waits up to max(240 s, 2 * interval + 60 s)
+and for a span of interval + 15 s; the failure back-offs (24..36 s, slow reply 44..56 s) do not depend on the interval. The R1-R7 run is
+longer (about 3 minutes of waiting instead of 100 s). Not yet run on a rig with the new numbers. Guard: `cases/unit/test_asl_lab_node_numbers.py`.
 
 ## Run
 
@@ -25,8 +38,8 @@ Three rig variants, because the settings that matter are start-up configuration 
 
 Rig details are in `docs/asl-lab.md` ("Profile asl-edge"). `rig/config/dv-router/allstar-lab.toml` is the base
 config; `-out`, `-lookup` and `-reg` snippets are added by `run.sh` from the flags above. The stand-in registrar
-(`rig/asl-lab-registrar.py`, plain HTTP on asl-reg:8082) answers six public nodes one way each (1991 ok, 1992 other
-port, 1993 HTTP 500, 1994 200 without the success text, 1995 reply after 20 s, 1996 reply over 4 KiB) and logs every
+(`rig/asl-lab-registrar.py`, plain HTTP on asl-reg:8082) answers six public nodes one way each (2991 ok, 2992 other
+port, 2993 HTTP 500, 2994 200 without the success text, 2995 reply after 20 s, 2996 reply over 4 KiB; 1991..1996 before wip-1590f26) and logs every
 request in full to `out/<run>/asl-lab/register/requests.jsonl`. Fixture secrets only (`test-secret-not-real`).
 
 Images (all local, none pulled; the DVSwitch Mobile app run is described in [asl-dvswitch.md](asl-dvswitch.md)): **c199** = `dv-router:asl-c199` (the tag was removed afterwards), **c199b** =
@@ -261,7 +274,7 @@ with no CALLTOKEN IE is dropped silently, REGAUTH has the same fields for a know
 | R9 `test_r9_wrong_secret_is_regrej` | REGREJ with CAUSE "authentication failed" and CAUSECODE 29 within a few seconds, no REGACK |
 | R10 `test_r10_unknown_user_is_indistinguishable_from_a_wrong_secret` | the same steps, cause and REGAUTH IEs (but the USERNAME echo) for a known and an unknown user |
 | R11 `test_r11_regreq_without_calltoken_is_dropped` | no reply of any kind to a REGREQ without a CALLTOKEN IE |
-| R12 `test_r12_node_account_cannot_register_as_a_phone` | the node account 1999 is refused (REGREJ) |
+| R12 `test_r12_node_account_cannot_register_as_a_phone` | the node account 2999 (the edge's own number; 1999 before wip-1590f26) is refused (REGREJ) |
 
 The ASL1h log lines are `level=info allstar_call event=setup|hangup direction=in|out kind=node|client peer=... module=L result=ok|rejected:ip|
 rejected:refused ... cause_code=... duration_ms=...` and `allstar_client_registration ...`. They cannot be read during a run (run.sh writes

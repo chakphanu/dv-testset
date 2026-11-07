@@ -6,7 +6,7 @@ FAILS by design (that is the old answer, docs/asl-dvswitch.md).
 
 Prerequisites, as tools/dvswitch_radio_case.py (same environment variables, same emulator addressing, nothing committed), except
 that the account saved in the app has "Phone mode IAX2 connection" ON (host <net>.11, username acct, the fixture password,
-CallerID N0TEST, node 1999). The app registers by itself when it starts, so the capture on the edge is started BEFORE the app is
+CallerID N0TEST, node 2999). The app registers by itself when it starts, so the capture on the edge is started BEFORE the app is
 (re)started.
 
 Expected on the wire (APP_REGISTRATION below; observed with DVSwitch Mobile 2.0.7 against wip-c165c93): the bare NEW probe is
@@ -165,7 +165,7 @@ def main():
             radio.tap(130, 420)                                     # Connect
         time.sleep(7)
         status = radio.line1()
-        if "Node: 1999" in status or connected_text() not in ("", "Not connected"):
+        if "Node: 2999" in status or connected_text() not in ("", "Not connected"):
             break
     status = status + " | status tab: " + connected_text()
     open_tab("Dialer")
@@ -183,7 +183,7 @@ def main():
               ("registration %s" % " -> ".join(APP_REGISTRATION) + ("" if reg_ok else " [%s]" % why), reg_ok),
               ("app shows Registered", registered),
               ("Connect (send) button enabled", enabled is True),
-              ("app shows the node (connected)", "Node: 1999" in status or "Connected" in status.split("| status tab:")[-1]),
+              ("app shows the node (connected)", "Node: 2999" in status or "Connected" in status.split("| status tab:")[-1]),
               ("ANSWER", s.get("control.ANSWER", 0) >= 1),
               ("AUTHREP md5", s.get("iax.AUTHREP", 0) >= 1),
               ("RADIO_KEY from the app", s.get("control.RADIO_KEY", 0) >= 1),

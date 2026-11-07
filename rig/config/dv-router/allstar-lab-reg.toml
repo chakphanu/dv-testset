@@ -1,47 +1,51 @@
 # HTTP registration of the AllStar edge against the lab's stand-in registrar (DVT_ASL_EDGE_REG=1, images with
 # register.server/insecure, dv-router:asl-c199b and later; rig/asl-lab-registrar.py on asl-reg, port 8082).
 # Six public nodes, one answer variant each (selected by node number in the stand-in):
-#   1991 ok (ipaddr = the sender)   1992 success with another port (mismatch)   1993 HTTP 500
-#   1994 200 without the success text   1995 reply after 20 s (past the 15 s client timeout)   1996 reply over 4 KiB
+#   2991 ok (ipaddr = the sender)   2992 success with another port (mismatch)   2993 HTTP 500
+#   2994 200 without the success text   2995 reply after 20 s (past the 15 s client timeout)   2996 reply over 4 KiB
+# Numbers: public nodes must be 2000 or higher and the register interval at least 120 s (DV-Router wip-1590f26 refuses
+# 1991..1996 and "60s" at load time); the lab registrar is our own fake, so the lab uses 2991..2996 and "120s". Both values
+# are valid on older images too (they clamp the interval to max(60, ...)). Slot spacing of the initial spread is
+# S = max(interval, 60) / 7 nodes = 17.14 s, a successful refresh is 120 s (see docs/asl-lab.md, R1-R7).
 # "insecure = true" sends the node password in clear text to a rig-internal address: fixture password only.
 [edges.allstar.register]
 enable = true
-interval = "60s"
+interval = "120s"
 server = "http://<NET>.41:8082/"
 insecure = true
 
 [[edges.allstar.node]]
-number = 1991
+number = 2991
 module = "S"
 public = true
-password_file = "/etc/dv-router/asl-secrets/node-1991.pw"
+password_file = "/etc/dv-router/asl-secrets/node-2991.pw"
 
 [[edges.allstar.node]]
-number = 1992
+number = 2992
 module = "T"
 public = true
-password_file = "/etc/dv-router/asl-secrets/node-1992.pw"
+password_file = "/etc/dv-router/asl-secrets/node-2992.pw"
 
 [[edges.allstar.node]]
-number = 1993
+number = 2993
 module = "U"
 public = true
-password_file = "/etc/dv-router/asl-secrets/node-1993.pw"
+password_file = "/etc/dv-router/asl-secrets/node-2993.pw"
 
 [[edges.allstar.node]]
-number = 1994
+number = 2994
 module = "V"
 public = true
-password_file = "/etc/dv-router/asl-secrets/node-1994.pw"
+password_file = "/etc/dv-router/asl-secrets/node-2994.pw"
 
 [[edges.allstar.node]]
-number = 1995
+number = 2995
 module = "W"
 public = true
-password_file = "/etc/dv-router/asl-secrets/node-1995.pw"
+password_file = "/etc/dv-router/asl-secrets/node-2995.pw"
 
 [[edges.allstar.node]]
-number = 1996
+number = 2996
 module = "X"
 public = true
-password_file = "/etc/dv-router/asl-secrets/node-1996.pw"
+password_file = "/etc/dv-router/asl-secrets/node-2996.pw"

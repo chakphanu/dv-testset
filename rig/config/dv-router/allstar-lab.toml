@@ -1,9 +1,15 @@
 # AllStar edge of the asl-lab (--profile asl-edge, docs/asl-edge-results.md): DV-Router's dv-edge-allstar
-# as node 1999 in room L, next to the lab's app_rpt nodes. Appended to the SUT template by
+# as node 2999 in room L, next to the lab's app_rpt nodes. Appended to the SUT template by
 # DVT_SUT_CONFIG_EXTRA (run.sh adds it itself). <NET> is the rig /24 prefix. All secrets are the lab fixture
 # test-secret-not-real in files that run.sh writes (mode 600) and mounts read-only.
 #
-#   1999     public node (anonymous "radio" callers from the lab nodes, identity checked against the static
+# Why 2999 and not 1999 (renumbered 2026-11, DV-Router wip-1590f26): a public node must be numbered 2000 or higher
+# ("public node numbers must be at least 2000; private numbers cannot be registered"). The lab registrar is our own
+# fake, so any number works; numbers >= 2000 are valid on older images too. Do not switch the node to public = false:
+# that would stop testing the public-node path (registry identity, caller IP check). Guarded by
+# cases/unit/test_asl_lab_node_numbers.py.
+#
+#   2999     public node (anonymous "radio" callers from the lab nodes, identity checked against the static
 #            rows below; no registration: [edges.allstar.register] stays off), may_tx so a caller may talk
 #   acct     IAX2 client account (T10), md5, callsign N0TEST, listen + talk in room L
 #   static   the lab nodes by address (the edge's own DNS name hierarchy and domain are not the lab zone's);
@@ -17,10 +23,10 @@ enable = true
 # every lab node a case dials by number, so DNS lookup is never exercised and this is not a blocker.
 
 [[edges.allstar.node]]
-number = 1999
+number = 2999
 module = "L"
 public = true
-password_file = "/etc/dv-router/asl-secrets/node-1999.pw"
+password_file = "/etc/dv-router/asl-secrets/node-2999.pw"
 may_tx = true
 
 [[edges.allstar.account]]

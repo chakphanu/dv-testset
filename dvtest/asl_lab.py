@@ -323,7 +323,7 @@ def from_env(env=None):
         "e": Host("asl-e", env["DVT_ASL_E"], env["DVT_ASL_NODE_E"]),
     }
     if env.get("DVT_ASL_EDGE") == "on":
-        hosts["edge"] = Host("edge", env["DVT_ASL_EDGE_IP"], env.get("DVT_ASL_EDGE_NODE", "1999"), tap=True)
+        hosts["edge"] = Host("edge", env["DVT_ASL_EDGE_IP"], env.get("DVT_ASL_EDGE_NODE", "2999"), tap=True)
     return Lab(hosts, Path(env.get("DVT_OUT", "out")), int(env.get("DVT_ASL_IAX_PORT", "4569")),
                env.get("DVT_ASL_DOMAIN", "nodes.asl.test"), env.get("DVT_ASL_NODE_T", "299902"))
 
