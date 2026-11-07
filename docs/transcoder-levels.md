@@ -48,6 +48,60 @@ python3 -m dvtest.tools.levels_table out/<run1>/transcoder-levels.jsonl out/<run
 
 About 10 minutes a tag (30 overs per source protocol, three source protocols, then the load case).
 
+### Recipe: one tag on the current rig (candidate or production)
+
+The vocoder image of a run is selected by one variable, `TRANSCODER_IMAGE` (`.env.example`; `rig/compose.yml` services `transcoder-ref` and
+`transcoder-sut`). Do not set the per-side overrides `TRANSCODER_REF_IMAGE` / `TRANSCODER_SUT_IMAGE` for this case (both must run the tag, and the
+tester reads the tag for its rows from `TRANSCODER_IMAGE` through `DVT_TRANSCODER_TAG`). `VAMBED_IMAGE` is DV-Router's production compose variable
+and is not read by this repository. The tags in the local docker store: `vocoder-ambed:64s-pcm-823ce72a` (production, rollback),
+`vocoder-ambed:64s-pcm-688d9bf7-unity`, `vocoder-ambed:64s-pcm-688d9bf7-gain`; later images (49f237f0) are loaded with `docker load` first. The SUT
+image must be the same for both runs of a comparison. Run the two tags one after the other (one rig at a time), the production tag and the candidate:
+
+```sh
+export XLXD_SUT_IMAGE=<dv-router image> DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-router DVT_SUT_LAUNCH=native \
+  DVT_USRP_DYNAMIC=1 DVT_SUT_CONFIG=<template path> DVT_TRANSCODER_LEVELS=1
+mkdir -p out/voc1
+for tag in 823ce72a 688d9bf7-unity; do                  # production first, then the candidate
+  # CPU of transcoder-sut for the load case (read only, docker stats); it starts when the container exists and ends 60 s after it is gone
+  ( until [ -n "$(docker ps -q --filter name=dvt-transcoder-sut-1)" ]; do sleep 2; done
+    scripts/transcoder-cpu-sample.sh out/voc1/cpu-$tag.txt ) &
+  TRANSCODER_IMAGE=vocoder-ambed:64s-pcm-$tag scripts/run.sh -m rig -- cases/test_transcoder_levels.py
+  run="$(ls -d out/2* | tail -1)"                       # the run just finished
+  cp "$run/transcoder-levels.jsonl" out/voc1/levels-$tag.jsonl
+  cp "$run/transcoder-levels-load.json" out/voc1/load-$tag.json
+  wait
+done
+```
+
+Both result files per tag are plain text (JSON lines): `transcoder-levels.jsonl` (one row per pair and signal, keys `tag`, `pair`, `signal`, `sent`, `got`,
+`rms`, `delta_db`, `ok`, ...) and `transcoder-levels-load.json` (`tag`, `start`, `end`, `streams`). The CPU file has one `<epoch> <cpu %> <mem>` line per sample.
+
+### Decision rule VOC1 (dvtest/tools/voc1_rule.py)
+
+For a vocoder image to replace the production image (DV-Router decision VOC1, 2026-11-07) the candidate run and the production run, same SUT image, must
+satisfy ALL four rules; `dvtest.tools.voc1_rule` prints the table with PASS / FAIL per rule and the verdict:
+
+```sh
+python3 -m dvtest.tools.voc1_rule \
+  --candidate out/voc1/levels-688d9bf7-unity.jsonl --production out/voc1/levels-823ce72a.jsonl \
+  --candidate-load out/voc1/load-688d9bf7-unity.json --candidate-cpu out/voc1/cpu-688d9bf7-unity.txt \
+  --production-load out/voc1/load-823ce72a.json --production-cpu out/voc1/cpu-823ce72a.txt
+```
+
+| Rule | Check (candidate against the production tag) |
+|------|-----------------------------------------------|
+| 1 delivery | frames received >= sent on every row of every pair, content check ok on every row (tone and speech) |
+| 2 speech | per pair the mean active-level delta to the source over the 9 speech signals is within 0.5 dB of production, or the pair moves TOWARD the source (the absolute mean delta decreases); no pair gets farther by more than 0.5 dB |
+| 3 tone | Codec2 -> DMR and Codec2 -> D-STAR 700 Hz rms (amp 8000) rises above production and reaches at least 900 rms (target about 1260 = Codec2's own level); every pair with a non-Codec2 source (tone and speech rows) stays identical (0.0 dB, so a changed AMBE -> AMBE pair fails); the tone is delivered 150/150 frames |
+| 4 load | the 16-stream case completes 16/16 and the mean transcoder CPU of its window is at most 2x the production mean |
+
+Exit status 0 = ship (all four PASS), 1 = do not ship (a rule failed, or rule 4 has no data because the four load files were not given: the decision needs
+all four), 2 = unusable input (unreadable file, rows of more than one tag on a side; a pair without its 9 speech signals is a rule 2 problem).
+`--json` prints the same result as JSON for the tracker row. Nothing is deployed by the tool; a failing candidate keeps the table as evidence.
+Rule 3 does not judge `Codec2 -> YSF` (not named by the decision; rule 2 and rule 1 cover its speech and delivery). Calibration of the thresholds with the
+2026-11-04 rows: the `unity` tag against `823ce72a` passes rules 1, 2 and 4 and fails rule 3 (it does not raise the Codec2 tone; that is the 49f237f0 fix),
+the `gain` tag fails rule 2 on 8 of 9 pairs and rule 3 on the unchanged AMBE pairs.
+
 ## Results
 
 Runs on `dv-router:wip-c165c93`, real transcoder (SUT and reference on the same tag), 2026-11-04: tag 823ce72a `out/20261104T081225Z`, 688d9bf7-gain
