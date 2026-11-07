@@ -698,3 +698,19 @@ def test_run_sh_rejects_a_bad_dp15_tx_enable(tmp_path):
     cfg.write_text(TEMPLATE)
     run = run_sh(tmp_path, XLXD_SUT_IMAGE="img:x", DVT_SUT_CONFIG=str(cfg), DVT_DP15_TX_ENABLE="maybe")
     assert run.returncode == 2 and "DVT_DP15_TX_ENABLE must be true or false" in run.stderr
+
+
+def test_a_bare_token_extra_before_a_merging_extra_renders_in_either_order():
+    """First DP15 rig notes: data-ident.toml (`require_ident = <REQUIRE_IDENT>`, a bare token that is not TOML until
+    render() substitutes it) followed by web.toml (which merges key by key into [web]) failed with "merged extra is not
+    valid TOML", so the snippets had to be named in one order. The check now looks at the text with tokens replaced."""
+    import tomllib
+    web = (ROOT / "rig" / "config" / "dv-router" / "web.toml").read_text()
+    results = []
+    for extras in ([EXTRA_DATA, web], [web, EXTRA_DATA]):
+        text = sut_config.render(WEB_TEMPLATE, "172.30.0", require_ident="false", extras=extras)
+        assert not sut_config.tokens(text)
+        cfg = tomllib.loads(text)
+        assert cfg["data"] == {"enable": True, "require_ident": False} and cfg["web"]["enable"] is True
+        results.append(cfg)
+    assert results[0] == results[1]

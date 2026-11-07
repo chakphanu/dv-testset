@@ -281,7 +281,10 @@ def merge_extra(base, extra):
         out = out.rstrip("\n") + "\n\n" + text
     if merged:
         try:
-            tomllib.loads(out)
+            # tokens (`require_ident = <REQUIRE_IDENT>`) are not TOML before the substitution of render(): check
+            # the text with every token replaced by a valid value, or an earlier extra that carries a bare token
+            # made every later merge fail ("merged extra is not valid TOML") and the order of the extras mattered
+            tomllib.loads(TOKEN.sub("0", out))
         except tomllib.TOMLDecodeError as exc:
             raise ConfigError("merged extra is not valid TOML: %s" % exc) from exc
     return out
