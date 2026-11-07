@@ -82,6 +82,12 @@ def main(argv=None):
                                                                      gaps_sorted[-1], len(gaps)))
         near = sum(1 for g in gaps if abs(g - 1000) <= 60)
         print("spacings within 60 ms of 1000 ms: %d of %d" % (near, len(gaps)))
+    parity = [0, 0]
+    for key, (n, _dev) in bins.items():
+        parity[(key // 10) % 2] += n
+    if total:
+        print("late packets by 10 ms bin parity (20 ms clock phase): even %d odd %d (%.0f%% in the busier half)" % (
+            parity[0], parity[1], 100.0 * max(parity) / total))
     for start, end, n, dev in items[:40]:
         line = "t=%d len=%d ms late=%d maxdev=%.1f" % (start, end - start + 10, n, dev)
         if args.threads:
