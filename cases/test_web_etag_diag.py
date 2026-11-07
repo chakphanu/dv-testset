@@ -111,7 +111,7 @@ def _find(node, key):
 
 
 def test_admin_status_keeps_the_uptime_values(anon, admin_session):
-    """ETAG1 / admin.md 'Status fields' (278): GET /api/v1/admin/status, block `live`: uptime_s and node_uptime_s are present
+    """ETAG1 / admin.md 'Status fields' (278): GET /api/v1/admin/status, block `live` only (no top-level fallback; a missing block fails): uptime_s and node_uptime_s are present
     and increase between two requests a few seconds apart, started_ms / node_started_ms equal the public state's values,
     uptime_source is present; the response has no ETag and Cache-Control no-store. Role viewer (the lowest floor of the route)."""
     admin = admin_session("viewer")
@@ -120,8 +120,9 @@ def test_admin_status_keeps_the_uptime_values(anon, admin_session):
     time.sleep(3.0)
     second = admin.get(path, expect=200)
     a, b = json.loads(first.body), json.loads(second.body)
-    live_a = a.get("live") if isinstance(a.get("live"), dict) else a
-    live_b = b.get("live") if isinstance(b.get("live"), dict) else b
+    assert isinstance(a.get("live"), dict) and isinstance(b.get("live"), dict), \
+        "admin status has no `live` block (admin.md 'Status fields'): top-level keys %s" % sorted(a)[:20]
+    live_a, live_b = a["live"], b["live"]
     for key in ("uptime_s", "node_uptime_s"):
         assert key in live_a and key in live_b, "admin status lacks %s in block live: %s" % (key, sorted(live_a)[:20])
         assert live_b[key] > live_a[key], "%s did not increase: %s then %s" % (key, live_a[key], live_b[key])
