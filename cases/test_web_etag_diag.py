@@ -67,8 +67,9 @@ def test_public_validator_on_an_idle_node(anon, path):
         [(e1 == e2, ident) for e1, e2, _d, ident in pairs]))
     for e1, e2, diffs, ident in pairs:
         assert not (ident and e1 != e2), "%s: identical bodies, different ETags (%s vs %s): validator computation defect" % (path, e1, e2)
-    assert all(not diffs for _e1, _e2, diffs, _i in pairs), "%s changes on an idle node: %s" % (
-        path, [(p, str(x)[:60], str(y)[:60]) for _e1, _e2, diffs, _i in pairs for p, x, y in diffs[:6]][:12])
+    # now_ms is the one leaf that moves by design (web.md: the validator is a hash of the body without now_ms)
+    moving = [(p, str(x)[:60], str(y)[:60]) for _e1, _e2, diffs, _i in pairs for p, x, y in diffs if p != "/now_ms"]
+    assert not moving, "%s changes on an idle node besides now_ms: %s" % (path, moving[:12])
 
 
 def _keys(node, found=None):
