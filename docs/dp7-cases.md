@@ -139,4 +139,126 @@ Config check (host side, throw-away container, `--network none`; all `valid` wit
 * The lead wrote that D-PRS from a GPS-A beacon never claims ambiguity. data.md 5 says the byte is "nonzero only for sources 1 D-PRS and 5 APRS", and a GPS-A line is an APRS information field: a beacon with every digit has ambiguity 0 (asserted, DP7-a and the ledger case), a beacon with blanked digits carries the level (asserted, DP7-c d-prs). The NMEA GPS mode of a D-STAR radio (`$GPRMC` + `$GPGGA` + ID line) is not written.
 * APRS-IS DOWNLINK positions are never admitted into a room (data.md 13.4), so the "APRS-IS" source of the drop cases is the UPLINK (a room position going up) and the RF-to-IS transit; there is no APRS-IS to room position to send.
 * Only `N0OPT`/`N0DMP` are opted out; the account case uses `N0HIDE` over D-STAR, M17, YSF and an M17 object (DMR needs a registry callsign, RF is covered by the opt-out case).
-* Not covered: the IS-to-RF courtesy posit (needs a gated message to an RF-heard addressee), NXDN positions, hide_position for RF transit, the browser DOM of `#/positions`, SSE replay (`Last-Event-ID`) after a hide, object ambiguity levels, items (`)`) as opposed to objects, the 30 minute retention.
+* Not covered by the FIRST set: the IS-to-RF courtesy posit, hide_position for RF, the browser DOM of `#/positions`, SSE replay after a hide, items, the 30 minute retention, the strict ETag case: all written for the next image in "DP7 second set" below. Still not covered: NXDN positions (after the HWFREE1 generator) and object ambiguity levels.
+
+# DP7 second set (written for the next image, NOT RUN)
+
+For the image that carries MAP1, ETAG1, W8A1, XCOBS1, LSTOP1 and DPRS1 (tag not known when this was written; the snippets below were
+checked with `dv-router:wip-ac750c7`, which parses all of them). Nothing here was run on a rig. Authority read (DV-Router tree, read
+only): `docs/design/data.md` 8.3 / 8.9 / 9.3 / 13.2 / 13.4, `docs/design/config.md` (`[data]`, `[[data.path]]`, `[edges.aprsis]`,
+`[[edges.ax25.port]]`), `docs/design/deployment.md` "Optional position basemap (MAP1)", `web/README.md`, `web/site/positions.js`,
+`positions-map.js`, `public.js`, `scripts/basemap-build.py`, `docs/api/openapi-web.yaml` (Stream, LastEventId),
+`crates/data/worker/src/core_rf_tx.rs`, `core_rf_state.rs`, `rf_tx_tests.rs`, `crates/lib/pkt/src/aprs/igate.rs`, `object.rs`,
+`crates/lib/config/src/data_path.rs`, `crates/svc/status/src/hub/data.rs`.
+
+Files: `cases/test_dp15_positions2.py` (DP7-e to DP7-i, imports the helpers and the `hub` / `web_ctx` / `aprsc` fixtures of
+`cases/test_dp15_positions.py`), `cases/test_dp7_positions_page.py` (Playwright, three engines), the strict ETag case in
+`cases/test_web_etag_diag.py`, helpers `cases/position2_support.py`, selectors in `cases/web_pages.py` ("#/positions"), unit tests
+`cases/unit/test_position2_support.py`, `test_dp15_positions2_helpers.py`, `test_dp7_positions_page_helpers.py` (needs playwright),
+snippets `rig/config/dv-router/dp7-courtesy-*.toml`, tester environment `DVT_BASEMAP_FILE` and `DVT_DP7_RETENTION_LONG`
+(`rig/compose.yml`). Notes of a run: `out/<run>/dp7-positions2.txt` and stdout ("RECORD", "FINDING").
+
+## Case table
+
+| Case | Design statement | Steps | Asserted | Recorded |
+|------|------------------|-------|----------|----------|
+| DP7-e `courtesy` | data.md 8.3 "IS to RF": positions are never gated to RF except ONE courtesy position of the station whose message was just gated to RF, when `courtesy_posit = true` | the fake TNC rf-a hears `N0PRX-2`; the verified APRS-IS login `N0PSD-1` sends a message to it, then a position, then a second position | the message is transmitted: `N0TEST-1>APZDVR:}N0PSD-1>APDVT1,TCPIP,N0TEST-1*::N0PRX-2  :text{1`; ONE more third-party frame carries the position exactly as sent; the second position is not transmitted | frame texts, delay, `dv_pkt_rf_drop_total{reason}` and `dv_pkt_rf_downlink_total{result}` |
+| DP7-e `no credit` | `Courtesy::take` needs a credit made by a gated message | `N0PSN-1` sends a position with no message before | no frame from it in 14 s | counters |
+| DP7-e `optout` | data.md 13.4 / config.md: `[data] positions` and `position_optout` apply to the courtesy posit | `N0OPT-1` (opt-out run) or `N0PSB-1` (`positions = false` run): message, then position | the message IS transmitted (control), the position is not | counters |
+| DP7-e `hide_position` | data.md 13.4: the account hidden set applies to the courtesy posit | account `N0PSH` hidden: message (control frame), position; flag cleared: message, position | hidden: no position frame; cleared: the position is transmitted | whether it was |
+| DP7-e `path off` | config.md `courtesy_posit` default false | path `dp7-is-to-rf` with `courtesy_posit = false` | message transmitted, position not | |
+| DP7-e `tx off` | config.md: no path to a port without effective TX; `tx_enable` false | receive-only run, same sequence | NO data frame at the TNC in 22 s | frame count |
+| DP7-f `hide rf` | data.md 13.4: `hide_position` applies to RF-heard APRS and to RF transit | account `N0PFH`: RF position public; flag set; retained row leaves the state; RF position and RF object dropped; transit (with `dp7-rf-igate.toml`): control `N0PFC` reaches the aprsc, `N0PFH` does not; flag cleared: RF position public again | counters `optout` + absence on state / SSE / operator feed; no line at the aprsc | whether the row left |
+| DP7-g `replay` | web/README.md: SSE "streamed/replayed" rows are filtered with the hidden set; openapi Stream: hidden accounts omitted | live SSE sees marker `N0PGM`, control `N0PGK`, `N0PGH`; cursor = id of the marker's event; `N0PGH` hidden; NEW connection with `?last_event_id=<cursor>`; plain new connection; flag cleared | before the hide the replay holds both; after: state lacks `N0PGH`, replay holds `N0PGK` and NOT `N0PGH`, plain connection has no `N0PGH` row; cleared: the state row and a new replay hold `N0PGH` again (design-implied, UNVERIFIED) | frame ids, event names |
+| DP7-h `item m17` / `item rf` | data.md 8.3 objects/items; `object.rs` | `)DVT7ITM!1030.00N/02015.00E>` (3..9 char name, no timestamp), 34 s later the kill `)DVT7ITM_...` over M17 packet mode and over RF | live item public on the three surfaces (`item_type object`, name, state 1, source 5); kill event body `{name, state 0}`, no key starting `lat`/`lon` at any depth; item leaves the listing | rows, keys |
+| DP7-i `retention` | data.md 13.2 / `hub/data.rs`: 30 minutes, a CONSTANT | one M17 position; present at 2 and 25 min; gone by 33 min | as stated | skipped unless `DVT_DP7_RETENTION_LONG=1` (about 35 minutes, own run) |
+| DOM `without a basemap` (3 engines) | deployment.md MAP1: missing data leaves the list and a short note | `#/positions`, room C selected, `<state>/basemap/` absent | `Basemap not installed.` shown, map container has class `hidden` and is not visible, no attribution, table rows = the public rows of room C with coordinates printed at the sent precision, `/basemap/MANIFEST` 404, the browser requested ONLY the page's origin | requests, findings |
+| DOM `with a basemap` (3 engines) | web/README.md: no browser request leaves the site; markers over the basemap; OSM attribution | the provided basemap installed to `out/<run>/sut-state/basemap/`; same page | no note, map visible with a canvas, attribution link text + href, the table unchanged, MANIFEST 200 and the archive requested (200/206), requested origins == {page origin} (foreign ones are aborted and fail the case), one circle per station and per object counted in the map picture | statuses, counts, picture `out/<run>/web/browser/positions-map-<engine>.png` |
+| ETag `idle` / `after a real change` (state with a DExtra link, state with an M17 position, last heard with a D-STAR over) | web.md: weak ETag = hash of the body without `now_ms`; matching `If-None-Match` is 304 | settle to a quiet pair, 4 samples 4 s apart; then the protocol client acts | idle: the ETag is identical across the samples (whatever else moved in the body is only recorded), starts with `W/`, conditional GET and HEAD 304; after the change: ETag differs within 25 s, conditional GET with the OLD ETag is 200, with the CURRENT one 304, conditional HEAD with the OLD one 200 | moved leaves, latency |
+
+`test_public_conditional_and_head` of `cases/test_web_api.py` and the diagnostic `test_public_validator_on_an_idle_node` are unchanged.
+
+## Why these rules (for the reader of a failure)
+
+* The courtesy credit (`Courtesy` / `RfState::credit`): a message from X gated to RF gives X one credit for 300 s; the NEXT position of X seen on
+  APRS-IS spends it, once, only for sender not heard on RF in the last 60 s, only when `position_allowed` (positions on, base callsign not opted out,
+  not in the hidden set, hidden set KNOWN). The frame is the same third-party wrapper as the message. A position interval of the port class
+  (30 minutes for `afsk1200-shared`) applies per station, so every case uses its own correspondent.
+* Flat IS-to-RF limit of the worker per RF port: 6 in 60 s and 10 in 300 s (gated messages AND courtesy frames; result `rate`). `position2_support.IGATE`
+  books the frames a case expects and waits when the window is full; the positive case books 2, the hidden-account case 3.
+* The launcher accepts only `types = ["transit"]` on an APRS-IS to RF path ("APRS-IS-to-RF permits transit messages only", seen with `config_check` on
+  wip-ac750c7). The DV-Router login filter is only `g/<addressee>` of the paths FROM `edge:aprsis` plus `filter_extra`, so
+  `dp7-courtesy-filter.toml` adds `p/N0PS/N0OPT` (aprsc prefix filter on the source); without it neither the message nor the position comes down.
+* Markers are WebGL: positions-map.js puts the rows into a GeoJSON circle layer, and neither the page nor MapLibre exposes a marker element or a map
+  handle. The table is the accessible list of the same rows (the DOM evidence); the circles are counted in a screenshot (`position2_support.blobs`).
+* The retention window is a constant (`POSITION_AGE_MS`, 30 minutes) of the hub and the page (`KEEP_MS`); config.md has no key, so no 20 to 60 s
+  case exists. The long case is opt-in.
+
+## Snippets (`rig/config/dv-router/`)
+
+| Snippet | Content | Note |
+|---------|---------|------|
+| `dp7-courtesy-tx.toml` | `[edges.ax25]` with `tx_enable = true` and ONE kiss-tcp port `rf-a` (`<TESTER_IP>:8101`) bound to `room = "B"`, `tx = true`, `physical = "radio1"`, `band = "2m"`, `class = "afsk1200-shared"`, `tx_budget = {}`, `tx_per_min = 10`, `tx_burst = 3` | INSTEAD of `dp7-rf.toml` and `dp15-rf.toml` (all define `[edges.ax25]`); the default 2 per minute / burst 1 would delay the courtesy frame by 30 s |
+| `dp7-courtesy-filter.toml` | `[edges.aprsis] filter_extra = "p/N0PS/N0OPT"` | merged key by key into `dp15-aprsis.toml`'s table; name it after that file; needed in every courtesy shape |
+| `dp7-courtesy-path.toml` | path `dp7-is-to-rf`: `edge:aprsis` to `edge:ax25/rf-a`, `types = ["transit"]`, `courtesy_posit = true` | only with `dp7-courtesy-tx.toml` and `dp15-aprsis.toml` |
+| `dp7-courtesy-path-off.toml` | the same path with `courtesy_posit = false` | INSTEAD of `dp7-courtesy-path.toml` (same path name) |
+
+Config check (host side, throw-away container, `--network none`, `dv-router:wip-ac750c7`, all `valid`):
+`python3 -m dvtest.tools.config_check --image dv-router:wip-ac750c7 --template <template> --gen compat1 --extra R/data-ident.toml --extra R/dp15-aprsis.toml --extra R/dp7-courtesy-tx.toml --extra R/dp7-courtesy-filter.toml --extra R/dp7-courtesy-path.toml --extra R/dp7-position-optout.toml`
+(also with `dp7-courtesy-path-off.toml` in place of the path, with `--extra R/dp7-rf.toml` and `dp7-courtesy-filter.toml` for the receive-only shape, and with
+`dp7-rf-igate.toml` and `dp7-aprsis-up.toml` added to the first). `dp7-courtesy-path.toml` together with `dp7-courtesy-path-off.toml` is INVALID (duplicate path name), as expected.
+
+## Run commands
+
+Common prefix as above (`XLXD_SUT_IMAGE=<next image> DVT_SUT_PROFILE=dvrouter DVT_SUT_LAUNCH=native DVT_SUT_GEN=compat1 DVT_SUT_CONFIG=<template>
+DVT_TRANSCODER_FAKE=1 DVT_REQUIRE_IDENT=true`); `R` = `rig/config/dv-router`; `W` = `R/web.toml:R/admin.toml:R/totp-required.toml:R/data-ident.toml:R/dp15-aprsis.toml`.
+
+| Run | `DVT_SUT_CONFIG_EXTRA` | Command tail | Runs | Needs |
+|-----|------------------------|--------------|------|-------|
+| C1 courtesy on (about 25 min, UNVERIFIED) | `W:R/dp7-courtesy-tx.toml:R/dp7-courtesy-filter.toml:R/dp7-courtesy-path.toml:R/dp7-rf-igate.toml:R/dp7-position-optout.toml` | `scripts/run.sh -m rig --capture --profile web,aprs -- cases/test_dp15_positions2.py` | DP7-e courtesy / no credit / optout / hide_position, DP7-f (with transit), DP7-g, DP7-h m17 + rf | profile aprs (`scripts/pre-fetch-aprsc.sh` once), `DVT_RIG_CONTROL` is set by `run.sh` |
+| C2 courtesy path off (about 8 min) | as C1 with `R/dp7-courtesy-path-off.toml` instead of `R/dp7-courtesy-path.toml` | same | DP7-e path off (the others skip with the reason, DP7-f / g / h run again) | as C1 |
+| C3 transmit off (about 8 min) | `W:R/dp7-rf.toml:R/dp7-courtesy-filter.toml:R/dp7-position-optout.toml` | same | DP7-e tx off, DP7-f (no transit), DP7-g, DP7-h | as C1 |
+| C4 positions off, optional | as C1 with `R/dp7-positions-off.toml` instead of `R/dp7-position-optout.toml` | same | DP7-e optout (the `positions = false` correspondent) | as C1 |
+| ETag (about 4 min) | `R/web.toml:R/admin.toml:R/totp-required.toml:R/data-ident.toml` | `scripts/run.sh -m rig --capture --profile web -- cases/test_web_etag_diag.py` | the strict ETag case x3 and the diagnostic | the position trigger needs the data worker |
+| DOM without a basemap (about 10 min) | `R/web.toml:R/admin.toml:R/totp-required.toml:R/data-ident.toml` | `scripts/run.sh -m rig --capture --profile web,browser -- cases/test_dp7_positions_page.py` | `without a basemap` x3; `with a basemap` skips with the reason | `docker pull` of `BROWSER_BASE_IMAGE` once; M17 module C |
+| DOM with a basemap (about 15 min) | as above | `DVT_BASEMAP_FILE=.local/basemap-20261106-z8.pmtiles scripts/run.sh -m rig --capture --profile web,browser -- cases/test_dp7_positions_page.py` | both, 6 cases | a basemap file (below) |
+| Retention (about 40 min, its own run) | as ETag | `DVT_DP7_RETENTION_LONG=1 scripts/run.sh -m rig --profile web -- cases/test_dp15_positions2.py -k retention` | DP7-i | the data worker |
+
+## The basemap file (what the lead supplies)
+
+`scripts/basemap-build.py` needs the internet (go-pmtiles 1.31.2 from GitHub with a pinned hash, ranges of a Protomaps daily build, glyph files at
+a pinned commit), so it was NOT run here and no tile, package or glyph was fetched. On a machine with network access:
+`python3 scripts/basemap-build.py 20261106 --maxzoom 8 --output target/basemap-20261106` in the DV-Router tree (about 4.4 MB for Thailand at z8). Then
+`DVT_BASEMAP_FILE` may name (a path under this repository, the tester container mounts it at `/dvt`; relative paths are taken from the repository
+root; `.local/` is ignored by git):
+
+* the output directory itself (`MANIFEST`, `basemap-20261106-z8.pmtiles`, `glyphs/`), or
+* a `.tar` / `.tar.gz` of it (one leading directory is stripped; absolute and `..` names are refused), or
+* a bare `basemap-*.pmtiles` archive (the case writes the `MANIFEST` and names the file `basemap-20260101-z<maxzoom>.pmtiles`, which is the form the page
+  accepts; there are no glyph files, so label text requests answer 404 on the page's own origin: UNVERIFIED that the map still reaches `ready`).
+
+The case verifies every file against the MANIFEST hashes, stages the copy as `out/<run>/sut-state/basemap.dvt-staging/` and renames it to `basemap/` in one
+step (never over an existing `basemap/`), puts a marker file `.dvt-installed` inside, and at the end removes only a `basemap/` that carries the marker. The
+seeds (three stations and one object in room C) are placed inside the basemap's bounding box from the MANIFEST (default: Thailand `97.3,5.6,105.7,20.5`).
+
+## UNVERIFIED shapes of the second set
+
+* Courtesy: that the rig's aprsc passes the correspondent's packets to the DV-Router login with `filter_extra = "p/N0PS/N0OPT"` (aprsc `p/` prefix filter on the
+  source), that a verified login may send only with source == login (the cases never send another source), that the worker's heard table sees the TNC
+  frame of `N0PRX-2` (a status) 2 s after the injection, that the courtesy frame follows within 25 s (scheduler: min gap 2 s, position class), and the counter
+  names `dv_pkt_rf_drop_total{reason}` / `dv_pkt_rf_downlink_total{result}` (read from `core_rf_tx.rs`, recorded not asserted). The outer path of a transmitted frame is empty
+  (`tx_path = ""`); only the inner path is asserted (`TCPIP,N0TEST-1*`).
+* The hide push (3 s after `PATCH ... hide_position` the worker and the web process have the new set), and that the worker knows a hidden set at all in the run (cold
+  start denies positions until the first set; the cases come late enough).
+* SSE: that data event frames carry `id: <boot>-<ordinal>`, that `?last_event_id=` replays the events after it for a client that was not connected, that
+  a hidden station is omitted from the replay, and that clearing the flag brings the retained row back (the hub does not know the flag).
+* Items: that `)NAME!` over M17 packet mode and RF becomes the same `object` row as `;NAME`, and that the timestamp-free kill is accepted after the live item (the hub
+  orders by acceptance time, `hub/data.rs`).
+* DOM: the status texts and test ids are taken from `positions.js`; that `.hidden` hides the map container; that the default room selected by the page is the first
+  room of the state (the case selects `C` with the room `<select>`); that module C exists and accepts an M17 client; that the tester sees `out/<run>/sut-state/`;
+  that dv-svc-web serves a `basemap/` that appears while it runs (else the case restarts `dv-svc-web` through the control channel, or fails with the reason);
+  that Chromium delivers the requests of the MapLibre worker to the context-level `request` event (Firefox and WebKit: unknown; an unseen request cannot fail the origin
+  audit, the aborting route is the guard); the marker colours (`#146cad`, `#b36b00`, tolerance 12 per channel) and that circles of the seeds do not touch; WebGL2 in
+  the browser container (without it the case checks the list and skips the pixel part).
+* ETag: that a DExtra link changes the state's client list, that a D-STAR over adds a last-heard entry, and that the validator is a weak ETag (`W/` prefix, as the first case asserts).
+
