@@ -223,6 +223,8 @@ def run_load(n, plan_kw, web_base_url, web_ca, load_gen, rig_control, target, ac
     totals["errors"] = sorted({r["error"] for r in rows if r["error"]})[:5]
     summary["listener_totals"] = totals
     summary["loop_lag"] = res["loop_lag"]
+    summary["late_bins_count"] = len(res.get("late_bins") or {})
+    summary["late_bins"] = res.get("late_bins") or {}
     checks = wl.evaluate_gates(n, edge, totals, summary["source"])
     summary["gate"] = [{"name": c.name, "measured": c.measured, "limit": c.limit, "ok": c.ok, "note": c.note} for c in checks]
     summary["gate_ok"] = wl.all_ok(checks)

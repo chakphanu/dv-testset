@@ -56,6 +56,11 @@ def relay_sdp(sdp):
     return "\r\n".join(keep) + "\r\n"
 
 
+LATE_MS = 5.0               # a packet whose spacing is off by more than this is "late" (late_bins)
+LATE_BIN_MS = 10
+LATE_BINS_MAX = 6000
+
+
 def now_ns():
     return time.perf_counter_ns()
 
@@ -397,12 +402,43 @@ class Worker:
             if win:
                 lo = min(win) if lo is None else min(lo, min(win))
                 hi = max(win) if hi is None else max(hi, max(win))
+        late_bins = self.late_bins()
         lags = sorted(ms for t, ms in self.lag if lo is not None and lo <= t <= hi)
         lag = {"samples": len(lags), "p50_ms": wl.nearest_rank(lags, 50), "p99_ms": wl.nearest_rank(lags, 99),
                "max_ms": lags[-1] if lags else None}
         ticks, rss = read_proc_ticks()
         return {"rows": rows, "srtp_errors": _SRTP_ERRORS[0], "loop_lag": lag, "pid": os.getpid(),
-                "ticks": ticks, "rss_kib": rss}
+                "ticks": ticks, "rss_kib": rss, "late_bins": late_bins}
+
+    def late_bins(self):
+        """Where in time the late packets are (THREADS1b evidence). A packet is late when its spacing to the
+        previous in-window packet of the same listener differs from the frame interval by more than LATE_MS (the
+        deviation the jitter figures use). Returned as {epoch ms of a LATE_BIN_MS bin: [late packets, largest
+        deviation ms]} over all listeners of this worker, so a stall that hits every listener at once shows as one
+        bin with many packets. The perf_counter arrival times are mapped to the wall clock at the time of the call."""
+        off_ns = time.time_ns() - time.perf_counter_ns()
+        first, end = self.plan.window
+        bins = {}
+        for lst in self.listeners:
+            seen = set()
+            times = []
+            for t_ns, idx in zip(lst.t, lst.idx):
+                if idx in seen:
+                    continue
+                seen.add(idx)
+                if first <= idx < end:
+                    times.append(t_ns)
+            for a, b in zip(times, times[1:]):
+                dev = abs((b - a) / 1e6 - wl.FRAME_MS)
+                if dev > LATE_MS:
+                    key = str(int((b + off_ns) / 1e6) // LATE_BIN_MS * LATE_BIN_MS)
+                    cur = bins.setdefault(key, [0, 0.0])
+                    cur[0] += 1
+                    cur[1] = max(cur[1], round(dev, 2))
+        if len(bins) > LATE_BINS_MAX:
+            keep = sorted(bins.items(), key=lambda kv: -kv[1][0])[:LATE_BINS_MAX]
+            bins = dict(keep)
+        return bins
 
     async def teardown(self):
         loop = asyncio.get_running_loop()
@@ -590,15 +626,20 @@ class Server:
         if len(got) < len(job.workers):
             job.state = "error"
             raise RuntimeError("only %d of %d workers returned a result" % (len(got), len(job.workers)))
-        rows, errors, lags, procs = [], 0, [], {}
+        rows, errors, lags, procs, late = [], 0, [], {}, {}
         for w, res in sorted(got.items()):
             rows += res["rows"]
+            for key, (n, dev) in (res.get("late_bins") or {}).items():
+                cur = late.setdefault(key, [0, 0.0])
+                cur[0] += n
+                cur[1] = max(cur[1], dev)
             errors += res["srtp_errors"]
             lags.append(dict(res["loop_lag"], worker=w))
             procs["worker%d" % w] = {"ticks": res["ticks"], "rss_kib": res["rss_kib"]}
         rows.sort(key=lambda r: r["j"])
         job.state = "done"
-        return {"rows": rows, "srtp_errors": errors, "loop_lag": lags, "connect_failures": dict(job.failed)}
+        return {"rows": rows, "srtp_errors": errors, "loop_lag": lags, "connect_failures": dict(job.failed),
+                "late_bins": late}
 
     def abort(self):
         job = self.job

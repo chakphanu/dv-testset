@@ -188,3 +188,25 @@ def test_soak_release_revokes_closes_and_forgets_the_peer():
     asyncio.run(worker.release(lst, Client(), pc))
     assert calls == [("POST", gen.CLOSE_PATH, {"sess_id": "ab" * 8})] and pc.closed and worker.pcs == []
     assert lst.left and lst.client is None and events == [{"ev": "left", "j": 5}]
+
+
+def test_late_bins_marks_a_stall_seen_by_every_listener():
+    import time
+    import types
+    plan = wl.Plan(listeners=2)
+    first, end = plan.window
+    lsts = []
+    for j in range(2):
+        lst = gen.Listener({"j": j, "room": "A", "login": 0}, plan)
+        base = time.perf_counter_ns()
+        t = base
+        for idx in range(first, first + 20):
+            # frame 10 arrives 12 ms late, frame 11 right behind it (deviations 12 ms and 12 ms)
+            lst.t.append(t + (12_000_000 if idx == first + 10 else 0))
+            lst.idx.append(idx)
+            t += 20_000_000
+        lsts.append(lst)
+    fake = types.SimpleNamespace(listeners=lsts, plan=plan)
+    bins = gen.Worker.late_bins(fake)
+    assert sum(n for n, _dev in bins.values()) == 4          # two spacings per listener, two listeners
+    assert all(dev >= 11.9 for _n, dev in bins.values())
