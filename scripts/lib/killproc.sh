@@ -23,7 +23,10 @@
 #   buckets and lockouts; the launcher respawns it), dv-edge-webrtc (the
 #   WebRTC edge: the K22 cases kill it under a guest that keeps calling
 #   /rtc/alive) and dv-svc-status (the status hub: its snapshots carry the
-#   guest proof) with KILL only; dv-room (a room controller: the LEAK2 cases
+#   guest proof) and dv-data-worker (the data worker: the DP15 cases kill it
+#   during traffic and the launcher respawns it after 0.5 s doubling to 5 s; the
+#   comm is the same for every worker id, DV_DATA_WORKER_ID only shows in the
+#   launcher label dv-data-worker[<id>]) with KILL only; dv-room (a room controller: the LEAK2 cases
 #   kill the one of a module and the launcher respawns it) with KILL only and
 #   ONLY together with rooms=<LETTER> (a blanket kill of every controller is
 #   refused); the selector is refused for every other process. The
@@ -49,7 +52,7 @@ dvt_killproc_allowed() {
     return 1                                      # dv-room needs rooms=<LETTER>
   fi
   case "$2:$3" in
-    dv-edge-xlx:KILL|dv-edge-xlx:USR1|dv-edge-nxdn:KILL|dv-edge-nxdn:USR1|dv-edge-p25:KILL|dv-edge-p25:USR1|dv-edge-allstar:KILL|dv-edge-allstar:USR1|dv-codec-ambed:KILL|dv-svc-web:KILL|dv-edge-webrtc:KILL|dv-svc-status:KILL|dv-room:KILL) return 0 ;;
+    dv-edge-xlx:KILL|dv-edge-xlx:USR1|dv-edge-nxdn:KILL|dv-edge-nxdn:USR1|dv-edge-p25:KILL|dv-edge-p25:USR1|dv-edge-allstar:KILL|dv-edge-allstar:USR1|dv-codec-ambed:KILL|dv-svc-web:KILL|dv-edge-webrtc:KILL|dv-svc-status:KILL|dv-data-worker:KILL|dv-room:KILL) return 0 ;;
   esac
   return 1
 }

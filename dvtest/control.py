@@ -45,6 +45,7 @@ KILL_PROC_ALLOWED = {
     ("xlxd-sut", "dv-svc-web"): ("KILL",),       # resets the web service's in-memory limits and lockouts
     ("xlxd-sut", "dv-edge-webrtc"): ("KILL",),   # K22: a dropped Disconnect, guests calling /rtc/alive meanwhile
     ("xlxd-sut", "dv-svc-status"): ("KILL",),    # K22: the status hub's snapshots carry the guest proof
+    ("xlxd-sut", "dv-data-worker"): ("KILL",),   # DP15: the data worker (comm is the same for every id); the launcher respawns it
     ("xlxd-sut", "dv-room"): ("KILL",),          # LEAK2: one room controller, ONLY with a rooms=<LETTER> selector
 }
 

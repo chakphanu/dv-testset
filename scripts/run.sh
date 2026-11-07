@@ -164,8 +164,9 @@
 # or "kill-proc xlxd-sut <process> <signal> [rooms=<LETTER>]": signal one process INSIDE the sut
 # container by exact /proc comm (scripts/lib/killproc.sh): dv-edge-xlx,
 # dv-edge-nxdn, dv-edge-p25 with KILL or USR1 (quiet restart), dv-codec-ambed, dv-svc-web,
-# dv-edge-webrtc and dv-svc-status with KILL only (the web cases reset its in-memory limits;
-# the K22 cases kill the WebRTC edge and the status hub), dv-room with KILL only and
+# dv-edge-webrtc, dv-svc-status and dv-data-worker with KILL only (the web cases reset its in-memory limits;
+# the K22 cases kill the WebRTC edge and the status hub; the DP15 cases kill the data worker, the
+# launcher respawns it after 0.5 s doubling to 5 s), dv-room with KILL only and
 # ONLY with the fifth word rooms=<LETTER> (one A-Z: the process must also carry
 # --rooms <LETTER> in its /proc cmdline; the LEAK2 cases kill one room controller,
 # the launcher respawns it; the selector is refused for every other process, a

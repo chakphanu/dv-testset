@@ -21,7 +21,7 @@ LIB = Path(__file__).resolve().parents[2] / "scripts" / "lib" / "killproc.sh"
 METRICS_LIB = Path(__file__).resolve().parents[2] / "scripts" / "lib" / "metrics.sh"
 
 SERVICES = ["xlxd-sut", "xlxd-ref", "tester", "transcoder-sut", "allstar", "XLXD-SUT", "", "xlxd-sut ", "*"]
-PROCESSES = ["dv-edge-xlx", "dv-edge-nxdn", "dv-edge-p25", "dv-edge-allstar", "dv-router", "dv-codec-ambed", "dv-svc-web", "dv-svc-admin", "dv-edge-webrtc", "dv-svc-status", "dv-room", "dv-room2", "dv-codec", "dv-codec-ambed2", "dv-codec-*", "dv-edge-dextra", "dv-edge-*", "dv-edge",
+PROCESSES = ["dv-edge-xlx", "dv-edge-nxdn", "dv-edge-p25", "dv-edge-allstar", "dv-router", "dv-codec-ambed", "dv-svc-web", "dv-svc-admin", "dv-edge-webrtc", "dv-svc-status", "dv-data-worker", "dv-data-worker2", "dv-data-worker[pkt]", "dv-data", "dv-room", "dv-room2", "dv-codec", "dv-codec-ambed2", "dv-codec-*", "dv-edge-dextra", "dv-edge-*", "dv-edge",
              "dv-router2", "DV-ROUTER", "xlxd", "sh", "", "dv-edge-xlx;id", "../dv-router", "-1", "1"]
 SIGNALS = ["KILL", "USR1", "TERM", "SIGKILL", "kill", "9", "HUP", "USR2", "INT", "STOP", "", "-9", "KILL;id"]
 
@@ -55,7 +55,7 @@ def test_python_table():
         assert not control.kill_proc_allowed("xlxd-sut", "dv-svc-web", sig)
     assert not control.kill_proc_allowed("xlxd-ref", "dv-svc-web", "KILL")
     # the WebRTC edge and the status hub (K22): KILL only
-    for proc in ("dv-edge-webrtc", "dv-svc-status"):
+    for proc in ("dv-edge-webrtc", "dv-svc-status", "dv-data-worker"):
         assert control.kill_proc_allowed("xlxd-sut", proc, "KILL")
         for sig in ("USR1", "TERM", "HUP", "INT", "STOP"):
             assert not control.kill_proc_allowed("xlxd-sut", proc, sig)
@@ -67,7 +67,7 @@ def test_python_table():
     for sig in ("USR1", "TERM", "HUP", "INT", "STOP"):
         assert not control.kill_proc_allowed("xlxd-sut", "dv-room", sig, "B")
     assert not control.kill_proc_allowed("xlxd-ref", "dv-room", "KILL", "B")
-    assert sum(len(v) for v in control.KILL_PROC_ALLOWED.values()) == 13
+    assert sum(len(v) for v in control.KILL_PROC_ALLOWED.values()) == 14
     assert not any(proc == "dv-router" for _svc, proc in control.KILL_PROC_ALLOWED)
 
 
@@ -79,11 +79,27 @@ def test_python_refuses_malformed_rooms_selector(rooms):
 
 
 def test_python_refuses_selector_on_other_processes():
-    for proc in ("dv-edge-xlx", "dv-edge-p25", "dv-codec-ambed", "dv-svc-web", "dv-edge-webrtc", "dv-svc-status", "dv-router"):
+    for proc in ("dv-edge-xlx", "dv-edge-p25", "dv-codec-ambed", "dv-svc-web", "dv-edge-webrtc", "dv-svc-status", "dv-data-worker", "dv-router"):
         for sig in ("KILL", "USR1"):
             assert not control.kill_proc_allowed("xlxd-sut", proc, sig, "A")
     with pytest.raises(ValueError):
         control.kill_proc_line("xlxd-sut", "dv-edge-xlx", "KILL", "A")
+
+
+def test_data_worker_kill_line_and_guard_rails():
+    """DP15 U1: dv-data-worker is killable with KILL only, in the sut only, never with a selector."""
+    assert control.kill_proc_line("xlxd-sut", "dv-data-worker", "KILL") == "kill-proc xlxd-sut dv-data-worker KILL"
+    assert control.KILL_PROC_ALLOWED[("xlxd-sut", "dv-data-worker")] == ("KILL",)
+    assert ("xlxd-sut", "dv-data-worker") not in control.KILL_PROC_NEEDS_ROOMS
+    for sig in ("TERM", "USR1", "HUP", "9"):
+        with pytest.raises(ValueError):
+            control.kill_proc_line("xlxd-sut", "dv-data-worker", sig)
+    for name in ("dv-data-worker2", "dv-data-worker[pkt]", "dv-data"):
+        assert not control.kill_proc_allowed("xlxd-sut", name, "KILL")
+    with pytest.raises(ValueError):
+        control.kill_proc_line("xlxd-ref", "dv-data-worker", "KILL")
+    # the read-only side stays: proc-stat of the worker is allow-listed
+    assert control.proc_stat_allowed("xlxd-sut", "dv-data-worker")
 
 
 def test_kill_proc_line_rooms():
@@ -108,7 +124,7 @@ def test_bash_and_python_agree_on_every_combination():
     allowed_bash = {combos[int(i)] for v, i in verdicts if v == "1"}
     allowed_py = {c for c in combos if control.kill_proc_allowed(*c)}
     assert allowed_bash == allowed_py
-    assert len(allowed_py) == 12                    # dv-room is not among them: it needs a selector
+    assert len(allowed_py) == 13                    # dv-room is not among them: it needs a selector
     assert not any(p == "dv-router" for _s, p, _g in allowed_bash)
     assert not any(p == "dv-room" for _s, p, _g in allowed_bash)
 
@@ -146,6 +162,10 @@ def test_bash_allowed_needs_exactly_three_words():
 
 
 def test_bash_allowed_selector_rules():
+    assert bash('dvt_killproc_allowed xlxd-sut dv-data-worker KILL').returncode == 0
+    assert bash('dvt_killproc_allowed xlxd-sut dv-data-worker USR1').returncode == 1
+    assert bash('dvt_killproc_allowed xlxd-sut dv-data-worker KILL rooms=B').returncode == 1
+    assert bash('dvt_killproc_parse "kill-proc xlxd-sut dv-data-worker KILL"').stdout.strip() == "xlxd-sut dv-data-worker KILL"
     assert bash('dvt_killproc_allowed xlxd-sut dv-room KILL rooms=B').returncode == 0
     assert bash('dvt_killproc_allowed xlxd-sut dv-room KILL').returncode == 1                  # blanket kill refused
     assert bash('dvt_killproc_allowed xlxd-sut dv-room KILL rooms=b').returncode == 1
