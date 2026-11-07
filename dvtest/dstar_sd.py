@@ -827,3 +827,47 @@ def over_datagrams(stream_id, frames, radio=None, ambe=NULL_AMBE, last=True):
     if last:
         out.append(dextra.last_frame(stream_id, len(frames)))
     return out
+
+
+# ------------------------------------------------------------------ whole overs for the DP15 cases
+
+def aprs_position_payload(source, lat, lon, comment="test", tocall="API510", path="DSTAR*", symbol="/>"):
+    """The D-PRS line payload "SRC>TOCALL,PATH:!DDMM.mmN/DDDMM.mmEs comment" (uncompressed position, no
+    timestamp, symbol table and code from `symbol`). Keep the comment free of the characters of FORBIDDEN_SIMPLE
+    (a lower case 'v' is one)."""
+    def part(value, deg_width, pos, neg):
+        hund = round(abs(value) * 60 * 100)
+        deg, rest = divmod(hund, 6000)
+        return "%0*d%02d.%02d%s" % (deg_width, deg, rest // 100, rest % 100, pos if value >= 0 else neg)
+    return "%s>%s,%s:!%s%s%s%s%s" % (source, tocall, path, part(lat, 2, "N", "S"), symbol[0],
+                                     part(lon, 3, "E", "W"), symbol[1], comment)
+
+
+def tx_message_fields(text, superframes=3, drop=()):
+    """(seq, wire data field) of an over whose every superframe carries the 20 character TX message in blocks
+    0x40..0x43 at slots 0..3 (the layout ircDDBGateway and the radios use). `drop` lists block numbers
+    (0..3) that are replaced by the filler: the text of that superframe is then incomplete."""
+    blocks = [None if i in drop else b for i, b in enumerate(text_blocks(text))]
+    sfs = interleave(LAYOUTS["text"], {"T": ("cycle", blocks)}, superframes=superframes)
+    return render(superframes_to_halves(sfs))
+
+
+def text_gps_fields(text, dprs_payload, superframes=3):
+    """As tx_message_fields, with a D-PRS line (dprs_line of `dprs_payload`) interleaved in the free slots (pattern
+    text-gps: T G T G T G T G G G). At least `superframes` superframes, more when the line needs them."""
+    line = simple_data_blocks(dprs_line(dprs_payload))
+    sfs = interleave(LAYOUTS["text-gps"], {"T": ("cycle", text_blocks(text)), "G": ("once", line)},
+                     superframes=superframes)
+    return render(superframes_to_halves(sfs))
+
+
+def over_packets(stream_id, fields, ambe_frames=None, radio=None, **header_fields):
+    """DSVT datagrams (header, one voice packet per (seq, wire) of `fields`, last frame) with the AMBE frames of
+    `ambe_frames` (NULL_AMBE where there are fewer). The header is dextra.header_packet(radio or header_fields)."""
+    ambe_frames = list(ambe_frames or [])
+    out = [dextra.header_packet(stream_id, radio=radio, **header_fields)]
+    for index, (seq, wire) in enumerate(fields):
+        out.append(dextra.voice_packet(stream_id, seq, ambe_frames[index] if index < len(ambe_frames) else NULL_AMBE,
+                                       slow=wire))
+    out.append(dextra.last_frame(stream_id, len(fields)))
+    return out

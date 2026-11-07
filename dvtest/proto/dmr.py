@@ -454,3 +454,127 @@ class DmrClient:
 
     def close(self):
         self.client.close()
+
+
+# ---------------------------------------------------------------- DMRG / DMRA (Homebrew side channels)
+# What a repeater sends beside the voice bursts of the stream of a radio id: GPS ("DMRG", 14 B) and talker
+# alias ("DMRA", 15 B). Layout READ from MMDVMHost DMRNetwork.cpp:259-297 (writeRadioPosition,
+# writeTalkerAlias), DMRSlot.cpp:2061-2088 (position fields), DMRTA.cpp:34-136 (alias formats) of the
+# pinned checkout (.cache/dstarsd-mmdvm) and from the DV-Router parser crates/lib/pkt/src/dmr.rs:26-141;
+# VERIFIED against both. docs/dp15-cases.md lists the lines.
+#
+#   DMRG  'DMRG' + source id (3 B, big endian) + 7 B: LC bytes 2..8
+#         byte 0: bit 0 = bit 24 of the longitude, bits 1..3 = position error estimate (7 = not known)
+#         bytes 1..3: low 24 bits of the longitude, 25 bit signed, 360 / 2^25 degrees per step
+#         bytes 4..6: latitude, 24 bit signed, 180 / 2^24 degrees per step
+#   DMRA  'DMRA' + source id (3 B) + block number (1 B, 0..3) + 7 B of the alias buffer (block * 7)
+#         buffer byte 0: bits 7..6 format (0 7 bit packed, 1 ISO 8 bit, 2 UTF-8, 3 UTF-16 low byte),
+#         bits 5..1 character count, then the characters: format 0 packs 7 bit characters from bit 0 of
+#         byte 0 on, formats 1 and 2 one byte per character from byte 1, format 3 two bytes (high, low)
+DMRG_SIZE, DMRA_SIZE = 14, 15
+ALIAS_7BIT, ALIAS_ISO8, ALIAS_UTF8, ALIAS_UTF16 = 0, 1, 2, 3
+POSITION_UNKNOWN_ERROR = 7
+
+
+def dmrg_packet(radio_id, lat, lon, error=POSITION_UNKNOWN_ERROR):
+    """The 14 byte DMRG datagram of a fix (degrees, south and west negative)."""
+    if not -90 <= lat < 90 or not -180 <= lon < 180:
+        raise ValueError("latitude/longitude out of range")
+    lon_v = round(lon * (1 << 25) / 360) & ((1 << 25) - 1)
+    lat_v = round(lat * (1 << 24) / 180) & ((1 << 24) - 1)
+    body = bytes([((error & 7) << 1) | (lon_v >> 24)]) + (lon_v & 0xFFFFFF).to_bytes(3, "big") + lat_v.to_bytes(3, "big")
+    return b"DMRG" + radio_id.to_bytes(3, "big") + body
+
+
+def parse_dmrg(data):
+    """(radio id, lat, lon, error) of a 14 byte DMRG datagram, or None."""
+    if len(data) != DMRG_SIZE or not data.startswith(b"DMRG"):
+        return None
+    lon_v = ((data[7] & 1) << 24) | int.from_bytes(data[8:11], "big")
+    lat_v = int.from_bytes(data[11:14], "big")
+    lon_v -= (1 << 25) if lon_v & (1 << 24) else 0
+    lat_v -= (1 << 24) if lat_v & (1 << 23) else 0
+    return (int.from_bytes(data[4:7], "big"), lat_v * 180 / (1 << 24), lon_v * 360 / (1 << 25), (data[7] >> 1) & 7)
+
+
+def alias_buffer(text, fmt=ALIAS_7BIT):
+    """The talker alias buffer (up to 28 bytes, padded with zero to whole 7 byte blocks)."""
+    if fmt == ALIAS_7BIT:
+        chars = text.encode("ascii")
+        if len(chars) > 31:
+            raise ValueError("an alias holds at most 31 characters")
+        bits = format(0, "02b") + format(len(chars), "05b") + "".join(format(c & 0x7F, "07b") for c in chars)
+        bits += "0" * (-len(bits) % 8)
+        buf = int(bits, 2).to_bytes(len(bits) // 8, "big")
+    elif fmt in (ALIAS_ISO8, ALIAS_UTF8):
+        chars = text.encode("latin-1" if fmt == ALIAS_ISO8 else "utf-8")
+        if len(chars) > 27:
+            raise ValueError("an alias in this format holds at most 27 bytes")
+        buf = bytes([(fmt << 6) | (len(chars) << 1)]) + chars
+    elif fmt == ALIAS_UTF16:
+        chars = text.encode("latin-1")
+        if len(chars) > 13:
+            raise ValueError("a UTF-16 alias holds at most 13 characters")
+        buf = bytes([(fmt << 6) | (len(chars) << 1)]) + b"".join(b"\0" + bytes([c]) for c in chars)
+    else:
+        raise ValueError("alias format 0..3")
+    if len(buf) > 28:
+        raise ValueError("an alias buffer is 28 bytes")
+    return buf + bytes(-len(buf) % 7)
+
+
+def dmra_packets(radio_id, text, fmt=ALIAS_7BIT):
+    """The 15 byte DMRA datagrams (one per 7 byte block, block numbers from 0) of a talker alias."""
+    buf = alias_buffer(text, fmt)
+    return [b"DMRA" + radio_id.to_bytes(3, "big") + bytes([block]) + buf[block * 7:block * 7 + 7]
+            for block in range(len(buf) // 7)]
+
+
+def parse_dmra(datagrams):
+    """The alias text of a complete set of DMRA datagrams (all blocks needed by the declared length), or None.
+    An independent reading of the layout above, used by the unit tests."""
+    buf = bytearray(28)
+    present = 0
+    for data in datagrams:
+        if len(data) != DMRA_SIZE or not data.startswith(b"DMRA") or data[7] > 3:
+            return None
+        buf[data[7] * 7:data[7] * 7 + 7] = data[8:]
+        present |= 1 << data[7]
+    fmt, count = buf[0] >> 6, (buf[0] >> 1) & 31
+    needed = {0: -(-(7 + 7 * count) // 8), 1: 1 + count, 2: 1 + count, 3: 1 + 2 * count}[fmt]
+    if present & ((1 << -(-needed // 7)) - 1) != (1 << -(-needed // 7)) - 1:
+        return None
+    if fmt == ALIAS_7BIT:
+        value = int.from_bytes(bytes(buf[:needed]), "big")
+        total = needed * 8
+        return "".join(chr((value >> (total - 7 - 7 * (i + 1))) & 0x7F) for i in range(count))
+    if fmt == ALIAS_ISO8:
+        return bytes(buf[1:needed]).decode("latin-1")
+    if fmt == ALIAS_UTF8:
+        return bytes(buf[1:needed]).decode("utf-8")
+    return "".join(chr(buf[2 + 2 * i]) if buf[1 + 2 * i] == 0 else "?" for i in range(count))
+
+
+def talk_with_side_packets(client, frames, side, stream_id=0x22222222, settle=1.2, tail=2.0, gap=0.060):
+    """DmrClient.talk with extra datagrams sent while the stream is open: `side` maps a voice packet
+    index to a list of datagrams sent right after that packet. Returns (voice send stamps, {index:
+    stamps of the side datagrams})."""
+    import time as _time
+    client.client.send(client.dest, packet(0, client.id, client.tg, client.id, 0xA1, stream_id, data_sync_payload()))
+    client.client.pump(settle)
+    packets, seq = voice_packets(frames, client.id, client.tg, stream_id)
+    start = _time.monotonic()
+    stamps, side_stamps = [], {}
+    for index, pkt in enumerate(packets):
+        delay = start + index * gap - _time.monotonic()
+        if delay > 0:
+            _time.sleep(delay)
+        client.client.sock.sendto(pkt, client.dest)
+        stamps.append(_time.monotonic())
+        for datagram in side.get(index, []):
+            client.client.sock.sendto(datagram, client.dest)
+            side_stamps.setdefault(index, []).append(_time.monotonic())
+        client.client.drain()
+    client.client.send(client.dest, packet(seq, client.id, client.tg, client.id, 0xA2, stream_id, data_sync_payload()))
+    client.client.pump(tail)
+    return stamps, side_stamps

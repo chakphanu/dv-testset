@@ -323,6 +323,57 @@ M17P_TYPE_LEGACY_ENCRYPTED, M17P_TYPE_V3_ENCRYPTED = 0x0008, 0xF200
 M17P_TYPE_STREAM_BIT, M17P_TYPE_OTHER = 0x0001, 0x1000
 
 
+# ---------------------------------------------------------------- legacy META text (DP15-2c)
+# The 14 byte META of the LSF carries, for the legacy TYPE with bits 5..6 = 0 (TYPE 0x0005 for a plain voice stream), text
+# in blocks of 13 UTF-8 bytes: META byte 0 is the control byte, its high nibble the bit map of all blocks of the message
+# (0x1 one block, 0x3 two, 0x7 three, 0xF four), its low nibble the one-hot bit of this block (1, 2, 4, 8); the 13 text
+# bytes follow, space padded (at most 4 blocks = 52 bytes). A control byte of 0 means no text.
+# READ from: M17 spec (.cache/m17src/M17_spec/M17_spec.tex:1310-1316, Text Data), the DV-Router decoder
+# crates/lib/pkt/src/m17_meta.rs:105-188 and crates/lib/radio/src/m17.rs:200-211 (text_control). VERIFIED.
+META_BLOCK = 13
+META_MAX_BLOCKS = 4
+TYPE_META_TEXT = TYPE_VOICE                       # TYPE bits 5..6 = 00: text; 0x0005 is a plain voice stream
+
+
+def meta_text_blocks(text):
+    """The 14 byte META values (one per block, in order) of a text of at most 52 UTF-8 bytes."""
+    raw = text.encode("utf-8") if isinstance(text, str) else bytes(text)
+    blocks = max(1, -(-len(raw) // META_BLOCK))
+    if len(raw) > META_BLOCK * META_MAX_BLOCKS:
+        raise ValueError("a legacy META text holds at most 52 bytes")
+    raw = raw.ljust(blocks * META_BLOCK, b" ")
+    total = (1 << blocks) - 1
+    return [bytes([(total << 4) | (1 << n)]) + raw[n * META_BLOCK:(n + 1) * META_BLOCK] for n in range(blocks)]
+
+
+def parse_meta_text(metas):
+    """The text of a set of 14 byte META values (blocks in any order, repeats allowed), or None while a block is
+    missing. The trailing padding spaces are kept. An independent reading of the layout above."""
+    seen, total, parts = 0, 0, {}
+    for meta in metas:
+        high, low = meta[0] >> 4, meta[0] & 15
+        if high not in (1, 3, 7, 15) or low not in (1, 2, 4, 8) or low & high != low:
+            return None
+        total |= high
+        seen |= low
+        parts[low.bit_length() - 1] = bytes(meta[1:14])
+    if not total or seen != total:
+        return None
+    return b"".join(parts[n] for n in range(total.bit_length())).decode("utf-8")
+
+
+def meta_text_stream(stream_id, payloads, src, metas, per_block=28, dst=None, type_=TYPE_META_TEXT):
+    """Stream packets (fn 0..) for `payloads` (16 byte each) whose META steps through `metas`: block k is held for
+    per_block packets (28 packets = 1.12 s at 40 ms, the edge re-publishes the LSF on a META change at most once a
+    second), the last packet carries the EOT bit."""
+    out = []
+    for n, payload in enumerate(payloads):
+        meta = metas[min(n // per_block, len(metas) - 1)]
+        out.append(stream_packet(stream_id, n, payload, src=src, dst=dst, type_=type_, meta=meta,
+                                 last=n == len(payloads) - 1))
+    return out
+
+
 # ---------------------------------------------------------------- reflector to reflector (stage 2)
 
 PEER_CONN_SIZE = 37

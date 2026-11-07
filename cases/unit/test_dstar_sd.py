@@ -404,3 +404,37 @@ def test_committed_corpus_keeps_the_findings_the_doc_relies_on():
     kinds = {e[0] for r in by_name.values() for e in r["dgw"]}
     assert {"text", "gpsa"} <= kinds and {k for k in kinds if k.startswith("nmea:")} == {
         "nmea:GPGGA", "nmea:GPGLL", "nmea:GPVTG", "nmea:GPRMC", "nmea:GPGSA", "nmea:GPGSV"}
+
+
+# ---------------------------------------------------------------- whole overs for DP15 (tx_message_fields & co)
+
+def test_tx_message_fields_decode_to_the_text_in_every_superframe():
+    fields = sd.tx_message_fields("DVT TXMSG 0042", superframes=3)
+    assert len(fields) == 63 and [seq for seq, _w in fields][:22] == list(range(21)) + [0]
+    texts = [e["text"] for e in sd.DvrUnitDecoder().feed_frames(fields) if e["kind"] == "text"]
+    assert texts and set(texts) == {"DVT TXMSG 0042      "}
+
+
+def test_tx_message_with_a_dropped_block_never_completes():
+    fields = sd.tx_message_fields("DVT TXMSG 0042", superframes=3, drop=(2,))
+    got = [e for e in sd.DvrUnitDecoder().feed_frames(fields) if e["kind"] == "text"]
+    assert got == []
+
+
+def test_text_gps_fields_carry_text_and_a_valid_dprs_line():
+    payload = sd.aprs_position_payload("N0TEST", 10.5, 20.25)
+    assert payload == "N0TEST>API510,DSTAR*:!1030.00N/02015.00E>test"
+    fields = sd.text_gps_fields("DVT TXMSG 0042", payload)
+    kinds = [e["kind"] for e in sd.DvrUnitDecoder().feed_frames(fields)]
+    assert "text" in kinds and "dprs" in kinds
+
+
+def test_over_packets_shape():
+    fields = sd.tx_message_fields("HI", superframes=1)
+    packets = sd.over_packets(0x1234, fields)
+    assert len(packets) == 1 + len(fields) + 1 == 23
+    assert packets[0][:4] == b"DSVT" and len(packets[0]) == 56 and all(len(p) == 27 for p in packets[1:])
+
+
+def test_aprs_position_payload_south_west():
+    assert sd.aprs_position_payload("N0TEST-7", -33.5, -151.25, comment="x") == "N0TEST-7>API510,DSTAR*:!3330.00S/15115.00W>x"
