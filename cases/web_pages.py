@@ -42,7 +42,7 @@ OPS_PAGES = {"clients": "Clients", "events": "Events", "accounts": "Accounts", "
 OPS_HEADINGS = {
     "clients": ["Callsign", "Kind", "Protocol", "Edge", "Circuit", "Room", "Address", "Connected", "Actions"],
     "events": ["ID", "Time (local)", "Type", "Event", "Mode", "Edge", "Callsign", "Room", "Details"],     # WEBEV1 / WEBEV2 (2026-11-04)
-    "accounts": ["Callsign", "Name", "Role", "Status", "TX", "Limits", "TOTP enrolled", "Actions"],
+    "accounts": ["Callsign", "Name", "Role", "Status", "TX", "Hide position", "Limits", "TOTP enrolled", "Actions"],   # "Hide position" since DP7 (wip-ac750c7); older images lack it
     "invites": ["Callsign", "Kind", "Role", "TX", "Expires (local)", "Actions"],
     "audit": ["Time (local)", "Operator", "Role", "Remote", "Action", "Target", "Result"],
     "ids": ["ID", "Kind", "Callsign", "Source", "Status", "Seen (local)", "Actions"],
