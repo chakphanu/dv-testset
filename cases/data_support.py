@@ -132,13 +132,15 @@ def moved(delta_map):
 
 
 class Hub:
-    """The hub metrics of xlxd-sut through the control channel."""
+    """The hub metrics of xlxd-sut (or of another allow-listed node, `service="dvr-peer"`: the second DV-Router node of
+    --profile twonode) through the control channel."""
 
-    def __init__(self, control):
+    def __init__(self, control, service="xlxd-sut"):
         self.control = control
+        self.service = service
 
     def text(self):
-        return self.control.metrics("xlxd-sut")
+        return self.control.metrics(self.service)
 
     def snap(self):
         return snapshot(metrics.parse(self.text()))

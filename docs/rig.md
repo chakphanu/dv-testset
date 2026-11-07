@@ -48,6 +48,7 @@ internet, and every address is fixed.
 | xlxd-peer-sut / xlxd-peer-ref | 172.30.0.12 / .13 | interlink | XLX998, interlinked with xlxd-sut / xlxd-ref on `DVT_INTERLINK_MODULES` |
 | urfd | 172.30.0.70 | urfd | URFd (`URF999`, modules A-Z), a second reference reflector; see "URFd as the reference" |
 | mrefd | 172.30.0.80 | mrefd | mrefd (`M17-REF`, modules `MNOP`), the M17 Project reflector, with interlink peers M17-DVT / M17-DVU at the tester; see "mrefd as an extra reference" |
+| dvr-peer / transcoder-peer | 172.30.0.16 / .17 | twonode | a SECOND DV-Router node (XLX998, the image of `XLXD_SUT_IMAGE`, native launch, own rendered config) with its own transcoder, a plain XLX interlink peer of xlxd-sut on modules DE; the second node of the DP15 cases 7b-7d; see "Two DV-Router nodes (profile twonode)" |
 | aprsc | 172.30.0.47 | aprs | a PRIVATE aprsc (APRS-IS server), standalone, client port TCP 14580, no uplink, no internet; the server side of the APRS-IS cases of DV-Router; see "Private APRS-IS server (profile aprs)" |
 | dw-a / dw-b | 172.30.0.48 / .49 | dw | two real Dire Wolf TNCs on a modem loop (KISS TCP 8001 each, audio relayed over UDP 7355, no hardware); the TNC side of the DP15 RF tier B cases; see "Dire Wolf TNCs on a modem loop (profile dw)" |
 | webload | 172.30.0.97 | webload | WebRTC load generator (aiortc), control server :3100 for the tester only; see "Web load profile" |
@@ -758,6 +759,33 @@ is modulated, demodulated by the other and handed to the other's KISS clients, w
 * Traps: `KISSPORT 0` must come first in a Dire Wolf configuration that sets a port (otherwise the built-in 8001 stays); a TNC does not hear what arrives while its own transmission is
   still "on the air" (the cases pause); the UDP audio between the containers has no loss protection (an internal bridge dropped nothing in the tests).
 
+## Two DV-Router nodes (profile twonode)
+
+The DP15 cases 7b, 7c and 7d ([dp15-cases.md](dp15-cases.md), `cases/test_dp15_peer.py`) need a receiving node with DV-Router semantics (a floor, a recorder, a
+transcoder), which the xlxd peer of the `interlink` profile (`xlxd-peer-sut`, `.12`, "no transcoder: the interlink carries every codec as is") cannot be. The profile `twonode` adds
+a second DV-Router node next to the SUT. Nothing is built: it is the prebuilt image of `XLXD_SUT_IMAGE`.
+
+| Service | Address | What it is |
+|---------|---------|------------|
+| `xlxd-sut` | `.11` | node 1, XLX999, as in every native run; `dp15-twonode-a.toml` (added by `run.sh`) gives it the peer row to node 2 and the recorder |
+| `dvr-peer` | `.16` | node 2, XLX998: `command: --config /etc/dv-router/dv-router.toml XLX998 <net>.16 <net>.17` |
+| `transcoder-peer` | `.17` | the transcoder of node 2, the same image as `transcoder-sut` (the fake with `DVT_TRANSCODER_FAKE=1`), peers `.16` and `.30` |
+
+* `dvr-peer` is hardened like the helper services (host uid, `cap_drop: [ALL]`, `no-new-privileges`, `read_only`, tmpfs `/tmp` and `/run` for the run directory, `x-limits-medium` with the pids and memory
+  caps of `xlxd-sut`, no published ports) and mounts three things: its rendered config (read-only), the id seed files `rig/config/dmrid.dat` / `nxdn.csv` at `/xlxd` (read-only) and the host
+  directory `out/<run>/recorder-peer` (read-write) at `/var/lib/dv-recorder`.
+* The config is rendered by `scripts/run.sh` (`render_dvr_peer`) from the SAME template as the SUT (`DVT_SUT_CONFIG`, so the same dialect and `DVT_SUT_GEN`), with `--own 16 --transcoder 17 --tester 30`
+  and the snippet `rig/config/dv-router/dp15-twonode-b.toml` only (no web, data-ident or echo extras of the SUT): `[node] callsign = "XLX998"`, the peer row `XLX999` at `<NET>.11` on modules DE and a
+  `[recorder]`. The result is `out/<run>/xlxd-config/dvr-peer/dv-router.toml`. The template's M17 peer rows (the tester) stay in it; nothing plays those peers in the two-node cases.
+* The SUT side: `dp15-twonode-a.toml` has the peer row `XLX998` at `<NET>.16` on DE and a `[recorder]` (`out/<run>/recorder` mounted at `/var/lib/dv-recorder`; the SUT then runs as the host uid, as with the
+  web profile). Both ends dial each other on UDP 10002 (`edges.xlx.port`; there is no per-peer port key).
+* Control channel: `metrics dvr-peer` returns the hub metrics of node 2 (`dvtest.control.METRICS_ALLOWED`, `scripts/lib/metrics.sh`; the same fixed URL inside the container's namespace). No kill, no
+  proc-stat, no stop/start of `dvr-peer`.
+* The tester gets `DVT_TWONODE=on`, `DVT_DVR_PEER` (`.16`), `DVT_DVR_PEER_TRANSCODER` (`.17`). Needs `DVT_SUT_LAUNCH=native` and `XLXD_SUT_IMAGE` (`run.sh` exits 2 otherwise); `--profile interlink` with it is refused
+  (the xlxd peer is also XLX998). Free host numbers used: `.16` and `.17` (`.12` to `.15` are the xlxd peers of `interlink`).
+* Limits: the second node has no web service (the proxy `web-proxy` forwards to `<net>.11:8081` only); the web-side observations of 7b-7d are not part of the rig (dp15-cases.md).
+* Run command: [dp15-cases.md](dp15-cases.md), "Two DV-Router nodes".
+
 ## Control channel
 
 The tester has no docker socket. Cases that stop a backend write a request
@@ -793,7 +821,7 @@ Tester side: `rig_control.kill_proc(service, process, signal[, rooms="B"])` retu
 and `t_kill` (`dvtest/control.py`; `KILL_PROC_ALLOWED` mirrors
 `scripts/lib/killproc.sh`, a unit test checks both agree).
 
-`metrics xlxd-sut` returns the Prometheus text of the system under test's hub in
+`metrics xlxd-sut` (or `metrics dvr-peer`, the second node of `--profile twonode`) returns the Prometheus text of the system under test's hub in
 `<id>.out`. The DV-Router image is `FROM scratch` (no shell, no `curl`) and the
 hub listens on `127.0.0.1:19108` of the container's own network namespace, which
 the tester cannot reach. The host starts a throwaway container of the tester

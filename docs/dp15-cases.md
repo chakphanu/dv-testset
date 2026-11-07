@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: MIT -->
-# DP15 cases: stream metadata (groups 1, 2, 4), the worker lifecycle (3), RF tiers A and B (6) and the XLX peer wire (7a)
+# DP15 cases: stream metadata (groups 1, 2, 4), the worker lifecycle (3), RF tiers A and B (6) and the XLX peer wire (7a) and the remote floor, recording and cross-mode effects on a second node (7b-7d)
 
 Status: the first rig run (image `dv-router:wip-0348b98`, native, `DVT_SUT_GEN=compat1`; streams 8 passed / 6 failed, worker
 0 / 2, RF tier A with `DVT_DP15_TX_ENABLE=false` 4 passed / 2 failed / 3 skipped) found no DV-Router defect: every failure
@@ -104,6 +104,9 @@ web.md 1178, not a failure). The `/operator/events` row shape is the one of answ
 | DP15-4b | "a `DMRG` in a DMR over give[s] one position" | DMR id 1023008 (= N0TEST in `rig/config/dmrid.dat`), DMRG inside the stream; then a DMRG with no open stream | ONE position row, source 4, symbol `/-`; the outside DMRG gives no position and `dv_pkt_reject_total{reason=unbound}` moves | rows | written, not run on a rig |
 | DP15-4c | "a `DMRA` gives a status and never changes the displayed callsign" | DMR id 1023008, two DMRA blocks of the alias `N0TEST ALIAS` (and `N0CALL`, another station's call) inside the stream; `public/state` sampled every 0.4 s | a status event of N0TEST with the alias text; the on-air callsign of room B is only `N0TEST`; the first last-heard entry is N0TEST | samples, last heard | written, not run on a rig |
 | DP15-7a | "XLX peer: ... synthetic text over" (wire half only) | the tester is XLX996 (modules DE, `xlx-peer-tester.toml`), two web texts to module D back to back | two complete streams; header MY `XLX999`; 22 frames, 21 with null AMBE; the slow data is a valid text over `N0DPT: <body>`; header to last frame 0.3 to 0.9 s; the second over starts >= 0.85 s after the first ended (V3: 1 s) | per-stream timing | written, not run on a rig |
+| DP15-7b | "XLX peer: ... remote floor ... of a synthetic text over" | TWO nodes (profile `twonode`): an M17 SMS to module D of node 1, a D-STAR listener and a local D-STAR talker on node 2; the talker keys the instant the header of the over arrives, and again 2.5 s after the over | node 2 hears only the text over, not the first talker; node 2's room D: exactly 2 grants (the over, the second talker) and at least one deny or `busy_delayed`; the second talker is heard in full; node 1's room D: no grant, no closed stream | all hub deltas of both nodes, the timing | written, not run on a rig (`cases/test_dp15_peer.py`) |
+| DP15-7c | "... recording ... of a synthetic text over" (receiving side; sending side by exclusion) | the same SMS, node 2 with its recorder on (`out/<run>/recorder-peer`), node 1 with its recorder on (`out/<run>/recorder`) | node 2: `dv_recorder_records_total` and `_bytes_total` up, `_dropped_total` not, one grant and one closed stream; node 1: no record, no bytes, no grant, no closed stream, no published unit, `dv_edge_text_overs_total{result=sent}` up | archive file counts of node 2 | written, not run on a rig |
+| DP15-7d | "... cross-mode effects of a synthetic text over" | the same SMS, a DExtra and an M17 listener on node 2 | DExtra: a whole text over, MY `XLX999`, null AMBE, `N0CALL: <body>`; M17: one stream of 8 to 14 packets; node 2: `dv_room_data_total` and `dv_pkt_items_total` do not move, no text over of its own | header UR / suffix / RPT, M17 SRC, packets, raw units | written, not run on a rig |
 
 ### Worker lifecycle (group 3): `cases/test_dp15_worker.py`
 
@@ -326,12 +329,54 @@ Honest limits: the line DV-Router writes is not visible to the case (aprsc adds 
 Nothing here has run on a rig; what was run is the aprsc image (login verified with the computed passcode, a message forwarded with `qAC`, the ack with `qAS`, an identical ack inside 30 s dropped, a wrong passcode
 `unverified`) in a throw-away container with `--network none`, and the unit tests (`cases/unit/test_aprs_passcode.py`, `test_aprsis_client.py` against a fake server, `test_dp15_aprsis_config.py`).
 
+### Two DV-Router nodes: the XLX peer cases 7b, 7c, 7d: `cases/test_dp15_peer.py`
+
+Design text (DV-Router `data.md` 7.6): "A receiving XLX peer sees a synthetic text over as ordinary class 1 voice from the reflector
+callsign: it takes that node's floor for about 440 ms, can be recorded there and can be transcoded from null AMBE to its DMR or M17
+listeners. The edge-local fabric and recorder exclusion applies only on the sending node." The three cases check exactly that with
+TWO DV-Router nodes of the same image: node 1 is the SUT (`xlxd-sut`, XLX999, `.11`), node 2 the new rig service `dvr-peer`
+(XLX998, `.16`, own transcoder `transcoder-peer` `.17`), profile `twonode`. Both list each other in `[[edges.xlx.peer]]` on modules
+DE (UDP 10002, `kind = "xlx"` on compat1 images), as the lead described (answer 11). How the second node is built and started:
+[rig.md](rig.md), "Two DV-Router nodes (profile twonode)".
+
+Run (one rig run, about 6 to 8 minutes; no web profile, the trigger is a direct M17 SMS from the tester to module D of node 1, a
+class 0 text, which is the one origin that gets a synthetic text over on XLX; `DVT_RIG_CONTROL=1` is set by `run.sh`):
+
+```
+XLXD_SUT_IMAGE=dv-router:wip-0348b98 DVT_SUT_PROFILE=dvrouter DVT_SUT_LAUNCH=native DVT_SUT_GEN=compat1 \
+DVT_SUT_CONFIG=<template> DVT_TRANSCODER_FAKE=1 \
+scripts/run.sh -m rig --capture --profile twonode -- cases/test_dp15_peer.py
+```
+
+* `run.sh --profile twonode` adds `rig/config/dv-router/dp15-twonode-a.toml` to `DVT_SUT_CONFIG_EXTRA` (the peer row to node 2 and the recorder of node 1),
+  renders the SAME template for node 2 with `--own 16 --transcoder 17` plus `dp15-twonode-b.toml` only, and creates the two recorder directories.
+  Do not name `xlx-peer.toml` (the xlxd peer is another host with the same callsign XLX998) or use `--profile interlink` with it (refused).
+* Config check of both snippets against the image (host side, `--gen compat1`, `--network none`): valid on `dv-router:wip-0348b98`
+  (`python3 -m dvtest.tools.config_check --image dv-router:wip-0348b98 --template <template> --extra rig/config/dv-router/dp15-twonode-a.toml --gen compat1`,
+  and for node 2 the same on the file rendered with `python3 -m dvtest.sut_config <template> OUT --net 172.30.0 --own 16 --transcoder 17 --extra rig/config/dv-router/dp15-twonode-b.toml`).
+  Only the warnings about the id seed files (`/xlxd/dmrid.dat`, not mounted in that throw-away container) appear.
+* Observation points (the tester reaches both nodes): the hub metrics of each node through the control channel (`metrics xlxd-sut`, `metrics dvr-peer`;
+  refreshed every 10 s, so every check settles a baseline for 12 s and polls up to 45 s), the DExtra and M17 listeners and a local D-STAR talker on node 2, and the
+  archive directory `out/<run>/recorder-peer`. Counters read: `dv_room_rts_total{room=d,result}`, `dv_room_streams_closed_total`, `dv_room_units_total{kind=published}`,
+  `dv_recorder_{records,bytes,dropped}_total`, `dv_room_data_total`, `dv_pkt_items_total`, `dv_edge_raw_total{result=sent}`, `dv_edge_text_overs_total`, `dv_edge_sessions{kind=peer,proc=xlx}`.
+* Bounds: the over reaches node 2 within 20 s of the SMS (slot, queue, 440 ms; no number in the design), counters within 45 s (hub clock 10 s), the M17 stream has 8 to 14
+  packets (440 ms of 40 ms packets is 11 plus the last one), the local talker of 7b keys within a few ms of the header (polled every 2 ms) so that its RTS lands inside the
+  440 ms; the busy deny of the controller comes 50 ms after the RTS (`floor-control.md`, busy-DENY delay), still inside the over.
+* Findings are recorded, not asserted: the header suffix and UR on node 2 (design: `M17 ` / `ALL`), the M17 SRC (the over's talker `XLX999`), the raw units of node 2.
+* Not observed (no web service on node 2): the room's on-air state shown as remote, `public/state`, the recordings API, web listeners. What would add them: a second
+  `web-proxy` (`rig/compose.yml:882` hard-wires the upstream `<net>.11:8081`), a state directory and bootstrap login for node 2 (`scripts/run.sh` web block) and a second set of
+  web fixtures (`cases/web_fixtures.py`). Not done: it is a larger change to the one-SUT assumptions of the web profile.
+* Assumptions that were NOT verified (no rig run): that node 2 starts as the host uid with a read-only root and `/run`, `/tmp` tmpfs (the SUT runs as the host uid with web, but it is not read-only);
+  that `dv_edge_sessions{kind=peer,proc=xlx}` counts a linked peer (only used as a precondition note); that a denied RTS of a DExtra talker is counted `deny` or `busy_delayed` on node 2;
+  that the recorder of node 2 stores a 440 ms class 1 over (it may drop streams below a size, then 7c reports it); that the template's M17 peer rows (the tester, `M17-DVT` / `M17-DVU`)
+  on node 2 are harmless when nothing plays them.
+
 ### Not written, and why
 
 | Case | Reason |
 |------|--------|
 | DP15-6d, 6e, 6s on tier B | not written: 6d checks frame times against the budget (the audio adds nothing), 6e needs the same audio in two Dire Wolf instances (no hardware-free way short of a tee; the dedupe is DV-Router's, tier A covers it), 6s reads what the fake TNC records (Dire Wolf only logs the parameters). Also not written: a low `tx_budget` run for 6d, an RF ack with `alias_calls` (the room name `XLX999B` cannot be an AX.25 source; answer 8) |
-| DP15-7b, 7c (receiving side), 7d | need a second DV-Router node as XLX peer (U8; the lead confirms a plain `[[edges.xlx.peer]]` row works and the text over needs no transcoder, answer 11) |
+| DP15-7b, 7c, 7d: the web and DMR sides | the second node has no web service (the TLS proxy of the rig is bound to the SUT, `rig/compose.yml:882`, and the fixtures read the SUT's bootstrap login), so the room's on-air state "as remote", the recordings API and web listeners of node 2 are not observed; the hub counters, the protocol listeners and the archive directory stand in. No DMR listener (a DMRHB client needs a radio id and a login; the M17 listener covers the carried / transcoded path) |
 | 7a parts | `xlx_text_overs = false` (live config edit), preemption of a text over by peer voice, and "the sending node's own XLX listener does not get its own text over back" are not written |
 
 ### dp15-paths.toml

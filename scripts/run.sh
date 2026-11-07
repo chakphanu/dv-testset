@@ -84,6 +84,16 @@
 #                      Use with web (--profile web,dw: the cases post room text through the web service). The tester
 #                      gets DVT_DW=on, DVT_DW_A, DVT_DW_B. RF transmit stays off unless DVT_DP15_TX_ENABLE=true (then
 #                      also name rig/config/dv-router/dp15-rf-out.toml in DVT_SUT_CONFIG_EXTRA)
+#   --profile twonode  a SECOND DV-Router node (dvr-peer .16, XLX998, the image XLXD_SUT_IMAGE started natively with its own
+#                      rendered config) with its own transcoder (transcoder-peer .17) as a plain XLX interlink peer of
+#                      xlxd-sut on modules DE, for DP15 7b-7d (cases/test_dp15_peer.py, docs/dp15-cases.md, docs/rig.md
+#                      "Two DV-Router nodes"). Needs DVT_SUT_LAUNCH=native and XLXD_SUT_IMAGE; adds
+#                      rig/config/dv-router/dp15-twonode-a.toml (the peer row and the recorder of the SUT) unless listed;
+#                      node 2 is the SAME template (DVT_SUT_CONFIG) rendered with --own 16 --transcoder 17 plus
+#                      rig/config/dv-router/dp15-twonode-b.toml only, into out/<utc>/xlxd-config/dvr-peer/dv-router.toml;
+#                      the recorder archives are out/<utc>/recorder (SUT) and out/<utc>/recorder-peer (node 2). The
+#                      hub of node 2 is read by the control action `metrics dvr-peer`. The tester gets DVT_TWONODE=on,
+#                      DVT_DVR_PEER and DVT_DVR_PEER_TRANSCODER. Do not combine with --profile interlink
 #   --profile webload  the WebRTC load generator (webload, .97: aiortc, control server on :3100 for the tester
 #                      only) of the W8 load case, used together with web (--profile web,webload; exit 2
 #                      without it); the tester gets DVT_WEBLOAD=on and DVT_WEBLOAD_URL (docs/web-load-cases.md,
@@ -192,7 +202,7 @@
 # dv-room kill without it too); never dv-router; anything
 # else is refused. <id>.out gets "pid=<n>" per process and "t_kill=<epoch s>";
 # exit 3 (error 3) when no process has that name.
-# or "metrics xlxd-sut" (no other word): <id>.out gets the Prometheus text of the
+# or "metrics xlxd-sut" (or "metrics dvr-peer", the second node of --profile twonode) (no other word): <id>.out gets the Prometheus text of the
 # sut hub, fetched from inside its network namespace by a throwaway tester-image
 # container (scripts/lib/metrics.sh; the DV-Router image has no shell or curl and
 # the hub listens on its loopback only). error 1 = the GET failed.
@@ -405,6 +415,25 @@ if [ "$has_dw" = 1 ]; then
   esac
   export DVT_SUT_CONFIG_EXTRA
 fi
+# --profile twonode: the second DV-Router node; the SUT's peer row and recorder come from dp15-twonode-a.toml
+has_twonode=0
+case ",$profile," in *,twonode,*) has_twonode=1 ;; esac
+if [ "$has_twonode" = 1 ]; then
+  [ "${DVT_SUT_LAUNCH:-direct}" = native ] \
+    || { echo "run.sh: --profile twonode needs DVT_SUT_LAUNCH=native (both nodes are DV-Router)" >&2; exit 2; }
+  [ -n "${XLXD_SUT_IMAGE:-}" ] \
+    || { echo "run.sh: --profile twonode needs XLXD_SUT_IMAGE (dvr-peer is the same image as xlxd-sut)" >&2; exit 2; }
+  case ",$profile," in
+    *,interlink,*) echo "run.sh: --profile twonode and --profile interlink are separate rigs (the xlxd peer XLX998 and dvr-peer share a callsign)" >&2; exit 2 ;;
+  esac
+  case ":${DVT_SUT_CONFIG_EXTRA:-}:" in
+    *:rig/config/dv-router/dp15-twonode-a.toml:*) ;;
+    *) DVT_SUT_CONFIG_EXTRA="${DVT_SUT_CONFIG_EXTRA:+$DVT_SUT_CONFIG_EXTRA:}rig/config/dv-router/dp15-twonode-a.toml" ;;
+  esac
+  export DVT_SUT_CONFIG_EXTRA
+  # dp15-twonode-a.toml switches the recorder of the SUT on: its archive is the host directory out/<run>/recorder
+  has_recorder=1
+fi
 # --profile nat: needs web and browser; rig/config/dv-router/turn.toml in DVT_SUT_CONFIG_EXTRA switches the SUT's TURN on
 has_nat=0
 has_turn=0
@@ -490,7 +519,7 @@ if [ -n "${COMPOSE_OVERRIDE:-}" ] && [ -f "$COMPOSE_OVERRIDE" ]; then
   compose_files+=(-f "$COMPOSE_OVERRIDE")
 fi
 compose_all=(docker compose -p "${COMPOSE_PROJECT_NAME:-dvt}" "${compose_files[@]}" "${DVT_ENV_FILES[@]}"
-  --profile core --profile allstar --profile nxdn --profile capture --profile capture-allstar
+  --profile core --profile twonode --profile allstar --profile nxdn --profile capture --profile capture-allstar
   --profile capture-nxdn --profile p25 --profile capture-p25 --profile interlink
   --profile capture-interlink --profile load --profile netem --profile g3
   --profile urfd --profile capture-urfd --profile mrefd --profile capture-mrefd --profile web --profile browser
@@ -618,6 +647,11 @@ for p in "${wanted[@]}"; do
       profiles+=(--profile dw)
       export DVT_DW=on
       ;;
+    twonode)
+      # checked above (native launch, XLXD_SUT_IMAGE, the SUT's snippet)
+      profiles+=(--profile twonode)
+      export DVT_TWONODE=on
+      ;;
     nat)
       # checked above (needs web and browser); the browser moves behind the router (rig/compose.nat.yml)
       profiles+=(--profile nat)
@@ -630,7 +664,7 @@ for p in "${wanted[@]}"; do
     mrefd)
       has_mrefd=1
       ;;
-    *) echo "run.sh: --profile takes core, allstar, asl-lab, asl-edge, asl-ext, nxdn, p25, interlink, load, g3, urfd, mrefd, web, browser, webload, nat, aprs, dw or a comma list" >&2; exit 2 ;;
+    *) echo "run.sh: --profile takes core, allstar, asl-lab, asl-edge, asl-ext, nxdn, p25, interlink, twonode, load, g3, urfd, mrefd, web, browser, webload, nat, aprs, dw or a comma list" >&2; exit 2 ;;
   esac
 done
 # native launch reads no xlxd.* file: these settings only change the reference side
@@ -821,6 +855,14 @@ if [ "$has_web" = 1 ]; then
   echo "run.sh: web profile: operator login in $out/web/operator.env, admin logins in $out/web/admin.env (mode 600), CA will be $out/web/ca.pem"
 fi
 
+# --profile twonode: the recorder archives of the two nodes (host directories, mode 0700, owned by the host user the
+# containers run as, each its own mount; the web block above makes out/<run>/recorder too, mkdir -p is idempotent)
+if [ "$has_twonode" = 1 ]; then
+  (umask 077; mkdir -p "$out/recorder" "$out/recorder-peer")
+  chmod 700 "$out/recorder" "$out/recorder-peer"
+  echo "run.sh: twonode profile: dvr-peer at ${DVT_NET:-172.30.0}.16 (transcoder-peer .17), recorders in $out/recorder and $out/recorder-peer"
+fi
+
 # --profile asl-edge: fixture secret files of the edge's accounts and node password (the lab's
 # test-secret-not-real: they protect nothing), regular files, mode 0600, no symlink, as the edge demands;
 # mounted read-only at /etc/dv-router/asl-secrets with the SUT running as the host uid
@@ -897,7 +939,7 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
     # the image is used as it is: no build section, never pulled
     printf '    build: !reset null\n    pull_policy: never\n'
     # --profile web: the sut writes the persistent state dir of the host user
-    if [ "$svc" = xlxd-sut ] && { [ "$has_web" = 1 ] || [ "$has_asl_edge" = 1 ] || [ "$has_aprs" = 1 ]; }; then
+    if [ "$svc" = xlxd-sut ] && { [ "$has_web" = 1 ] || [ "$has_asl_edge" = 1 ] || [ "$has_aprs" = 1 ] || [ "$has_twonode" = 1 ]; }; then
       printf '    user: "%s:%s"\n' "$DVT_UID" "$DVT_GID"
     fi
     printf '    environment:\n      DVT_CONFIG_MOUNTED: "1"\n'
@@ -948,6 +990,16 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
   } >> "$override"
   prebuilt+=("$svc")
 }
+# --profile twonode: the config of the second node (dvr-peer): the SUT's template with its own address, transcoder and the
+# snippet dp15-twonode-b.toml only (the image and the command are in rig/compose.yml; the bind address and the callsign
+# are in the file, the argv repeats them)
+render_dvr_peer() {
+  local net="${DVT_NET:-172.30.0}" cfg="$DVT_ROOT/$out/xlxd-config/dvr-peer"
+  mkdir -p "$cfg"
+  python3 -m dvtest.sut_config "$DVT_SUT_CONFIG" "$cfg/dv-router.toml" --net "$net" --own 16 --transcoder 17 --tester 30 \
+    --require-ident "${DVT_REQUIRE_IDENT:-true}" --dp15-tx-enable false --extra rig/config/dv-router/dp15-twonode-b.toml || exit 2
+}
+[ "$has_twonode" = 0 ] || render_dvr_peer
 if { [ "$lab_only" = 0 ] || [ "$has_asl_edge" = 1 ]; } && [ -n "${XLXD_REF_IMAGE:-}${XLXD_SUT_IMAGE:-}" ]; then
   echo "services:" > "$override"
   [ -z "${XLXD_REF_IMAGE:-}" ] || render_xlxd xlxd-ref "$XLXD_REF_IMAGE" 10 20 off 50 60 13 15
@@ -1162,6 +1214,7 @@ printf 'markers=%s profile=%s xlxd_ref=%s xlxd_sut=%s transcoder=%s sut_divergen
   > "$out/run.txt"
 [ "$has_aprs" = 0 ] || echo "aprs=on aprsc_commit=${APRSC_COMMIT:-} sut_config_extra=${DVT_SUT_CONFIG_EXTRA}" >> "$out/run.txt"
 [ "$has_web" = 0 ] || echo "web=on sut_config_extra=${DVT_SUT_CONFIG_EXTRA}" >> "$out/run.txt"
+[ "$has_twonode" = 0 ] || echo "twonode=on image=${XLXD_SUT_IMAGE} sut_config_extra=${DVT_SUT_CONFIG_EXTRA}" >> "$out/run.txt"
 [ "$has_nat" = 0 ] || echo "nat=on turn=$([ "$has_turn" = 1 ] && echo on || echo off) coturn_image=${COTURN_IMAGE} nat_net=${DVT_NAT_NET}" >> "$out/run.txt"
 cat ".cache/xlxd/${XLXD_REF_DIR:-ref}.fetched" ".cache/xlxd/${XLXD_SUT_DIR:-sut}.fetched" >> "$out/run.txt" 2>/dev/null || true
 

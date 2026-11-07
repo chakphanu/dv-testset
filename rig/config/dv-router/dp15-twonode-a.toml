@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# Snippet for the SUT (node 1, XLX999) of the two-node rig (scripts/run.sh --profile twonode adds it to
+# DVT_SUT_CONFIG_EXTRA by itself; docs/rig.md "Two DV-Router nodes", docs/dp15-cases.md 7b-7d). The
+# second node is the rig service dvr-peer (<NET>.16, XLX998, the same image, rig/config/dv-router/dp15-twonode-b.toml):
+# a plain XLX interlink peer on modules D and E (the remote port is edges.xlx.port, 10002; there is no per-peer
+# port key). The modules must be served by [node] rooms (the template serves A-Z). The recorder is on so that the
+# cases can show that the SENDING node records nothing of its own synthetic text over (local exclusion,
+# data.md 7.6); run.sh mounts the host directory out/<run>/recorder at that path. Do not combine with
+# xlx-peer.toml (the xlxd peer XLX998 of the interlink profile is another host with the same callsign).
+[[edges.xlx.peer]]
+callsign = "XLX998"
+host = "<NET>.16"
+modules = "DE"
+
+[recorder]
+dir = "/var/lib/dv-recorder"
+keep_days = 1
+max_gb = 1

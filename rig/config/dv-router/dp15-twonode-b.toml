@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+[node]
+callsign = "XLX998"
+
+# Snippet for the SECOND node (dvr-peer, <NET>.16, XLX998) of the two-node rig (docs/rig.md "Two DV-Router nodes"):
+# scripts/run.sh --profile twonode renders the SAME template as the SUT with --own 16 --transcoder 17 (its
+# transcoder is the service transcoder-peer, <NET>.17) and appends only this file (never DVT_SUT_CONFIG_EXTRA: node 2
+# has no web, no data-ident, no echo). [node] callsign above is merged into the template's own table (the file then
+# agrees with argv XLX998). Node 2 lists the SUT as its XLX peer on the same module letters, so both ends dial each
+# other on UDP 10002 (edges.xlx.port). The recorder is on: out/<run>/recorder-peer is mounted at /var/lib/dv-recorder
+# (docs/dp15-cases.md 7c). The template's other rows (the M17 peers at the tester, designation M17-DVR) stay as
+# they are: nothing plays those peers in the two-node cases.
+[[edges.xlx.peer]]
+callsign = "XLX999"
+host = "<NET>.11"
+modules = "DE"
+
+[recorder]
+dir = "/var/lib/dv-recorder"
+keep_days = 1
+max_gb = 1

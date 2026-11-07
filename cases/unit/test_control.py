@@ -521,16 +521,17 @@ def test_request_names_are_unique_across_instances(tmp_path):
 
 # ---- metrics: "metrics xlxd-sut" (scripts/lib/metrics.sh), python table and bash agree
 
-METRICS_SERVICES = ["xlxd-sut", "xlxd-ref", "tester", "transcoder-sut", "allstar", "XLXD-SUT", "", "xlxd-sut ", "*", "xlxd-sut;id",
-                    "container:abc", "http://127.0.0.1:19108/metrics"]
+METRICS_SERVICES = ["xlxd-sut", "dvr-peer", "xlxd-ref", "tester", "transcoder-sut", "transcoder-peer", "allstar", "XLXD-SUT", "DVR-PEER",
+                    "", "xlxd-sut ", "dvr-peer ", "*", "xlxd-sut;id", "dvr-peer;id", "container:abc", "http://127.0.0.1:19108/metrics"]
 
 
 def test_metrics_python_table():
-    assert control.METRICS_ALLOWED == ("xlxd-sut",)
-    assert control.metrics_allowed("xlxd-sut")
-    for service in METRICS_SERVICES[1:]:
-        assert not control.metrics_allowed(service), service
+    assert control.METRICS_ALLOWED == ("xlxd-sut", "dvr-peer")
+    assert control.metrics_allowed("xlxd-sut") and control.metrics_allowed("dvr-peer")
+    for service in METRICS_SERVICES:
+        assert control.metrics_allowed(service) == (service in ("xlxd-sut", "dvr-peer")), service
     assert control.metrics_line("xlxd-sut") == "metrics xlxd-sut"
+    assert control.metrics_line("dvr-peer") == "metrics dvr-peer"
     for service in ("xlxd-ref", "tester", "", "xlxd-sut extra"):
         with pytest.raises(ValueError):
             control.metrics_line(service)
@@ -546,11 +547,13 @@ def test_metrics_bash_and_python_agree():
     assert run.returncode == 0, run.stderr
     allowed_bash = {line[2:] for line in run.stdout.splitlines() if line.startswith("1 ")}
     allowed_py = {s for s in METRICS_SERVICES if control.metrics_allowed(s)}
-    assert allowed_bash == allowed_py == {"xlxd-sut"}
+    assert allowed_bash == allowed_py == {"xlxd-sut", "dvr-peer"}
 
 
 def test_metrics_bash_allowed_takes_exactly_one_word():
     assert bash('dvt_metrics_allowed xlxd-sut', lib=METRICS_LIB).returncode == 0
+    assert bash('dvt_metrics_allowed dvr-peer', lib=METRICS_LIB).returncode == 0
+    assert bash('dvt_metrics_allowed dvr-peer extra', lib=METRICS_LIB).returncode == 1
     assert bash('dvt_metrics_allowed xlxd-sut extra', lib=METRICS_LIB).returncode == 1
     assert bash('dvt_metrics_allowed', lib=METRICS_LIB).returncode == 1
     assert bash('dvt_metrics_allowed xlxd-ref', lib=METRICS_LIB).returncode == 1
@@ -559,6 +562,7 @@ def test_metrics_bash_allowed_takes_exactly_one_word():
 @pytest.mark.parametrize("line,out", [
     ("metrics xlxd-sut", "xlxd-sut"),
     ("metrics  xlxd-sut\t ", "xlxd-sut"),
+    ("metrics dvr-peer", "dvr-peer"),
 ])
 def test_metrics_parse_accepts(line, out):
     run = bash('dvt_metrics_parse "$1"', line, lib=METRICS_LIB)
@@ -569,6 +573,7 @@ def test_metrics_parse_accepts(line, out):
     "", "metrics", "metrics xlxd-ref", "metrics tester", "metrics xlxd-sut extra",
     "metrics xlxd-sut http://127.0.0.1:19108/metrics", "metrics xlxd-sut;id", "METRICS xlxd-sut",
     "metric xlxd-sut", "kill-proc xlxd-sut dv-edge-xlx KILL", "stop xlxd-sut", "metrics *",
+    "metrics dvr-peer extra", "metrics transcoder-peer", "metrics dvr-peer;id", "METRICS dvr-peer",
 ])
 def test_metrics_parse_refuses(line):
     run = bash('dvt_metrics_parse "$1"', line, lib=METRICS_LIB)

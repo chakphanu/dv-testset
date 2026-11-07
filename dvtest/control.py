@@ -12,7 +12,7 @@ with one line; the host watcher answers with <id>.ack ("ok", "error <rc>" or
                                              dv-room needs the rooms selector
   "mark begin|end <tag>"                     only logged: brackets traffic a case
                                              makes abnormal on purpose (dvcheck)
-  "metrics xlxd-sut"                         the Prometheus text of the sut hub
+  "metrics xlxd-sut|dvr-peer"                the Prometheus text of the sut hub (dvr-peer: the second node, profile twonode)
                                              (127.0.0.1:19108 inside its network
                                              namespace) in <id>.out
   "proc-stat <service> <process>"            cpu ticks, memory, threads, open fds and
@@ -89,7 +89,7 @@ def proc_stat_line(service, process):
 
 
 # services whose hub the host will scrape (scripts/lib/metrics.sh), no arguments
-METRICS_ALLOWED = ("xlxd-sut",)
+METRICS_ALLOWED = ("xlxd-sut", "dvr-peer")      # dvr-peer: the second DV-Router node of --profile twonode
 
 
 def metrics_allowed(service):

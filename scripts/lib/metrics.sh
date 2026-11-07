@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Sourced by scripts/run.sh (bash). The control-channel action
 #
-#   metrics xlxd-sut
+#   metrics xlxd-sut|dvr-peer
 #
 # fetches the Prometheus text of the DV-Router hub from INSIDE the system-under-test
 # container. The image is scratch (no shell, no curl) and the hub listens on
@@ -12,8 +12,8 @@
 # GET of exactly http://127.0.0.1:19108/metrics with python urllib (5 s timeout, no
 # proxy). The text goes to <id>.out.
 #
-# Allow-list (anything else is "error refused", nothing runs): service xlxd-sut, no
-# further word. The URL is fixed in the helper; a request cannot name another one.
+# Allow-list (anything else is "error refused", nothing runs): service xlxd-sut, or dvr-peer (the
+# second DV-Router node of --profile twonode, same hub, same fixed URL), no further word. The URL is fixed in the helper; a request cannot name another one.
 # dvtest/control.py (METRICS_ALLOWED) mirrors the table for the tester;
 # cases/unit/test_control.py checks that the two agree.
 #
@@ -27,7 +27,7 @@ DVT_METRICS_URL="http://127.0.0.1:19108/metrics"
 
 dvt_metrics_allowed() {
   [ "$#" -eq 1 ] || return 1
-  [ "$1" = xlxd-sut ] || return 1
+  [ "$1" = xlxd-sut ] || [ "$1" = dvr-peer ] || return 1
   return 0
 }
 
