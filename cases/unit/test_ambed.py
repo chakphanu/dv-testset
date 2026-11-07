@@ -148,6 +148,40 @@ def test_fake_ambed_open_delay():
         fake.stop()
 
 
+def test_open_delay_for_picks_the_open_by_index():
+    assert ambed.open_delay_for([1.5, 0.05], 0) == 1.5
+    assert ambed.open_delay_for([1.5, 0.05], 1) == 0.05
+    assert ambed.open_delay_for([1.5, 0.05], 2) == 0.0
+    assert ambed.open_delay_for([1.5], 3, 0.2) == 0.2
+    assert ambed.open_delay_for([], 0) == 0.0
+
+
+def test_fake_ambed_open_delays_per_open_keep_the_control_loop_alive():
+    """H6: the first STD is late, the second is immediate; while the first is
+    pending the control loop still answers CAPS (the delay is a timer, not a
+    sleep in the control thread)."""
+    port = _free_port()
+    fake = ambed.FakeAmbed("127.0.0.1", port=port, open_delays=[0.4], data_port_base=_free_port())
+    sock = _client()
+    try:
+        dest = ("127.0.0.1", port)
+        start = time.monotonic()
+        sock.sendto(ambed.open_ext("XLX999", 3, [5], 5), dest)
+        sock.sendto(ambed.CAPS_REQUEST, dest)
+        assert ambed.parse_caps(sock.recv(64)) is not None          # first answer: CAPS, not STD
+        assert time.monotonic() - start < 0.3
+        assert ambed.parse_std(sock.recv(64)).transaction == 5
+        assert time.monotonic() - start >= 0.35
+        sock.sendto(ambed.open_ext("XLX999", 3, [5], 6), dest)       # second open: no delay
+        second = time.monotonic()
+        assert ambed.parse_std(sock.recv(64)).transaction == 6
+        assert time.monotonic() - second < 0.3
+        assert [o.transaction for _t, o, _p in fake.opens] == [5, 6]
+    finally:
+        sock.close()
+        fake.stop()
+
+
 def test_transcode_against_fake():
     port = _free_port()
     fake = ambed.FakeAmbed("127.0.0.1", port=port, data_port_base=_free_port())

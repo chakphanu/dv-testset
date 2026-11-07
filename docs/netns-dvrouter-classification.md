@@ -230,7 +230,8 @@ The design does not allow audio loss for a 5-unit burst when the STD arrives ins
 OPEN wait: the 1.0 s STD delay leaves 50 ms of margin on the OPEN wait, but the burst itself is
 only 5 units, far below the 128-unit buffer, so the case asserts "all 5" (no loss bound needed).
 A longer burst (above 128 units, about 2.5 s) or an STD after 1050 ms is a different case (drops
-the oldest units / refused open, `transcoding.md:344`, `:472`) and is not covered here.
+the oldest units / refused open, `transcoding.md:344`, `:472`) and is not covered here (see H5 and
+H6 below).
 
 Observations on `wip-0348b98` (alone, `DVT_NETNS_PARALLEL` default, two runs, times in s on the
 fake's clock; run directories `out/20261107T114540Z/netns/slow_open_listener` and
@@ -254,6 +255,103 @@ Commands (one scenario at a time, `wip-0348b98` binaries):
 DVT_DVR_BIN_DIR=.cache/dvr-wip-0348b98 DVT_XLXD_BIN=scripts/dvr-import-wrap.sh DVT_SUT_PROFILE=dvrouter \
   scripts/contained.sh --name test -- python3 -m pytest -m netns cases/test_xlxd_usrp_netns.py -q -k test_open_wait_
 # the old variant: -k test_slow_open_
+```
+
+## H5 applied: more than 128 units before SessionReady (the oldest are dropped)
+
+Decision of the DV-Router lead: assert the documented limit of the pre-ready buffer.
+
+- scenario `pre_ready_overflow` (profile `dvrouter`, case prefix `test_pre_ready_cap_`, case
+  `test_pre_ready_cap_oldest_units_dropped`, spec `netns_ambed.pre_ready_overflow`): as
+  `slow_open_listener` (STD 1.0 s after the OPEN, D-STAR listener on module B) with step
+  `usrp:200:2`: 200 USRP voice frames 2 ms apart (0.4 s), frame i carrying i in its first PCM sample
+  (`indexed_pcm`), so the fake transcoder's PCM requests name the units it received. The hub
+  counters are read in the namespace (`docs/rig.md`, "netns cases").
+- Why faster than real time: 128 units are 2.56 s of audio and the OPEN wait is 1050 ms, so a
+  real-time (20 ms) USRP over has at most about 53 units in the buffer at any SessionReady that
+  the worker answers (the controller give-up, 3000 ms, is never reached with a worker that
+  answers or refuses by 1050 ms). The cap needs an ingress faster than about 122 units/s
+  (a burst, an interlink bundle, a recorder replay). A 200-unit real-time over (4 s) over a 1.0 s
+  STD buffers about 50 units and loses none; that is not the limit under test.
+
+Design rule asserted (`docs/design/transcoding.md:344`, `:352`, `crates/room/src/xcode.rs`
+`PRE_READY_CAP` = 128 and `Xcode::unit`, `pre_ready_dropped`, `crates/room/src/telemetry.rs`):
+
+| Rule | Assertion |
+|------|-----------|
+| :344 "Before SessionReady the controller buffers up to 128 units per session with no age drop (when full, the oldest is dropped with a counter), then sends them in order" | the fake transcoder gets exactly 128 PCM requests, indexes 72 to 199 in order (the newest 128) |
+| :344 same, listener side | the D-STAR listener hears 128 voice frames (one stream id, none before the STD, last one within the 3 s give-up of the first USRP frame) |
+| :344 "with a counter"; telemetry `dv_xcode_frames_total{dir="in",result="pre_ready_dropped"}` | the counter says 72 (hub `/metrics`), `sessions_opened` 1, `open_failed` 0, `frames_out published` 128 |
+
+Observations on `wip-0348b98` (alone, two runs, times in s on the fake's clock; first run
+`out/20261107T115121Z/netns/pre_ready_overflow`, second `out/20261107T115333Z/netns/pre_ready_overflow`,
+second one below):
+
+| Item | Value |
+|------|-------|
+| USRP frames | 200, first 5.566, last 5.964 (0.398 s), unkey 5.964 |
+| OPEN `[24, 5, [1]]` | 5.568 (2.2 ms after the first frame) |
+| STD sent by the fake | 6.568 (1.000 s after the OPEN) |
+| fake data requests | 128 x 322 B, indexes 72 to 199 in order, 6.569 to 6.580 (flushed with the 20-request window as the fake answers), then CS 6.580 |
+| D-STAR listener | 128 voice frames (one stream id, first 6.571, last 6.580, D-STAR seq 9, 10, ... = 72 mod 21 on: the source position is kept), 5 header repeats, 1 end frame |
+| hub counters | `pre_ready_dropped` 72, `sent` 128, `published` 128, `sessions opened` 1, `open_failed` 0 (first run identical) |
+
+Verdict: matches the design, no finding. The oldest 72 units are dropped, the newest 128 are
+transcoded in order, the counter is exact.
+
+Remark (not a disagreement, the design does not define the label): `dv_xcode_sessions_total{result="opened"}`
+counts the CreateSessions sent (`xcode.rs` `open_pending`), so a failed open is in `opened` and in
+`open_failed` (see H6). The hub exposes the xcode counters only after the controller's next 10 s
+telemetry record, about 10 s after the over (`status.md`, "Telemetry").
+
+Command (alone, `wip-0348b98` binaries):
+
+```
+DVT_DVR_BIN_DIR=.cache/dvr-wip-0348b98 DVT_XLXD_BIN=scripts/dvr-import-wrap.sh DVT_SUT_PROFILE=dvrouter \
+  scripts/contained.sh --name test -- python3 -m pytest -m netns cases/test_xlxd_usrp_netns.py -q -k test_pre_ready_cap_
+```
+
+## H6 applied: STD later than 1050 ms (the open is given up, the room recovers)
+
+- scenario `open_late_std` (profile `dvrouter`, case prefix `test_open_refused_`, case
+  `test_open_refused_late_std_given_up`, spec `netns_ambed.open_late_std`): `FakeAmbed(open_delays=[1.5, 0.05])`:
+  the first STD is sent 1.5 s after its OPEN, the second 0.05 s after its OPEN. Steps: `listenB`,
+  `usrp:100:20` (a real-time 100-unit over, 2.0 s), `usrpShortB` (5 units) 2.5 s after the first
+  over ended. The delay is a timer, so the fake keeps answering CAPS while the first STD is pending.
+
+Design rule asserted (`transcoding.md:472`, `:473`, `:509`, `:346`, `:140`):
+
+| Rule | Assertion |
+|------|-----------|
+| :472 "nothing within 1050 ms: closes the session; one immediate CAPS re-probe; no CS; accepted = 0, retryable = 1" | exactly one CAPS between the first and the second OPEN, 1.0 to 1.2 s after the first OPEN |
+| :346 "A failed open ... is counted, and the target streams of that over are not produced. There is no retry within a stream" | one OPEN for the 2 s over (opens == two OPENs in all, the second for the next over); the listener hears no frame and no header of the first over; hub `open_failed` 1, `frames in sent` 0, `frames out published` 0 |
+| :473 "STD after the session closed: CS for that stream id, nothing bound" | one CS for stream 1 within 0.3 s after the late STD, and no data request on the first open's data port |
+| the next over (STD at once) | opened again (second OPEN, STD 0.05 s), the 5 frames heard in full with one end frame inside 3 s, 5 PCM requests; hub `open_failed` stays 1 |
+
+Observations on `wip-0348b98` (alone, two runs; first `out/20261107T115235Z/netns/open_late_std`,
+second `out/20261107T115345Z/netns/open_late_std`, second one below, times in s on the fake's clock):
+
+| Item | Value |
+|------|-------|
+| over 1 | 100 frames 5.562 to 7.542, unkey 7.542 |
+| OPEN 1 / STD 1 | 5.564 (2.4 ms after the first frame) / 7.065 (1.5007 s later) |
+| CAPS re-probe | 1.0565 s after OPEN 1 (first run 1.0561 s), one only |
+| CS | stream 1 at 7.0648 (0.2 ms after the late STD); none before |
+| data requests on the first open | 0 |
+| listener during over 1 and until over 2 | 0 frames, 0 headers |
+| hub after over 1 | `sessions opened` 1 (CreateSession sent), `open_failed` 1, `frames in sent` 0, `published` 0 |
+| over 2 | 5 frames 11.058 to 11.138; OPEN 11.060; STD 11.110 (0.050 s); 5 PCM requests; listener 5 voice frames + 1 end frame 11.1116 to 11.1387, one stream id |
+| hub after over 2 | `opened` 2, `open_failed` 1, `frames in sent` 5, `published` 5 |
+
+Verdict: matches the design, no finding. The late STD is refused at the OPEN wait (the listener
+hears nothing for that over, not even a header), counted once, CS follows the late STD, the room
+is ready again for the next over (CAPS re-probe answered).
+
+Command:
+
+```
+DVT_DVR_BIN_DIR=.cache/dvr-wip-0348b98 DVT_XLXD_BIN=scripts/dvr-import-wrap.sh DVT_SUT_PROFILE=dvrouter \
+  scripts/contained.sh --name test -- python3 -m pytest -m netns cases/test_xlxd_usrp_netns.py -q -k test_open_refused_
 ```
 
 ## Harness fixes

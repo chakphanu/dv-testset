@@ -291,6 +291,12 @@ def run_stream(addr, port, codec_in, outs, frames, gap=0.02, wait=3.0, bind_ip="
         sock.close()
     return replies
 
+def open_delay_for(delays, index, default=0.0):
+    """STD delay of the index-th OPEN (from 0): delays[index], or default when
+    the list is shorter."""
+    return delays[index] if 0 <= index < len(delays) else default
+
+
 class FakeAmbed:
     """Minimal AMBEd server for reflector tests.
 
@@ -300,10 +306,16 @@ class FakeAmbed:
     data_port_base upward; each data request is answered with fake_payload()
     per output codec. open_delay delays the STD reply (open still pending
     while the reflector keeps sending). Everything received is logged.
+
+    open_delays (optional list of seconds) sets the STD delay per open, in
+    the order the OPENs arrive; an open beyond the list uses open_delay. The
+    delayed STD is sent from its own timer thread, so the control loop keeps
+    answering PING and CAPS meanwhile (a late STD after a given-up open, H6).
+    Without the list the reply is delayed in the control thread, as before.
     """
 
     def __init__(self, bind_ip, port=PORT, mode="extended", max_outputs=MAX_OUTPUTS,
-                 mask=MASK_ALL, open_delay=0.0, data_port_base=41000):
+                 mask=MASK_ALL, open_delay=0.0, data_port_base=41000, open_delays=None):
         if mode not in ("extended", "legacy"):
             raise ValueError("mode is extended or legacy")
         self.bind_ip = bind_ip
@@ -311,6 +323,7 @@ class FakeAmbed:
         self.max_outputs = max_outputs
         self.mask = mask
         self.open_delay = open_delay
+        self.open_delays = None if open_delays is None else [float(d) for d in open_delays]
         self.t0 = time.monotonic()
         self.lock = threading.Lock()
         self.ctrl = []          # [(t, bytes)] every control packet received
@@ -378,12 +391,27 @@ class FakeAmbed:
         thread.start()
         with self.lock:
             self.opens.append((self.now(), request, port))
-        if self.open_delay:
-            time.sleep(self.open_delay)
+            index = len(self.opens) - 1
         out0 = request.outs[0] if request.outs else NONE
-        self.event("OPEN len=%d in=%d outs=%s tr=%s -> port %d" % (
-            request.size, request.codec_in, list(request.outs), request.transaction, port))
-        self.sock.sendto(std(stream_id, port, request.codec_in, out0, request.transaction), addr)
+        reply = std(stream_id, port, request.codec_in, out0, request.transaction)
+        text = "OPEN len=%d in=%d outs=%s tr=%s -> port %d" % (
+            request.size, request.codec_in, list(request.outs), request.transaction, port)
+        if self.open_delays is not None:
+            delay = open_delay_for(self.open_delays, index, self.open_delay)
+            if delay:
+                threading.Thread(target=self._reply_later, args=(delay, text, reply, addr),
+                                 daemon=True).start()
+                return
+        elif self.open_delay:
+            time.sleep(self.open_delay)
+        self.event(text)
+        self.sock.sendto(reply, addr)
+
+    def _reply_later(self, delay, text, reply, addr):
+        if self.stopping.wait(delay):
+            return
+        self.event(text)
+        self.sock.sendto(reply, addr)
 
     def _control(self):
         while not self.stopping.is_set():

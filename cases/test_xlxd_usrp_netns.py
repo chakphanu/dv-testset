@@ -33,11 +33,14 @@ USRP_PCM = (b"\xe8\x03\x18\xfc") * 80          # +1000, -1000 S16LE
 LISTENER = "N0LSTN"
 LISTEN_SETTLE = 1.0                             # s after the link ack (DV-Router demand token)
 SHORT_BURST = 5                                 # USRP frames of usrpShortB
+HUB_METRICS = "http://127.0.0.1:19108/metrics"  # dv-svc-status hub of the converted config (in the namespace)
+METRIC_PREFIXES = ("dv_xcode_", "dv_room_data_total")
+METRICS_WAIT = 15.0                             # s to wait for the controllers' 10 s telemetry
 
 # name: usrp config present, fake ambed mode / max outputs / STD delay, steps,
 # "cases": name prefix of the cases that read the scenario (only scenarios of
 # selected cases are launched; the prefixes must not be prefixes of each other:
-# "test_slow_open_" and "test_open_wait_"), optional "profile": the scenario is
+# "test_slow_open_" and "test_open_wait_"; also test_pre_ready_cap_, test_open_refused_), optional "profile": the scenario is
 # launched only under that DVT_SUT_PROFILE (H4)
 SCENARIOS = {
     "no_usrp": dict(usrp=False, mode="extended", max_outputs=4, open_delay=0.05,
@@ -56,11 +59,38 @@ SCENARIOS = {
     "slow_open_listener": dict(usrp=True, mode="extended", max_outputs=4, open_delay=1.0,
                                steps=["listenB", "usrpShortB"], cases="test_open_wait_",
                                profile="dvrouter"),
+    # H5: a USRP over of 200 units sent 2 ms apart (0.4 s, faster than real
+    # time) while the STD is 1.0 s late: more than the 128 units the
+    # controller buffers before SessionReady are in hand, the oldest go.
+    # "metrics_wait": after that step the hub counters are read in the namespace,
+    # once dv_xcode_sessions_total{result=<label>} has reached the minimum
+    "pre_ready_overflow": dict(usrp=True, mode="extended", max_outputs=4, open_delay=1.0,
+                               steps=["listenB", "usrp:200:2"], cases="test_pre_ready_cap_",
+                               profile="dvrouter", metrics_wait={"usrp:200:2": ["opened", 1]}),
+    # H6: the first STD comes 1.5 s after its OPEN (later than the 1050 ms
+    # OPEN wait), the second one at once; a 100-unit over (2 s) first, a short
+    # one after it
+    "open_late_std": dict(usrp=True, mode="extended", max_outputs=4, open_delay=0.05,
+                          open_delays=[1.5, 0.05], steps=["listenB", "usrp:100:20", "usrpShortB"],
+                          cases="test_open_refused_", profile="dvrouter",
+                          metrics_wait={"usrp:100:20": ["open_failed", 1], "usrpShortB": ["opened", 2]}),
 }
 TIMEOUT = 120
 
 
 # ---------------------------------------------------------------- inside
+
+def indexed_pcm(index):
+    """USRP_PCM with the frame index in the first sample (S16LE): the PCM
+    request at the fake transcoder names the unit it carries."""
+    return index.to_bytes(2, "little") + USRP_PCM[2:]
+
+
+def pcm_index(request):
+    """Index of an indexed_pcm() unit in a PCM data request (codec, pid,
+    320 B of PCM)."""
+    return int.from_bytes(request[2:4], "little")
+
 
 def _inside(spec, run_dir):
     """Runs in the namespace: xlxd + fakes, writes run_dir/result.json."""
@@ -68,6 +98,7 @@ def _inside(spec, run_dir):
     import signal
     import socket
     import threading
+    import urllib.request
 
     from dvtest.net import pace
     from dvtest.proto import ambed, dextra, usrp
@@ -82,14 +113,14 @@ def _inside(spec, run_dir):
         libc.prctl(1, signal.SIGKILL)       # PR_SET_PDEATHSIG
 
     fake = ambed.FakeAmbed(AMBED_IP, mode=spec["mode"], max_outputs=spec["max_outputs"],
-                           open_delay=spec["open_delay"])
+                           open_delay=spec["open_delay"], open_delays=spec.get("open_delays"))
     log = open(run_dir / "xlxd.log", "wb")
     # DV_RUN_DIR: a DV-Router keeps its run state here (xlxd ignores it)
     xlxd = subprocess.Popen([spec["bin"], "XLX999", XLXD_IP, AMBED_IP], cwd=run_dir,
                             env=dict(os.environ, DV_RUN_DIR=str(run_dir)),
                             stdout=log, stderr=subprocess.STDOUT, preexec_fn=die_with_parent)
     result = {"phases": [], "usrp_rx": [], "dextra_ack": [], "listen_ack": [], "dstar_rx": [],
-              "dstar_hdr": [], "usrp_tx": []}
+              "dstar_hdr": [], "usrp_tx": [], "metrics": []}
     lock = threading.Lock()
     stop = threading.Event()
     peer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -182,6 +213,43 @@ def _inside(spec, run_dir):
         # [first voice, last voice, unkey] sent, fake clock
         result["usrp_tx"].append([first, last, fake.now()])
 
+    def usrp_over(count, gap):
+        """count USRP voice frames gap seconds apart, frame i carrying its
+        index in the PCM (indexed_pcm), then the unkey."""
+        start = time.monotonic()
+        first = None
+        for seq in range(count):
+            pace(start, seq, gap)
+            if first is None:
+                first = fake.now()
+            peer.sendto(usrp.voice(seq, indexed_pcm(seq)), (XLXD_IP, 34001))
+        last = fake.now()
+        peer.sendto(usrp.unkey(count), (XLXD_IP, 34001))
+        result["usrp_tx"].append([first, last, fake.now()])
+
+    def scrape(step, result_label, minimum):
+        """The xcode / room data counters of the hub as [step, t, lines]. The
+        controllers put their counters on the fabric every 10 s (status.md),
+        so poll until dv_xcode_sessions_total{result=result_label} reached
+        minimum, at most METRICS_WAIT s; the last text is kept either way."""
+        from dvtest import metrics
+        lines = []
+        deadline = time.monotonic() + METRICS_WAIT
+        while True:
+            try:
+                with urllib.request.urlopen(HUB_METRICS, timeout=2) as reply:
+                    text = reply.read().decode("utf-8", "replace")
+                lines = [ln for ln in text.splitlines() if ln.startswith(METRIC_PREFIXES)]
+                if metrics.total(metrics.parse("\n".join(lines)), "dv_xcode_sessions_total",
+                                 result=result_label) >= minimum:
+                    break
+            except Exception as exc:            # a missing hub is a finding, not a crash
+                lines = ["error: %s" % exc]
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.5)
+        result["metrics"].append([step, fake.now(), lines])
+
     threading.Thread(target=usrp_rx, daemon=True).start()
     try:
         result["pinged"] = fake.connected.wait(15)
@@ -196,10 +264,15 @@ def _inside(spec, run_dir):
                 listen("B")
             elif step == "usrpShortB":
                 usrp_talk(SHORT_BURST)
+            elif step.startswith("usrp:"):
+                _name, count, gap_ms = step.split(":")
+                usrp_over(int(count), int(gap_ms) / 1000.0)
             elif step == "badB":
                 # TLV/text frame from the configured peer: must be dropped
                 peer.sendto(usrp.frame(0, usrp.TYPE_TEXT, b"\x08\x00"), (XLXD_IP, 34001))
             time.sleep(2.5)
+            if step in spec.get("metrics_wait", {}):
+                scrape(step, *spec["metrics_wait"][step])
             result["phases"].append([step, start, fake.now()])
         result["xlxd_alive"] = xlxd.poll() is None
     finally:
@@ -569,6 +642,203 @@ def test_open_wait_listener_short_burst_heard(runs, target):
     assert seen["fake_data_requests"] == SHORT_BURST, seen["fake_data_requests"]
     reqs = requests(run, run["opens"][0][6])
     assert all(len(r) == 322 and r[0] == 5 and r[2:] == USRP_PCM for r in reqs)
+
+
+# ---- H5 / H6: the documented limits of the opening session
+
+def hub_counter(run, step, name, **labels):
+    """Value of a hub counter in the snapshot taken after the step (name of
+    the step as in the scenario), summed over the rooms; None when the
+    scenario has no snapshot of it."""
+    from dvtest import metrics
+    for got, _t, lines in run.get("metrics", []):
+        if got == step:
+            if lines and lines[0].startswith("error:"):
+                return None
+            return metrics.total(metrics.parse("\n".join(lines)), name, **labels)
+    return None
+
+
+def xcode_counters(run, step):
+    """The transcoding counters of the hub after the step: sessions by result
+    (dv_xcode_sessions_total) and frames by direction and result
+    (dv_xcode_frames_total)."""
+    out = {}
+    for result in ("opened", "open_failed", "failed", "drain_timeout"):
+        out["sessions_" + result] = hub_counter(run, step, "dv_xcode_sessions_total", result=result)
+    for dir_, result in (("in", "sent"), ("in", "skipped"), ("in", "pre_ready_dropped"),
+                         ("out", "published"), ("out", "dropped")):
+        out["frames_%s_%s" % (dir_, result)] = hub_counter(run, step, "dv_xcode_frames_total",
+                                                           dir=dir_, result=result)
+    return out
+
+
+def pre_ready_observed(run, open_delay, frames, gap):
+    """The numbers of the pre_ready_overflow scenario (times on the fake's
+    clock): the over sent, OPEN and STD, the PCM units the transcoder got
+    (named by indexed_pcm), what the listener heard, the hub counters."""
+    sent = run["usrp_tx"][0]
+    open_t = run["opens"][0][0]
+    std = [t for t, text in run["events"] if text.startswith("OPEN")]
+    std_t = std[0] if std else open_t + open_delay
+    port = run["opens"][0][6]
+    reqs = run["data_in"].get(str(port), [])
+    indexes = [pcm_index(bytes.fromhex(h)) for _t, h in reqs]
+    rx = run["dstar_rx"]
+    voice = [r for r in rx if r[4]]
+    step = "usrp:%d:%d" % (frames, round(gap * 1000))
+    return {
+        "usrp_frames_sent": frames, "usrp_gap_s": gap, "usrp_first_sent": sent[0],
+        "usrp_last_sent": sent[1], "usrp_unkey_sent": sent[2],
+        "open_at": open_t, "open_lag_s": open_t - sent[0], "std_at": std_t, "std_delay_s": std_t - open_t,
+        "fake_data_requests": len(reqs), "fake_request_indexes": indexes,
+        "fake_first_request_at": reqs[0][0] if reqs else None,
+        "fake_last_request_at": reqs[-1][0] if reqs else None,
+        "dstar_headers": run["dstar_hdr"], "dstar_frames_heard": len(voice),
+        "dstar_end_frames": sum(1 for r in rx if r[3]),
+        "dstar_first_heard": voice[0][0] if voice else None,
+        "dstar_last_heard": voice[-1][0] if voice else None,
+        "dstar_seqs": [r[2] for r in voice], "dstar_stream_ids": sorted({r[1] for r in rx}),
+        "closes": run["closes"], "counters": xcode_counters(run, step),
+    }
+
+
+def test_pre_ready_cap_oldest_units_dropped(runs, target):
+    """H5: a USRP over of 200 units sent 2 ms apart (0.4 s) while the STD is
+    1.0 s late has 200 units in hand before SessionReady, 72 more than the
+    pre-ready buffer. The design (DV-Router docs/design/transcoding.md:344,
+    :352; crates/room/src/xcode.rs PRE_READY_CAP and Xcode::unit): before
+    SessionReady the controller buffers up to 128 units per session with no
+    age drop; when the buffer is full the oldest unit is dropped with a
+    counter (dv_xcode_frames_total{dir="in",result="pre_ready_dropped"}), and
+    the buffer is then sent in order. So the transcoder gets the newest 128
+    units (input_seq 72 to 199), in order, the D-STAR listener hears 128
+    voice frames and the counter says 72. A real-time over cannot get there
+    (128 units are 2.56 s, the OPEN wait is 1050 ms): the over has to be
+    faster than real time. Skipped under the xlxd profile."""
+    spec = netns_spec(target)
+    if spec is None:
+        pytest.skip("DV-Router profile spec only (the scenario is not launched under xlxd)")
+    want = spec["pre_ready_overflow"]
+    scenario = SCENARIOS["pre_ready_overflow"]
+    run = get(runs, "pre_ready_overflow")
+    assert run["listen_ack"] and run["listen_ack"][0], "the D-STAR listener was not acked on module B"
+    assert [o[1:4] for o in run["opens"]] == want["opens"], run["opens"]
+    seen = pre_ready_observed(run, scenario["open_delay"], want["frames"], want["gap_s"])
+    (Path(run["run_dir"]) / "observed.json").write_text(json.dumps(seen, indent=1))
+    assert 0 <= seen["open_lag_s"] <= want["open_lag_s"], "OPEN %.3f s after the first USRP frame" % seen["open_lag_s"]
+    assert abs(seen["std_delay_s"] - scenario["open_delay"]) <= 0.15, seen["std_delay_s"]
+    # the whole over is in hand before SessionReady: this is the situation under test
+    assert seen["usrp_unkey_sent"] < seen["std_at"], "over not finished before the STD"
+    kept = want["frames"] - want["dropped"]
+    # which units: the newest `kept`, in order (the oldest are dropped, :344)
+    assert seen["fake_request_indexes"] == list(range(want["dropped"], want["frames"])), \
+        "transcoder got %d units, indexes %s .. %s" % (
+            len(seen["fake_request_indexes"]), seen["fake_request_indexes"][:3], seen["fake_request_indexes"][-3:])
+    # the listener hears exactly those, after the STD, inside the give-up
+    assert seen["dstar_frames_heard"] == kept, \
+        "listener heard %d of %d units" % (seen["dstar_frames_heard"], want["frames"])
+    assert len(seen["dstar_stream_ids"]) == 1, seen["dstar_stream_ids"]
+    assert seen["dstar_first_heard"] >= seen["std_at"] - 0.01, seen["dstar_first_heard"]
+    assert seen["dstar_last_heard"] - seen["usrp_first_sent"] <= want["give_up_s"], \
+        "last frame heard %.3f s after the first USRP frame" % (seen["dstar_last_heard"] - seen["usrp_first_sent"])
+    # the counter of the drop
+    counters = seen["counters"]
+    assert counters["frames_in_pre_ready_dropped"] == want["dropped"], counters
+    assert counters["sessions_opened"] == 1 and counters["sessions_open_failed"] == 0, counters
+    assert counters["frames_out_published"] == kept, counters
+
+
+def open_refused_observed(run):
+    """The numbers of the open_late_std scenario (times on the fake's clock):
+    over 1 (100 units, STD 1.5 s late) and over 2 (5 units, STD at once), what
+    the fake saw (OPENs, STDs, CS, CAPS probes, PCM requests per open), what
+    the listener heard in each window, the hub counters after each over."""
+    over1, over2 = run["usrp_tx"][0], run["usrp_tx"][1]
+    opens = run["opens"]
+    stds = [t for t, text in run["events"] if text.startswith("OPEN")]
+    caps_after_open1 = [t - opens[0][0] for t in caps_times(run) if opens[0][0] < t < opens[1][0]]
+    rx, hdr = run["dstar_rx"], run["dstar_hdr"]
+    window1 = [r for r in rx if r[0] < over2[0]]
+    window2 = [r for r in rx if r[0] >= over2[0]]
+    voice2 = [r for r in window2 if r[4]]
+    ports = [o[6] for o in opens]
+    return {
+        "over1_first_sent": over1[0], "over1_last_sent": over1[1], "over1_unkey_sent": over1[2],
+        "over2_first_sent": over2[0], "over2_last_sent": over2[1], "over2_unkey_sent": over2[2],
+        "open1_at": opens[0][0], "open2_at": opens[1][0] if len(opens) > 1 else None,
+        "open1_lag_s": opens[0][0] - over1[0],
+        "std_at": stds, "std1_delay_s": stds[0] - opens[0][0] if stds else None,
+        "std2_delay_s": stds[1] - opens[1][0] if len(stds) > 1 else None,
+        "closes": run["closes"], "caps_after_open1_s": caps_after_open1,
+        "requests_open1": len(run["data_in"].get(str(ports[0]), [])),
+        "requests_open2": len(run["data_in"].get(str(ports[1]), [])) if len(ports) > 1 else None,
+        "over1_dstar_frames": len(window1), "over1_dstar_headers": len([h for h in hdr if h[0] < over2[0]]),
+        "over2_dstar_frames_heard": len(voice2), "over2_dstar_end_frames": sum(1 for r in window2 if r[3]),
+        "over2_dstar_first_heard": voice2[0][0] if voice2 else None,
+        "over2_dstar_last_heard": voice2[-1][0] if voice2 else None,
+        "over2_dstar_stream_ids": sorted({r[1] for r in window2}),
+        "counters_after_over1": xcode_counters(run, "usrp:100:20"),
+        "counters_after_over2": xcode_counters(run, "usrpShortB"),
+    }
+
+
+def test_open_refused_late_std_given_up(runs, target):
+    """H6: an STD 1.5 s after its OPEN is later than the 1050 ms OPEN wait.
+    The design (DV-Router docs/design/transcoding.md:472, :473, :509, :346):
+    nothing within 1050 ms closes the worker session, one immediate CAPS
+    re-probe, no CS yet, SessionReady accepted = 0 retryable = 1; the
+    controller counts a failed open (:346, dv_xcode_sessions_total{result=
+    "open_failed"}), does not produce the target streams of that over and
+    never retries within a stream; the late STD finds the transaction
+    forgotten: CS for its stream, nothing bound (:473, so the transcoder sees
+    no data request on that stream). The next over opens again and is heard
+    in full. Skipped under the xlxd profile."""
+    spec = netns_spec(target)
+    if spec is None:
+        pytest.skip("DV-Router profile spec only (the scenario is not launched under xlxd)")
+    want = spec["open_late_std"]
+    scenario = SCENARIOS["open_late_std"]
+    run = get(runs, "open_late_std")
+    assert run["listen_ack"] and run["listen_ack"][0], "the D-STAR listener was not acked on module B"
+    seen = open_refused_observed(run)
+    (Path(run["run_dir"]) / "observed.json").write_text(json.dumps(seen, indent=1))
+    # one OPEN per over: no retry within the first stream (:140, :346)
+    assert [o[1:4] for o in run["opens"]] == want["opens"], run["opens"]
+    assert 0 <= seen["open1_lag_s"] <= want["open_lag_s"], "OPEN %.3f s after the first USRP frame" % seen["open1_lag_s"]
+    assert abs(seen["std1_delay_s"] - scenario["open_delays"][0]) <= 0.15, seen["std1_delay_s"]
+    assert seen["std1_delay_s"] > want["open_wait_s"], "the STD is not later than the OPEN wait"
+    assert seen["open2_at"] > seen["std_at"][0], "the second OPEN is not after the late STD"
+    # the open is given up: one CAPS re-probe shortly after the OPEN wait (:472)
+    assert len(seen["caps_after_open1_s"]) == 1, seen["caps_after_open1_s"]
+    assert want["open_wait_s"] - 0.05 <= seen["caps_after_open1_s"][0] <= want["reprobe_within_s"], \
+        "CAPS re-probe %.3f s after the OPEN" % seen["caps_after_open1_s"][0]
+    # the late STD: CS for its stream, no data request on it (:473, :509)
+    cs1 = [t for t, stream in run["closes"] if stream == 1]
+    assert len(cs1) == 1 and seen["std_at"][0] <= cs1[0] <= seen["std_at"][0] + want["cs_within_s"], \
+        "CS for the late stream %s, STD at %.3f" % (run["closes"], seen["std_at"][0])
+    assert seen["requests_open1"] == 0, "%d data requests on the given-up open" % seen["requests_open1"]
+    # nothing of the over is heard: no header, no frame, until the second over starts
+    assert seen["over1_dstar_frames"] == 0 and seen["over1_dstar_headers"] == 0, \
+        "listener heard %d frames, %d headers of the refused over" % (seen["over1_dstar_frames"],
+                                                                      seen["over1_dstar_headers"])
+    # the counters (:346): a failed open, nothing sent to the transcoder, nothing published. Note:
+    # result="opened" counts the CreateSessions sent (xcode.rs open_pending), the failed one included
+    first = seen["counters_after_over1"]
+    assert first["sessions_open_failed"] == 1 and first["sessions_opened"] == 1, first
+    assert first["frames_in_sent"] == 0 and first["frames_out_published"] == 0, first
+    # the room recovers: the next over opens at once and is heard in full
+    assert abs(seen["std2_delay_s"] - scenario["open_delays"][1]) <= 0.15, seen["std2_delay_s"]
+    assert seen["over2_dstar_frames_heard"] == want["frames_heard"], \
+        "listener heard %d of %d units of the second over" % (seen["over2_dstar_frames_heard"], SHORT_BURST)
+    assert seen["over2_dstar_end_frames"] == 1 and len(seen["over2_dstar_stream_ids"]) == 1, seen
+    assert seen["over2_dstar_last_heard"] - seen["over2_first_sent"] <= want["give_up_s"], seen
+    assert seen["requests_open2"] == SHORT_BURST, seen["requests_open2"]
+    reqs = requests(run, run["opens"][1][6])
+    assert all(len(r) == 322 and r[0] == 5 and r[2:] == USRP_PCM for r in reqs)
+    second = seen["counters_after_over2"]
+    assert second["sessions_opened"] == 2 and second["sessions_open_failed"] == 1, second
+    assert second["frames_out_published"] == SHORT_BURST, second
 
 
 if __name__ == "__main__" and len(sys.argv) == 4 and sys.argv[1] == "--inside":

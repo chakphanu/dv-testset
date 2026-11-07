@@ -333,9 +333,10 @@ Scenarios, waves and the task limit. Both files run one scenario per `-k` group 
 ("cases" name prefix of each scenario: only the scenarios that a selected case reads are
 launched, in both files). One idle DV-Router scenario (launcher, 8 rooms, edges,
 `dv-codec-ambed`, status, web, ...) peaks near 435 tasks (threads), and `scripts/contained.sh`
-puts the job in a scope with `TasksMax=1024`. Starting all scenarios at once (6 in the USRP
-file, 5 of them under the xlxd profile: `slow_open_listener` has `profile="dvrouter"` and is
-not started under another `DVT_SUT_PROFILE`; 4 in the lifecycle file) needs about 2200 and starves the launcher (`clone()` fails with
+puts the job in a scope with `TasksMax=1024`. Starting all scenarios at once (8 in the USRP
+file, 5 of them under the xlxd profile: `slow_open_listener`, `pre_ready_overflow` and
+`open_late_std` have `profile="dvrouter"` and are not started under another `DVT_SUT_PROFILE`;
+4 in the lifecycle file) needs about 2200 and starves the launcher (`clone()` fails with
 `os error 11`); the cases then looked like a product fault ("never sent AMBEDPING"). So the
 scenarios start in waves:
 
@@ -348,11 +349,22 @@ Recipe (the default is the safe one; no scratch plugin is needed any more):
 ```
 DVT_DVR_BIN_DIR=.cache/dvr-<tag> DVT_XLXD_BIN=scripts/dvr-import-wrap.sh DVT_SUT_PROFILE=dvrouter \
   scripts/contained.sh --name test -- python3 -m pytest -m netns \
-  cases/test_xlxd_usrp_netns.py -q                    # whole file: 6 scenarios (5 under xlxd), one after the other
+  cases/test_xlxd_usrp_netns.py -q                    # whole file: 8 scenarios (5 under xlxd), one after the other
   # one scenario: add -k test_extended_ (or test_lost_listener_ for the lifecycle file)
   # slow STD over a short USRP burst: -k test_slow_open_ (no listener, no OPEN) or
   # -k test_open_wait_ (D-STAR listener, DV-Router profile only: the burst must be heard in full)
+  # the documented limits of the opening session (DV-Router profile only, one scenario each):
+  # -k test_pre_ready_cap_ (200 units faster than real time over a 1.0 s STD: the oldest 72 dropped)
+  # -k test_open_refused_ (STD 1.5 s after the OPEN: open given up, the next over heard)
 ```
+
+The H5 / H6 scenarios read the hub counters of the system under test from inside the namespace:
+the converted config enables `dv-svc-status` with `metrics_bind = 127.0.0.1:19108`, the harness
+GETs `/metrics` after the step and keeps the `dv_xcode_*` lines in `result.json` ("metrics").
+The controllers put their counters on the fabric every 10 s, so the harness polls (at most
+`METRICS_WAIT` = 15 s) until `dv_xcode_sessions_total` reached the value the scenario names
+("metrics_wait"). `dvtest/proto/ambed.py` `FakeAmbed(open_delays=[...])` sets the STD delay per
+OPEN (a timer thread, the control loop keeps answering PING and CAPS).
 
 Wall time of a whole-file run with the default: the USRP file runs its 6 scenarios one after
 the other instead of together: about 5 x 30 s instead of about 30 s; the lifecycle file

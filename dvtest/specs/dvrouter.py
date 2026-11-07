@@ -92,6 +92,21 @@ SPEC = {
         # the 3 s controller give-up (:341, :344)
         "slow_open_listener": {"opens": [[24, 5, [1]]], "frames_heard": 5, "open_lag_s": 0.3,
                                "give_up_s": 3.0},
+        # H5, more than 128 units before SessionReady (200 units 2 ms apart over the 1.0 s
+        # slow STD): the pre-ready buffer holds 128 units, "when full, the oldest is dropped
+        # with a counter" (transcoding.md:344, :352; xcode.rs PRE_READY_CAP), so the
+        # transcoder and the listener get input_seq 72..199 in order and the counter
+        # dv_xcode_frames_total{dir="in",result="pre_ready_dropped"} says 72
+        "pre_ready_overflow": {"opens": [[24, 5, [1]]], "frames": 200, "gap_s": 0.002,
+                               "dropped": 72, "open_lag_s": 0.3, "give_up_s": 3.0},
+        # H6, an STD 1.5 s after its OPEN: later than the 1050 ms OPEN wait (transcoding.md:472
+        # nothing within 1050 ms -> closed, one immediate CAPS re-probe, accepted = 0, retryable
+        # = 1; :346 a failed open is counted, the target streams of that over are not produced,
+        # no retry within a stream; :473 a STD after the session closed -> CS for its stream,
+        # nothing bound). The next over (STD at once) opens and is heard in full.
+        "open_late_std": {"opens": [[24, 5, [1]], [24, 5, [1]]], "open_lag_s": 0.3,
+                          "open_wait_s": 1.05, "reprobe_within_s": 1.2, "cs_within_s": 0.3,
+                          "frames_heard": 5, "give_up_s": 3.0},
     },
     # netns transcoder-lifecycle cases (test_xlxd_transcoder_lifecycle, B13/B14);
     # DV-Router docs/design/transcoding.md: one CAPS per connection, opens on

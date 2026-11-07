@@ -153,7 +153,114 @@ def test_for_profile_drops_scenarios_of_another_profile():
     assert netns_runs.for_profile(names, scenarios, "dvrouter") == names
     assert netns_runs.for_profile(names, scenarios, "xlxd") == ["slow_open"]
     assert netns_runs.for_profile([], scenarios, "xlxd") == []
-    assert [n for n, spec in scenarios.items() if "profile" in spec] == ["slow_open_listener"]
+    assert [n for n, spec in scenarios.items() if "profile" in spec] == \
+        ["slow_open_listener", "pre_ready_overflow", "open_late_std"]
+    # H5 / H6: every scenario that only the DV-Router profile can judge is dropped under xlxd
+    assert netns_runs.for_profile(list(scenarios), scenarios, "xlxd") == \
+        [n for n in scenarios if "profile" not in scenarios[n]]
+    assert netns_runs.for_profile(list(scenarios), scenarios, "dvrouter") == list(scenarios)
+
+
+def test_boundary_variants_are_selected_apart():
+    """H5 / H6: -k test_pre_ready_cap_ and -k test_open_refused_ each launch their
+    own scenario only, never the slow-open ones (and the other way round)."""
+    module = load("test_xlxd_usrp_netns")
+    scenarios = module.SCENARIOS
+    assert netns_runs.scenarios_for(scenarios, {"test_pre_ready_cap_oldest_units_dropped"}) == ["pre_ready_overflow"]
+    assert netns_runs.scenarios_for(scenarios, {"test_open_refused_late_std_given_up"}) == ["open_late_std"]
+    assert netns_runs.scenarios_for(scenarios, {"test_slow_open_short_burst_delivered"}) == ["slow_open"]
+    assert netns_runs.scenarios_for(scenarios, {"test_open_wait_listener_short_burst_heard"}) == \
+        ["slow_open_listener"]
+    both = {"test_pre_ready_cap_oldest_units_dropped", "test_open_refused_late_std_given_up"}
+    assert netns_runs.scenarios_for(scenarios, both) == ["pre_ready_overflow", "open_late_std"]
+    # the test names really start with the prefix of their scenario
+    for case, scenario in (("test_pre_ready_cap_oldest_units_dropped", "pre_ready_overflow"),
+                           ("test_open_refused_late_std_given_up", "open_late_std")):
+        assert hasattr(module, case) and case.startswith(scenarios[scenario]["cases"])
+    prefixes = [spec["cases"] for spec in scenarios.values()]
+    assert len(prefixes) == len(set(prefixes))
+    for prefix in prefixes:
+        assert [p for p in prefixes if p.startswith(prefix)] == [prefix], prefix
+
+
+def test_indexed_pcm_names_the_unit():
+    module = load("test_xlxd_usrp_netns")
+    assert len(module.indexed_pcm(0)) == 320 and module.indexed_pcm(5)[2:] == module.USRP_PCM[2:]
+    for index in (0, 1, 71, 72, 199, 255, 256, 1000):
+        request = bytes([5, index % 256]) + module.indexed_pcm(index)      # codec, pid, 320 B
+        assert len(request) == 322 and module.pcm_index(request) == index
+
+
+def hub_lines(opened, failed, dropped=0, sent=0, published=0):
+    return ['dv_xcode_sessions_total{proc="b",result="opened",room="b"} %d' % opened,
+            'dv_xcode_sessions_total{proc="b",result="open_failed",room="b"} %d' % failed,
+            'dv_xcode_frames_total{dir="in",proc="b",result="pre_ready_dropped",room="b"} %d' % dropped,
+            'dv_xcode_frames_total{dir="in",proc="b",result="sent",room="b"} %d' % sent,
+            'dv_xcode_frames_total{dir="out",proc="b",result="published",room="b"} %d' % published,
+            'dv_room_data_total{proc="x",result="accepted",room="x"} 0']
+
+
+def test_xcode_counters_read_the_snapshot_of_the_step():
+    module = load("test_xlxd_usrp_netns")
+    run = {"metrics": [["a", 1.0, hub_lines(1, 1)], ["b", 2.0, hub_lines(2, 1, 3, 4, 5)]]}
+    first = module.xcode_counters(run, "a")
+    assert (first["sessions_opened"], first["sessions_open_failed"], first["frames_out_published"]) == (1, 1, 0)
+    second = module.xcode_counters(run, "b")
+    assert second["sessions_opened"] == 2 and second["frames_in_pre_ready_dropped"] == 3
+    assert second["frames_in_sent"] == 4 and second["frames_out_published"] == 5
+    assert module.xcode_counters(run, "missing")["sessions_opened"] is None
+    assert module.xcode_counters({"metrics": [["a", 1.0, ["error: refused"]]]}, "a")["sessions_opened"] is None
+
+
+def pcm_request(index):
+    return (bytes([5, index % 256]) + (index).to_bytes(2, "little") + bytes(318)).hex()
+
+
+def test_pre_ready_observed_reads_the_run():
+    module = load("test_xlxd_usrp_netns")
+    kept = list(range(72, 200))
+    run = {"usrp_tx": [[5.0, 5.4, 5.401]], "opens": [[5.003, 24, 5, [1], 7, "00", 41000]],
+           "events": [[0.5, "CAPS request"], [6.003, "OPEN len=24"]],
+           "data_in": {"41000": [[6.004, pcm_request(i)] for i in kept]},
+           "dstar_hdr": [[6.005, 9]],
+           "dstar_rx": [[6.006, 9, i % 21, False, True] for i in kept] + [[6.007, 9, 8, True, False]],
+           "closes": [[6.01, 1]],
+           "metrics": [["usrp:200:2", 10.0, hub_lines(1, 0, 72, 128, 128)]]}
+    seen = module.pre_ready_observed(run, 1.0, 200, 0.002)
+    assert seen["fake_request_indexes"] == kept and seen["fake_data_requests"] == 128
+    assert seen["dstar_frames_heard"] == 128 and seen["dstar_end_frames"] == 1
+    assert seen["dstar_seqs"][:3] == [9, 10, 11] and seen["dstar_stream_ids"] == [9]
+    assert round(seen["std_delay_s"], 3) == 1.0 and round(seen["open_lag_s"], 3) == 0.003
+    assert seen["counters"]["frames_in_pre_ready_dropped"] == 72
+    # a transcoder that kept the OLDEST 128 would show indexes 0..127
+    run["data_in"] = {"41000": [[6.004, pcm_request(i)] for i in range(128)]}
+    assert module.pre_ready_observed(run, 1.0, 200, 0.002)["fake_request_indexes"] == list(range(128))
+
+
+def test_open_refused_observed_reads_the_run():
+    module = load("test_xlxd_usrp_netns")
+    caps = "AMBEDCAPS".encode().hex()
+    run = {"usrp_tx": [[5.0, 7.0, 7.001], [11.0, 11.08, 11.081]],
+           "opens": [[5.003, 24, 5, [1], 7, "00", 41000], [11.003, 24, 5, [1], 8, "00", 41001]],
+           "events": [[7.0, "OPEN len=24 tr=7"], [11.05, "OPEN len=24 tr=8"]],
+           "ctrl": [[0.5, caps], [6.06, caps], [11.9, caps]],
+           "closes": [[7.001, 1], [11.12, 2]],
+           "data_in": {"41000": [], "41001": [[11.06, "00"]] * 5},
+           "dstar_hdr": [[11.06, 3]],
+           "dstar_rx": [[11.06, 3, i, False, True] for i in range(5)] + [[11.07, 3, 5, True, False]],
+           "metrics": [["usrp:100:20", 10.0, hub_lines(1, 1)], ["usrpShortB", 15.0, hub_lines(2, 1, 0, 5, 5)]]}
+    seen = module.open_refused_observed(run)
+    assert round(seen["std1_delay_s"], 3) == 1.997 and round(seen["std2_delay_s"], 3) == 0.047
+    assert [round(x, 2) for x in seen["caps_after_open1_s"]] == [1.06]      # the later CAPS is after OPEN 2
+    assert seen["requests_open1"] == 0 and seen["requests_open2"] == 5
+    assert seen["over1_dstar_frames"] == 0 and seen["over1_dstar_headers"] == 0
+    assert seen["over2_dstar_frames_heard"] == 5 and seen["over2_dstar_end_frames"] == 1
+    assert seen["over2_dstar_stream_ids"] == [3]
+    assert seen["counters_after_over1"]["sessions_open_failed"] == 1
+    assert seen["counters_after_over2"]["sessions_opened"] == 2
+    # a frame of the refused over leaks into the first window
+    run["dstar_rx"].append([8.0, 4, 0, False, True])
+    assert module.open_refused_observed(run)["over1_dstar_frames"] == 1
 
 
 def test_open_wait_observed_reads_the_run():
