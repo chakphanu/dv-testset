@@ -199,7 +199,7 @@ two instances already leave no headroom.
 
 ## Harness fixes
 
-Status: H1, H2 and H3 are APPLIED (commit COMMIT_HASH); H4 is not (needs the lead). Shared code
+Status: H1, H2 and H3 are APPLIED (commit 67028d9); H4 is not (needs the lead). Shared code
 `dvtest/netns_runs.py`, offline tests `cases/unit/test_netns_runs.py`, recipe and variable in
 `docs/rig.md` ("netns cases with a DV-Router build"). No expectation was changed. The text below
 is the original proposal, kept for the reasoning.
