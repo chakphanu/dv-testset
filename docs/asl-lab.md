@@ -215,36 +215,91 @@ The control channel (kill-proc, proc-stat, netem, restart) only exists while `ru
 watcher stops with that run even under `--keep`. Cases that need it run inside one `run.sh -- cases/...` call;
 a kept rig can still be driven by `docker compose exec tester` for everything else.
 
-### Registration cases R1-R7: one edge process only
+### Registration cases R1-R7, R13, R14: one edge process only
 
-Why node 2999 and 2991..2996, interval 120 s (DV-Router wip-1590f26): the build refuses `public = true` with a node number below 2000
+Why node 2999 and 2991..2998, interval 120 s (DV-Router wip-1590f26): the build refuses `public = true` with a node number below 2000
 ("public node numbers must be at least 2000; private numbers cannot be registered") and a register interval below 120 s. The lead decided not to
 switch the lab node to `public = false` (the public-node path, registry identity and the caller IP check, would no longer be tested), so the lab
 was renumbered: edge 1999 -> 2999, registration nodes 1991..1996 -> 2991..2996 (one answer variant each, in the same order), `interval = "120s"`
-(was "60s"). The lab registrar is our own fake, so the numbers are free; they are valid on older images too, hence one config for all
-generations (no `DVT_SUT_GEN` key). Timing consequences: S = 120 / 7 = 17.14 s, node 2996 first registers at +102.9 s, a successful refresh is 120 s
-(was 60 s), so the fixture waits up to max(240 s, 2 * interval + 60 s) and for a span of interval + 15 s (was 240 s and 75 s); an R1-R7 run takes about
-3 minutes of waiting. The back-offs (24..36 s, 44..56 s) are unchanged. The lab's app_rpt nodes (199901, 199902, 299901, 299902) keep their numbers;
-`cases/unit/test_asl_lab_node_numbers.py` guards the config.
+(was "60s"); 2997 and 2998 (HTTP 429 and HTTP 503 answers, R14) were added for the new retry rules. The lab registrar is our own fake, so the
+numbers are free; they are valid on older images too, hence one config for all generations (no `DVT_SUT_GEN` key). The lab's app_rpt nodes
+(199901, 199902, 299901, 299902) keep their numbers; `cases/unit/test_asl_lab_node_numbers.py` guards the config.
+
+Registrar variants (`rig/asl-lab-registrar.py`, node -> answer): 2991 ok, 2992 success with another port (Mismatch state), 2993 HTTP 500,
+2994 HTTP 200 without "successfully registered", 2995 the ok answer after 20 s (the client gives up after 15 s), 2996 a reply over 4 KiB,
+2997 HTTP 429 with `Retry-After: 300` (`429ra`), 2998 HTTP 503 with `Retry-After: invalid` (`503bad`). The variants `429` and `503` (no header)
+exist for `DVT_ASL_REG_VARIANTS` but no lab node uses them: per `register_worker.rs` only 429 and 503 WITH a Retry-After are `rate_limited`,
+a bare 503 is an ordinary `http` failure. `scripts/run.sh` writes `node-2991.pw` .. `node-2998.pw` (fixture password) next to `node-2999.pw`.
+
+**Retry rules since wip-1590f26 (ASL1j; authority: dv-router `docs/design/allstar.md` of the wip tree, lines 59-72 rate_limited, 72-75 and
+620-625 other failures, 616-618 success; checked against `crates/edge/allstar/src/register.rs` `retry_delay_ns`).** The 30 s +/- 20 % back-off
+of earlier builds is gone:
+
+| rule | when | next attempt after |
+|------|------|--------------------|
+| (a) ordinary failure (`http`, `parse`, `timeout`, `tls`/transport) | the n-th consecutive failure | `120 s * 2^(n-1)` capped at 900 s, times 80..120 % (entropy), clamped to 120..900 s: n=1 120..144 s, n=2 192..288 s, n=3 384..576 s, n>=4 720..900 s; success resets n |
+| (b) HTTP 429, or 503 with `Retry-After` (`rate_limited`) | a valid `Retry-After` (seconds or HTTP date) | that value bounded to 120..86400 s, no jitter |
+| (b) the same without a usable `Retry-After` | the n-th consecutive failure | `interval * 2^(n-1)` up to `max(3600, interval)`, no downward jitter (interval 180: 180, 360, 720, 1440, 2880, 3600 s; the lab's interval 120: 120, 240, 480, ...) |
+| (c) success and Mismatch | | `max(120, min(interval, refresh))` = 120 s here (the stand-in answers refresh 180) |
+
+(The lead's note gave 768 s as the lower bound for n=4; the code caps the base at 900 s before the entropy, so the bound is 720 s. Only n=1 and
+n=2 are observable in the window.) The delay is scheduled when the failed attempt COMPLETES, so the measured gap between two requests of a node is
+`next_retry_delay_ms` + the attempt duration: a few ms for a prompt answer, 15.3 s for the client timeout (run `20261107T034616Z`: 123228 ms +
+15.3 s = 138.5 s). The failure log line, once per admitted failed attempt:
+
+```
+level=warn event=allstar_registration_failed node=2993 result=http http_status=500 error="registrar returned an unsuccessful HTTP status" next_retry_delay_ms=120000
+```
+
+(fields node, result in http/tls/parse/mismatch/unattributed/timeout/rate_limited, http_status or `-`, fixed error text, delay). The limiter
+admits the first failure and then at most one line per node and result class every 300 s (design doc lines 726-737), so with delays of 120 s and
+192..288 s the log has lines for attempts 1 and 3, not for attempt 2.
 
 The edge's registration schedule belongs to its PROCESS (dv-router ruling 2026-11-04, `debug-asl-r1-cadence`): every new dv-edge-allstar
 process, also after a quiet SIGUSR1 restart, starts a fresh initial spread. With N public nodes and interval I (120 s here) the slot spacing is
-S = max(I, 60) / N (seven nodes: 17.14 s) and node k (config order, 0-based: 2999 is slot 0, 2991 slot 1, ... 2996 slot 6) first registers at
-start + k * S; after that a successful refresh is max(60, min(I, refresh)) = 120 s (the stand-in answers refresh 180), a failure backs off 24..36 s, the slow reply (20 s
-core timeout) 44..56 s after the first request. A recording that spans a restart mixes schedules (a run of `test_restart_then_over_five_times`
+S = max(I, 60) / N (nine nodes: 13.33 s) and node k (config order, 0-based: 2999 is slot 0, 2991 slot 1, ... 2998 slot 8) first registers at
+start + k * S. A recording that spans a restart mixes schedules (a run of `test_restart_then_over_five_times`
 before R1 gave 16.1 s gaps and looked like a regression; it was not).
 
 So the `registrations` fixture (`cases/test_asl_edge.py`, helpers in `dvtest/asl_register.py`): reads the node list and interval from the
 rendered config (`out/<run>/xlxd-config/xlxd-sut/dv-router.toml`), finds the start of the LAST edge process from the requests (the slot-0
 node registers at every start; two requests of it closer than 50 s are two processes), keeps only the rows from that start and waits until
-every node has two requests after it; it reads the edge's (pid, starttime) with `proc-stat` before and after and FAILS ("the edge
-restarted during the registration window") if it changed. Restarts BEFORE the window are fine (trimmed away), but the cheapest and clearest
-way is a fresh rig: `DVT_ASL_EDGE_REG=1 scripts/run.sh --profile asl-edge -m asl_lab -- cases/test_asl_edge.py -k "test_r1 or test_r2 or
-test_r3 or test_r4 or test_r5 or test_r6 or test_r7"`. R1 asserts the slot of every node (+/- 1 s) and a refresh of 110..150 s (`asl_register.refresh_gap(interval)`: nominal
-max(60, min(interval, 180)) = 120 s, -10 s / +30 s); R2 the same window
-after a mismatch; R3, R4, R6 a 24..36 s retry; R5 44..56 s; R7 the counters of the last process (ok, mismatch, http + parse >= 4,
-timeout >= 1, unattributed 0). The recording and the schedule are written to `out/<run>/asl-lab/register/` (`requests.jsonl`,
-`metrics.txt`, `schedule.json`).
+every node has the requests the cases need (`asl_register.REG_NEEDED`: 3 for the ordinary failure nodes = their second retry, 2 for 2997, 3 for
+2998), at most until process start + `asl_register.window_budget_s` (562 s) and never less than 120 s from the fixture start. **The registration
+run waits about 9.5 minutes** (was about 3), the slowest node being 2995 (client timeout) at 5 * S + (144 + 16.5) + (288 + 16.5) = 532 s. It
+reads the edge's (pid, starttime) with `proc-stat` before and after and FAILS ("the edge restarted during the registration window") if it
+changed. Restarts BEFORE the window are fine (trimmed away), but the cheapest and clearest way is a fresh rig:
+
+```
+DVT_ASL_EDGE_REG=1 [DVT_RIG_CONTROL=1 ...as for asl-edge] scripts/run.sh --profile asl-edge -m asl_lab -- cases/test_asl_edge.py \
+  -k "test_r1_ or test_r2_ or test_r3_ or test_r4_ or test_r5_ or test_r6_ or test_r7_ or test_r13_ or test_r14_"
+```
+
+R1 asserts the slot of every node (+/- 1 s) and a refresh of 110..150 s (`asl_register.refresh_gap(interval)`: nominal
+max(60, min(interval, 180)) = 120 s, -10 s / +30 s); R2 the same window after a mismatch; **R3, R4, R6** per consecutive failure number n the
+gap between request n and n+1 lies in `asl_register.retry_gap_range(n)` (rule (a) widened by the attempt duration: n=1 120..145.5 s, n=2
+192..289.5 s) and both retries must have been observed; **R5** the same with the client timeout as attempt duration (n=1 134.9..160.5 s,
+n=2 206.9..304.5 s); R7 the counters of the last process (ok, mismatch, http + parse >= 4, timeout >= 1, unattributed 0). **R14** (nodes 2997,
+2998): the registrar sent 429 + `Retry-After: 300` and 503 + `Retry-After: invalid`; the first retry of 2997 is 300 s (299..302.5 s), those of
+2998 are 120 s then 240 s (+/- 1 s plus the prompt attempt), and `rate_limited >= 2` in the metrics (when the control channel is on). The
+recording and the schedule are written to `out/<run>/asl-lab/register/` (`requests.jsonl`, `metrics.txt`, `schedule.json`).
+
+The SUT log (`out/<run>/logs/xlxd-sut.log`) is written by `run.sh` after pytest ends, so the tester cannot read it. The log checks are therefore
+a helper (`dvtest/tools/asl_reg_log.py`, unit-tested with the lines of run `20261107T034616Z`) used two ways. After the run (normal path):
+
+```
+python3 -m dvtest.tools.asl_reg_log out/<run>/logs/xlxd-sut.log --register out/<run>/asl-lab/register
+```
+
+or as case R13 with `DVT_ASL_SUT_LOG=<path of a log file with docker timestamps>` when one exists while pytest runs (it skips otherwise). Both
+check: per failed attempt the limiter model decides whether there is exactly one `allstar_registration_failed` line (none for attempt 2, since it
+completes less than 300 s after attempt 1's line); the line names the node and the class (http 2993, parse 2994 and 2996, timeout 2995,
+mismatch 2992, rate_limited 2997 / 2998); `next_retry_delay_ms` is inside rule (a) for that failure number (exact for rate_limited, 120000 for
+the Mismatch state); the next request arrives that long after the line (+/- 1 s); the line comes at most one attempt duration after its request;
+and no line of the registration logging (any line naming `allstar_registration`, `allstar_register` or `registrar`) contains a password
+(`test-secret-not-real`, `passwd`, `password`), a password file or directory (`.pw`, `asl-secrets`) or a URL (`://`). The only exception is
+the lab's own start-up WARNING `AllStar registrar insecure = true: LAB CLEARTEXT HTTP sends portal credentials without encryption` (it names no
+secret; on wip-1590f26 it carries no URL either). Not verified against a rig yet: the second-retry gaps (R3-R6), R14 and the limiter model.
 
 ## Profile asl-ext: the real node 400169 (external, outbound only)
 

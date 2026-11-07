@@ -457,6 +457,7 @@ services:
       DVT_ASL_EDGE_NODE: ${DVT_ASL_EDGE_NODE:-2999}
       DVT_ASL_EDGE_OUT: ${DVT_ASL_EDGE_OUT:-}
       DVT_ASL_EDGE_REG: ${DVT_ASL_EDGE_REG:-}
+      DVT_ASL_SUT_LOG: ${DVT_ASL_SUT_LOG:-}       # optional case R13: an edge log file (docker timestamps) visible in the tester; docs/asl-lab.md
       DVT_ASL_EDGE_LOOKUP: ${DVT_ASL_EDGE_LOOKUP:-}
       # image-generation knobs (docs/rig.md "Image generations"); empty = the default, the behaviour of dv-router:wip-c165c93; 0 = wip-71ab207
       DVT_ASL_PHONE_REG: ${DVT_ASL_PHONE_REG:-}

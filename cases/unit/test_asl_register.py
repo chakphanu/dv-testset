@@ -51,7 +51,8 @@ def test_refresh_gap_follows_the_interval():
 
 def test_slot_spacing_is_the_interval_over_the_node_count():
     assert round(ar.slot_spacing(7, 60), 2) == 8.57
-    assert round(ar.slot_spacing(7, 120), 2) == 17.14        # the lab since wip-1590f26: seven nodes, "120s"
+    assert round(ar.slot_spacing(7, 120), 2) == 17.14        # the lab at first with wip-1590f26: seven nodes, "120s"
+    assert round(ar.slot_spacing(9, 120), 2) == 13.33        # now: the edge, 2991..2998
     assert ar.slot_spacing(9, 180) == 20.0          # XLX345: nine nodes, 180 s
     assert ar.slot_spacing(3, 10) == 20.0           # the interval is at least 60 s
     with pytest.raises(ValueError):
@@ -95,5 +96,72 @@ def test_gaps_and_bounds():
     rows = [row(0.0, 2991), row(60.0, 2991), row(120.5, 2991), row(30.0, 2993)]
     assert ar.gaps(rows, 2991) == [60.0, 60.5] and ar.gaps(rows, 2993) == []
     assert ar.gap_in(60.0, ar.REFRESH_GAP_S) and not ar.gap_in(16.1, ar.REFRESH_GAP_S)
-    assert ar.gap_in(24.1, ar.RETRY_GAP_S) and not ar.gap_in(23.9, ar.RETRY_GAP_S)
-    assert ar.gap_in(47.8, ar.SLOW_GAP_S) and not ar.gap_in(60.0, ar.SLOW_GAP_S)
+    assert ar.gap_in(124.0, ar.retry_gap_range(1)) and not ar.gap_in(24.1, ar.retry_gap_range(1))     # the 30 s back-off is gone
+
+
+# ---------------------------------------------------------------- retry rules of wip-1590f26 (ASL1j)
+
+def test_failure_delay_range_is_120_times_2_to_n_minus_1_with_80_120_percent_and_the_clamps():
+    assert ar.failure_delay_range(1) == (120.0, 144.0)       # 96..144 clamped up to the 120 s floor (design doc lines 624-625)
+    assert ar.failure_delay_range(2) == (192.0, 288.0)       # design doc line 625
+    assert ar.failure_delay_range(3) == (384.0, 576.0)
+    assert ar.failure_delay_range(4) == (720.0, 900.0)       # base capped at 900 before the entropy, upper bound clamped at 900
+    assert ar.failure_delay_range(5) == ar.failure_delay_range(40) == (720.0, 900.0)
+    for n in range(1, 12):
+        lo, hi = ar.failure_delay_range(n)
+        assert 120.0 <= lo <= hi <= 900.0
+    with pytest.raises(ValueError):
+        ar.failure_delay_range(0)
+
+
+def test_retry_gap_range_widens_by_the_attempt_duration():
+    assert ar.retry_gap_range(1) == (120.0, 145.5)
+    assert ar.retry_gap_range(2) == (192.0, 289.5)
+    lo, hi = ar.retry_gap_range(1, timeout=True)
+    assert (lo, hi) == (120.0 + 14.9, 144.0 + 16.5)
+    # the values measured on wip-1590f26 (run 20261107T034616Z): 120.0 s (500), 123.6 (notext), 138.5 (client timeout), 134.3 (oversize)
+    assert ar.gap_in(120.0, ar.retry_gap_range(1)) and ar.gap_in(123.6, ar.retry_gap_range(1)) and ar.gap_in(134.3, ar.retry_gap_range(1))
+    assert ar.gap_in(138.5, ar.retry_gap_range(1, timeout=True)) and not ar.gap_in(138.5 + 30, ar.retry_gap_range(1, timeout=True))
+    assert not ar.gap_in(119.0, ar.retry_gap_range(1)) and not ar.gap_in(30.0, ar.retry_gap_range(1))     # the old 24..36 s window
+
+
+def test_rate_limited_delay_uses_retry_after_or_doubles_the_interval():
+    assert ar.rate_limited_delay(1, 120, 300) == 300.0 and ar.rate_limited_delay(3, 120, 300) == 300.0     # header: no doubling
+    assert ar.rate_limited_delay(1, 120, 10) == 120.0                          # bounded below by 120
+    assert ar.rate_limited_delay(1, 120, 200000) == 86400.0                    # and above by 86400
+    assert [ar.rate_limited_delay(n, 180) for n in range(1, 8)] == [180, 360, 720, 1440, 2880, 3600, 3600]     # design doc lines 66-69
+    assert [ar.rate_limited_delay(n, 120) for n in range(1, 8)] == [120, 240, 480, 960, 1920, 3600, 3600]     # the lab's interval
+    assert ar.rate_limited_delay(1, 7200) == 7200 and ar.rate_limited_delay(2, 7200) == 7200   # a slow interval is never accelerated
+    with pytest.raises(ValueError):
+        ar.rate_limited_delay(0, 120)
+
+
+def test_success_delay_and_exact_gap():
+    assert ar.success_delay_s(120) == 120.0 and ar.success_delay_s(600) == 180.0 and ar.success_delay_s(60) == 120.0
+    assert ar.gap_with_attempt(300.0) == (299.0, 302.5)
+
+
+def test_retry_wait_and_window_budget():
+    assert ar.retry_wait_s(1) == 145.5 and ar.retry_wait_s(2) == 435.0
+    assert ar.retry_wait_s(2, timeout=True) == 465.0
+    nodes = [2999] + list(range(2991, 2999))
+    budget = ar.window_budget_s(nodes, 120.0)
+    # node 2995 (slot 5 at S = 13.33 s) is the slowest: 66.7 + 465 + 30
+    assert round(budget, 1) == 561.7 and budget / 60 < 12
+    assert ar.window_budget_s([2999, 2991], 120.0) == 60.0 + 121.5 + 30.0          # slot 1, one refresh, margin
+
+
+def test_limiter_admits_the_first_failure_and_then_one_per_300_s():
+    assert ar.limiter_admits([0.0, 120.0, 360.0, 480.0, 720.0]) == [True, False, True, False, True]
+    assert ar.limiter_admits([0.0, 299.9, 300.0]) == [True, False, True]
+    assert ar.limiter_admits([]) == []
+    # the lab: attempt 1 at 0, attempt 2 at 120..144 s (suppressed), attempt 3 at 312..432 s (a line again)
+    for second in (120.0, 144.0):
+        third = second + ar.failure_delay_range(2)[0]
+        assert ar.limiter_admits([0.0, second, third]) == [True, False, True]
+
+
+def test_lab_expectation_tables_cover_the_failing_nodes():
+    assert set(ar.REG_RESULTS) == {"2992", "2993", "2994", "2995", "2996", "2997", "2998"}
+    assert set(ar.REG_RESULTS.values()) == {"mismatch", "http", "parse", "timeout", "rate_limited"}
+    assert ar.REG_NEEDED["2995"] == 3 and ar.REG_NEEDED["2997"] == 2 and ar.REG_NEEDED["2991"] == 2

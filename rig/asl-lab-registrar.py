@@ -18,6 +18,10 @@ DVT_ASL_REG_VARIANTS "node=variant,..."):
     notext     HTTP 200 JSON whose data has no "successfully registered"
     slow       the same answer as ok after SLOW_S (default 20 s: past the client's 15 s timeout)
     oversize   HTTP 200 JSON larger than 4 KiB (the client caps the reply at 4 KiB)
+    429ra      HTTP 429 with "Retry-After: 300" (DV-Router wip-1590f26: result rate_limited, retry after the header, 120..86400 s)
+    503bad     HTTP 503 with "Retry-After: invalid" (rate_limited, no usable header: the interval doubles per consecutive failure)
+    429        HTTP 429 without Retry-After (rate_limited, interval doubling); not used by a lab node
+    503        HTTP 503 without Retry-After (NOT rate_limited: an ordinary http failure, 120 s * 2^(n-1) +/- 20 percent); not used by a lab node
     (any other node: ok)
 
 Every request is appended in full to the log file as one JSON line (time, peer, path, headers, raw body, parsed
@@ -33,7 +37,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 LOG = os.environ.get("DVT_ASL_REG_LOG", "/var/lib/dvt-lab/register/requests.jsonl")
 PORT = int(os.environ.get("DVT_ASL_HTTP_REG_PORT", "8082"))
 SLOW_S = float(os.environ.get("DVT_ASL_REG_SLOW_S", "20"))
-DEFAULT_VARIANTS = "2991=ok,2992=port,2993=http500,2994=notext,2995=slow,2996=oversize"
+RETRY_AFTER_S = int(os.environ.get("DVT_ASL_REG_RETRY_AFTER_S", "300"))
+DEFAULT_VARIANTS = "2991=ok,2992=port,2993=http500,2994=notext,2995=slow,2996=oversize,2997=429ra,2998=503bad"
 _lock = threading.Lock()
 
 
@@ -46,6 +51,19 @@ def variants():
     return out
 
 
+# rate-limit variants -> HTTP status; the body is a short text in every case, the headers come from extra_headers()
+LIMITED = {"429ra": 429, "503bad": 503, "429": 429, "503": 503}
+
+
+def extra_headers(variant):
+    """Reply headers of a rate-limit variant: {"Retry-After": "300"} for 429ra, {"Retry-After": "invalid"} for 503bad, else {}."""
+    if variant == "429ra":
+        return {"Retry-After": str(RETRY_AFTER_S)}
+    if variant == "503bad":
+        return {"Retry-After": "invalid"}
+    return {}
+
+
 def answer(variant, peer_ip, body):
     """(status, bytes) of the reply for one parsed request body."""
     node = next(iter(body.get("data", {}).get("nodes", {})), "")
@@ -55,6 +73,8 @@ def answer(variant, peer_ip, body):
         ok["port"] = port + 1
     if variant == "http500":
         return 500, b"internal error\n"
+    if variant in LIMITED:
+        return LIMITED[variant], b"slow down\n"
     if variant == "notext":
         return 200, json.dumps({"ipaddr": peer_ip, "port": port, "refresh": 180, "data": "node %s pending" % node}).encode()
     if variant == "oversize":
@@ -68,9 +88,11 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         print("registrar: " + fmt % args, flush=True)
 
-    def _send(self, status, data, ctype="application/json"):
+    def _send(self, status, data, ctype="application/json", headers=None):
         self.send_response(status)
         self.send_header("Content-Type", ctype)
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -96,11 +118,13 @@ class Handler(BaseHTTPRequestHandler):
         record["variant"] = variant
         status, data = answer(variant, self.client_address[0], body)
         record["status"], record["reply_bytes"] = status, len(data)
+        if extra_headers(variant):
+            record["reply_headers"] = extra_headers(variant)
         self._log(record)                      # logged before a slow reply is held back
         if variant == "slow":
             time.sleep(SLOW_S)
         try:
-            self._send(status, data, "text/plain" if status == 500 else "application/json")
+            self._send(status, data, "text/plain" if status >= 400 else "application/json", extra_headers(variant))
         except OSError:
             pass                               # the client gave up (slow variant): expected
 

@@ -16,8 +16,20 @@ that was recorded before this change (runs up to `20261104T001310Z`, the tables,
 old numbers (1999, 1991..1996, T1999) and the 60 s timing on purpose: they are results of those runs, not of the current config. The registration cases
 now derive their expectations from the rendered config: slot spacing S = 120 / 7 = 17.14 s (node k first at start + k * S), a successful
 refresh max(60, min(120, 180)) = 120 s (window 110..150 s, `asl_register.refresh_gap`), the fixture waits up to max(240 s, 2 * interval + 60 s)
-and for a span of interval + 15 s; the failure back-offs (24..36 s, slow reply 44..56 s) do not depend on the interval. The R1-R7 run is
-longer (about 3 minutes of waiting instead of 100 s). Not yet run on a rig with the new numbers. Guard: `cases/unit/test_asl_lab_node_numbers.py`.
+and for a span of interval + 15 s (the 24..36 s and 44..56 s back-offs named in this paragraph at the time are history: see the next paragraph).
+Guard: `cases/unit/test_asl_lab_node_numbers.py`.
+
+**Retry rules of wip-1590f26 (ASL1j; DV-Router lead: intended).** The first registration-lab run on that image (`20261107T034616Z`) passed
+R1, R2 and R7 and failed R3-R6 only because their windows were the old ones: the first retry gaps were 120.0 s (500), 123.6 s (200 without the
+text), 138.5 s (client timeout) and 134.3 s (oversize reply) instead of 24..36 / 44..56 s. The new behaviour (design doc
+`docs/design/allstar.md` of the wip tree, lines 59-72, 72-75, 616-618, 620-625): the n-th consecutive ordinary failure waits `120 s * 2^(n-1)`
+(cap 900 s) times 80..120 % clamped to 120..900 s (n=1 120..144 s, n=2 192..288 s), measured from the COMPLETION of the failed attempt (gap =
+`next_retry_delay_ms` + attempt duration: 123228 ms + 15.3 s client timeout = 138.5 s); HTTP 429, and 503 with Retry-After, are `rate_limited`
+(Retry-After bounded 120..86400 s, otherwise the interval doubled up to max(3600, interval), no downward jitter); success is
+max(120, min(interval, refresh)). R3-R6 now judge each failure number n inside `asl_register.retry_gap_range(n)` for the first two retries, a
+new R14 covers `rate_limited` (nodes 2997: 429 + `Retry-After: 300`, 2998: 503 + `Retry-After: invalid`) and R13 / `python3 -m
+dvtest.tools.asl_reg_log LOG --register DIR` the failure log lines. The registration run now waits about 9.5 minutes (nine public nodes,
+S = 13.33 s; was about 3). Details and the rules table: `docs/asl-lab.md`, "Registration cases". The R3-R6 rows of the tables below (24..36 s, 44..56 s) stay as the recorded results of the 30 s back-off builds. Not yet run on a rig with these cases.
 
 ## Run
 
@@ -34,12 +46,13 @@ Three rig variants, because the settings that matter are start-up configuration 
 |---------|-------------|-------|
 | main | `DVT_ASL_EDGE_OUT=1` (+ `DVT_ASL_EDGE_LOOKUP=1` on images that accept it) | everything except T4b and R1-R7 |
 | no outbound rows | `DVT_ASL_EDGE_OUT` unset | `-k t4b` (B and E are not linked to the edge, so app_rpt has no way to see the edge through them) |
-| registration | `DVT_ASL_EDGE_REG=1`, no outbound rows | `-k "test_r1 or ... or test_r7"` (own rig: the cases look at the request cadence since the edge started) |
+| registration | `DVT_ASL_EDGE_REG=1`, no outbound rows | `-k "test_r1_ or test_r2_ or test_r3_ or test_r4_ or test_r5_ or test_r6_ or test_r7_ or test_r13_ or test_r14_"` (own rig, about 9.5 minutes of waiting: the cases look at the request cadence since the edge started) |
 
 Rig details are in `docs/asl-lab.md` ("Profile asl-edge"). `rig/config/dv-router/allstar-lab.toml` is the base
 config; `-out`, `-lookup` and `-reg` snippets are added by `run.sh` from the flags above. The stand-in registrar
-(`rig/asl-lab-registrar.py`, plain HTTP on asl-reg:8082) answers six public nodes one way each (2991 ok, 2992 other
-port, 2993 HTTP 500, 2994 200 without the success text, 2995 reply after 20 s, 2996 reply over 4 KiB; 1991..1996 before wip-1590f26) and logs every
+(`rig/asl-lab-registrar.py`, plain HTTP on asl-reg:8082) answers eight public nodes one way each (2991 ok, 2992 other
+port, 2993 HTTP 500, 2994 200 without the success text, 2995 reply after 20 s, 2996 reply over 4 KiB, 2997 HTTP 429 with `Retry-After: 300`,
+2998 HTTP 503 with `Retry-After: invalid`; 1991..1996 before wip-1590f26, 2997 / 2998 new for the ASL1j retry rules) and logs every
 request in full to `out/<run>/asl-lab/register/requests.jsonl`. Fixture secrets only (`test-secret-not-real`).
 
 Images (all local, none pulled; the DVSwitch Mobile app run is described in [asl-dvswitch.md](asl-dvswitch.md)): **c199** = `dv-router:asl-c199` (the tag was removed afterwards), **c199b** =

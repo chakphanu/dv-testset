@@ -1,12 +1,14 @@
 # HTTP registration of the AllStar edge against the lab's stand-in registrar (DVT_ASL_EDGE_REG=1, images with
 # register.server/insecure, dv-router:asl-c199b and later; rig/asl-lab-registrar.py on asl-reg, port 8082).
-# Six public nodes, one answer variant each (selected by node number in the stand-in):
+# Eight public nodes, one answer variant each (selected by node number in the stand-in):
 #   2991 ok (ipaddr = the sender)   2992 success with another port (mismatch)   2993 HTTP 500
 #   2994 200 without the success text   2995 reply after 20 s (past the 15 s client timeout)   2996 reply over 4 KiB
+#   2997 HTTP 429 with "Retry-After: 300" (rate_limited)   2998 HTTP 503 with "Retry-After: invalid" (rate_limited, interval doubling)
 # Numbers: public nodes must be 2000 or higher and the register interval at least 120 s (DV-Router wip-1590f26 refuses
 # 1991..1996 and "60s" at load time); the lab registrar is our own fake, so the lab uses 2991..2996 and "120s". Both values
 # are valid on older images too (they clamp the interval to max(60, ...)). Slot spacing of the initial spread is
-# S = max(interval, 60) / 7 nodes = 17.14 s, a successful refresh is 120 s (see docs/asl-lab.md, R1-R7).
+# S = max(interval, 60) / 9 nodes = 13.33 s (the edge 2999 is slot 0), a successful refresh is 120 s, an ordinary failure retries
+# after 120 s * 2^(n-1) +/- 20 percent (120..144, 192..288, ...; wip-1590f26 ASL1j), see docs/asl-lab.md, R1-R7 and R13-R14.
 # "insecure = true" sends the node password in clear text to a rig-internal address: fixture password only.
 [edges.allstar.register]
 enable = true
@@ -49,3 +51,15 @@ number = 2996
 module = "X"
 public = true
 password_file = "/etc/dv-router/asl-secrets/node-2996.pw"
+
+[[edges.allstar.node]]
+number = 2997
+module = "Y"
+public = true
+password_file = "/etc/dv-router/asl-secrets/node-2997.pw"
+
+[[edges.allstar.node]]
+number = 2998
+module = "Z"
+public = true
+password_file = "/etc/dv-router/asl-secrets/node-2998.pw"

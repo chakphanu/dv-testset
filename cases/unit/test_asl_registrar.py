@@ -26,6 +26,17 @@ def registrar(tmp_path, monkeypatch):
     srv.server_close()
 
 
+def post_full(url, node, port=4569):
+    """(status, headers, body) of one registration request, the headers of an error reply included."""
+    body = json.dumps({"port": port, "data": {"nodes": {node: {"node": node, "passwd": "test-secret-not-real", "remote": 0}}}}).encode()
+    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status, dict(resp.headers), resp.read()
+    except urllib.error.HTTPError as err:
+        return err.code, dict(err.headers), err.read()
+
+
 def post(url, node, port=4569, raw=None):
     body = raw if raw is not None else json.dumps(
         {"port": port, "data": {"nodes": {node: {"node": node, "passwd": "test-secret-not-real", "remote": 0}}}}).encode()
@@ -86,3 +97,22 @@ def test_unknown_node_gets_ok_and_get_answers_ok(registrar):
     assert "successfully registered" in json.loads(post(url, "1500")[1])["data"]
     with urllib.request.urlopen(url, timeout=5) as resp:
         assert resp.read() == b"OK"
+
+
+def test_rate_limit_variants_send_the_status_and_the_retry_after_header(registrar):
+    url, log = registrar
+    status, headers, _ = post_full(url, "2997")                       # 429ra: HTTP 429 with Retry-After: 300
+    assert status == 429 and headers["Retry-After"] == "300"
+    status, headers, _ = post_full(url, "2998")                       # 503bad: HTTP 503 with an unusable Retry-After
+    assert status == 503 and headers["Retry-After"] == "invalid"
+    rows = [json.loads(line) for line in log.read_text().splitlines()]
+    assert [(r["variant"], r["status"], r["reply_headers"]) for r in rows] == [
+        ("429ra", 429, {"Retry-After": "300"}), ("503bad", 503, {"Retry-After": "invalid"})]
+
+
+def test_bare_429_and_503_have_no_retry_after(registrar, monkeypatch):
+    url, _log = registrar
+    monkeypatch.setenv("DVT_ASL_REG_VARIANTS", "2991=429,2992=503")    # no lab node uses these; a 503 without the header is an http failure
+    for node, code in (("2991", 429), ("2992", 503)):
+        status, headers, _ = post_full(url, node)
+        assert status == code and "Retry-After" not in headers

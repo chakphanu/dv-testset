@@ -287,7 +287,7 @@ if [ "$has_asl_edge" = 1 ]; then
   if [ "${DVT_ASL_EDGE_OUT:-}" = 1 ]; then
     DVT_SUT_CONFIG_EXTRA="$DVT_SUT_CONFIG_EXTRA:rig/config/dv-router/allstar-lab-out.toml"
   fi
-  # DVT_ASL_EDGE_LOOKUP=1: the lab DNS zone as the edge's lookup domain; DVT_ASL_EDGE_REG=1: six public nodes
+  # DVT_ASL_EDGE_LOOKUP=1: the lab DNS zone as the edge's lookup domain; DVT_ASL_EDGE_REG=1: eight public nodes
   # registering over plain HTTP at the stand-in registrar (images that have those keys only)
   if [ "${DVT_ASL_EDGE_LOOKUP:-}" = 1 ]; then
     DVT_SUT_CONFIG_EXTRA="$DVT_SUT_CONFIG_EXTRA:rig/config/dv-router/allstar-lab-lookup.toml"
@@ -756,7 +756,7 @@ fi
 if [ "$has_asl_edge" = 1 ]; then
   mkdir -p "$out/asl-secrets"
   chmod 700 "$out/asl-secrets"
-  for f in node-2999.pw acct.secret node-2991.pw node-2992.pw node-2993.pw node-2994.pw node-2995.pw node-2996.pw; do
+  for f in node-2999.pw acct.secret node-2991.pw node-2992.pw node-2993.pw node-2994.pw node-2995.pw node-2996.pw node-2997.pw node-2998.pw; do
     (umask 077; printf 'test-secret-not-real\n' > "$out/asl-secrets/$f")
     chmod 600 "$out/asl-secrets/$f"
   done

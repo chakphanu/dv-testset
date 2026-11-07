@@ -3,7 +3,7 @@
 
 DV-Router wip-1590f26 refuses `[[edges.allstar.node]] public = true` with a number below 2000 ("public node numbers must be at least
 2000; private numbers cannot be registered") and a `[edges.allstar.register] interval` below 120 s. The lab edge is therefore node 2999
-and the six registration nodes are 2991..2996 (the DV-Router lead decided to keep the nodes public, not to use public = false: that
+and the eight registration nodes are 2991..2998 (2997 and 2998 are the rate_limited ones; the DV-Router lead decided to keep the nodes public, not to use public = false: that
 would stop testing the public-node path), with interval "120s". These tests keep the repo from drifting back: the snippets under
 rig/config/dv-router/allstar-lab*.toml, the files and variants that depend on the numbers (password files written by scripts/run.sh,
 the stand-in registrar's answer variants, the compose default) and the rendered config of every DVT_SUT_GEN generation.
@@ -22,8 +22,8 @@ pytestmark = pytest.mark.unit
 ROOT = Path(__file__).resolve().parents[2]
 SNIPPETS = sorted((ROOT / "rig" / "config" / "dv-router").glob("allstar-lab*.toml"))
 EDGE_NODE = 2999
-REG_NODES = [2991, 2992, 2993, 2994, 2995, 2996]
-VARIANTS = ["ok", "port", "http500", "notext", "slow", "oversize"]       # one per registration node, in order
+REG_NODES = [2991, 2992, 2993, 2994, 2995, 2996, 2997, 2998]
+VARIANTS = ["ok", "port", "http500", "notext", "slow", "oversize", "429ra", "503bad"]       # one per registration node, in order
 MIN_PUBLIC_NUMBER = 2000
 MIN_REGISTER_INTERVAL_S = 120.0
 TEMPLATE = '[core]\nname = "unit"\n'                                    # the real template lives outside the repo
@@ -100,16 +100,20 @@ def test_password_files_follow_the_node_numbers():
             name = Path(row["password_file"]).name
             assert name == "node-%d.pw" % row["number"], (path.name, row)
             assert name in run_sh, "scripts/run.sh does not write %s" % name
+            assert row["number"] >= MIN_PUBLIC_NUMBER or not row.get("public")
     assert "node-1999.pw" not in run_sh and not re.search(r"node-199[1-6]\.pw", run_sh)
 
 
-def test_registrar_variants_map_the_six_nodes_one_to_one():
+def test_registrar_variants_map_the_eight_nodes_one_to_one():
     spec = importlib.util.spec_from_file_location("asl_lab_registrar_guard", ROOT / "rig" / "asl-lab-registrar.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     mapping = dict(item.split("=") for item in mod.DEFAULT_VARIANTS.split(","))
     assert mapping == {str(n): v for n, v in zip(REG_NODES, VARIANTS)}
     assert mod.variants().get("2993") == "http500"                       # (no env override in the unit run)
+    assert mod.variants()["2997"] == "429ra" and mod.variants()["2998"] == "503bad"
+    assert mod.extra_headers("429ra") == {"Retry-After": "300"} and mod.extra_headers("503bad") == {"Retry-After": "invalid"}
+    assert mod.RETRY_AFTER_S == asl_register.RETRY_AFTER_S                # the case expects what the registrar sends
 
 
 def test_compose_default_and_lab_default_are_the_edge_node():
@@ -122,5 +126,20 @@ def test_compose_default_and_lab_default_are_the_edge_node():
 
 def test_case_module_uses_the_registration_nodes():
     cases = (ROOT / "cases" / "test_asl_edge.py").read_text()
-    assert 'REG_NODES = {"2991": "ok", "2992": "port", "2993": "http500", "2994": "notext", "2995": "slow", "2996": "oversize"}' in cases
+    assert ('REG_NODES = {"2991": "ok", "2992": "port", "2993": "http500", "2994": "notext", "2995": "slow", "2996": "oversize",\n'
+            '             "2997": "429ra", "2998": "503bad"}') in cases
     assert "EDGE_REG_NODE = %d" % EDGE_NODE in cases
+
+
+def test_expectation_tables_name_exactly_the_lab_nodes():
+    lab = {str(n) for n in REG_NODES}
+    assert set(asl_register.REG_NEEDED) == lab and set(asl_register.REG_RESULTS) <= lab
+    # the rate_limited nodes are the last two public nodes of the snippet, in config order (slot 7 and 8 of nine)
+    assert [str(n) for n in REG_NODES[-2:]] == [k for k, v in asl_register.REG_RESULTS.items() if v == "rate_limited"]
+    assert asl_register.window_budget_s([EDGE_NODE] + REG_NODES, 120.0) / 60 < 12      # the whole registration window stays under 12 minutes
+
+
+def test_run_sh_writes_all_eight_password_files():
+    run_sh = (ROOT / "scripts" / "run.sh").read_text()
+    for number in [EDGE_NODE] + REG_NODES:
+        assert "node-%d.pw" % number in run_sh
