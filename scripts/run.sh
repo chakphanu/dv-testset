@@ -143,8 +143,9 @@
 # after the rendered template, with the same tokens plus <REQUIRE_IDENT> (env
 # DVT_REQUIRE_IDENT, true or false, default true) and <WEB_PROXY_IP> (<net>.90);
 # a plain [table] the template already has is merged key by key; docs/rig.md.
-# The launcher reads no other xlxd.* file: DVT_NXDN, DVT_P25, DVT_INTERLINK, DVT_SUT_USRP and
-# DVT_XLXD_BLACKLIST only draw a warning, and DVT_UNSERVED_MODULE=M|N is refused
+# The launcher reads no other xlxd.* file: DVT_NXDN, DVT_P25, DVT_INTERLINK and
+# DVT_XLXD_BLACKLIST only draw a warning (DVT_SUT_USRP=on, set by --profile allstar and load, adds the
+# snippet rig/config/dv-router/usrp-rig.toml with the USRP endpoints A/B/C instead), and DVT_UNSERVED_MODULE=M|N is refused
 # (exit 2; a template may name peers on other modules too).
 #
 # Control channel for cases that stop a backend (tester has no docker socket):
@@ -359,6 +360,33 @@ fi
 if [ "$has_turn" = 1 ] && [ "$has_nat" = 0 ]; then
   echo "run.sh: rig/config/dv-router/turn.toml needs --profile nat (coturn and the secret file come with it)" >&2; exit 2
 fi
+# Native launch reads no xlxd.usrp, so the USRP endpoints (A 34001, B 34002, C 34003) that the AllStar
+# application cases need come from rig/config/dv-router/usrp-rig.toml, the rows the importer makes in the
+# import launch. Added whenever DVT_SUT_USRP is on (--profile allstar and --profile load set it; the profile
+# loop below does the same default) unless it is listed already or the template has endpoint rows itself.
+# usrp_snippet=1 = the SUT has USRP endpoints (the "DVT_SUT_USRP is ignored" warning below does not apply).
+usrp_snippet=0
+usrp_val="${DVT_SUT_USRP:-}"
+case ",$profile," in *,allstar,*|*,load,*) usrp_val="${usrp_val:-on}" ;; esac
+if [ "${DVT_SUT_LAUNCH:-direct}" = native ] && [ "$usrp_val" = on ]; then
+  case ":${DVT_SUT_CONFIG_EXTRA:-}:" in
+    *:rig/config/dv-router/echo-usrp-peer.toml:*)
+      echo "run.sh: echo-usrp-peer.toml and DVT_SUT_USRP=on (profile allstar or load) both bind <OWN_IP>:34003; drop one of them" >&2
+      exit 2 ;;
+  esac
+  if grep -Eq '^[[:space:]]*\[\[edges\.usrp\.endpoint\]\]' "$DVT_SUT_CONFIG"; then
+    echo "run.sh: native launch: the template has its own [[edges.usrp.endpoint]] rows; usrp-rig.toml not added" >&2
+    usrp_snippet=1
+  else
+    case ":${DVT_SUT_CONFIG_EXTRA:-}:" in
+      *:rig/config/dv-router/usrp-rig.toml:*) ;;
+      *) DVT_SUT_CONFIG_EXTRA="${DVT_SUT_CONFIG_EXTRA:+$DVT_SUT_CONFIG_EXTRA:}rig/config/dv-router/usrp-rig.toml"
+         echo "run.sh: native launch: adding rig/config/dv-router/usrp-rig.toml (USRP endpoints A/B/C for DVT_SUT_USRP=on)" >&2 ;;
+    esac
+    export DVT_SUT_CONFIG_EXTRA
+    usrp_snippet=1
+  fi
+fi
 # DVT_SUT_CONFIG_EXTRA=<file>[:<file>...]: repo-owned snippets (rig/config/dv-router/)
 # appended after the rendered template, token substituted like the template
 cfg_opts=(--require-ident "${DVT_REQUIRE_IDENT:-true}")
@@ -532,6 +560,8 @@ done
 # native launch reads no xlxd.* file: these settings only change the reference side
 if [ "${DVT_SUT_LAUNCH:-direct}" = native ]; then
   for v in DVT_NXDN DVT_P25 DVT_INTERLINK DVT_SUT_USRP DVT_XLXD_BLACKLIST; do
+    # DVT_SUT_USRP is effective here: usrp-rig.toml (or the template's own rows) gives the SUT its USRP endpoints
+    [ "$v" != DVT_SUT_USRP ] || [ "$usrp_snippet" != 1 ] || continue
     case "${!v:-}" in
       ''|off) ;;
       *) echo "run.sh: warning: $v is set but DVT_SUT_LAUNCH=native ignores it for xlxd-sut (peers come from the template)" >&2 ;;

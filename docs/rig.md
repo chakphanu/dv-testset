@@ -131,7 +131,7 @@ The run is capped (scope, container limits, one rig at a time): README, "Resourc
 
 ```sh
 scripts/run.sh -m rig                                  # core profile
-scripts/run.sh -m "rig or allstar" --profile allstar   # + AllStar, USRP on
+scripts/run.sh -m "rig or allstar" --profile allstar   # + AllStar, USRP on (native launch: usrp-rig.toml is added)
 scripts/run.sh -m wire                                 # transcoder wire cases
 scripts/run.sh --capture -m wire                       # + pcapng per service
 ```
@@ -289,8 +289,16 @@ are unused with a config file but harmless), `DVT_CONFIG_MOUNTED=1` and the
 `DV_*` pins, which win over the file. With a file there is no importer, so
 the `xlxd.interlink` / `xlxd.usrp` / `xlxd.whitelist` / `xlxd.blacklist` /
 `xlxd.terminal` files are not read: the template itself must name the interlink,
-NXDN and P25 peers. `run.sh` warns when `DVT_NXDN`, `DVT_P25`, `DVT_INTERLINK`,
-`DVT_SUT_USRP` or `DVT_XLXD_BLACKLIST` is set in this mode and refuses
+NXDN and P25 peers. The USRP endpoints are the exception that `run.sh` fills in:
+when `DVT_SUT_USRP` is on (`--profile allstar` and `--profile load` set it; `off`
+keeps it out) it appends the snippet `rig/config/dv-router/usrp-rig.toml`
+(next section) to `DVT_SUT_CONFIG_EXTRA`, which is what the AllStar application
+cases (`cases/test_allstar.py`, `cases/proto/test_usrp.py`) need; it does not add
+it when the template has `[[edges.usrp.endpoint]]` rows of its own, and it refuses
+the combination with `echo-usrp-peer.toml` (both bind `<OWN_IP>:34003`).
+`run.sh` warns when `DVT_NXDN`, `DVT_P25`, `DVT_INTERLINK` or
+`DVT_XLXD_BLACKLIST` is set in this mode (`DVT_SUT_USRP` is no longer ignored,
+so it draws no warning for `on` or `off`) and refuses
 `DVT_UNSERVED_MODULE=M|N` (exit 2). The tester sees the mode in
 `DVT_SUT_LAUNCH` (the M17 peer cases skip with `import` only).
 
@@ -320,6 +328,7 @@ another launch mode the variable draws a warning. Snippets in
 | `xlx-peer-tester.toml` | `[[edges.xlx.peer]]` XLX996 at `<TESTER_IP>` on modules `DE`: the tester plays the peer (`dvtest.proto.xlx.XlxPeer`), used by the xlx kind of E9 (`docs/echo-cases.md`) and by P19; use it instead of `xlx-peer.toml`, or next to it |
 | `nxdn-peer-host.toml` / `-bad.toml` | the NXDN probe row of the rig (the tester as NXDN reflector: UDP 41411, TG 31673, module I) named by host name `tester`; `-bad` adds a row `no-such-peer.example.invalid`. For P19 `cases/test_edge_relink.py -k nxdn`, profile `nxdn` |
 | `p25-peer-host.toml` / `-bad.toml` | the rig's P25Reflector `p25-sut` (id 31672, UDP 41000, module G) named by host name; `-bad` adds an unresolvable row. For P19 `-k p25`, profile `p25` |
+| `usrp-rig.toml` | the three static USRP endpoints of the rig, what the importer makes from `xlxd.usrp` in the import launch: A `<OWN_IP>:34001` <-> `<NET>.40:32001` (AllStar node 1901), B `:34002` <-> `<NET>.40:32002` (node 1902), C `:34003` <-> `<TESTER_IP>:32003` (the tester), callsign `N0TEST`, `[edges.usrp] enable = "auto"`. Added by `run.sh` itself when `DVT_SUT_USRP` is on (see above); the `rig_usrp` fixture skips the AllStar application cases with the reason when the rendered config lacks these binds. Independent of the dynamic hub (`DVT_USRP_DYNAMIC=1` pins `edges.usrp.dynamic` through `DV_USRP_DYNAMIC`, UDP 34101) |
 | `web.toml` | the web service, a persistent state dir and the WebRTC edge; added by `--profile web` itself (next section) |
 | `recorder.toml` | the recorder (K14b): `[recorder] dir = "/var/lib/dv-recorder"`, `keep_days = 7`, `max_gb = 1`; naming it in `DVT_SUT_CONFIG_EXTRA` is the switch (see "Recorder" in the web profile section) |
 | `guest.toml` | `[web] guest_listen = true`: anonymous guests may Listen (two per IPv4, no Talk); used by the K22 cases (`docs/web-k22-cases.md`); name it after `web.toml` |

@@ -323,6 +323,36 @@ def render_file(template, output, net, own=11, transcoder=21, tester=30, require
     return out
 
 
+USRP_RIG_PORTS = (34001, 34002, 34003)     # xlxd-sut side of the rig's USRP endpoints A, B, C (rig/config/dv-router/usrp-rig.toml)
+
+
+def usrp_bind_ports(text):
+    """The UDP bind ports of the `[[edges.usrp.endpoint]]` rows of a RENDERED dv-router.toml, as a set; None when the text is not
+    TOML or a row has no explicit `bind` (the port is then allocated by the router, so the text does not tell)."""
+    try:
+        doc = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return None
+    rows = doc.get("edges", {}).get("usrp", {}).get("endpoint", [])
+    ports = set()
+    for row in rows if isinstance(rows, list) else []:
+        bind = row.get("bind") if isinstance(row, dict) else None
+        port = str(bind).rsplit(":", 1)[-1] if bind else ""
+        if not port.isdigit():
+            return None
+        ports.add(int(port))
+    return ports
+
+
+def missing_usrp_ports(text, expected=USRP_RIG_PORTS):
+    """The sorted ports of `expected` that no `[[edges.usrp.endpoint]]` row of the rendered config binds (empty = all there, or the
+    text cannot tell: see usrp_bind_ports). Used by the rig_usrp fixture (cases/conftest.py)."""
+    ports = usrp_bind_ports(text)
+    if ports is None:
+        return []
+    return sorted(set(expected) - ports)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="python3 -m dvtest.sut_config", description=__doc__.split("\n\n")[0])
     ap.add_argument("template")

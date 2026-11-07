@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from dvtest import limits  # noqa: E402
+from dvtest import sut_config  # noqa: E402
 from dvtest import target as target_mod  # noqa: E402
 from dvtest.control import RigControl  # noqa: E402
 from dvtest.proto import ambed  # noqa: E402
@@ -204,10 +205,24 @@ def rig(target):
 
 
 @pytest.fixture(scope="session")
-def rig_usrp(rig):
-    """xlxd-sut loaded rig/config/xlxd.usrp.in (DVT_SUT_USRP=on)."""
+def rig_usrp(rig, target):
+    """xlxd-sut loaded rig/config/xlxd.usrp.in (DVT_SUT_USRP=on). With DVT_SUT_LAUNCH=native there is no importer: the rendered
+    dv-router.toml of the run must carry the three endpoint rows (rig/config/dv-router/usrp-rig.toml, added by run.sh); without
+    them dv-edge-usrp is not spawned and every case would fail at its first packet, so skip here with the reason."""
     if os.environ.get("DVT_SUT_USRP") != "on":
         pytest.skip("xlxd-sut has no USRP endpoints (DVT_SUT_USRP=on, e.g. run.sh --profile allstar)")
+    if os.environ.get("DVT_SUT_LAUNCH") == "native":
+        cfg = Path(target.out) / "xlxd-config" / "xlxd-sut" / "dv-router.toml"
+        try:
+            text = cfg.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            text = None         # not visible from here: cannot tell, run the cases
+        missing = sut_config.missing_usrp_ports(text) if text is not None else []
+        if missing:
+            pytest.skip("native launch: the rendered dv-router.toml has no [[edges.usrp.endpoint]] bind on UDP %s, so dv-edge-usrp "
+                        "does not serve them (rig/config/dv-router/usrp-rig.toml in DVT_SUT_CONFIG_EXTRA; run.sh adds it when "
+                        "DVT_SUT_USRP=on, unless the template already has USRP rows that miss these binds)"
+                        % ", ".join(str(p) for p in missing))
     return rig
 
 

@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/rig.md): the three static USRP endpoints of the rig,
+# the same rows the importer (dv-xlxd-import) makes from rig/config/xlxd.usrp.in in the import launch:
+#   A  <OWN_IP>:34001 <-> <NET>.40:32001   AllStar node 1901 (profile allstar)
+#   B  <OWN_IP>:34002 <-> <NET>.40:32002   AllStar node 1902 (profile allstar)
+#   C  <OWN_IP>:34003 <-> <TESTER_IP>:32003   the tester is the USRP peer
+# source callsign N0TEST on all three. scripts/run.sh adds this file by itself to a native launch whenever
+# DVT_SUT_USRP is on (--profile allstar and --profile load set it; DVT_SUT_USRP=off keeps it out), unless the
+# template already has [[edges.usrp.endpoint]] rows. The AllStar application cases (cases/test_allstar.py,
+# cases/proto/test_usrp.py) need it: without rows dv-edge-usrp is not spawned and UDP 34001-34003 stay closed.
+# The dynamic hub (DVT_USRP_DYNAMIC=1 -> env DV_USRP_DYNAMIC, UDP 34101) is independent of these rows and
+# is not set here. Do not combine with echo-usrp-peer.toml (its row on module E also binds <OWN_IP>:34003).
+[edges.usrp]
+enable = "auto"
+
+[[edges.usrp.endpoint]]
+module = "A"
+bind = "<OWN_IP>:34001"
+peer = "<NET>.40:32001"
+callsign = "N0TEST"
+
+[[edges.usrp.endpoint]]
+module = "B"
+bind = "<OWN_IP>:34002"
+peer = "<NET>.40:32002"
+callsign = "N0TEST"
+
+[[edges.usrp.endpoint]]
+module = "C"
+bind = "<OWN_IP>:34003"
+peer = "<TESTER_IP>:32003"
+callsign = "N0TEST"

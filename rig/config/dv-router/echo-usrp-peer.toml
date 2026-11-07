@@ -3,6 +3,7 @@
 # tester (<TESTER_IP>:32003, the "USRP C" peer of the rig) as the far end. A static [[edges.usrp.endpoint]]
 # row is a peer session (origin class 2): its overs are not echoed, unlike the clients of the dynamic hub
 # (class 0, echoed). Used by the E5b case of cases/test_echo.py (docs/echo-cases.md). Name it after echo.toml.
+# Its bind <OWN_IP>:34003 is the one of module C in usrp-rig.toml: scripts/run.sh refuses both together.
 [[edges.usrp.endpoint]]
 module = "E"
 peer = "<TESTER_IP>:32003"
