@@ -692,6 +692,18 @@ def normalise_sessions(raw):
             "failed": failed, "xcobs1": False}
 
 
+def check_session_accounting(counters):
+    """XCOBS1 rules on a settled snapshot: requested == opened + open_failed (nothing pending), and neither
+    dv_xcode_session_events_total{result="failed"|"drain_timeout"} moved in a scenario that has no failing or
+    draining session. Only for the XCOBS1 generation; older images have neither family."""
+    if not counters.get("xcobs1"):
+        return
+    assert counters["sessions_requested"] == counters["sessions_opened"] + counters["sessions_open_failed"], \
+        "requested != opened + open_failed on a settled snapshot: %s" % counters
+    for name in ("events_failed", "events_drain_timeout"):
+        assert not counters[name], "%s = %s where no session fails or drains: %s" % (name, counters[name], counters)
+
+
 def xcode_counters(run, step):
     """The transcoding counters of the hub after the step: sessions by result
     (dv_xcode_sessions_total) and frames by direction and result
@@ -699,6 +711,8 @@ def xcode_counters(run, step):
     out = {}
     for result in ("requested", "opened", "open_failed", "failed", "drain_timeout"):
         out["sessions_" + result] = hub_counter(run, step, "dv_xcode_sessions_total", result=result)
+    for result in ("failed", "drain_timeout"):
+        out["events_" + result] = hub_counter(run, step, "dv_xcode_session_events_total", result=result)
     out.update(normalise_sessions(out))
     for dir_, result in (("in", "sent"), ("in", "skipped"), ("in", "pre_ready_dropped"),
                          ("out", "published"), ("out", "dropped")):
@@ -780,6 +794,7 @@ def test_pre_ready_cap_oldest_units_dropped(runs, target):
     counters = seen["counters"]
     assert counters["frames_in_pre_ready_dropped"] == want["dropped"], counters
     assert counters["attempts"] == 1 and counters["ok"] == 1 and counters["failed"] == 0, counters
+    check_session_accounting(counters)
     assert counters["frames_out_published"] == kept, counters
 
 
@@ -861,6 +876,7 @@ def test_open_refused_late_std_given_up(runs, target):
     # normalise_sessions reads both generations
     first = seen["counters_after_over1"]
     assert first["attempts"] == 1 and first["failed"] == 1 and first["ok"] == 0, first
+    check_session_accounting(first)
     assert first["frames_in_sent"] == 0 and first["frames_out_published"] == 0, first
     # the room recovers: the next over opens at once and is heard in full
     assert abs(seen["std2_delay_s"] - scenario["open_delays"][1]) <= 0.15, seen["std2_delay_s"]
@@ -873,6 +889,7 @@ def test_open_refused_late_std_given_up(runs, target):
     assert all(len(r) == 322 and r[0] == 5 and r[2:] == USRP_PCM for r in reqs)
     second = seen["counters_after_over2"]
     assert second["attempts"] == 2 and second["failed"] == 1 and second["ok"] == 1, second
+    check_session_accounting(second)
     assert second["frames_out_published"] == SHORT_BURST, second
 
 

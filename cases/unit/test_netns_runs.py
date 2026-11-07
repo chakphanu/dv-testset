@@ -402,3 +402,14 @@ def test_normalise_sessions_reads_both_metric_generations():
     quiet = {"sessions_opened": 1, "sessions_open_failed": 0, "sessions_requested": 1}
     assert module.normalise_sessions(quiet)["ok"] == 1
     assert module.normalise_sessions({"sessions_opened": None})["attempts"] is None
+
+
+def test_check_session_accounting_only_binds_xcobs1():
+    module = load("test_xlxd_usrp_netns")
+    good = {"xcobs1": True, "sessions_requested": 2, "sessions_opened": 1, "sessions_open_failed": 1,
+            "events_failed": 0.0, "events_drain_timeout": 0.0}
+    module.check_session_accounting(good)
+    module.check_session_accounting({"xcobs1": False})
+    for bad in (dict(good, sessions_requested=3), dict(good, events_failed=1.0), dict(good, events_drain_timeout=2.0)):
+        with pytest.raises(AssertionError):
+            module.check_session_accounting(bad)

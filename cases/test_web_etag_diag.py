@@ -71,6 +71,28 @@ def test_public_validator_on_an_idle_node(anon, path):
         path, [(p, str(x)[:60], str(y)[:60]) for _e1, _e2, diffs, _i in pairs for p, x, y in diffs[:6]][:12])
 
 
+def _keys(node, found=None):
+    found = set() if found is None else found
+    if isinstance(node, dict):
+        for key, value in node.items():
+            found.add(key)
+            _keys(value, found)
+    elif isinstance(node, list):
+        for item in node:
+            _keys(item, found)
+    return found
+
+
+def test_public_state_has_no_moving_uptime(anon):
+    """ETAG1 (6ea130a): the public state carries no uptime_s / node_uptime_s (they moved the validator every second);
+    started_ms and node_started_ms stay. The admin status keeping its uptime values is not asserted here (admin route cases)."""
+    keys = _keys(json.loads(anon.get("/api/v1/public/state", expect=200).body))
+    present = sorted(k for k in ("uptime_s", "node_uptime_s") if k in keys)
+    assert not present, "public state still carries %s (ETAG1)" % present
+    missing = sorted(k for k in ("started_ms", "node_started_ms") if k not in keys)
+    assert not missing, "public state lost %s (ETAG1 keeps them)" % missing
+
+
 # ================================================================ ETAG1: the strict case, both ways
 
 SETTLE_S = 60.0                 # an earlier case may still be moving the state (links expiring): wait for a quiet pair
