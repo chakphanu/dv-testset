@@ -133,6 +133,51 @@ def test_usrp_k_selects_one_scenario():
     assert netns_runs.scenarios_for(scenarios, {"test_something_else"}) == []
 
 
+def test_slow_open_variants_are_selected_apart():
+    """H4: the no-listener variant (test_slow_open_) and the listener variant
+    (test_open_wait_) never pull each other's scenario with -k."""
+    module = load("test_xlxd_usrp_netns")
+    scenarios = module.SCENARIOS
+    assert netns_runs.scenarios_for(scenarios, {"test_slow_open_short_burst_delivered"}) == ["slow_open"]
+    assert netns_runs.scenarios_for(scenarios, {"test_open_wait_listener_short_burst_heard"}) == \
+        ["slow_open_listener"]
+    prefixes = [spec["cases"] for spec in scenarios.values()]
+    for prefix in prefixes:
+        assert [p for p in prefixes if p.startswith(prefix)] == [prefix], prefix
+
+
+def test_for_profile_drops_scenarios_of_another_profile():
+    module = load("test_xlxd_usrp_netns")
+    scenarios = module.SCENARIOS
+    names = ["slow_open", "slow_open_listener"]
+    assert netns_runs.for_profile(names, scenarios, "dvrouter") == names
+    assert netns_runs.for_profile(names, scenarios, "xlxd") == ["slow_open"]
+    assert netns_runs.for_profile([], scenarios, "xlxd") == []
+    assert [n for n, spec in scenarios.items() if "profile" in spec] == ["slow_open_listener"]
+
+
+def test_open_wait_observed_reads_the_run():
+    module = load("test_xlxd_usrp_netns")
+    run = {"usrp_tx": [[5.0, 5.08, 5.081]], "opens": [[5.002, 24, 5, [1], 7, "00", 41000]],
+           "events": [[0.5, "CAPS request"], [6.002, "OPEN len=24"], [6.003, "CLOSE id=1"]],
+           "dstar_hdr": [[6.004, 9]],
+           "dstar_rx": [[6.005, 9, i, False, True] for i in range(5)] + [[6.005, 9, 5, True, False]],
+           "data_in": {"41000": [[6.003, "00"]] * 5}}
+    seen = module.open_wait_observed(run, 1.0)
+    assert seen["dstar_frames_heard"] == 5 and seen["dstar_end_frames"] == 1
+    assert seen["dstar_seqs"] == [0, 1, 2, 3, 4] and seen["dstar_stream_ids"] == [9]
+    assert seen["std_at"] == 6.002 and round(seen["std_delay_s"], 3) == 1.0
+    assert round(seen["open_lag_s"], 3) == 0.002 and seen["fake_data_requests"] == 5
+    assert seen["dstar_first_heard"] == seen["dstar_last_heard"] == 6.005
+    # no OPEN event: the STD time falls back to OPEN + the scenario delay
+    run["events"] = []
+    assert round(module.open_wait_observed(run, 1.0)["std_at"], 3) == 6.002
+    # nothing heard
+    run["dstar_rx"] = []
+    seen = module.open_wait_observed(run, 1.0)
+    assert seen["dstar_frames_heard"] == 0 and seen["dstar_first_heard"] is None
+
+
 def test_lifecycle_selection_unchanged():
     module = load("test_xlxd_transcoder_lifecycle")
     assert netns_runs.scenarios_for(module.SCENARIOS, {"test_lost_listener_heard"}) == ["listener_lost_and_back"]

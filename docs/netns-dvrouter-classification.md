@@ -12,7 +12,7 @@ alone. The red results came from the harness starting all scenarios at once,
 which exhausts the task limit of the `contained.sh` scope and keeps
 DV-Router's child processes from starting. There is no class (a) change and no
 class (b) finding in this pass. The report itself changed no case, library or spec; the
-harness fixes H1 to H3 below were applied afterwards (status at "Harness fixes"), H4 is open.
+harness fixes H1 to H3 and the coverage item H4 below were applied afterwards (status at "Harness fixes" and "H4 applied").
 
 Scope: `cases/test_xlxd_usrp_netns.py` (13 cases that run, plus
 `test_no_usrp_link_bytes_equal_reference`, skipped without `DVT_XLXD_REF_BIN`)
@@ -111,7 +111,7 @@ PYTHONPATH=$SCRATCH/plug DVT_ONE_SCEN=extended DVT_DVR_BIN_DIR=.cache/dvr-<tag> 
   cases/test_xlxd_usrp_netns.py -q -k test_extended
 ```
 
-Scenario names: `no_usrp`, `legacy_ambed`, `extended`, `one_output`, `slow_open`.
+Scenario names: `no_usrp`, `legacy_ambed`, `extended`, `one_output`, `slow_open`, and (H4, DV-Router profile only) `slow_open_listener`.
 Never run two scenarios in the same scope (435 tasks each, scope limit 1024),
 never run a netns job next to another heavy job. A scenario takes 5 to 12 s
 (USRP file) or 20 to 66 s (lifecycle).
@@ -183,10 +183,10 @@ at:
 
 - lost listener not heard: `test_lost_listener_heard` passes alone (50 of 51 D-STAR
   frames carry the transcoder AMBE+ before the loss and after the reconnect).
-- slow open dropping a short burst: not exercised for DV-Router. The
-  `slow_open` scenario has no digital listener, so the spec (and the product)
-  correctly open nothing; the xlxd behaviour "burst held until the delayed STD"
-  has no DV-Router counterpart in this scenario (see H4).
+- slow open dropping a short burst: not exercised by the `slow_open` scenario (no digital
+  listener, so the spec and the product correctly open nothing). Exercised since H4 by
+  `slow_open_listener` (D-STAR listener on the module): the burst is delivered in full, see
+  "H4 applied" below. No finding.
 
 ## Environment observation for DV-Router (not a defect against its design)
 
@@ -197,9 +197,69 @@ unavailable` and the backoff. Relevant for the tracker item on thread counts
 (THREADS1): the number to bring down is 435 per instance; on a 1024-task scope
 two instances already leave no headroom.
 
+## H4 applied: short burst over a slow OPEN with a D-STAR listener
+
+Decision of the DV-Router lead: keep `slow_open` (no listener, DV-Router asserts "no OPEN") and
+add a second variant WITH a listener, asserted on real behaviour.
+
+What was added (`cases/test_xlxd_usrp_netns.py`, `dvtest/specs/dvrouter.py`,
+`dvtest/netns_runs.py`):
+
+- scenario `slow_open_listener`: as `slow_open` (fake transcoder, STD delayed 1.0 s, 5-frame USRP
+  burst on module B) plus step `listenB` first (a D-STAR listener linked on module B, 1 s settle
+  for the demand token, as `listener_lost_and_back`). Case prefix `test_open_wait_`, chosen so that
+  `-k test_slow_open_` and `-k test_open_wait_` select their own scenario only (offline test
+  `test_slow_open_variants_are_selected_apart`). The scenario carries `profile="dvrouter"`:
+  `netns_runs.for_profile()` drops it under any other `DVT_SUT_PROFILE`, so the xlxd reference run
+  neither launches nor judges it (case skipped, no scenario started; B12 for xlxd stays
+  `test_slow_open_short_burst_delivered`, unchanged).
+- case `test_open_wait_listener_short_burst_heard`, spec entry `netns_ambed.slow_open_listener`.
+  Every run writes `observed.json` (times on the fake's clock) into the scenario directory.
+
+Design rule asserted (DV-Router `docs/design/transcoding.md`; wip tree):
+
+| Line | Rule | Assertion |
+|------|------|-----------|
+| :339, :344 | the OPEN starts with the first voice unit, "no added timer or lookahead" | OPEN seen 0 to 0.3 s after the first USRP frame; opens == `[[24, 5, [1]]]` (demand = AMBE+ of the listener) |
+| :344, `xcode.rs` `close_stream` | before SessionReady up to 128 units are buffered with no age drop; EndSession of a stream closed while opening waits for SessionReady; the buffer is then sent in order | the listener hears all 5 frames; the fake gets 5 PCM requests, PCM unchanged |
+| :510 (table) | a slow STD below 1050 ms is a normal open | the open succeeds, STD about 1.0 s after the OPEN |
+| :347 | target StreamEnd follows the outputs of the last input (or 400 ms after close) | one end frame after the 5 frames, one stream id, sequence numbers increasing |
+| :341, :344 | controller give-up 3000 ms after the first voice unit | last frame heard within 3.0 s of the first USRP frame; nothing heard before the STD |
+
+The design does not allow audio loss for a 5-unit burst when the STD arrives inside the 1050 ms
+OPEN wait: the 1.0 s STD delay leaves 50 ms of margin on the OPEN wait, but the burst itself is
+only 5 units, far below the 128-unit buffer, so the case asserts "all 5" (no loss bound needed).
+A longer burst (above 128 units, about 2.5 s) or an STD after 1050 ms is a different case (drops
+the oldest units / refused open, `transcoding.md:344`, `:472`) and is not covered here.
+
+Observations on `wip-0348b98` (alone, `DVT_NETNS_PARALLEL` default, two runs, times in s on the
+fake's clock; run directories `out/20261107T114540Z/netns/slow_open_listener` and
+`out/20261107T114604Z/netns/slow_open_listener`, first one below):
+
+| Item | Value |
+|------|-------|
+| USRP frames sent | 5 (first 5.546, last 5.626, unkey 5.626) |
+| OPEN `[24, 5, [1]]` seen | 5.549 (2.8 ms after the first frame; second run 2.2 ms) |
+| STD sent by the fake | 6.549 (1.000 s after the OPEN) |
+| fake data requests | 5 x 322 B, all at 6.55 (flushed together right after the STD), then CS at 6.550 |
+| D-STAR listener | 5 voice frames with the transcoder AMBE+ payload (seq 0 to 4, one stream id, all at 6.551, 1.005 s after the first USRP frame), 5 header repeats, then 1 end frame (seq 5, last flag, synthesized payload) |
+| frames heard / sent | 5 / 5, no loss (second run also 5 / 5, STD +1.000 s, first frame heard +1.004 s) |
+
+Verdict: passes the design rule; no finding. The old variant `slow_open` still gives
+`opens == []` (run `out/20261107T114558Z/netns/slow_open`).
+
+Commands (one scenario at a time, `wip-0348b98` binaries):
+
+```
+DVT_DVR_BIN_DIR=.cache/dvr-wip-0348b98 DVT_XLXD_BIN=scripts/dvr-import-wrap.sh DVT_SUT_PROFILE=dvrouter \
+  scripts/contained.sh --name test -- python3 -m pytest -m netns cases/test_xlxd_usrp_netns.py -q -k test_open_wait_
+# the old variant: -k test_slow_open_
+```
+
 ## Harness fixes
 
-Status: H1, H2 and H3 are APPLIED (commit 67028d9); H4 is not (needs the lead). Shared code
+Status: H1, H2 and H3 are APPLIED (commit 67028d9); H4 is APPLIED too, after the lead's
+decision (section "H4 applied" below). Shared code
 `dvtest/netns_runs.py`, offline tests `cases/unit/test_netns_runs.py`, recipe and variable in
 `docs/rig.md` ("netns cases with a DV-Router build"). No expectation was changed. The text below
 is the original proposal, kept for the reasoning.
@@ -234,7 +294,7 @@ is the original proposal, kept for the reasoning.
   docs/netns-dvrouter-classification.md); run one scenario at a time")` instead
   of the product-sounding "xlxd never sent AMBEDPING". Same for
   `listener_run()`.
-- H4 (coverage, optional): the `slow_open` DV-Router spec asserts "no OPEN"
+- H4 (coverage; applied, see "H4 applied"): the `slow_open` DV-Router spec asserts "no OPEN"
   because nobody listens in another profile. To keep B12 (a short burst during
   a slow open is not lost) meaningful for DV-Router, add a variant with a
   D-STAR listener on the USRP module (as `listener_lost_and_back` does) and
@@ -243,5 +303,5 @@ is the original proposal, kept for the reasoning.
   STD delay leaves 50 ms, so the expectation needs the lead's decision.
 - Spec edits: none (class (a) is empty).
 
-Commands and numbers in this file are from the run directories named above; the
+Commands and numbers in this file are from the run directories named above (H4: see its own section); the
 tool scope was `scripts/contained.sh --name test` with one scenario at a time.

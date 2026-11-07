@@ -86,6 +86,12 @@ SPEC = {
         "extended_opens": [[24, 1, [5]], [24, 5, [1]]],         # B6
         "one_output_opens": [[24, 1, [5]], [24, 1, [5]]],       # B11
         "slow_open_opens": [],                      # B12: no digital listener
+        # H4, B12 with a D-STAR listener on the module: the demanded AMBE+ output is opened
+        # on the first voice unit (<= 0.3 s after it), the 5-frame burst is kept in the
+        # pre-ready buffer (transcoding.md:344) and heard in full after the 1.0 s STD, inside
+        # the 3 s controller give-up (:341, :344)
+        "slow_open_listener": {"opens": [[24, 5, [1]]], "frames_heard": 5, "open_lag_s": 0.3,
+                               "give_up_s": 3.0},
     },
     # netns transcoder-lifecycle cases (test_xlxd_transcoder_lifecycle, B13/B14);
     # DV-Router docs/design/transcoding.md: one CAPS per connection, opens on

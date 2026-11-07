@@ -89,6 +89,13 @@ def scenarios_for(scenarios, selected):
     return wanted
 
 
+def for_profile(names, scenarios, sut_profile):
+    """names without the scenarios that declare another "profile" (a scenario
+    only one profile can judge is not started, and costs no tasks, under the
+    others)."""
+    return [name for name in names if scenarios[name].get("profile", sut_profile) == sut_profile]
+
+
 def _tail(path):
     try:
         with open(path, "rb") as handle:

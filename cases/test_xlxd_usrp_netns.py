@@ -30,10 +30,15 @@ XLXD_IP, AMBED_IP, DEXTRA_IP, USRP_IP = "127.0.0.1", "127.0.0.2", "127.0.0.3", "
 USRP_LINE = "B %s 34001 %s 32001 N0CALL" % (XLXD_IP, USRP_IP)
 VOICE_FRAME = bytes(range(9))
 USRP_PCM = (b"\xe8\x03\x18\xfc") * 80          # +1000, -1000 S16LE
+LISTENER = "N0LSTN"
+LISTEN_SETTLE = 1.0                             # s after the link ack (DV-Router demand token)
+SHORT_BURST = 5                                 # USRP frames of usrpShortB
 
 # name: usrp config present, fake ambed mode / max outputs / STD delay, steps,
 # "cases": name prefix of the cases that read the scenario (only scenarios of
-# selected cases are launched)
+# selected cases are launched; the prefixes must not be prefixes of each other:
+# "test_slow_open_" and "test_open_wait_"), optional "profile": the scenario is
+# launched only under that DVT_SUT_PROFILE (H4)
 SCENARIOS = {
     "no_usrp": dict(usrp=False, mode="extended", max_outputs=4, open_delay=0.05,
                     steps=["dstarA"], cases="test_no_usrp_"),
@@ -45,6 +50,12 @@ SCENARIOS = {
                        steps=["dstarB", "dstarB"], cases="test_one_output_"),
     "slow_open": dict(usrp=True, mode="extended", max_outputs=4, open_delay=1.0,
                       steps=["usrpShortB"], cases="test_slow_open_"),
+    # H4: the same slow STD with a D-STAR listener on the USRP module, so a
+    # DV-Router really opens (demand = AMBE+) and the 5-frame burst runs over
+    # the slow OPEN; the xlxd profile has the case above for B12
+    "slow_open_listener": dict(usrp=True, mode="extended", max_outputs=4, open_delay=1.0,
+                               steps=["listenB", "usrpShortB"], cases="test_open_wait_",
+                               profile="dvrouter"),
 }
 TIMEOUT = 120
 
@@ -77,7 +88,8 @@ def _inside(spec, run_dir):
     xlxd = subprocess.Popen([spec["bin"], "XLX999", XLXD_IP, AMBED_IP], cwd=run_dir,
                             env=dict(os.environ, DV_RUN_DIR=str(run_dir)),
                             stdout=log, stderr=subprocess.STDOUT, preexec_fn=die_with_parent)
-    result = {"phases": [], "usrp_rx": [], "dextra_ack": []}
+    result = {"phases": [], "usrp_rx": [], "dextra_ack": [], "listen_ack": [], "dstar_rx": [],
+              "dstar_hdr": [], "usrp_tx": []}
     lock = threading.Lock()
     stop = threading.Event()
     peer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -116,12 +128,59 @@ def _inside(spec, run_dir):
                                   slow=dextra.SYNC_DATA), dest)
         s.close()
 
+    def listen(module):
+        """D-STAR listener linked on module for the rest of the run: header
+        times go to result["dstar_hdr"] as [t, sid], voice frames to
+        result["dstar_rx"] as [t, sid, seq, last, ambe == fake AMBE+] (t on
+        the fake's clock, like usrp_rx and opens)."""
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.bind((DEXTRA_IP, 0))
+        s.settimeout(0.2)
+        dest = (XLXD_IP, dextra.PORT)
+        acked = threading.Event()
+
+        def loop():
+            last = time.monotonic()
+            while not stop.is_set():
+                if time.monotonic() - last >= 3:        # DExtra keepalive period (xlxd 3 s)
+                    s.sendto(dextra.keepalive_packet(LISTENER), dest)
+                    last = time.monotonic()
+                try:
+                    data = s.recv(2048)
+                except socket.timeout:
+                    continue
+                voice = dextra.parse_voice(data)
+                header = dextra.parse_header(data)
+                reply = dextra.parse_link_reply(data)
+                with lock:
+                    if voice:
+                        result["dstar_rx"].append([fake.now(), voice[0], voice[1], voice[2],
+                                                   voice[3] == ambed.fake_payload(ambed.AMBEPLUS)])
+                    elif header:
+                        result["dstar_hdr"].append([fake.now(), header["stream_id"]])
+                    elif reply and reply["kind"] in ("ack", "nak") and not acked.is_set():
+                        result["listen_ack"].append(data.hex())
+                        acked.set()
+            s.close()
+
+        threading.Thread(target=loop, daemon=True).start()
+        s.sendto(dextra.link_packet(LISTENER, module, own_module="D"), dest)
+        if not acked.wait(3):
+            result["listen_ack"].append(None)
+        time.sleep(LISTEN_SETTLE)
+
     def usrp_talk(count):
         start = time.monotonic()
+        first = None
         for seq in range(count):
             pace(start, seq)
+            if first is None:
+                first = fake.now()
             peer.sendto(usrp.voice(seq, USRP_PCM), (XLXD_IP, 34001))
+        last = fake.now()
         peer.sendto(usrp.unkey(count), (XLXD_IP, 34001))
+        # [first voice, last voice, unkey] sent, fake clock
+        result["usrp_tx"].append([first, last, fake.now()])
 
     threading.Thread(target=usrp_rx, daemon=True).start()
     try:
@@ -133,8 +192,10 @@ def _inside(spec, run_dir):
                 dstar(step[-1], 0x1234 + index)
             elif step == "usrpB":
                 usrp_talk(50)
+            elif step == "listenB":
+                listen("B")
             elif step == "usrpShortB":
-                usrp_talk(5)
+                usrp_talk(SHORT_BURST)
             elif step == "badB":
                 # TLV/text frame from the configured peer: must be dropped
                 peer.sendto(usrp.frame(0, usrp.TYPE_TEXT, b"\x08\x00"), (XLXD_IP, 34001))
@@ -190,13 +251,15 @@ def _collect(launched):
 
 
 @pytest.fixture(scope="module")
-def runs(request, xlxd_bin, out_root):
-    """Result of every scenario a selected case reads, started in waves of
-    DVT_NETNS_PARALLEL (default 1)."""
+def runs(request, xlxd_bin, out_root, target):
+    """Result of every scenario a selected case reads (and that applies to
+    the profile under test), started in waves of DVT_NETNS_PARALLEL
+    (default 1)."""
     from dvtest import netns_runs
     selected = netns_runs.selected_names(request.session.items, request.module.__name__)
     return netns_runs.run_in_waves(
-        netns_runs.scenarios_for(SCENARIOS, selected),
+        netns_runs.for_profile(netns_runs.scenarios_for(SCENARIOS, selected), SCENARIOS,
+                               target.sut_profile),
         lambda name: _launch(xlxd_bin, name, SCENARIOS[name], out_root),
         _collect, netns_runs.parallel())
 
@@ -438,6 +501,74 @@ def test_slow_open_short_burst_delivered(runs, target):
     reqs = requests(run, run["opens"][0][6])
     assert len(reqs) >= 5, "data requests %d for a 5-frame burst" % len(reqs)
     assert all(len(r) == 322 for r in reqs) and reqs[0][2:] == USRP_PCM
+
+
+def open_wait_observed(run, open_delay):
+    """The numbers of the slow_open_listener scenario (times on the fake's
+    clock): burst sent, OPEN seen, STD answered, what the listener heard."""
+    burst = run["usrp_tx"][0]
+    open_t = run["opens"][0][0]
+    std = [t for t, text in run["events"] if text.startswith("OPEN")]
+    std_t = std[0] if std else open_t + open_delay
+    rx = run["dstar_rx"]
+    voice = [r for r in rx if r[4]]                  # frames carrying the transcoder AMBE+
+    return {
+        "usrp_frames_sent": SHORT_BURST, "usrp_first_sent": burst[0], "usrp_last_sent": burst[1],
+        "usrp_unkey_sent": burst[2], "open_at": open_t, "open_lag_s": open_t - burst[0],
+        "std_at": std_t, "std_delay_s": std_t - open_t,
+        "dstar_headers": run["dstar_hdr"], "dstar_frames_heard": len(voice),
+        "dstar_end_frames": sum(1 for r in rx if r[3]),
+        "dstar_first_heard": voice[0][0] if voice else None,
+        "dstar_last_heard": voice[-1][0] if voice else None,
+        "dstar_seqs": [r[2] for r in voice], "dstar_stream_ids": sorted({r[1] for r in rx}),
+        "dstar_rx": rx, "fake_data_requests": sum(len(v) for v in run["data_in"].values()),
+    }
+
+
+def test_open_wait_listener_short_burst_heard(runs, target):
+    """H4 / B12 for a DV-Router: the 5-frame USRP burst (100 ms) ends long
+    before the slow OPEN is answered (STD 1.0 s after the OPEN, inside the
+    1050 ms OPEN wait), and a D-STAR listener on the module must still hear
+    all of it. The design (DV-Router docs/design/transcoding.md): the OPEN
+    starts with the first voice unit, no added timer (:344); before
+    SessionReady the controller buffers up to 128 units with no age drop
+    (:344), so 5 units are all kept; EndSession of a stream closed while
+    opening waits for SessionReady (crates/room/src/xcode.rs close_stream),
+    the buffer is then flushed in order (:344) and the target StreamEnd
+    follows the outputs of the last input (:347); a slow STD below 1050 ms is
+    a normal open (:510); the controller gives up 3000 ms after the first
+    voice unit (:341, :344). So: nothing lost, nothing before the STD, all
+    inside the give-up. Skipped under the xlxd profile (the scenario is not
+    launched; B12 is test_slow_open_short_burst_delivered)."""
+    spec = netns_spec(target)
+    if spec is None:
+        pytest.skip("DV-Router profile spec only (xlxd: test_slow_open_short_burst_delivered)")
+    want = spec["slow_open_listener"]
+    run = get(runs, "slow_open_listener")
+    assert run["listen_ack"] and run["listen_ack"][0], "the D-STAR listener was not acked on module B"
+    assert [o[1:4] for o in run["opens"]] == want["opens"], run["opens"]
+    seen = open_wait_observed(run, SCENARIOS["slow_open_listener"]["open_delay"])
+    (Path(run["run_dir"]) / "observed.json").write_text(json.dumps(seen, indent=1))
+    # OPEN starts with the first voice unit (transcoding.md:344, no added timer)
+    assert 0 <= seen["open_lag_s"] <= want["open_lag_s"], \
+        "OPEN %.3f s after the first USRP frame" % seen["open_lag_s"]
+    assert abs(seen["std_delay_s"] - SCENARIOS["slow_open_listener"]["open_delay"]) <= 0.15, seen["std_delay_s"]
+    # the burst is over before the STD: this is the situation under test
+    assert seen["usrp_unkey_sent"] < seen["std_at"], "burst not over before the STD"
+    assert seen["dstar_frames_heard"] == want["frames_heard"], \
+        "listener heard %d of %d burst frames (seqs %s, end frames %d)" % (
+            seen["dstar_frames_heard"], SHORT_BURST, seen["dstar_seqs"], seen["dstar_end_frames"])
+    assert len(seen["dstar_seqs"]) == len(set(seen["dstar_seqs"])), seen["dstar_seqs"]
+    assert seen["dstar_seqs"] == sorted(seen["dstar_seqs"]), seen["dstar_seqs"]
+    assert len(seen["dstar_stream_ids"]) == 1, seen["dstar_stream_ids"]
+    # nothing is heard before the transcoder answered, all of it inside the give-up
+    assert seen["dstar_first_heard"] >= seen["std_at"] - 0.01, seen["dstar_first_heard"]
+    assert seen["dstar_last_heard"] - seen["usrp_first_sent"] <= want["give_up_s"], \
+        "last frame heard %.3f s after the first USRP frame" % (seen["dstar_last_heard"] - seen["usrp_first_sent"])
+    # the transcoder got every unit of the burst (5 PCM requests, unchanged PCM)
+    assert seen["fake_data_requests"] == SHORT_BURST, seen["fake_data_requests"]
+    reqs = requests(run, run["opens"][0][6])
+    assert all(len(r) == 322 and r[0] == 5 and r[2:] == USRP_PCM for r in reqs)
 
 
 if __name__ == "__main__" and len(sys.argv) == 4 and sys.argv[1] == "--inside":
