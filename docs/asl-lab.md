@@ -277,6 +277,14 @@ source (the kernel does both; no packet capture exists yet), that the edge's tap
 before ACCEPT, that the first `rpt fun` after the mode change is not swallowed by a call-token round that started before it,
 the 8 s window for "no link", the image build of `asl-nat-a`, and the allowed-address list of the sidecar's control port.
 
+### T11 (flood and spoofing cases): not built in this rig
+
+T11s (spoofed NEW/POKE from random source addresses at 10k packets/s for 10 s) is **not built: source-address spoofing generators are out of
+scope for this rig**. The variant with many real source addresses (T11m) is **not built either**: this rig does not carry a sustained
+high-rate datagram flood generator. The global and per-bucket caps of the edge (DV-Router docs/design/allstar.md 7.3/7.4) are to be
+covered on the product side with unit tests and its own test harness (token bucket and cap arithmetic with injected clocks and addresses),
+and the rig keeps the low-rate behavioural cases (T11: unknown callers, rejected NEW, no amplification for a single caller).
+
 ### Registration cases R1-R7, R13, R14: one edge process only
 
 Why node 2999 and 2991..2998, interval 120 s (DV-Router wip-1590f26): the build refuses `public = true` with a node number below 2000
