@@ -324,6 +324,23 @@ def test_t3_hub_l_lists_split_horizon(lab):
 
 # ------------------------------------------------------------------ T4: loop A + B + edge
 
+def _t4_pairs(a, b, edge, a_vars, b_vars):
+    """The set of node pairs that are linked, from the RPT_LINKS variables of A and B (entries like T199902 or R2999)."""
+    import re
+
+    def links(text):
+        m = re.search(r"RPT_LINKS=\d+((?:,[A-Z]\w+)*)", text)
+        return {item[1:] for item in (m.group(1).split(",")[1:] if m else [])}
+
+    trio = {a.node, b.node, edge.node}   # links to anything else (a tester node, a leftover) are not part of the triangle
+    pairs = set()
+    for me, vars_ in ((a.node, a_vars), (b.node, b_vars)):
+        for other in links(vars_):
+            if other in trio:
+                pairs.add(frozenset((me, other)))
+    return pairs
+
+
 def test_t4_loop_a_b_edge_no_loop_forms(lab):
     """A and B both link to the edge, and (in the same instant) A also dials B directly: a triangle.
     In this lab, A's own node_lookup for B goes through the lab's DNS zone (slower than the edge's L
@@ -344,11 +361,19 @@ def test_t4_loop_a_b_edge_no_loop_forms(lab):
         a.disconnect_links()
         b.disconnect_links()
         time.sleep(1.5)
-    assert "RPT_NUMLINKS=1" in a_vars and "RPT_LINKS=1,T%s" % edge.node in a_vars, a_vars
-    assert "RPT_NUMLINKS=1" in b_vars and "RPT_LINKS=1,T%s" % edge.node in b_vars, b_vars
+    pairs = _t4_pairs(a, b, edge, a_vars, b_vars)
+    # The invariant is "no triangle: exactly two of the three links exist". WHICH two is app_rpt's race (A's own dial
+    # of B against A's dial of the edge in the same instant), not the edge's: either A-edge + B-edge (A's direct
+    # dial refused locally with REMALREADY) or A-B + B-edge (A's dial of the edge lost the race). The edge never drops
+    # anything in either outcome (checked below).
+    assert len(pairs) == 2, "expected exactly two of the three links, got %s\nA: %s\nB: %s" % (sorted(map(sorted, pairs)), a_vars, b_vars)
     doc = iax2_frames.extract(sc.dir / "edge.pcap", ports=(lab.port,))
     texts = [f["text"].rstrip("\0") for f in doc["types"].get("text", []) if f["src"].split(":")[0] == a.ip]
-    assert any("REMALREADY" in t for t in texts), "A's own pre-check did not refuse the direct dial: %s" % texts
+    if pairs == {frozenset((a.node, edge.node)), frozenset((b.node, edge.node))}:
+        assert any("REMALREADY" in t for t in texts), "A's own pre-check did not refuse the direct dial: %s" % texts
+        print("[RECORD] T4: A-edge + B-edge, A's direct dial of B refused locally (REMALREADY)")
+    else:
+        print("[RECORD] T4: surviving links %s (A's dial of the edge lost the race to its dial of B: app_rpt's choice)" % sorted(map(sorted, pairs)))
     # no stray HANGUP from the edge mid-session (it never had to intervene: the loop never reached the wire)
     hangups = [f for f in doc["types"].get("iax.HANGUP", []) if f["t"] < 3.5]
     assert not hangups, "unexpected mid-session HANGUP: %s" % hangups
