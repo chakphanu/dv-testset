@@ -456,6 +456,10 @@ services:
       DVT_REQUIRE_IDENT: ${DVT_REQUIRE_IDENT:-true}
       # <DP15_TX_ENABLE> of rig/config/dv-router/dp15-rf.toml (RF transmit of the AX.25 edge); notes of cases/test_dp15_rf.py
       DVT_DP15_TX_ENABLE: ${DVT_DP15_TX_ENABLE:-false}
+      # DP7 second set (docs/dp7-cases.md): a basemap for the #/positions DOM case (cases/test_dp7_positions_page.py), a path under the
+      # repository as the tester sees it (/dvt/.local/...), and the opt-in 35 minute retention case of cases/test_dp15_positions2.py
+      DVT_BASEMAP_FILE: ${DVT_BASEMAP_FILE:-}
+      DVT_DP7_RETENTION_LONG: ${DVT_DP7_RETENTION_LONG:-}
       DVT_XLXD_SUT: ${DVT_NET:-172.30.0}.11
       DVT_AMBED_REF: ${DVT_NET:-172.30.0}.20
       DVT_AMBED_SUT: ${DVT_NET:-172.30.0}.21

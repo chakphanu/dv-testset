@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/dp7-cases.md "DP7 second set"): the AX.25 edge WITH RF transmit and
+# ONE KISS TCP port rf-a bound to room B, for the IS-to-RF courtesy posit cases (cases/test_dp15_positions2.py) and the RF
+# hide_position cases. The tester plays the TNC (dvtest/kiss_tnc.py): the edge is the kiss-tcp CLIENT and connects to
+# <TESTER_IP>:8101. Use it INSTEAD of dp7-rf.toml and dp15-rf.toml (all three define [edges.ax25]).
+#
+# tx_enable and the port's tx are both true: DV-Router refuses a path to an RF port without effective TX, and the courtesy
+# posit rides the path dp7-courtesy-path.toml. A TX port needs a physical transmitter id, an explicit budget (`{}` = the
+# class defaults), a band; tx_per_min / tx_burst are raised from the 2 / 1 default (one frame per 30 s) so that a gated
+# message and its courtesy position (two frames within seconds) both pass the coarse packet bucket. The airtime budget of
+# the class afsk1200-shared (5 % per 600 s) stays the default. tx_path stays empty: the transmitted frame is
+# N0TEST-1>APZDVR:}SRC>DST,TCPIP,N0TEST-1*:info.
+# `room = "B"` keeps the RF receive side of the DP7 cases (RF-heard positions are published into room B).
+[edges.ax25]
+enable = true
+callsign = "N0TEST-1"
+tx_enable = true
+alias_calls = []
+
+[[edges.ax25.port]]
+name = "rf-a"
+kind = "kiss-tcp"
+host = "<TESTER_IP>"
+port = 8101
+channel = 0
+room = "B"
+tx = true
+physical = "radio1"
+band = "2m"
+class = "afsk1200-shared"
+tx_budget = {}
+tx_per_min = 10
+tx_burst = 3
+reconnect = { min_secs = 1, max_secs = 5 }

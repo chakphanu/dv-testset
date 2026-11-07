@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (docs/dp7-cases.md "DP7 second set"): the extra APRS-IS server filter of the DV-Router
+# edge for the IS-to-RF courtesy posit cases. The automatic filter is only `g/<addressee>` of the paths FROM edge:aprsis (the
+# room name), so neither a message to an RF-heard station nor the correspondent's position would come down. `p/` is the
+# prefix filter of aprsc (packets whose SOURCE starts with the text): N0PS.. are the correspondents of the cases, N0OPT is
+# the opted-out callsign of dp7-position-optout.toml. Merged into [edges.aprsis] of dp15-aprsis.toml (name it after that
+# file); the tester logs in under each correspondent's own callsign (a verified login, source == login).
+[edges.aprsis]
+filter_extra = "p/N0PS/N0OPT"

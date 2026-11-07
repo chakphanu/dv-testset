@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (docs/dp7-cases.md "DP7 second set"): the same IS-to-RF path with courtesy_posit = false (the
+# default): a gated message goes to RF, the correspondent's position does NOT. Use it INSTEAD of dp7-courtesy-path.toml
+# (both name the path dp7-is-to-rf), with dp7-courtesy-tx.toml and dp15-aprsis.toml.
+[[data.path]]
+name = "dp7-is-to-rf"
+from = "edge:aprsis"
+to = "edge:ax25/rf-a"
+types = ["transit"]
+courtesy_posit = false

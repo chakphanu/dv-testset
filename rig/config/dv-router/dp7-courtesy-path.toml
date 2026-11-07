@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (docs/dp7-cases.md "DP7 second set"): the IS-to-RF path with the courtesy posit ON
+# (data.md 9.3: one courtesy position of the station whose message was just gated to RF, when courtesy_posit = true). ONLY with
+# dp7-courtesy-tx.toml (a path to an RF port needs effective TX) and dp15-aprsis.toml (the APRS-IS edge must be enabled).
+# types = ["transit"] is the only value the launcher accepts for APRS-IS to RF (config check on wip-ac750c7: "APRS-IS-to-RF
+# permits transit messages only"); the path carries the gated messages and the courtesy position that follows one. per_min and
+# per_5min stay at the IS-to-RF defaults (6 and 10); the worker's flat limit per RF port is the same.
+[[data.path]]
+name = "dp7-is-to-rf"
+from = "edge:aprsis"
+to = "edge:ax25/rf-a"
+types = ["transit"]
+courtesy_posit = true
