@@ -55,7 +55,6 @@ blocks at frames 1..8 and 9..16).
 Findings and records go to stdout and to out/<run>/data-ident.txt ("FINDING" =
 observed differs from the documented rule, "RECORD" = nothing documented).
 """
-import contextlib
 import os
 import sys
 import time
@@ -65,29 +64,25 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "proto"))
 
-from m17_common import MOD, clear, done, new, ready  # noqa: E402
-from dvtest import clients, metrics, slowdata  # noqa: E402
+from m17_common import MOD, clear  # noqa: E402
+from dvtest import clients, slowdata  # noqa: E402
 from dvtest.audio import signals  # noqa: E402
 from dvtest.proto import ambed, dextra, m17  # noqa: E402
 
 import test_xlxd_interlink as interlink_cases  # noqa: E402  (its voice cell helpers)
 
+# the helpers below were moved to cases/data_support.py (shared with the DP15 cases) without a change of behaviour
+from data_support import (  # noqa: E402,F401
+    FAMILIES, FAMILY_WAIT_S, LINK_CALLSIGN, OVER_WAIT_S, POLL_S, QUIET_S, RESULTS, SMS, EDGE_NAME,
+    Hub, anything_counted, anything_counted_any, check_edge_counts, delta, describe, dstar_listener,
+    edge_counts_known, has_text_with, hub_session, m17_client, moved, nonce_body, sms_packet, snapshot,
+    texts_of, wait_for_overs, write_note)
+
 pytestmark = pytest.mark.rig
 
 REQUIRE_IDENT = os.environ.get("DVT_REQUIRE_IDENT", "true") != "false"
 SETTING = "require_ident=%s" % ("true" if REQUIRE_IDENT else "false")
-SMS = 0x05
-LINK_CALLSIGN = "N0CALL"
-FAMILIES = ("dv_room_data_total", "dv_pkt_items_total")
-QUIET_S = 12.0                  # a baseline is quiet when nothing changed for one refresh and a bit
-FAMILY_WAIT_S = 60.0            # the data families appear after the first publish of the controller and worker
-POLL_S = 25.0                   # the change shows up within this after the event
-OVER_WAIT_S = 15.0              # a text over starts after the floor was idle for idle_gap_ms
 XLX_MODULE = "D"                # first of DVT_INTERLINK_MODULES
-RESULTS = ("accepted", "unidentified")
-# the per-edge counter is only recorded, never asserted; compat1 removed dv_edge_data_total (dvtest/metrics.py edge_data_family): the
-# records then say "n/a (removed on compat1)" and the edge deltas are 0
-EDGE_NAME = metrics.edge_data_family() or "dv_edge_data_total n/a (removed on compat1)"
 
 
 # ---------------------------------------------------------------- findings
@@ -95,217 +90,14 @@ EDGE_NAME = metrics.edge_data_family() or "dv_edge_data_total n/a (removed on co
 def note(target, case, tag, text):
     """Print and append "[tag] case: text" (RECORD, FINDING or OK) to the run's
     data-ident.txt."""
-    line = "[%s] %s (%s): %s" % (tag, case, SETTING, text)
-    print(line)
-    try:
-        with open(Path(target.out) / "data-ident.txt", "a", encoding="utf-8") as fh:
-            fh.write(line + "\n")
-    except OSError:
-        pass
-
-
-# ---------------------------------------------------------------- hub counters
-
-def snapshot(samples):
-    """The counters the cases read, by flat name: room.<result> (controller,
-    dv_room_data_total), pkt.<kind>.<result> (worker, dv_pkt_items_total),
-    edge.<result> (dv_edge_data_total; metrics.edge_data_family(): 0 on compat1, which removed it), each also as .all (any result)."""
-    snap = {"room.all": metrics.total(samples, "dv_room_data_total"),
-            "pkt.all": metrics.total(samples, "dv_pkt_items_total"),
-            "edge.all": metrics.edge_total(samples),
-            # compat1 successors of dv_edge_data_total: recorded only (their labels are not asserted); 0 on older images
-            "edge_raw.all": metrics.total(samples, "dv_edge_raw_total"),
-            "edge_render.all": metrics.total(samples, "dv_edge_render_total")}
-    for result in RESULTS:
-        snap["room." + result] = metrics.total(samples, "dv_room_data_total", result=result)
-        snap["edge." + result] = metrics.edge_total(samples, result=result)
-        for kind in ("text", "status"):
-            snap["pkt.%s.%s" % (kind, result)] = metrics.total(
-                samples, "dv_pkt_items_total", kind=kind, result=result)
-    for kind in ("text", "status"):
-        snap["pkt.%s.all" % kind] = metrics.total(samples, "dv_pkt_items_total", kind=kind)
-    return snap
-
-
-def delta(after, before):
-    return {key: after[key] - before[key] for key in after}
-
-
-def edge_counts_known():
-    """True on the generations that have dv_edge_raw_total / dv_edge_render_total (compat1 and newer; they replace dv_edge_data_total)."""
-    from dvtest import sut_config
-    return sut_config.gen_at_least(None, sut_config.COMPAT1)
-
-
-def check_edge_counts(change, delivered):
-    """By sums only (no label values): dv_edge_raw_total counts the item the edge saw (+1, delivered or not), dv_edge_render_total only
-    what was rendered for delivery: > 0 for a delivered text item, 0 for an unidentified one denied under require_ident=true."""
-    if not edge_counts_known():
-        return
-    assert change["edge_raw.all"] == 1, "dv_edge_raw_total moved by %s, want 1: %s" % (change["edge_raw.all"], moved(change))
-    if delivered:
-        assert change["edge_render.all"] > 0, "dv_edge_render_total did not move for a delivered item: %s" % moved(change)
-    else:
-        assert change["edge_render.all"] == 0, "dv_edge_render_total moved for a denied item: %s" % moved(change)
-
-
-def moved(delta_map):
-    """The non-zero entries, for printing."""
-    return {key: int(value) for key, value in sorted(delta_map.items()) if value}
-
-
-class Hub:
-    """The hub metrics of xlxd-sut through the control channel."""
-
-    def __init__(self, control):
-        self.control = control
-
-    def text(self):
-        return self.control.metrics("xlxd-sut")
-
-    def snap(self):
-        return snapshot(metrics.parse(self.text()))
-
-    def settle(self, quiet=QUIET_S, limit=90.0, poll=2.0):
-        """A snapshot after the counters did not change for `quiet` seconds (a
-        refresh of an earlier case has landed)."""
-        snap, changed, end = self.snap(), time.monotonic(), time.monotonic() + limit
-        while time.monotonic() - changed < quiet and time.monotonic() < end:
-            time.sleep(poll)
-            current = self.snap()
-            if current != snap:
-                snap, changed = current, time.monotonic()
-        return snap
-
-    def wait_for(self, before, pred, timeout=POLL_S, poll=2.0):
-        """(snapshot, True) once pred(snapshot, before) holds, else (last
-        snapshot, False) after `timeout` seconds."""
-        end = time.monotonic() + timeout
-        while True:
-            current = self.snap()
-            if pred(current, before):
-                return current, True
-            if time.monotonic() >= end:
-                return current, False
-            time.sleep(poll)
-
-
-def anything_counted(now, before):
-    """Both the controller's and the worker's counter moved. They refresh on
-    their own 10 s clocks, so the second one may show up one refresh after the first."""
-    return now["room.all"] > before["room.all"] and now["pkt.all"] > before["pkt.all"]
-
-
-def anything_counted_any(now, before):
-    return now["room.all"] > before["room.all"] or now["pkt.all"] > before["pkt.all"]
+    write_note(target, case, tag, text, setting=SETTING, log="data-ident.txt")
 
 
 @pytest.fixture(scope="module")
 def hub(rig, target, rig_control):
     """Hub metrics of the DV-Router SUT with the data worker on; skips with the
     reason otherwise. Writes the data counter lines into data-ident.txt at the end."""
-    if target.sut_profile != "dvrouter":
-        pytest.skip("DV-Router only: DVT_SUT_PROFILE=dvrouter (profile %s)" % target.sut_profile)
-    if os.environ.get("DVT_SUT_LAUNCH") != "native":
-        pytest.skip("needs DVT_SUT_LAUNCH=native with the data-ident.toml config extra")
-    helper = Hub(rig_control)
-    # the controller and the worker publish their counters 10 s after they start (and then
-    # every 10 s), so the families may show up only after the rig is up for a while
-    end = time.monotonic() + FAMILY_WAIT_S
-    while True:
-        try:
-            text = helper.text()
-        except RuntimeError as exc:
-            pytest.skip("the hub metrics are not reachable through the control channel (%s)" % exc)
-        if set(FAMILIES) & metrics.families(text) or time.monotonic() >= end:
-            break
-        time.sleep(3.0)
-    if not set(FAMILIES) & metrics.families(text):
-        pytest.skip("[data] is not enabled: no %s family in the hub metrics after %.0f s; run with "
-                    "DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/data-ident.toml" % (" or ".join(FAMILIES), FAMILY_WAIT_S))
-    yield helper
-    try:
-        for line in helper.text().splitlines():
-            if line.startswith(("dv_room_data_total", "dv_pkt_items_total", "dv_edge_raw_total", "dv_edge_render_total") + ((metrics.edge_data_family(),) if metrics.edge_data_family() else ())) \
-                    and line.rsplit(" ", 1)[-1] not in ("0", "0.0"):
-                note(target, "hub", "RECORD", "end of run: " + line)
-    except Exception:                                    # the SUT may be gone; not a case failure
-        pass
-
-
-# ---------------------------------------------------------------- clients
-
-@contextlib.contextmanager
-def dstar_listener(ip, module=MOD):
-    """A DExtra client linked to the module, with an empty inbox."""
-    listener = dextra.DstarClient("0.0.0.0", callsign="N0TEST", module=module)
-    try:
-        assert listener.link(ip), "DExtra link to %s module %s failed" % (ip, module)
-        time.sleep(1.2)                         # the module's client list refreshes once per second
-        listener.client.drain()
-        listener.client.inbox.clear()
-        listener.client.inbox_times.clear()
-        yield listener
-    finally:
-        clients.close(listener)
-
-
-@contextlib.contextmanager
-def m17_client(ip, callsign=LINK_CALLSIGN, module=MOD):
-    """A linked M17 client (CONN, not LSTN) with an empty inbox."""
-    c = new(callsign, module)
-    try:
-        ready(ip, c)
-        yield c
-    finally:
-        done(c)
-
-
-def nonce_body(tag="DVT"):
-    return "%s %04d" % (tag, int(time.time() * 10) % 10000)
-
-
-def sms_packet(body, src):
-    """M17P packet-mode SMS: LSF with DST @ALL and the legacy TYPE, specifier
-    0x05, UTF-8 body, NUL, payload CRC (dvtest/proto/m17.py)."""
-    return m17.m17p_packet(SMS, body.encode("ascii") + b"\0", src=src)
-
-
-def wait_for_overs(listener, seconds, want=None):
-    """Drain the listener for up to `seconds` (stop early when want(overs));
-    the overs received so far (dvtest.slowdata.overs)."""
-    end = time.monotonic() + seconds
-    while time.monotonic() < end:
-        listener.client.drain()
-        if want is not None and want(slowdata.overs(listener.client.inbox)):
-            time.sleep(0.3)
-            listener.client.drain()
-            break
-        time.sleep(0.02)
-    return slowdata.overs(listener.client.inbox)
-
-
-def texts_of(overs):
-    """[(stream id, decoded dict)] of the whole text overs among `overs`."""
-    out = []
-    for over in overs:
-        got = slowdata.over_text(over)
-        if got:
-            out.append((over["stream_id"], got))
-    return out
-
-
-def has_text_with(body):
-    return lambda overs: any(got["text"].rstrip().endswith(body) for _sid, got in texts_of(overs))
-
-
-def describe(over):
-    header = over["header"] or {}
-    return {"stream_id": over["stream_id"], "frames": over["frames"],
-            "my": bytes(header.get("my", b"")).decode("ascii", "replace"),
-            "ur": bytes(header.get("ur", b"")).decode("ascii", "replace"),
-            "suffix": bytes(header.get("suffix", b"")).decode("ascii", "replace"),
-            "seqs": [v["counter"] for v in over["voice"]][:3] + ["..."]}
+    yield from hub_session(target, rig_control, lambda line: note(target, "hub", "RECORD", "end of run: " + line))
 
 
 # ---------------------------------------------------------------- a: direct SMS

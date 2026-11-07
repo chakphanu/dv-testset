@@ -461,6 +461,46 @@ class WebClient:
         return user
 
 
+# --------------------------------------------------------------- room data (DP15)
+
+def operator_events(client, types="data", after=None, limit=200):
+    """GET /api/v1/operator/events (an operator session): (items, last_id) of the admin-scope change feed, filtered
+    by `types` (a comma list, default `data`: text, status and position items), only the events after the id `after`
+    when given. A `data` row is {id, type, item_type, room, callsign, protocol, ts_ms, body}; for item_type position
+    body is an object {lat_e7, lon_e7, alt_dm, course_deg, speed_dmh, fix_unix_ms, symbol, source, comment}, else a
+    string (answer of the DV-Router lead, docs/dp15-cases.md). Station-directed rows are not in it. Unknown keys must
+    be ignored by the caller."""
+    query = "type=%s&limit=%d" % (urllib.parse.quote(types, safe=","), limit)
+    if after is not None:
+        query += "&after=%d" % after
+    data = client.get("/api/v1/operator/events?" + query, expect=200).json()
+    return list(data.get("items") or []), data.get("last_id")
+
+
+def room_messages(client, room, limit=64, after_ms=None):
+    """GET /api/v1/user/rooms/{R}/messages (a user or operator session): the items list, newest first. Rows are
+    {type, id, item_type, room, callsign, protocol, ts_ms, body}; text and status only, never a position."""
+    query = "limit=%d" % limit
+    if after_ms is not None:
+        query += "&after=%d" % after_ms
+    return list(client.get("/api/v1/user/rooms/%s/messages?%s" % (room, query), expect=200).json().get("items") or [])
+
+
+def post_room_text(client, room, text, expect=202):
+    """POST /api/v1/user/rooms/{R}/messages {text} (a user with may_tx); the Response. The account's bucket is 1 per
+    5 s, burst 2: space the calls."""
+    return client.post("/api/v1/user/rooms/%s/messages" % room, {"text": text}, expect=expect)
+
+
+def sse_data(frame):
+    """The JSON object of an SSE frame (dict of fields) or None."""
+    try:
+        value = json.loads(frame.get("data", ""))
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
 def new_password():
     """A random password within the documented 8-1024 bytes."""
     return secrets.token_urlsafe(18)

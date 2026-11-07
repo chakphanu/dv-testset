@@ -298,3 +298,49 @@ def test_classify_knows_the_admin_budgets():
     assert web.classify("GET", "/ready") == "public" and web.classify("GET", "/admin/health") == "public"
     assert web.classify("GET", "/api/v1/admin/status") == "session"
     assert web.classify("POST", "/api/v1/admin/config/changes") == "action"
+
+
+# ---------------------------------------------------------------- room data helpers (DP15)
+
+class _FakeResponse:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
+class _FakeClient:
+    def __init__(self, payload):
+        self.payload, self.calls = payload, []
+
+    def get(self, path, **kw):
+        self.calls.append(("GET", path, kw))
+        return _FakeResponse(self.payload)
+
+    def post(self, path, body=None, **kw):
+        self.calls.append(("POST", path, body, kw))
+        return _FakeResponse({})
+
+
+def test_operator_events_query_and_reply():
+    client = _FakeClient({"boot": "b", "last_id": 9, "items": [{"id": 8, "type": "data"}], "more": False})
+    items, last = web.operator_events(client, after=5, limit=50)
+    assert items == [{"id": 8, "type": "data"}] and last == 9
+    assert client.calls[0][1] == "/api/v1/operator/events?type=data&limit=50&after=5"
+    web.operator_events(client, types="data,room")
+    assert client.calls[1][1] == "/api/v1/operator/events?type=data,room&limit=200"
+
+
+def test_room_messages_and_post():
+    client = _FakeClient({"items": [{"id": 1}], "total": 1})
+    assert web.room_messages(client, "B", limit=10, after_ms=77) == [{"id": 1}]
+    assert client.calls[0][1] == "/api/v1/user/rooms/B/messages?limit=10&after=77"
+    web.post_room_text(client, "B", "hello")
+    assert client.calls[1][:3] == ("POST", "/api/v1/user/rooms/B/messages", {"text": "hello"})
+    assert client.calls[1][3] == {"expect": 202}
+
+
+def test_sse_data_parses_object_or_none():
+    assert web.sse_data({"event": "data", "data": '{"item_type": "status"}'}) == {"item_type": "status"}
+    assert web.sse_data({"data": "not json"}) is None and web.sse_data({}) is None and web.sse_data({"data": "[1]"}) is None

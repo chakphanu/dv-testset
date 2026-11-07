@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/rig.md): the [[data.path]] rows of the DP15 runs
+# (docs/dp15-cases.md). Use it AFTER data-ident.toml (the data worker must be on).
+#
+# Only rows that are valid on the plain rig template are here. The launcher refuses a path whose endpoint
+# is not enabled, also with enable = false (config check: "data.path[0]: APRS-IS endpoint is not enabled"), so the
+# gateway rows of data.md 8.2 live with the snippet that enables their edge:
+#   aprsis-down (edge:aprsis -> room:B, addressee XLX999B)      next to [edges.aprsis]   (DP15-5, later unit)
+#   rf-in / rf-out (edge:ax25/<port> <-> room:B, XLX999B)       next to [edges.ax25]     (DP15-6, later unit)
+#
+# dp15-b-to-c: class 0 text of room B is forwarded to room C (data.md 8.2, a room path; the default
+# is no path). No DP15 case of the stream-metadata group depends on it; it is the room-to-room tripwire
+# of the runs: a forwarded copy of a text sent in B shows up in the messages of C.
+[[data.path]]
+name = "dp15-b-to-c"
+from = "room:B"
+to = "room:C"
+types = ["text"]
+per_min = 10
