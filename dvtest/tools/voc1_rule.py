@@ -171,6 +171,32 @@ def rule3(cand_pairs, prod_pairs):
     return (FAIL if bad else PASS), "%d problems" % len(bad), bad, detail
 
 
+def rule3_identical(cand_pairs, prod_pairs):
+    """Rule 3 for a carrier image that must NOT change the levels (the unity tag): every row of every pair, the Codec2 tones
+    included, equals production (delta within IDENTICAL_DB; tone rms within 1 percent), and the tone frames are all delivered."""
+    bad, detail = [], []
+    for p in PAIRS:
+        cp, qp = cand_pairs.get(p), prod_pairs.get(p)
+        if cp is None or qp is None:
+            bad.append("%s: no rows" % p)
+            continue
+        rows = [("tone", cp["tone"], qp["tone"])] + [(sg, cp["speech"].get(sg), qp["speech"].get(sg)) for sg in sorted(qp["speech"])]
+        for name, c, q in rows:
+            if c is None or q is None:
+                bad.append("%s %s: row missing on one side" % (p, name))
+                continue
+            if abs(c["delta_db"] - q["delta_db"]) > IDENTICAL_DB:
+                bad.append("%s %s: delta %+.1f dB vs production %+.1f dB (a carrier must stay identical)" % (p, name, c["delta_db"], q["delta_db"]))
+            if name == "tone":
+                same = abs(c["rms"] - q["rms"]) <= 0.01 * max(q["rms"], 1)
+                detail.append({"pair": p, "candidate_rms": c["rms"], "production_rms": q["rms"], "ok": same})
+                if not same:
+                    bad.append("%s tone: rms %d vs production %d (a carrier must stay identical)" % (p, c["rms"], q["rms"]))
+                if c["sent"] != TONE_FRAMES or c["got"] < TONE_FRAMES:
+                    bad.append("%s tone: %d/%d frames, expected %d/%d" % (p, c["got"], c["sent"], TONE_FRAMES, TONE_FRAMES))
+    return (FAIL if bad else PASS), "%d problems" % len(bad), bad, detail
+
+
 def read_load(load_path, cpu_path, what):
     """(streams ok, streams, cpu mean, cpu max) of a load run, or raises InputError."""
     try:
@@ -200,22 +226,22 @@ def rule4(cand_load, prod_load):
     return (FAIL if bad else PASS), note, bad
 
 
-def decide(cand_rows, prod_rows, cand_load=None, prod_load=None):
+def decide(cand_rows, prod_rows, cand_load=None, prod_load=None, identical_ok=False):
     """The four rules. Returns {"rules": [{"n", "name", "status", "note", "problems"}], "verdict", "ship", "speech", "tone"}."""
     cand_pairs, prod_pairs = by_pair(cand_rows), by_pair(prod_rows)
     s1, n1, p1 = rule1(cand_rows)
     s2, n2, p2, speech = rule2(cand_pairs, prod_pairs)
-    s3, n3, p3, tone = rule3(cand_pairs, prod_pairs)
+    s3, n3, p3, tone = (rule3_identical if identical_ok else rule3)(cand_pairs, prod_pairs)
     s4, n4, p4 = rule4(cand_load, prod_load)
     rules = [
         {"n": 1, "name": "delivery and content", "status": s1, "note": n1, "problems": p1},
         {"n": 2, "name": "speech levels", "status": s2, "note": n2, "problems": p2},
-        {"n": 3, "name": "tone (Codec2 sources) and AMBE pairs unchanged", "status": s3, "note": n3, "problems": p3},
+        {"n": 3, "name": ("every row identical to production (carrier image)" if identical_ok else "tone (Codec2 sources) and AMBE pairs unchanged"), "status": s3, "note": n3, "problems": p3},
         {"n": 4, "name": "load 16/16 and cpu within 2x", "status": s4, "note": n4, "problems": p4},
     ]
     ship = all(r["status"] == PASS for r in rules)
     if ship:
-        verdict = "SHIP the candidate (all four rules pass)"
+        verdict = "SHIP the candidate (all four rules pass%s)" % ("; carrier image, identical to production" if identical_ok else "")
     else:
         verdict = "DO NOT SHIP (%s)" % ", ".join("rule %d %s" % (r["n"], r["status"]) for r in rules if r["status"] != PASS)
     return {"rules": rules, "verdict": verdict, "ship": ship, "speech": speech, "tone": tone}
@@ -249,6 +275,7 @@ def main(argv=None):
     ap.add_argument("--candidate-cpu", metavar="TXT", help="transcoder-cpu-sample.sh file of the candidate run")
     ap.add_argument("--production-load", metavar="JSON")
     ap.add_argument("--production-cpu", metavar="TXT")
+    ap.add_argument("--identical-ok", action="store_true", help="carrier image (the unity tag): rule 3 passes when EVERY row, the Codec2 tones included, is identical to production, instead of requiring the tone fix")
     ap.add_argument("--json", action="store_true", help="print the result as JSON instead of the table")
     args = ap.parse_args(argv)
     try:
@@ -262,7 +289,7 @@ def main(argv=None):
     except InputError as exc:
         print("voc1_rule: %s" % exc, file=sys.stderr)
         return 2
-    result = decide(cand, prod, loads[0], loads[1])
+    result = decide(cand, prod, loads[0], loads[1], identical_ok=args.identical_ok)
     result["candidate_tag"], result["production_tag"] = cand_tag, prod_tag
     if args.json:
         print(json.dumps(result, sort_keys=True, indent=1))

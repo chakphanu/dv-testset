@@ -222,3 +222,28 @@ def test_the_rows_of_the_recorded_runs_have_the_keys_the_rule_reads():
     for key in ("tag", "pair", "signal", "sent", "got", "rms", "delta_db", "ok"):
         assert key in r
     assert v.short(r["tag"]) == "823ce72a"
+
+
+def test_identical_ok_passes_a_carrier_that_changes_nothing():
+    """The unity tag: no tone fix, every row identical to production. Rule 3 in the tone-fix form fails it, the carrier form passes."""
+    same = make_rows("64s-pcm-688d9bf7-unity")
+    assert status(v.decide(same, prod(), load(), load()), 3) == v.FAIL
+    r = v.decide(same, prod(), load(), load(), identical_ok=True)
+    assert status(r, 3) == v.PASS and r["ship"] is True
+    assert "carrier image" in r["verdict"]
+
+
+def test_identical_ok_fails_when_a_row_moves_even_toward_the_source():
+    moved = dict(PROD_SPEECH, **{"dmr>dstar": -0.1})            # 0.6 dB closer to the source: fine for a tone-fix, not for a carrier
+    r = v.decide(make_rows("64s-pcm-x", speech=moved), prod(), load(), load(), identical_ok=True)
+    assert status(r, 3) == v.FAIL
+    r = v.decide(cand(), prod(), load(), load(), identical_ok=True)       # the tone fix itself is not a carrier
+    assert status(r, 3) == v.FAIL
+
+
+def test_identical_ok_on_the_command_line(tmp_path, capsys):
+    write_jsonl(tmp_path / "c.jsonl", make_rows("64s-pcm-688d9bf7-unity"))
+    write_jsonl(tmp_path / "p.jsonl", prod())
+    assert v.main(["--candidate", str(tmp_path / "c.jsonl"), "--production", str(tmp_path / "p.jsonl"), "--identical-ok", "--json"]) == 1   # rule 4 has no data
+    data = json.loads(capsys.readouterr().out)
+    assert [r["status"] for r in data["rules"]][2] == v.PASS

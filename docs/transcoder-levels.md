@@ -95,6 +95,12 @@ python3 -m dvtest.tools.voc1_rule \
 | 3 tone | Codec2 -> DMR and Codec2 -> D-STAR 700 Hz rms (amp 8000) rises above production and reaches at least 900 rms (target about 1260 = Codec2's own level); every pair with a non-Codec2 source (tone and speech rows) stays identical (0.0 dB, so a changed AMBE -> AMBE pair fails); the tone is delivered 150/150 frames |
 | 4 load | the 16-stream case completes 16/16 and the mean transcoder CPU of its window is at most 2x the production mean |
 
+For a carrier image that must not change anything (the unity tag), `--identical-ok` replaces rule 3: every row, the Codec2 tones included, must equal
+production (delta within the identical tolerance, tone rms within 1 percent, all tone frames delivered). Recorded on wip-0348b98:
+`vocoder-ambed:64s-pcm-688d9bf7-unity` against `64s-pcm-823ce72a` (out 20261107T091839Z and 20261107T090732Z): rules 1, 2, 4 pass, all 9 speech pairs
++0.0 dB, Codec2 tone rms 438 (m17>dmr) and 985 (m17>dstar) on both tags; with `--identical-ok` the verdict is SHIP as a carrier. Without the flag the same
+files give "DO NOT SHIP (rule 3 FAIL)" because unity carries no tone fix: rule 3 in its normal form is the acceptance of the 49f237f0 tone-fix pair.
+
 Exit status 0 = ship (all four PASS), 1 = do not ship (a rule failed, or rule 4 has no data because the four load files were not given: the decision needs
 all four), 2 = unusable input (unreadable file, rows of more than one tag on a side; a pair without its 9 speech signals is a rule 2 problem).
 `--json` prints the same result as JSON for the tracker row. Nothing is deployed by the tool; a failing candidate keeps the table as evidence.
