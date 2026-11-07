@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/rig.md, docs/dp15-cases.md): the APRS-IS client of DV-Router
+# pointing at the PRIVATE aprsc of the rig (service aprsc, profile aprs, <NET>.47 port 14580) and the path rows that
+# need the APRS-IS edge, for DP15-5a / 5b (cases/test_dp15_aprsis.py). Use it AFTER data-ident.toml (the data worker
+# must be on). scripts/run.sh --profile aprs adds it when it is not listed.
+#
+# Login: callsign N0TEST-5 (a synthetic callsign: base N0TEST has 6 characters, a digit and upper-case letters, as
+# valid_station wants; aprsc drops packet SOURCES that start with N0CALL / NOCALL / SERVER but allows such logins).
+# passcode_file is the file run.sh writes (mode 600) with the public passcode hash of that callsign
+# (python3 -m dvtest.aprs_passcode --dvr) and mounts read-only at /etc/dv-router/aprs-secrets. Without the file the
+# edge logs in with pass -1 (unverified, receive only) and aprsc drops its packets. The tester logs in as N0TEST-7:
+# two verified logins with the same name would kick each other.
+# filter_extra stays empty: the login filter is g/XLX999B, the union of the addressees of the enabled edge:aprsis paths.
+#
+# The launcher refuses a [[data.path]] whose endpoint is not enabled, so the row aprsis-down lives here with the
+# enable of its edge (dp15-paths.toml cannot carry it). Room B is the room of the DP15 cases; its APRS name is the
+# reflector callsign plus the module letter, XLX999B (7 characters): a message to it becomes room text, and the ack
+# `XLX999B>APZDVR,TCPIP*::<SRC padded to 9>:ack<id>` is sent under that name (the server adds the q construct).
+[edges.aprsis]
+enable = true
+server = "<NET>.47"
+port = 14580
+callsign = "N0TEST-5"
+passcode_file = "/etc/dv-router/aprs-secrets/passcode"
+filter_extra = ""
+tocall = "APZDVR"
+keepalive_secs = 30
+
+[[data.path]]
+name = "aprsis-down"
+from = "edge:aprsis"
+to = "room:B"
+types = ["text"]
+addressee = "XLX999B"
+per_min = 30

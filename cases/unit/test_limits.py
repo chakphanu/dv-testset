@@ -80,7 +80,7 @@ def test_shipped_compose_caps_every_service_of_every_profile():
         pytest.skip("docker is not installed")
     profiles = ["core", "allstar", "nxdn", "p25", "interlink", "load", "g3", "urfd", "mrefd", "netem",
                 "capture", "capture-allstar", "capture-nxdn", "capture-p25", "capture-urfd", "capture-mrefd",
-                "capture-interlink"]
+                "capture-interlink", "aprs"]
     cmd = ["docker", "compose", "-p", "dvtlimits", "-f", str(ROOT / "rig/compose.yml"),
            "--env-file", str(ROOT / ".env.example")]
     for name in profiles:

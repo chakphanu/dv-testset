@@ -48,6 +48,7 @@ internet, and every address is fixed.
 | xlxd-peer-sut / xlxd-peer-ref | 172.30.0.12 / .13 | interlink | XLX998, interlinked with xlxd-sut / xlxd-ref on `DVT_INTERLINK_MODULES` |
 | urfd | 172.30.0.70 | urfd | URFd (`URF999`, modules A-Z), a second reference reflector; see "URFd as the reference" |
 | mrefd | 172.30.0.80 | mrefd | mrefd (`M17-REF`, modules `MNOP`), the M17 Project reflector, with interlink peers M17-DVT / M17-DVU at the tester; see "mrefd as an extra reference" |
+| aprsc | 172.30.0.47 | aprs | a PRIVATE aprsc (APRS-IS server), standalone, client port TCP 14580, no uplink, no internet; the server side of the APRS-IS cases of DV-Router; see "Private APRS-IS server (profile aprs)" |
 | webload | 172.30.0.97 | webload | WebRTC load generator (aiortc), control server :3100 for the tester only; see "Web load profile" |
 | web-proxy | 172.30.0.90 (aliases `dvt-web`, `dvt-admin`) | web | TLS reverse proxy: HTTPS 443 to dv-svc-web of the SUT (`<net>.11:8081`) and HTTPS 8443 to dv-svc-admin (`<net>.11:8080`), self-signed CA in `out/<run>/web/ca.pem`; see "Web profile" |
 | browser | 172.30.0.91 | browser | Playwright browsers (`playwright run-server`, chromium + firefox + WebKit) for the browser cases, used with `web`; see "Browser profile" |
@@ -68,6 +69,7 @@ internet, and every address is fixed.
 | UDP 32001-32002 / 32003 | USRP, peer side | allstar / tester |
 | UDP 4569 | IAX2 | allstar, asl-reg, asl-a, asl-b, asl-e |
 | UDP 53 | DNS (lab zone) | asl-reg |
+| TCP 14580 | APRS-IS (client port, user-defined filters) | aprsc |
 | TCP 8099 | lab agent (JSON, tester only) | asl-reg, asl-a, asl-b, asl-e |
 | UDP 41400 | NXDNReflector network (xlxd connects out) | nxdn-ref, nxdn-sut |
 | UDP 41000 | P25Reflector network (xlxd connects out) | p25-ref, p25-sut |
@@ -704,6 +706,39 @@ come from the snippet. After the run `dvtest.turn scan` looks for the secret in 
 **Tester side.** `DVT_NAT=on`, `DVT_NAT_CTL`, `DVT_NAT_PROBE`, `DVT_NAT_REFLECTORS`, `DVT_NAT_ALIAS`, `DVT_NAT_INSIDE`, `DVT_TURN`,
 `DVT_TURN_SECRET_FILE`, `DVT_TURN_TTL`, `DVT_NAT_EXPIRY_S`, `DVT_NAT_SHORT` (the short profile, docs/web-nat-cases.md); `DVT_BROWSER_WS` points at `ws://<net>.92:3000/` (the router's forward).
 `cases/nat_support.py` has the client and the page helpers. Unit tests: `cases/unit/test_nat.py`, `cases/unit/test_turn.py`.
+
+## Private APRS-IS server (profile aprs)
+
+The APRS-IS cases of DV-Router (DP15-5a / 5b, [dp15-cases.md](dp15-cases.md)) need an APRS-IS server that is not the public network. The
+service `aprsc` (`--profile aprs`, 172.30.0.47) is [aprsc](https://github.com/hessu/aprsc) 3.0.0 (BSD-3-Clause), pinned in `.env.example` (`APRSC_REPO`,
+`APRSC_COMMIT` = the commit of the tag `release/3.0.0`, `APRSC_BASE_IMAGE`) and fetched once by `scripts/pre-fetch-aprsc.sh` into `.cache/aprsc` (the only
+internet use; the image build itself installs Debian packages as every other image does). `rig/Dockerfile.aprsc` builds it (multi-stage, `./configure --disable-is2`,
+a stripped binary, the runtime libraries by package name; about 123 MB on disk, 31 MB compressed) as `dvt-aprsc:local`, run as the non-root user `aprsc`
+(uid 10004). To build it by hand, inside the build scope and never while the rig runs:
+
+```
+scripts/pre-fetch-aprsc.sh
+scripts/contained.sh --name build -- docker build -f rig/Dockerfile.aprsc --build-arg APRSC_BASE_IMAGE=debian:bookworm-slim \
+  --build-arg MAKE_JOBS=4 --build-context src=.cache/aprsc -t dvt-aprsc:local rig
+```
+
+`run.sh --profile aprs` builds it the same way when needed.
+
+* The service is on the internal rig network only (no route out), nothing is published, `read_only` root with a tmpfs `/tmp`, `cap_drop: [ALL]`,
+  `no-new-privileges`, the `x-limits-small` set. The fixture config `rig/config/aprsc/aprsc.conf` is mounted read-only (a copy is baked into the
+  image and checked with `aprsc -y` at build time): `ServerId DVTEST`, a fixture `PassCode`, no `Uplink`, no HTTP listener, one client port
+  `Listen "Client-Defined Filters" igate tcp 0.0.0.0 14580 noIS2upgrade` (user-defined filters allowed, plain text protocol). The log goes to stderr:
+  `out/<run>/logs/aprsc.log`. An `ERROR: Language file search failed` line at start is harmless (the HTTP thread finds no web files; no HTTP port is configured).
+* Address: .46 was taken (the alias address of `asl-nat-a`, profile `asl-nat`), so the server is at .47.
+* Logins are verified against the public APRS passcode hash of the login callsign (`dvtest/aprs_passcode.py`; a wrong or missing passcode logs in
+  `unverified` and aprsc drops that client's packets). Fixture logins, all synthetic: the DV-Router edge `N0TEST-5`, the tester `N0TEST-7`. aprsc drops
+  packets whose SOURCE starts with `N0CALL`, `NOCALL` or `SERVER`, so every source here is `N0TEST-n` or `XLX999..`. The DV-Router passcode file is
+  written by `run.sh` to `out/<run>/aprs-secrets/passcode` (mode 600; nothing secret, a function of a synthetic callsign) and mounted read-only at
+  `/etc/dv-router/aprs-secrets`; the SUT then runs as the host user, like with the web and asl-edge profiles.
+* DV-Router side: the snippet `rig/config/dv-router/dp15-aprsis.toml` (`[edges.aprsis]` pointing at `<NET>.47:14580`, and the path row `aprsis-down`
+  `edge:aprsis -> room:B`, addressee `XLX999B`) is added by `run.sh` when `--profile aprs` is given and it is not listed in `DVT_SUT_CONFIG_EXTRA`. The
+  profile needs `DVT_SUT_LAUNCH=native`. The tester gets `DVT_APRS=on` and `DVT_APRSC=<net>.47`.
+* The tester client is `dvtest/aprsis_client.py` (stdlib sockets: login with the computed passcode, filter, TNC2 message lines, a reader thread).
 
 ## Control channel
 

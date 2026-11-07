@@ -73,7 +73,7 @@
 # Fixed addresses: xlxd-ref .10, xlxd-sut .11, transcoder-ref .20,
 # transcoder-sut .21, tester .30, allstar .40, asl-reg .41 / asl-a .42 / asl-b .43 / asl-e .44 (profile asl-lab), asl-ext .45 (profile asl-ext), .46 (alias address of asl-nat-a, profile asl-nat), web-proxy .90, browser .91 (profile nat: nat-router .92,
 # alias .93, coturn .94, nat-ref-a .95, nat-ref-b .96; the browser is then at <DVT_NAT_NET>.91 behind the router),
-# webload .97 (profile webload).
+# webload .97 (profile webload), aprsc .47 (profile aprs; .46 is taken by the alias address of asl-nat-a).
 
 name: dvt
 
@@ -385,6 +385,9 @@ services:
       # image generation of the SUT (docs/rig.md "Image generations"); the tester reads it for gen-dependent expectations (api_web, test_data_ident). Empty = the default
       DVT_SUT_GEN: ${DVT_SUT_GEN:-}
       DVT_ADMIN_URL: https://${DVT_ADMIN_HOST:-dvt-admin}:${DVT_ADMIN_PORT:-8443}
+      # profile aprs (cases/test_dp15_aprsis.py): on when the private aprsc runs; its address (docs/dp15-cases.md)
+      DVT_APRS: ${DVT_APRS:-off}
+      DVT_APRSC: ${DVT_NET:-172.30.0}.47
       # profile browser (cases/browser_fixtures.py): on when the browser service runs
       DVT_BROWSER: ${DVT_BROWSER:-off}
       # profile webload (cases/test_web_load.py): on when the load generator runs
@@ -886,6 +889,35 @@ services:
         aliases:
           - ${DVT_WEB_HOST:-dvt-web}
           - ${DVT_ADMIN_HOST:-dvt-admin}
+
+  # ---- profile aprs: a PRIVATE aprsc (APRS-IS server) for the APRS-IS cases of DV-Router (DP15-5a / 5b,
+  # docs/dp15-cases.md). Standalone: no uplink, no HTTP port, one client port 14580 (rig/config/aprsc/aprsc.conf,
+  # mounted read-only over the copy baked into the image); it sits on the internal rig network only, so it can never
+  # reach the public APRS-IS network. Nothing is published. The image runs as its own non-root user (uid 10004) on a
+  # read-only root with a tmpfs /tmp (RunDir and pid file); the log goes to stderr (out/<run>/logs/aprsc.log).
+  aprsc:
+    <<: *limits-small
+    profiles: [aprs]
+    init: true
+    restart: "no"
+    image: dvt-aprsc:local
+    build:
+      context: .
+      dockerfile: Dockerfile.aprsc
+      args:
+        <<: *build-jobs
+        APRSC_BASE_IMAGE: ${APRSC_BASE_IMAGE:-error-set-aprsc-base-image-see-env-example}
+      additional_contexts:
+        src: ../.cache/aprsc
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - ./config/aprsc/aprsc.conf:/etc/aprsc/aprsc.conf:ro
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.47"}
 
   # Load generator of the web load test (profile webload, together with web): many receive-only WebRTC
   # listeners (aiortc, pinned in .env.example) through the real HTTP signalling relay. A control server

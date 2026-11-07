@@ -69,6 +69,13 @@
 #                      (docs/rig.md "Web profile"). With rig/config/dv-router/recorder.toml in
 #                      DVT_SUT_CONFIG_EXTRA the recorder is on too: host directory
 #                      out/<utc>/recorder mounted read-write at /var/lib/dv-recorder (DVT_RECORDER=on)
+#   --profile aprs     a PRIVATE aprsc (APRS-IS server) at <net>.47 for the APRS-IS cases of DV-Router (DP15-5a / 5b,
+#                      docs/dp15-cases.md): service aprsc (dvt-aprsc:local, built from .cache/aprsc, run
+#                      scripts/pre-fetch-aprsc.sh once), standalone on the internal rig network, no internet. Needs
+#                      DVT_SUT_LAUNCH=native; adds rig/config/dv-router/dp15-aprsis.toml (the DV-Router APRS-IS client
+#                      and its path rows) unless listed; the fixture passcode of its login N0TEST-5 is computed
+#                      (dvtest/aprs_passcode.py) and written to out/<utc>/aprs-secrets/passcode (mode 600), mounted
+#                      read-only at /etc/dv-router/aprs-secrets (nothing secret: a function of a synthetic callsign)
 #   --profile webload  the WebRTC load generator (webload, .97: aiortc, control server on :3100 for the tester
 #                      only) of the W8 load case, used together with web (--profile web,webload; exit 2
 #                      without it); the tester gets DVT_WEBLOAD=on and DVT_WEBLOAD_URL (docs/web-load-cases.md,
@@ -362,6 +369,20 @@ if [ "$has_web" = 1 ]; then
     *:rig/config/dv-router/recorder.toml:*) has_recorder=1 ;;
   esac
 fi
+# --profile aprs: the private aprsc; the APRS-IS client of DV-Router is part of the native config
+has_aprs=0
+case ",$profile," in *,aprs,*) has_aprs=1 ;; esac
+if [ "$has_aprs" = 1 ]; then
+  [ "${DVT_SUT_LAUNCH:-direct}" = native ] \
+    || { echo "run.sh: --profile aprs needs DVT_SUT_LAUNCH=native (the APRS-IS edge is DV-Router's)" >&2; exit 2; }
+  [ -f .cache/aprsc/src/aprsc.c ] \
+    || { echo "run.sh: .cache/aprsc missing; run scripts/pre-fetch-aprsc.sh" >&2; exit 2; }
+  case ":${DVT_SUT_CONFIG_EXTRA:-}:" in
+    *:rig/config/dv-router/dp15-aprsis.toml:*) ;;
+    *) DVT_SUT_CONFIG_EXTRA="${DVT_SUT_CONFIG_EXTRA:+$DVT_SUT_CONFIG_EXTRA:}rig/config/dv-router/dp15-aprsis.toml" ;;
+  esac
+  export DVT_SUT_CONFIG_EXTRA
+fi
 # --profile nat: needs web and browser; rig/config/dv-router/turn.toml in DVT_SUT_CONFIG_EXTRA switches the SUT's TURN on
 has_nat=0
 has_turn=0
@@ -451,7 +472,7 @@ compose_all=(docker compose -p "${COMPOSE_PROJECT_NAME:-dvt}" "${compose_files[@
   --profile capture-nxdn --profile p25 --profile capture-p25 --profile interlink
   --profile capture-interlink --profile load --profile netem --profile g3
   --profile urfd --profile capture-urfd --profile mrefd --profile capture-mrefd --profile web --profile browser
-  --profile webload --profile nat --profile asl-lab --profile asl-ext --profile asl-nat)
+  --profile webload --profile nat --profile aprs --profile asl-lab --profile asl-ext --profile asl-nat)
 
 if [ "$down_only" = 1 ]; then
   take_lock
@@ -565,6 +586,11 @@ for p in "${wanted[@]}"; do
       profiles+=(--profile webload)
       export DVT_WEBLOAD=on
       ;;
+    aprs)
+      # checked above (native launch, the snippet, the source)
+      profiles+=(--profile aprs)
+      export DVT_APRS=on
+      ;;
     nat)
       # checked above (needs web and browser); the browser moves behind the router (rig/compose.nat.yml)
       profiles+=(--profile nat)
@@ -577,7 +603,7 @@ for p in "${wanted[@]}"; do
     mrefd)
       has_mrefd=1
       ;;
-    *) echo "run.sh: --profile takes core, allstar, asl-lab, asl-edge, asl-ext, nxdn, p25, interlink, load, g3, urfd, mrefd, web, browser, webload, nat or a comma list" >&2; exit 2 ;;
+    *) echo "run.sh: --profile takes core, allstar, asl-lab, asl-edge, asl-ext, nxdn, p25, interlink, load, g3, urfd, mrefd, web, browser, webload, nat, aprs or a comma list" >&2; exit 2 ;;
   esac
 done
 # native launch reads no xlxd.* file: these settings only change the reference side
@@ -781,6 +807,18 @@ if [ "$has_asl_edge" = 1 ]; then
   echo "run.sh: asl-edge profile: fixture secrets in $out/asl-secrets (mode 600)"
 fi
 
+# --profile aprs: the fixture passcode of the DV-Router APRS-IS login (rig/config/dv-router/dp15-aprsis.toml,
+# passcode_file) for the private aprsc, which verifies it against the same public hash of the callsign. Not a
+# secret (a function of a synthetic callsign), but the edge demands a regular file of mode 0600 owned by its uid;
+# the SUT runs as the host uid then, and the file is mounted read-only at /etc/dv-router/aprs-secrets
+if [ "$has_aprs" = 1 ]; then
+  mkdir -p "$out/aprs-secrets"
+  chmod 700 "$out/aprs-secrets"
+  (umask 077; python3 -m dvtest.aprs_passcode --dvr > "$out/aprs-secrets/passcode")
+  chmod 600 "$out/aprs-secrets/passcode"
+  echo "run.sh: aprs profile: fixture passcode in $out/aprs-secrets/passcode (mode 600), aprsc at ${DVT_NET:-172.30.0}.47"
+fi
+
 # Prebuilt reflector images (XLXD_REF_IMAGE / XLXD_SUT_IMAGE): another
 # implementation can be the system under test. Its contract: argv
 # "CALLSIGN OWN_IP TRANSCODER_IP"; config files mounted read-only under /xlxd/
@@ -832,7 +870,7 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
     # the image is used as it is: no build section, never pulled
     printf '    build: !reset null\n    pull_policy: never\n'
     # --profile web: the sut writes the persistent state dir of the host user
-    if [ "$svc" = xlxd-sut ] && { [ "$has_web" = 1 ] || [ "$has_asl_edge" = 1 ]; }; then
+    if [ "$svc" = xlxd-sut ] && { [ "$has_web" = 1 ] || [ "$has_asl_edge" = 1 ] || [ "$has_aprs" = 1 ]; }; then
       printf '    user: "%s:%s"\n' "$DVT_UID" "$DVT_GID"
     fi
     printf '    environment:\n      DVT_CONFIG_MOUNTED: "1"\n'
@@ -869,6 +907,9 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
     fi
     if [ "$svc" = xlxd-sut ] && [ "$has_asl_edge" = 1 ]; then
       printf '      - "%s/%s/asl-secrets:/etc/dv-router/asl-secrets:ro"\n' "$DVT_ROOT" "$out"
+    fi
+    if [ "$svc" = xlxd-sut ] && [ "$has_aprs" = 1 ]; then
+      printf '      - "%s/%s/aprs-secrets:/etc/dv-router/aprs-secrets:ro"\n' "$DVT_ROOT" "$out"
     fi
     if [ "$svc" = xlxd-sut ] && [ "$has_recorder" = 1 ]; then
       printf '      - "%s/%s/recorder:/var/lib/dv-recorder"\n' "$DVT_ROOT" "$out"
@@ -1092,6 +1133,7 @@ printf 'markers=%s profile=%s xlxd_ref=%s xlxd_sut=%s transcoder=%s sut_divergen
   "$markers" "$profile" "${XLXD_REF_IMAGE:-${XLXD_REF_DIR:-ref}}" "${XLXD_SUT_IMAGE:-${XLXD_SUT_DIR:-sut}}" "$TRANSCODER_IMAGE" \
   "${DVT_SUT_DIVERGENCES:-}" "${DVT_SUT_NAME:-}" "${DVT_SUT_PROFILE:-xlxd}" "${DVT_NO_RADIO_ID:-}" "${DVT_REF_KIND:-xlxd}" "${DVT_SUT_LAUNCH:-direct}" \
   > "$out/run.txt"
+[ "$has_aprs" = 0 ] || echo "aprs=on aprsc_commit=${APRSC_COMMIT:-} sut_config_extra=${DVT_SUT_CONFIG_EXTRA}" >> "$out/run.txt"
 [ "$has_web" = 0 ] || echo "web=on sut_config_extra=${DVT_SUT_CONFIG_EXTRA}" >> "$out/run.txt"
 [ "$has_nat" = 0 ] || echo "nat=on turn=$([ "$has_turn" = 1 ] && echo on || echo off) coturn_image=${COTURN_IMAGE} nat_net=${DVT_NAT_NET}" >> "$out/run.txt"
 cat ".cache/xlxd/${XLXD_REF_DIR:-ref}.fetched" ".cache/xlxd/${XLXD_SUT_DIR:-sut}.fetched" >> "$out/run.txt" 2>/dev/null || true

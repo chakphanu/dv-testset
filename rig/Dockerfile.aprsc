@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: MIT
+# aprsc (hessu/aprsc, BSD-3-Clause) as the PRIVATE APRS-IS server of the rig: the server side of the
+# APRS-IS cases of DV-Router (docs/dp15-cases.md DP15-5a / 5b, docs/rig.md "aprsc"). It runs standalone
+# (rig/config/aprsc/aprsc.conf: no uplink, no HTTP port, one client port 14580) on the internal rig
+# network; it never reaches the public APRS-IS network. dv-testset itself copies none of its code.
+#
+# Source is the named build context "src" (fetched by scripts/pre-fetch-aprsc.sh at APRSC_REPO @ APRSC_COMMIT
+# of .env.example): .cache/aprsc. Build by hand, inside scripts/contained.sh --name build, never while the
+# rig runs (run.sh builds it the same way for --profile aprs):
+#   docker build -f rig/Dockerfile.aprsc --build-arg APRSC_BASE_IMAGE=$APRSC_BASE_IMAGE \
+#     --build-arg MAKE_JOBS=$DVT_BUILD_JOBS --build-context src=.cache/aprsc \
+#     -t dvt-aprsc:local rig
+#
+# Build choices (each one read in src/configure.ac and src/Makefile.in):
+#  * autotools, `configure` is committed; `./configure --disable-is2 && make` in src/. IS2 (the work in
+#    progress protobuf protocol) is not needed: the plain text protocol only. libprotobuf-c is still
+#    required by configure (an unconditional AC_CHECK_LIB);
+#  * libcap-dev is left out (it only serves binding ports below 1024), git is not installed (the version
+#    string falls back to VERSION), the web files are not installed (no HTTP listener is configured);
+#  * only the binary is copied to the final image; its shared libraries are installed by package name
+#    and the stage fails when `ldd` finds one missing;
+#  * the fixture config is baked in at /etc/aprsc/aprsc.conf and validated with `aprsc -y` as the image's
+#    own user (a failing check fails the build); compose mounts the same file read-only over it;
+#  * non-root (uid 10004, next to 10003 of Dire Wolf) and read-only filesystem friendly: aprsc refuses to
+#    run as root without -u, RunDir and the pid file are /tmp (a tmpfs), nothing else is written;
+#  * foreground (no -f), log on stderr (docker logs), level info.
+ARG APRSC_BASE_IMAGE
+FROM ${APRSC_BASE_IMAGE} AS build
+ARG MAKE_JOBS=4
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc make libc6-dev libevent-dev libssl-dev libprotobuf-c-dev protobuf-c-compiler \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=src src /src/src
+WORKDIR /src/src
+RUN ./configure --disable-is2 \
+    && make -j"${MAKE_JOBS}" aprsc \
+    && strip --strip-unneeded aprsc \
+    && test -x aprsc \
+    && mkdir -p /out/usr/local/sbin \
+    && cp aprsc /out/usr/local/sbin/aprsc
+
+FROM ${APRSC_BASE_IMAGE}
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libevent-2.1-7 libssl3 libprotobuf-c1 zlib1g \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10004 --home-dir /nonexistent --shell /usr/sbin/nologin aprsc
+COPY --from=build /out/usr/local/sbin/aprsc /usr/local/sbin/aprsc
+COPY config/aprsc/aprsc.conf /etc/aprsc/aprsc.conf
+RUN chmod 755 /usr/local/sbin/aprsc && chmod 644 /etc/aprsc/aprsc.conf \
+    && ! ldd /usr/local/sbin/aprsc | grep -q "not found"
+USER aprsc
+WORKDIR /tmp
+RUN aprsc -c /etc/aprsc/aprsc.conf -y -o stderr -p /tmp/aprsc.check.pid \
+    && rm -f /tmp/aprsc.check.pid
+ENTRYPOINT ["aprsc", "-c", "/etc/aprsc/aprsc.conf", "-o", "stderr", "-e", "info", "-p", "/tmp/aprsc.pid"]
