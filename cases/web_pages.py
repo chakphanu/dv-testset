@@ -414,3 +414,82 @@ def recording_day_filter(page):
 
 def recording_apply(page):
     return page.get_by_role("button", name="Apply filters")
+
+
+# ---- #/positions (DP7, MAP1; web/site/positions.js, positions-map.js, public.js): public position table and optional map
+# Calibrated against the page SOURCES of the DV-Router lead's tree (not against a running image): UNVERIFIED until the first run.
+# The markers are drawn by MapLibre into a WebGL canvas (a GeoJSON circle layer), NOT as DOM elements: the table below the map is
+# the accessible list of the same rows and is the DOM evidence of "what is on the map"; markers are counted from the pixels.
+POSITIONS_ROUTE = "/positions"
+POSITIONS_TITLE = "Positions"
+POSITIONS_TESTIDS = {
+    "page": "positions-page",               # the section of the route
+    "room": "positions-room",               # room <select> (value = room letter)
+    "refresh": "positions-refresh",         # button, reloads the snapshot
+    "map": "positions-map",                 # the map container (class `hidden` unless status loading/ready)
+    "map_note": "positions-map-note",       # status line, present unless the map is ready
+    "attribution": "positions-attribution", # OpenStreetMap link, present when the map is shown
+}
+POSITIONS_NOTE_MISSING = "Basemap not installed."               # status `missing`: GET /basemap/MANIFEST was not 200 or not a manifest
+POSITIONS_NOTE_WEBGL = "The map needs WebGL2. Positions are listed below."
+POSITIONS_NOTE_UNAVAILABLE = "Basemap unavailable. Positions are listed below."
+POSITIONS_NOTE_LOADING = "Loading basemap..."
+POSITIONS_ATTRIBUTION_TEXT = "(c) OpenStreetMap contributors"
+POSITIONS_ATTRIBUTION_HREF = "https://www.openstreetmap.org/copyright"
+POSITIONS_EMPTY_TEXT = "No retained positions in this room."
+BASEMAP_MANIFEST = "/basemap/MANIFEST"
+POSITIONS_COLUMNS = ["Callsign / object", "Latitude", "Longitude", "Precision", "Time (local)"]
+
+
+def positions_url():
+    return dashboard_url(POSITIONS_ROUTE)
+
+
+def positions_page(page):
+    return page.get_by_test_id(POSITIONS_TESTIDS["page"])
+
+
+def positions_room(page):
+    return page.get_by_test_id(POSITIONS_TESTIDS["room"])
+
+
+def positions_room_option(page, room):
+    """fallback: one <option value=R> of the room select (read-only, no test id)."""
+    return positions_room(page).locator("option[value='%s']" % room)
+
+
+def positions_refresh(page):
+    return page.get_by_test_id(POSITIONS_TESTIDS["refresh"])
+
+
+def positions_map(page):
+    return page.get_by_test_id(POSITIONS_TESTIDS["map"])
+
+
+def positions_canvas(page):
+    """fallback: the WebGL canvas MapLibre creates inside the map container."""
+    return positions_map(page).locator("canvas")
+
+
+def positions_map_note(page):
+    return page.get_by_test_id(POSITIONS_TESTIDS["map_note"])
+
+
+def positions_attribution(page):
+    return page.get_by_test_id(POSITIONS_TESTIDS["attribution"])
+
+
+def positions_rows(page):
+    """fallback: the rows of the coordinate table of the route (read-only, no test id): one per retained position / object."""
+    return positions_page(page).locator("table tbody tr")
+
+
+def positions_cells(row):
+    """fallback: the five cells of one table row (Callsign / object, Latitude, Longitude, Precision, Time)."""
+    return row.locator("td")
+
+
+def positions_empty_note(page):
+    """fallback: the `No retained positions in this room.` status line."""
+    return positions_page(page).get_by_text(POSITIONS_EMPTY_TEXT)
+
