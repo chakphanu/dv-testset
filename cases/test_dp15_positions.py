@@ -674,6 +674,25 @@ def test_dp7_c_ambiguity_over_rf(rig, target, hub, web_ctx, shape, rf, level):
                    AMB_RF_CALL[level], level, 5)
 
 
+DPRS_AMBIGUITY_FINDING = (
+    "FINDING DP7-FIND1 (first rig run wip-ac750c7: the same line shape passes as a full precision beacon and as an M17 packet-mode APRS "
+    "position of ambiguity 2; the line is CRC valid): the D-PRS path does not accept an ambiguous position. "
+    "crates/lib/pkt/src/dstar_dprs.rs:105-106 slices the 19 byte field and calls position.rs coordinate(), whose decimal() "
+    "(position.rs:116-125) takes only digits, '.' and '-' so the blanked digits give Reject::BadPosition "
+    "(dv_pkt_reject_total{kind=\"dstar-slowdata\",reason=\"bad_position\"} +1) while the TX text of the same over still becomes a status. "
+    "data.md 5 (line 505) says the ambiguity byte is nonzero for source 1 D-PRS, data.md 696 says the info field goes through the APRS "
+    "position parser (9.1, which honours ambiguity: aprs/position.rs:226-257), data.md 1647 and 2339 say the level is carried and re-applied; "
+    "the DP5a 'Built scope' paragraph (data.md 709-711) says GPS-A decodes uncompressed '!'/'=' positions and does not mention ambiguity. Detail: "
+)
+
+
+def dprs_ambiguity_finding(message):
+    """Only the 'no event at all' failure is the finding; a later failure (level, centre, text) stays as it is."""
+    if "no position / object event" in message:
+        return DPRS_AMBIGUITY_FINDING + message
+    return message
+
+
 def test_dp7_c_dprs_ambiguity_and_uplink(rig, target, hub, web_ctx, shape, request):
     """data.md 5 ("nonzero only for sources 1 D-PRS and 5 APRS") and 9.5: a D-PRS GPS-A line whose position has two blanked
     minute digits is source 1 with ambiguity 2 and printed at that precision. When the run has the APRS-IS uplink
@@ -692,7 +711,10 @@ def test_dp7_c_dprs_ambiguity_and_uplink(rig, target, hub, web_ctx, shape, reque
         stack = contextlib.nullcontext(None)
     with stack as tester:
         mark = tester.mark() if tester is not None else 0
-        ambiguity_case(target, web_ctx, case, lambda c, lat, lon, lvl: send_dstar(ctx, c, lat, lon, lvl, "amb2"), call, 2, 1)
+        try:
+            ambiguity_case(target, web_ctx, case, lambda c, lat, lon, lvl: send_dstar(ctx, c, lat, lon, lvl, "amb2"), call, 2, 1)
+        except AssertionError as exc:
+            raise AssertionError(dprs_ambiguity_finding(str(exc))) from None
         if tester is not None:
             hit = tester.wait_packet(lambda p: ps.same_base(p["src"], call), UPLINK_WAIT_S, since=mark)
             note(target, case, "RECORD", "uplinked line at the aprsc: %s" % (None if hit is None else hit[2]))

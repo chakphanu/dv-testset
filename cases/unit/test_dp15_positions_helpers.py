@@ -140,6 +140,11 @@ def test_dstar_sender_carries_the_dprs_line_with_the_ambiguity(monkeypatch):
     lines = [e for e in events if e["kind"] == "dprs"]
     assert lines and lines[0]["crc_ok"]
     assert lines[0]["line"] == b"N0PDA-3>API510,DSTAR*:!4903.  N/07201.  W>amb2\r"
+    # the 19 byte position field the product slices (dstar_dprs.rs:105-108): ddmm.hhN, table, dddmm.hhE, code; blanks keep the width
+    info = lines[0]["line"].split(b":", 1)[1]
+    assert info[0:1] == b"!" and len(info[1:20]) == 19
+    assert info[1:8] == b"4903.  " and info[8:9] == b"N" and info[9:10] == b"/" and info[10:18] == b"07201.  " and info[18:19] == b"W"
+    assert info[19:20] == b">"
     texts = [e for e in events if e["kind"] == "text"]
     assert texts and texts[0]["text"].startswith("DVT DP7")
 
@@ -228,3 +233,12 @@ def test_set_hide_position_patches_and_reads_back():
         tp.set_hide_position(SimpleNamespace(op=FakeOp(flag=False)), "N0HIDE", True)
     with pytest.raises(AssertionError, match="HTTP 403"):
         tp.set_hide_position(SimpleNamespace(op=FakeOp(status=403)), "N0HIDE", False)
+
+
+def test_dprs_ambiguity_finding_wraps_only_the_missing_event_failure():
+    missing = "DP7-c[d-prs level 2]: no position / object event of the base callsign on the ANONYMOUS public SSE data topic"
+    wrapped = tp.dprs_ambiguity_finding(missing)
+    assert wrapped.startswith("FINDING DP7-FIND1") and wrapped.endswith(missing)
+    assert "dstar_dprs.rs:105" in wrapped and "bad_position" in wrapped
+    other = "DP7-c[d-prs level 2]: the operator feed body carries ambiguity 0, want 2"
+    assert tp.dprs_ambiguity_finding(other) == other
