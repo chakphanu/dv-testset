@@ -1,11 +1,12 @@
 <!-- SPDX-License-Identifier: MIT -->
 # DP15 cases: stream metadata (groups 1, 2, 4), the worker lifecycle (3), RF tier A (6) and the XLX peer wire (7a)
 
-Status of every case in this file: **written, not run on a rig.** Nothing here was executed against a DV-Router
-image: the cases were collected (`pytest --collect-only`), the byte builders have offline unit tests, and the two
-snippets were checked with `dvtest.tools.config_check` against `dv-router:wip-0348b98` (the worker cases `test_dp15_worker.py` and
-the RF cases `test_dp15_rf.py` have offline tests of their helpers and of the fake TNC). Expect first-run
-corrections. Specification and the other groups: [dp15-plan.md](dp15-plan.md). Source of the 15.5 wording:
+Status: the first rig run (image `dv-router:wip-0348b98`, native, `DVT_SUT_GEN=compat1`; streams 8 passed / 6 failed, worker
+0 / 2, RF tier A with `DVT_DP15_TX_ENABLE=false` 4 passed / 2 failed / 3 skipped) found no DV-Router defect: every failure
+traces to a harness defect (re-verification pending), fixed in commits 98415bb, 4b35fc3, ecf47ee and 47c6efd (section "First rig run:
+diagnosis"). The corrected cases have NOT been run again. Cases that passed in that run stay `passed` in the tables;
+cases marked "written, not run on a rig" in the tables below have either not run yet or are listed in the diagnosis.
+Specification and the other groups: [dp15-plan.md](dp15-plan.md). Source of the 15.5 wording:
 DV-Router `docs/design/data.md` lines 2442-2450.
 
 Case file `cases/test_dp15_streams.py`, shared helpers `cases/data_support.py` (moved out of
@@ -20,13 +21,20 @@ One rig run, profile `web` (the cases read the web API; the tester plays the XLX
 
 ```
 XLXD_SUT_IMAGE=dv-router:wip-0348b98 DVT_SUT_PROFILE=dvrouter DVT_SUT_LAUNCH=native DVT_SUT_GEN=compat1 \
-DVT_SUT_CONFIG=<template> DVT_TRANSCODER_FAKE=1 \
-DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/data-ident.toml:rig/config/dv-router/dp15-paths.toml:\
-rig/config/dv-router/web.toml:rig/config/dv-router/admin.toml:rig/config/dv-router/totp-required.toml:\
+DVT_SUT_CONFIG=<template> DVT_TRANSCODER_FAKE=1 DVT_REQUIRE_IDENT=true \
+DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/admin.toml:rig/config/dv-router/totp-required.toml:\
+rig/config/dv-router/data-ident.toml:rig/config/dv-router/dp15-paths.toml:\
 rig/config/dv-router/xlx-peer-tester.toml \
 scripts/run.sh -m rig --capture --profile web -- cases/test_dp15_streams.py
 ```
 
+* Snippet ORDER: the web snippets first, then `data-ident.toml` (as written above). Before commit 4b35fc3 the opposite
+  order failed (`data-ident.toml` carries the bare token `require_ident = <REQUIRE_IDENT>`; the merge of the next extra,
+  `web.toml` into `[web]`, parsed the merged text as TOML BEFORE `render()` replaced the tokens: "merged extra is not
+  valid TOML"; `run.sh` appends `web.toml` itself when it is not listed, so naming `data-ident.toml` alone also hit it).
+  The check now parses the text with the tokens replaced, so the order no longer matters; the documented order is kept.
+  Reproduce: `python3 -m dvtest.sut_config TEMPLATE OUT --net 172.30.0 --require-ident true --extra rig/config/dv-router/data-ident.toml --extra rig/config/dv-router/web.toml`.
+* `DVT_REQUIRE_IDENT=true` is set explicitly (false also works; the case notes print `require_ident=<value>`).
 * `data-ident.toml` turns the data worker on (`DVT_REQUIRE_IDENT` true or false, both fine; default true);
   `dp15-paths.toml` the room path; `web.toml:admin.toml:totp-required.toml` as for every web run (the web fixtures
   start from "first login = enrol", `docs/rig.md`); `xlx-peer-tester.toml` only for 7a (without it 7a skips).
@@ -41,7 +49,25 @@ scripts/run.sh -m rig --capture --profile web -- cases/test_dp15_streams.py
   behaviour).
 * Config check of the snippets (host side, throw-away container, `--network none`):
   `python3 -m dvtest.tools.config_check --image dv-router:wip-0348b98 --template <template> --gen compat1 --extra rig/config/dv-router/data-ident.toml --extra rig/config/dv-router/dp15-paths.toml` prints `valid` (done).
-  The tool cannot check `web.toml` in the combination (it merges before the token substitution; same for `web.toml` alone).
+  The tool could not check `web.toml` in that combination before commit 4b35fc3 (same cause as the snippet order above); it can now.
+
+## First rig run: diagnosis (all harness defects)
+
+Evidence: the run directories of the first chain (pytest.log, `dp15-*.txt`, `logs/xlxd-sut.log`, `logs/web-proxy.log`) and
+the DV-Router sources read-only. Re-verification means one more chain with the same commands as in "Run".
+
+| Case | Symptom | Root cause | Fix | Re-verified by |
+|------|---------|-----------|-----|----------------|
+| 1a, 1c (control), 4c [alias], 4c [foreign-callsign], 1b (stream half), 3a, 3b, 6a / 6e (SSE 0) | no `status` / `text` / `data_worker_*` event on an SSE watcher | `dvtest.web.WebClient.sse` with `stop=` polled the buffered response with a 0.5 s socket timeout; after a timeout inside a buffered read the response raises `OSError: cannot read from timed out object`. Every `SseWatch` therefore died 0.5 s after the hello (`logs/web-proxy.log`: every `GET /api/v1/public/events` and `/operator/stream` ends after 541 ms with "IncompleteRead", although the cases ran 7 to 20 s). The product delivered the items: `dv_room_data_total` and the controller counters moved for 1a, 1b, 1c, 2c, 4c; 1b's position was in the operator history (`position row keys [...]`) while its stream saw nothing. 4a / 4b / 2c passed because they read the history (`GET /operator/events`), not an SSE | the read blocks for the time left; `stop` shuts the socket down from a helper thread (`dvtest/web.py`); unit tests with a quiet gap after the hello and with `stop` inside a gap | 1a, 1b, 1c, 4c [both], 3a, 3b, 6a, 6e |
+| 2d | no position row (operator rows 0) | pacing: `PACER` stamps the CALL, but 2c's D-PRS position reached the controller about 1.6 s later (header settle + superframes) and 2d's M17 datagram right after its own call 31 s after the 2c call: 29.4 s apart, limit 1 per 30 s per base callsign. The worker counter says it: `dv_pkt_items_total{kind="position",result="rate"} 1` and the positions after the worker kill add up exactly (accepted 3 = 2c, 4a, 4b; duplicate 1 = the second GPS record of 4a; rate 1 = 2d). The operator feed baseline of 4a (330 bytes) is still 2c's position row | `data_support.OFFER_DELAY_S` 3.0 added to the status and position gaps (status 14 s, position 34 s) | 2d |
+| 6a, 6e (D-STAR 5) | "5 D-STAR text overs, want 1" | DV-Router's DExtra edge sends every header 5 times at the start of an over (xlxd `repeatCount 5`, DV-Router `crates/edge/dextra/src/wire.rs` `HEADER_REPEAT`, edge README fast path); the helper counted header datagrams (arrival times differ by microseconds), not streams | `data_support.first_header_times` (one entry per stream id, first arrival) used by `text_headers`, `dstar_times` (RF) and `dstar_text_times` (worker); unit test | 6a, 6e, 6b |
+| 3a, 3b | `data_worker_down` / `data_worker_up` never seen | the same SSE defect. The events exist: `crates/svc/status/src/hub_state.rs` `Input::DataWorker` emits a PUBLIC `status` event `{"ev": "data_worker_up" or "data_worker_down", "ts_ms", "worker", "kind": "data-worker"}` when the data-worker token toggles (`docs/design/status.md` 332). The kill itself worked: launcher log `dv-data-worker[pkt]: exited: signal: 9 (SIGKILL)`, `restarting in 500 ms`, `started (pid <new>)` 0.5 s later, `proc-stat` gave the new pid. The plan's "UNVERIFIED" for these events is resolved | SSE fix; the case already falls back to the new pid from `proc-stat` as the token when no up event arrives (the `data_worker_*` assertions stay: they are in the status contract) | 3a, 3b |
+
+Observable signals of a kill and restart (for the cases): launcher log lines `dv-data-worker[<id>]: exited: signal: 9 (SIGKILL)`,
+`restarting in 500 ms`, `started (pid N)`; the public SSE `status` events `data_worker_down` then `data_worker_up` (token); `proc-stat
+xlxd-sut dv-data-worker` with a new pid; `dv_edge_raw_total{result="no_worker"}` while down.
+
+Not diagnosed here: 5 skipped RF cases (`DVT_DP15_TX_ENABLE=true` run) and the passing cases of the first run.
 
 ## Bounds (module constants of `cases/data_support.py`)
 
@@ -137,15 +163,15 @@ Run commands (two runs; profile `web` because the posters are web accounts; imag
 
 ```
 XLXD_SUT_IMAGE=dv-router:wip-0348b98 DVT_SUT_PROFILE=dvrouter DVT_SUT_LAUNCH=native DVT_SUT_GEN=compat1 \
-DVT_SUT_CONFIG=<template> DVT_TRANSCODER_FAKE=1 DVT_DP15_TX_ENABLE=false \
-DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/data-ident.toml:rig/config/dv-router/dp15-rf.toml:\
-rig/config/dv-router/web.toml:rig/config/dv-router/admin.toml:rig/config/dv-router/totp-required.toml \
+DVT_SUT_CONFIG=<template> DVT_TRANSCODER_FAKE=1 DVT_REQUIRE_IDENT=true DVT_DP15_TX_ENABLE=false \
+DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/admin.toml:rig/config/dv-router/totp-required.toml:\
+rig/config/dv-router/data-ident.toml:rig/config/dv-router/dp15-rf.toml \
 scripts/run.sh -m rig --capture --profile web -- cases/test_dp15_rf.py
 
 XLXD_SUT_IMAGE=dv-router:wip-0348b98 DVT_SUT_PROFILE=dvrouter DVT_SUT_LAUNCH=native DVT_SUT_GEN=compat1 \
-DVT_SUT_CONFIG=<template> DVT_TRANSCODER_FAKE=1 DVT_DP15_TX_ENABLE=true \
-DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/data-ident.toml:rig/config/dv-router/dp15-rf.toml:rig/config/dv-router/dp15-rf-out.toml:\
-rig/config/dv-router/web.toml:rig/config/dv-router/admin.toml:rig/config/dv-router/totp-required.toml \
+DVT_SUT_CONFIG=<template> DVT_TRANSCODER_FAKE=1 DVT_REQUIRE_IDENT=true DVT_DP15_TX_ENABLE=true \
+DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/admin.toml:rig/config/dv-router/totp-required.toml:\
+rig/config/dv-router/data-ident.toml:rig/config/dv-router/dp15-rf.toml:rig/config/dv-router/dp15-rf-out.toml \
 scripts/run.sh -m rig --capture --profile web -- cases/test_dp15_rf.py
 ```
 
@@ -153,7 +179,7 @@ Config check (host side, throw-away container, `--network none`; `valid` for bot
 dvtest.tools.config_check --image dv-router:wip-0348b98 --template <template> --gen compat1 --extra rig/config/dv-router/data-ident.toml
 --extra rig/config/dv-router/dp15-rf.toml`, and the same with `DVT_DP15_TX_ENABLE=true` and `--extra rig/config/dv-router/dp15-rf-out.toml`
 added. `dp15-rf.toml` with `false` plus `dp15-rf-out.toml` is INVALID (the RF TX refusal above). The tool cannot check `web.toml` in any
-combination (it merges before the token substitution).
+combination before commit 4b35fc3 (the merge was validated before the token substitution); it can now.
 
 Wall time estimate (UNVERIFIED): RF-OFF about 5 minutes (two 12 s baselines, 6e waits 31 s), RF-ON about 9 minutes (6c waits for
 the 30 s TX spacing twice, 6d watches 140 s).
