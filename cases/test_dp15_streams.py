@@ -43,8 +43,9 @@ from dvtest.proto import dextra, dmr, m17, xlx, ysf, ysf_gps  # noqa: E402
 
 import data_support as ds  # noqa: E402
 from data_support import (  # noqa: E402
-    AT_ONCE_S, IDLE_GAP_S, PACER, STATUS_CEILING_S, SseWatch, dstar_listener, hub_session, m17_client, sms_packet,
-    texts_of, write_note)
+    AT_ONCE_S, IDLE_GAP_S, PACER, STATUS_CEILING_S, SseWatch, ambe, build_over, dstar_listener, hub_session,
+    m17_client, m17_voice_payloads, m17p_packets, over_by_my, plain_fields, pump_for, send_over, send_over_thread, sms_packet,
+    sms_text, text_headers, texts_of, write_note)
 
 pytestmark = pytest.mark.rig
 
@@ -95,89 +96,6 @@ def dl(rig, callsign):
 
 def ds_display(text):
     return slowdata.display_text(text)
-
-
-def ambe(count, seed):
-    return signals.prng_frames(1, count, seed="dp15/%s" % seed)
-
-
-def plain_fields(count):
-    """(seq, wire data field) of `count` frames with sync and the idle slow data (zeros), like DstarClient.talk."""
-    return [(i % 21, dextra.SYNC_DATA if i % 21 == 0 else dextra.SLOW_DATA) for i in range(count)]
-
-
-def build_over(callsign, fields, frames=None, module=MODULE, sid=None):
-    sid = sid or clients.fresh_stream_id("dstar")
-    radio = dextra.radio_header(my=callsign, module=module)
-    return sid, dstar_sd.over_packets(sid, fields, frames, radio=radio)
-
-
-def send_over(talker, packets, settle=0.3, gap=0.020):
-    """Header, settle, then the rest paced at `gap`. Returns (t_header, voice send stamps); the last stamp is the last frame."""
-    t_header = time.monotonic()
-    talker.client.send(talker.dest, packets[0])
-    talker.client.pump(settle)
-    return t_header, talker.client.paced(talker.dest, packets[1:], gap)
-
-
-def send_over_thread(talker, packets, out, settle=0.3, gap=0.020):
-    thread = threading.Thread(target=lambda: out.append(send_over(talker, packets, settle, gap)), daemon=True)
-    thread.start()
-    return thread
-
-
-def pump_for(seconds, *listeners):
-    end = time.monotonic() + seconds
-    while time.monotonic() < end:
-        for item in listeners:
-            item.client.drain()
-        time.sleep(0.01)
-
-
-def header_times(listener):
-    """[(arrival time, parsed header)] of the DSVT headers in a listener's inbox."""
-    out = []
-    for data, at in zip(listener.client.inbox, listener.client.inbox_times):
-        parsed = dextra.parse_header_full(data)
-        if parsed:
-            out.append((at, parsed))
-    return out
-
-
-def text_headers(listener):
-    """Arrival times of the headers of synthetic text overs (MY = the reflector callsign)."""
-    return [at for at, h in header_times(listener) if bytes(h["my"]).rstrip() == b"XLX999"]
-
-
-def over_by_my(overs, my):
-    for over in overs:
-        header = over["header"] or {}
-        if bytes(header.get("my", b"")).rstrip() == my.encode():
-            return over
-    return None
-
-
-def m17p_packets(client):
-    """[(arrival time, parsed M17P datagram)] of a linked M17 client."""
-    out = []
-    for data, at in zip(client.client.inbox, client.client.inbox_times):
-        parsed = m17.parse_m17p(data, trailer=False) if data.startswith(b"M17P") else None
-        if parsed:
-            out.append((at, parsed))
-    return out
-
-
-def sms_text(parsed):
-    """The text of a parsed M17P SMS (specifier 0x05), else None."""
-    payload = parsed["payload"]
-    if not payload or payload[0] != 0x05:
-        return None
-    return payload[1:].split(b"\0", 1)[0].decode("utf-8", "replace")
-
-
-def m17_voice_payloads(client):
-    """The 16 byte payloads of the stream packets a linked M17 client received, in arrival order."""
-    return [p["payload"] for p in (m17.parse_stream(d) for d in client.client.inbox) if p]
 
 
 def near(value, want, tol=POSITION_E7):

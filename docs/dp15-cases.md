@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: MIT -->
-# DP15 cases: stream metadata (groups 1, 2, 4) and the XLX peer wire (7a)
+# DP15 cases: stream metadata (groups 1, 2, 4), the worker lifecycle (3), RF tier A (6) and the XLX peer wire (7a)
 
 Status of every case in this file: **written, not run on a rig.** Nothing here was executed against a DV-Router
 image: the cases were collected (`pytest --collect-only`), the byte builders have offline unit tests, and the two
@@ -78,13 +78,38 @@ web.md 1178, not a failure). The `/operator/events` row shape is the one of answ
 | DP15-4c | "a `DMRA` gives a status and never changes the displayed callsign" | DMR id 1023008, two DMRA blocks of the alias `N0TEST ALIAS` (and `N0CALL`, another station's call) inside the stream; `public/state` sampled every 0.4 s | a status event of N0TEST with the alias text; the on-air callsign of room B is only `N0TEST`; the first last-heard entry is N0TEST | samples, last heard | written, not run on a rig |
 | DP15-7a | "XLX peer: ... synthetic text over" (wire half only) | the tester is XLX996 (modules DE, `xlx-peer-tester.toml`), two web texts to module D back to back | two complete streams; header MY `XLX999`; 22 frames, 21 with null AMBE; the slow data is a valid text over `N0DPT: <body>`; header to last frame 0.3 to 0.9 s; the second over starts >= 0.85 s after the first ended (V3: 1 s) | per-stream timing | written, not run on a rig |
 
+### Worker lifecycle (group 3): `cases/test_dp15_worker.py`
+
+The kill action exists since unit U1: `kill-proc xlxd-sut dv-data-worker KILL` (`dvtest.control.KILL_PROC_ALLOWED`,
+`scripts/lib/killproc.sh`, header of `scripts/run.sh`, `docs/rig.md` "Control channel"). The process name is always
+`dv-data-worker` (the worker id is only in the env `DV_DATA_WORKER_ID`, the launcher label `dv-data-worker[<id>]` and the
+token `pkt/<id>`), the launcher respawns it after 0.5 s doubling to 5 s, back to 0.5 s after a run of 10 s (answer 5).
+Same run shape as above (profile `web`, `DVT_TRANSCODER_FAKE=1` for the M17 voice of 3a, no `xlx-peer-tester.toml`
+needed); `scripts/run.sh -m rig --capture --profile web -- cases/test_dp15_worker.py`. Notes: `out/<run>/dp15-worker.txt`.
+Accounts: reader `N0DWR`, posters `N0DWA` (the text posted while the worker is down) and `N0DWB` (the new text at the
+token; a second account so the per-account bucket of 1 per 5 s never delays it). Skips: not DV-Router / not native / no `[data]`
+family (hub fixture), no web profile, no control channel (`DVT_RIG_CONTROL`), no `dv-data-worker` process.
+
+The token is the `data_worker_up` status event of the public SSE (`status` events carry `ev`, `worker`, `kind`; status.md,
+web.md `live.data_workers`); the first successful `proc-stat xlxd-sut dv-data-worker` of the new pid (pid differs, `t` read
+inside the container) is recorded next to it.
+
+| Case | 15.5 wording (`data.md:2446`) | Steps | Assert | Record | Status |
+|------|-------------------------------|-------|--------|--------|--------|
+| DP15-3a | "kill the worker during traffic: raw counters, voice untouched, web chat works" | D-STAR talker N0TEST, 30 superframes (12.6 s) with the TX message; D-STAR listener N0CALL, M17 listener N0TEST; 4 s in `kill-proc ... KILL`; web text G (account N0DWA) right after the kill; wait for down and up events and a new pid; new web text N (account N0DWB) at the token | listener hears every AMBE frame and slow data field unchanged, no silence over 0.25 s; M17 stream (if the fake transcoder is on) no silence over 0.5 s; down then up event, new pid; POST 202 and the row in `GET /user/rooms/B/messages`; G never rendered (no M17 SMS, no D-STAR text over); N rendered on M17 (<= `AT_ONCE_S + TOKEN_RENDER_S` after the POST) and as a D-STAR text over; `dv_edge_raw_total` +5 or more; `no_worker` > 0 when the down window lasted 1.5 s or more; `dv_pkt_ready` back to 1 | window, pids, silences, counter deltas | written, not run on a rig |
+| DP15-3b | "restart: renders resume within 2 s of the token" | 3 rounds (the worker ran 11 s before each kill, so the backoff is 0.5 s again): kill, text G while down (N0DWA), wait for `data_worker_up` (T_token), text N at once (N0DWB) | N reaches the M17 listener as an SMS within `TOKEN_RENDER_S` (2.0 s) of T_token; the D-STAR text over of N starts within `TOKEN_RENDER_S + IDLE_GAP_S` (4.0 s: answer 4, "2 s + idle gap" is the safe upper bound for an idle room); G is never rendered, also not later (judged only when its POST fell inside the measured down window) | down event, token, POST, M17 and D-STAR times, new pid | written, not run on a rig |
+
+Honest limits: the down window is the interval between the `data_worker_down` and `data_worker_up` events (SSE latency
+included); a kill that is answered after the worker is back (window too short) makes G a normal item, which the case then
+records and does not judge. The lead says the D-STAR text over after the token is "within 2 s for an idle room, voice end
++ idle gap otherwise"; the case asserts the safe upper bound and records the measured value. `no_worker` is asserted only for
+a down window of 1.5 s or more (the edges learn the token state with some delay; UNVERIFIED how long).
+
 ### Not written, and why
 
 | Case | Reason |
 |------|--------|
-| DP15-3a, 3b | need the kill action (unit U1: one allow-list entry in `scripts/lib/killproc.sh`, `dvtest/control.py`, the `scripts/run.sh` header, `cases/unit/test_control.py`). The lead confirmed the entry is acceptable (answer 5: process name always `dv-data-worker`, SIGKILL, launcher restart 0.5 s doubling to 5 s) |
 | DP15-5a, 5b | need a private aprsc image and rig service (units U4, U5) |
-| DP15-6a to 6e | need the fake KISS TNC (U2) or the Dire Wolf loop (U6, U7); the `DP15_TX_ENABLE` token belongs to their `dp15-ax25-*.toml` snippets and is NOT added yet (nothing in this unit uses it) |
 | DP15-7b, 7c (receiving side), 7d | need a second DV-Router node as XLX peer (U8; the lead confirms a plain `[[edges.xlx.peer]]` row works and the text over needs no transcoder, answer 11) |
 | 7a parts | `xlx_text_overs = false` (live config edit), preemption of a text over by peer voice, and "the sending node's own XLX listener does not get its own text over back" are not written |
 
