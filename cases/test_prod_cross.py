@@ -124,7 +124,7 @@ def test_prod_cross_levels(cfg, target, request):
     except ps.MissingClip as exc:
         pytest.skip(str(exc))
     plan = ps.make_plan(cfg, sigs)
-    print(ps.format_plan(plan))
+    print(ps.format_plan(plan, dry=cfg.dry))
     if cfg.dry:
         return
     if not target.is_given("ambed_ref"):

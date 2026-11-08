@@ -219,8 +219,9 @@ def tolerances():
             "loss_frames_max": MAX_LOSS_FRAMES}
 
 
-def format_plan(plan):
-    out = ["DRY RUN (DVT_PROD_CROSS_DRY=1): nothing is sent, no socket is opened, the host name is not resolved, the local transcoder is not used",
+def format_plan(plan, dry=True):
+    out = ["DRY RUN (DVT_PROD_CROSS_DRY=1): nothing is sent, no socket is opened, the host name is not resolved, the local transcoder is not used"
+           if dry else "REAL RUN: the plan below is sent to the live reflector now (module E only)",
            "host %s  module %s  tag %s" % (plan["host"], plan["module"], plan["tag"]),
            "order: one pair after the other, one over at a time, at least %.0f s between overs, each over at most %.1f s, "
            "listener read %.1f s after each over (live copy first, then the echo copy), global timeout %.0f s (about %d s planned)" % (
@@ -235,7 +236,8 @@ def format_plan(plan):
     out.append("judged against the rig unity row%s: speech level +-%.1f dB, tone level +-%.1f dB, tone +-%.0f Hz, envelope correlation >= %.2f, "
                "frames heard >= frames sent" % (" of " + plan["reference"] if plan["reference"] else " (no DVT_PROD_CROSS_REF: absolute checks only)",
                                                 tol["speech_db"], tol["tone_db"], tol["tone_hz"], tol["env_corr_min"]))
-    out.append("To run for real: unset DVT_PROD_CROSS_DRY (the owner of the reflector must have approved the check).")
+    if dry:
+        out.append("To run for real: unset DVT_PROD_CROSS_DRY (the owner of the reflector must have approved the check).")
     return "\n".join(out)
 
 

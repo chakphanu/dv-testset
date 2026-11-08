@@ -128,6 +128,8 @@ def test_the_plan_opens_no_socket_and_resolves_no_name(tmp_path, monkeypatch):
     assert plan["links"]["dstar"]["link_packet_hex"] == dextra.link_packet(b"N0CALL T", "E").hex()
     assert plan["links"]["m17"]["link_packet_hex"] == m17.conn_packet("N0CALL", "E").hex()
     assert "nothing is sent" in text and "module E" in text and "at least 6 s" in text
+    real = ps.format_plan(plan, dry=False)
+    assert "REAL RUN" in real and "DRY RUN" not in real and "unset DVT_PROD_CROSS_DRY" not in real
 
 
 # ---------------------------------------------------------------- live copy and echo copy
