@@ -64,6 +64,10 @@ PORT_GROUPS = {"dextra": ("dextra",), "dplus": ("dplus",), "dcs": ("dcs",), "dmr
                "dmrplus": ("dmrplus",), "ysf": ("ysf",), "m17": ("m17", "m17v3"), "nxdn": ("nxdn",),
                "p25": ("p25",), "usrp": ("usrp",), "xlx": ("xlx",), "imrs": ("imrs",), "g3": ("g3",)}
 PROTOCOLS = tuple(PORTS)
+# the module letter of the second variant (the fuzz client on another module than the valid clients on B);
+# None: the protocol has no module to move (usrp is bound to B by xlxd.usrp; nxdn / p25 name a TG, not a module)
+OTHER_MODULE = {"dextra": "C", "dplus": "C", "dcs": "C", "dmr": "C", "dmrplus": "C", "ysf": "C", "m17": "C",
+                "xlx": "C", "imrs": "C", "g3": "C", "usrp": None, "nxdn": None, "p25": None}
 
 
 # ---------------------------------------------------------------- locating fields in builders
@@ -121,15 +125,15 @@ def _module(build, name="module"):
 
 # ---------------------------------------------------------------- seeds per protocol
 
-def _dextra():
-    h = lambda s, m="B": dextra.header(s, CALL, m)
+def _dextra(m="B"):
+    h = lambda s, mm=m: dextra.header(s, CALL, mm)
     v = lambda s, last=False: dextra.voice(s, 1, FRAME9, last)
     return [
-        item("control", dextra.link_packet(CALL, "B"), _call8(lambda c: dextra.link_packet(c, "B")),
-             _module(lambda m: dextra.link_packet(CALL, m))),
-        item("control", dextra.unlink_packet(CALL, "B"), _call8(lambda c: dextra.unlink_packet(c, "B"))),
+        item("control", dextra.link_packet(CALL, m), _call8(lambda c: dextra.link_packet(c, m)),
+             _module(lambda mm: dextra.link_packet(CALL, mm))),
+        item("control", dextra.unlink_packet(CALL, m), _call8(lambda c: dextra.unlink_packet(c, m))),
         item("control", dextra.keepalive_packet(CALL), _call8(dextra.keepalive_packet)),
-        item("header", h(SID), _sid(h), _module(lambda m: h(SID, m)), tag=4),
+        item("header", h(SID), _sid(h), _module(lambda mm: h(SID, mm)), tag=4),
         item("voice", v(SID), _sid(v), fields_of(lambda n: dextra.voice(SID, n, FRAME9, False), 1, 2, "seq", "seq"),
              tag=4),
         item("terminator", v(SID, True), _sid(lambda s: v(s, True)), tag=4),
@@ -141,8 +145,8 @@ def _shift(fields, by):
     return [f._replace(offset=f.offset + by) for f in fields]
 
 
-def _dplus():
-    h = lambda s, m="B": dplus.header(s, CALL, m)
+def _dplus(m="B"):
+    h = lambda s, mm=m: dplus.header(s, CALL, mm)
     v = lambda s: dplus.voice(s, 1, FRAME9)
     t = lambda s: dplus.last_voice(s, 3)
     return [
@@ -152,30 +156,31 @@ def _dplus():
         item("control", dplus.DISCONNECT, tag=2),
         item("control", dplus.KEEPALIVE, tag=2),
         item("header", h(SID), _shift(_sid(lambda s: h(s)[2:]), 2),
-             _shift(_module(lambda m: h(SID, m)[2:]), 2), tag=2),
+             _shift(_module(lambda mm: h(SID, mm)[2:]), 2), tag=2),
         item("voice", v(SID), _shift(_sid(lambda s: v(s)[2:]), 2), tag=2),
         item("terminator", t(SID), _shift(_sid(lambda s: t(s)[2:]), 2), tag=2),
     ]
 
 
-def _dcs():
-    vo = lambda s, last=False: dcs.voice(s, 1, FRAME9, last, 5, CALL, "B")
+def _dcs(m="B"):
+    vo = lambda s, last=False: dcs.voice(s, 1, FRAME9, last, 5, CALL, m)
     return [
-        item("control", dcs.link_packet(CALL, "B"), fields_of(lambda c: dcs.link_packet(c, "B"), "AAAAAAA",
+        item("control", dcs.link_packet(CALL, m), fields_of(lambda c: dcs.link_packet(c, m), "AAAAAAA",
                                                             "BBBBBBB", "callsign", "callsign"),
-             _module(lambda m: dcs.link_packet(CALL, m))),
-        item("control", dcs.unlink_packet(CALL, "B"), _module(lambda m: dcs.unlink_packet(CALL, m))),
-        item("control", dcs.keepalive_packet(CALL, "B"), _module(lambda m: dcs.keepalive_packet(CALL, m, module=m))),
-        item("voice", vo(SID), _sid(vo), fields_of(lambda c: dcs.voice(SID, 1, FRAME9, False, c, CALL, "B"),
+             _module(lambda mm: dcs.link_packet(CALL, mm))),
+        item("control", dcs.unlink_packet(CALL, m), _module(lambda mm: dcs.unlink_packet(CALL, mm))),
+        item("control", dcs.keepalive_packet(CALL, m), _module(lambda mm: dcs.keepalive_packet(CALL, mm, module=mm))),
+        item("voice", vo(SID), _sid(vo), fields_of(lambda c: dcs.voice(SID, 1, FRAME9, False, c, CALL, m),
                                                    5, 0x010203, "counter", "count", "little"), tag=4),
         item("terminator", vo(SID, True), _sid(lambda s: vo(s, True)), tag=4),
     ]
 
 
-def _dmr():
-    pk = lambda bits, sid=0x22222222, src=DMR_ID, dst=4002, payload=None: dmr.packet(
+def _dmr(m="B"):
+    tg = dmr.module_tg(m)
+    pk = lambda bits, sid=0x22222222, src=DMR_ID, dst=tg, payload=None: dmr.packet(
         1, src, dst, DMR_ID, bits, sid, payload or dmr.data_sync_payload())
-    vp = lambda dst=4002, sid=0x22222222: dmr.voice_packets([FRAME9] * 3, DMR_ID, dst, sid)[0][0]
+    vp = lambda dst=tg, sid=0x22222222: dmr.voice_packets([FRAME9] * 3, DMR_ID, dst, sid)[0][0]
     return [
         item("control", dmr.rptl(DMR_ID), fields_of(dmr.rptl, 0x01020304, 0x05060708, "repeater", "id"), tag=4),
         item("control", dmr.rptk(DMR_ID), fields_of(dmr.rptk, 0x01020304, 0x05060708, "repeater", "id"), tag=4),
@@ -185,7 +190,7 @@ def _dmr():
              tag=7),
         item("control", dmr.rptcl(DMR_ID, 13), fields_of(lambda r: dmr.rptcl(r, 13), 0x01020304, 0x05060708,
                                                          "repeater", "id"), tag=5),
-        item("control", dmr.rpto(DMR_ID, "TS2=4002"), tag=4),
+        item("control", dmr.rpto(DMR_ID, "TS2=%d" % tg), tag=4),
         item("header", pk(0xA1), fields_of(lambda s: pk(0xA1, sid=s), 0x01020304, 0x05060708, "stream_id", "stream_id",
                                            "little"),
              fields_of(lambda d: pk(0xA1, dst=d), 0x010203, 0x040506, "dst", "tg"),
@@ -198,18 +203,19 @@ def _dmr():
     ]
 
 
-def _dmrplus():
-    st = dmrplus.stream([FRAME9] * 3, 1023009, 4002)
+def _dmrplus(m="B"):
+    tg = dmrplus.reflector_of(m)
+    st = dmrplus.stream([FRAME9] * 3, 1023009, tg)
     return [
-        item("control", dmrplus.connect_packet(DMR_ID, 4002),
-             fields_of(lambda d: dmrplus.connect_packet(d, 4002), 11111111, 22222222, "dmrid", "id"),
+        item("control", dmrplus.connect_packet(DMR_ID, tg),
+             fields_of(lambda d: dmrplus.connect_packet(d, tg), 11111111, 22222222, "dmrid", "id"),
              fields_of(lambda r: dmrplus.connect_packet(DMR_ID, r), 1234, 5678, "reflector", "tg")),
-        item("control", dmrplus.disconnect_packet(DMR_ID, "B"),
-             fields_of(lambda d: dmrplus.disconnect_packet(d, "B"), 11111111, 22222222, "dmrid", "id"),
-             _module(lambda m: dmrplus.disconnect_packet(DMR_ID, m))),
+        item("control", dmrplus.disconnect_packet(DMR_ID, m),
+             fields_of(lambda d: dmrplus.disconnect_packet(d, m), 11111111, 22222222, "dmrid", "id"),
+             _module(lambda mm: dmrplus.disconnect_packet(DMR_ID, mm))),
         item("header", st[0], fields_of(lambda d: dmrplus.stream([FRAME9] * 3, 1023009, d)[0], 0x010203, 0x040506, "dst", "tg",
                                         "little"),
-             fields_of(lambda d: dmrplus.stream([FRAME9] * 3, d, 4002)[0], 0x010203, 0x040506, "src", "id", "little")),
+             fields_of(lambda d: dmrplus.stream([FRAME9] * 3, d, tg)[0], 0x010203, 0x040506, "src", "id", "little")),
         item("voice", st[1], fields_of(lambda d: dmrplus.stream([FRAME9] * 3, 1023009, d)[1], 0x010203, 0x040506, "dst", "tg",
                                        "little")),
         item("terminator", st[-1], fields_of(lambda d: dmrplus.stream([FRAME9] * 3, 1023009, d)[-1], 0x010203,
@@ -217,13 +223,13 @@ def _dmrplus():
     ]
 
 
-def _m17():
+def _m17(m="B"):
     pk = lambda sid, seq=1, last=False, src=CALL: m17.stream_packet(sid, seq, bytes(range(16)), src=src, last=last)
-    conn = lambda c, m="B": m17.conn_packet(c, m)
+    conn = lambda c, mm=m: m17.conn_packet(c, mm)
     return [
         item("control", conn(CALL), fields_of(conn, "AAAAAA", "BBBBBB", "callsign", "callsign", limit=1),
-             _module(lambda m: conn(CALL, m)), tag=4),
-        item("control", m17.lstn_packet(CALL, "B"), _module(lambda m: m17.lstn_packet(CALL, m)), tag=4),
+             _module(lambda mm: conn(CALL, mm)), tag=4),
+        item("control", m17.lstn_packet(CALL, m), _module(lambda mm: m17.lstn_packet(CALL, mm)), tag=4),
         item("control", m17.disc_packet(CALL), tag=4),
         item("control", m17.pong_packet(CALL), tag=4),
         item("header", pk(SID, 0), fields_of(lambda s: pk(s, 0), 0x1234, 0xABCD, "stream_id", "stream_id", limit=1),
@@ -235,7 +241,7 @@ def _m17():
     ]
 
 
-def _m17v3():
+def _m17v3(m="B"):
     voice_type = m17v3.v3_type(m17v3.PAYLOAD_VOICE3200)
     text_meta = m17v3.v3_text_blocks("N0FUZZ")[0]
     gnss = m17v3.gnss_meta(lat=10.0, lon=20.0)
@@ -258,9 +264,10 @@ def _m17v3():
     ]
 
 
-def _ysf():
-    st = ysf.stream_packets([ysf.SILENCE] * 5, CALL, 11)
-    sp = lambda c, i=1: ysf.stream_packets([ysf.SILENCE] * 5, c, 11)[i]
+def _ysf(m="B"):
+    dg = ysf.module_dgid(m)
+    st = ysf.stream_packets([ysf.SILENCE] * 5, CALL, dg)
+    sp = lambda c, i=1: ysf.stream_packets([ysf.SILENCE] * 5, c, dg)[i]
     return [
         item("control", ysf.poll_packet(CALL), fields_of(ysf.poll_packet, "AAAAAAAAAA", "BBBBBBBBBB", "callsign",
                                                          "callsign"), tag=4),
@@ -274,7 +281,7 @@ def _ysf():
     ]
 
 
-def _nxdn():
+def _nxdn(m="B"):
     st = nxdn.stream_packets([FRAME7] * 4, NXDN_ID, 31672)
     sp = lambda src, i=0: nxdn.stream_packets([FRAME7] * 4, src, 31672)[i]
     dp = lambda dst, i=0: nxdn.stream_packets([FRAME7] * 4, NXDN_ID, dst)[i]
@@ -291,7 +298,7 @@ def _nxdn():
     ]
 
 
-def _p25():
+def _p25(m="B"):
     recs = p25.voice_records([FRAME11] * 9, P25_ID, 31672)
     return [
         item("control", p25.poll_packet(CALL), fields_of(p25.poll_packet, "AAAAAAAAAA", "BBBBBBBBBB", "callsign",
@@ -306,7 +313,7 @@ def _p25():
     ]
 
 
-def _usrp():
+def _usrp(m="B"):
     pcm = bytes(320)
     seq = lambda n, kind=0: usrp.header(n, 1, kind=kind) + pcm
     return [
@@ -326,18 +333,19 @@ def _usrp():
     ]
 
 
-def _xlx():
+def _xlx(m="B"):
+    xm = "D" if m == "B" else "E"       # the modules the XLX peer rows of the rig name are D and E
     return [
         item("control", xlx.connect("XLX996", "DE"), fields_of(lambda c: xlx.connect(c, "DE"), "AAAAAAAA", "BBBBBBBB",
                                                                 "callsign", "callsign"),
              fields_of(lambda v: xlx.connect("XLX996", "DE", v), (2, 6, 1), (3, 7, 4), "version", "count"),
-             fields_of(lambda m: xlx.connect("XLX996", m), "DE", "QR", "modules", "module")),
+             fields_of(lambda mm: xlx.connect("XLX996", mm), "DE", "QR", "modules", "module")),
         item("control", xlx.ack("XLX996", "DE")),
         item("control", xlx.nack("XLX996"), tag=1),
         item("control", xlx.disconnect("XLX996"), tag=1),
         item("control", xlx.keepalive("XLX996")),
-        item("header", xlx.header(SID, CALL, "D"), _sid(lambda s: xlx.header(s, CALL, "D")),
-             _module(lambda m: xlx.header(SID, CALL, m)), tag=4),
+        item("header", xlx.header(SID, CALL, xm), _sid(lambda s: xlx.header(s, CALL, xm)),
+             _module(lambda mm: xlx.header(SID, CALL, mm)), tag=4),
         item("voice", xlx.voice(SID, 1, FRAME9), _sid(lambda s: xlx.voice(s, 1, FRAME9)), tag=4),
         item("voice", xlx.voice(SID, 1, FRAME9, revision=1), _sid(lambda s: xlx.voice(s, 1, FRAME9, revision=1)),
              tag=4),
@@ -348,12 +356,13 @@ def _xlx():
     ]
 
 
-def _imrs():
-    st = imrs.stream_packets([ysf.SILENCE] * 5, 0x1234, CALL, CALL, 11)
-    sp = lambda s, i: imrs.stream_packets([ysf.SILENCE] * 5, s, CALL, CALL, 11)[i]
+def _imrs(m="B"):
+    dg = imrs.module_dgid(m)
+    st = imrs.stream_packets([ysf.SILENCE] * 5, 0x1234, CALL, CALL, dg)
+    sp = lambda s, i: imrs.stream_packets([ysf.SILENCE] * 5, s, CALL, CALL, dg)[i]
     return [
         item("control", imrs.PING),
-        item("control", imrs.info(CALL, dgids=(11,)), fields_of(lambda c: imrs.info(c), "AAAAAAAAAA", "BBBBBBBBBB",
+        item("control", imrs.info(CALL, dgids=(dg,)), fields_of(lambda c: imrs.info(c), "AAAAAAAAAA", "BBBBBBBBBB",
                                                                 "callsign", "callsign"),
              fields_of(lambda d: imrs.info(CALL, dgids=(d,)), 11, 12, "dgid_bitmap", "flags")),
         item("header", st[0], _sid(lambda s: sp(s, 0)), tag=4),
@@ -362,21 +371,22 @@ def _imrs():
     ]
 
 
-def _g3():
+def _g3(m="B"):
+    dest = "XLX999 " + m
     pres, rt = g3.PRESENCE_PORT, g3.ROUTE_PORT
-    st = g3.stream(SID, [FRAME9] * 2, CALL, "XLX999 B")
+    st = g3.stream(SID, [FRAME9] * 2, CALL, dest)
     return [
         item("control", g3.presence_packet("N0FUZZ T"), fields_of(g3.presence_packet, "AAAAAAAA", "BBBBBBBB",
                                                                   "terminal", "callsign"), port=pres),
         item("control", g3.presence_packet("N0FUZZ T", header=bytes([0xFF] * 8)), port=pres),
-        item("control", g3.route_packet("XLX999 B"), fields_of(g3.route_packet, "AAAAAAAA", "BBBBBBBB", "destination",
+        item("control", g3.route_packet(dest), fields_of(g3.route_packet, "AAAAAAAA", "BBBBBBBB", "destination",
                                                                "callsign"), port=rt),
-        item("control", g3.route_packet("XLX999 B", repeater=False), port=rt),
+        item("control", g3.route_packet(dest, repeater=False), port=rt),
         item("control", g3.hpch_packet("N0FUZZ"), tag=4, port=g3.DV_PORT),
-        item("header", st[0], _sid(lambda s: g3.stream(s, [FRAME9] * 2, CALL, "XLX999 B")[0]), tag=4,
+        item("header", st[0], _sid(lambda s: g3.stream(s, [FRAME9] * 2, CALL, dest)[0]), tag=4,
              port=g3.DV_PORT),
-        item("voice", st[1], _sid(lambda s: g3.stream(s, [FRAME9] * 2, CALL, "XLX999 B")[1]), tag=4, port=g3.DV_PORT),
-        item("terminator", st[-1], _sid(lambda s: g3.stream(s, [FRAME9] * 2, CALL, "XLX999 B")[-1]), tag=4,
+        item("voice", st[1], _sid(lambda s: g3.stream(s, [FRAME9] * 2, CALL, dest)[1]), tag=4, port=g3.DV_PORT),
+        item("terminator", st[-1], _sid(lambda s: g3.stream(s, [FRAME9] * 2, CALL, dest)[-1]), tag=4,
              port=g3.DV_PORT),
     ]
 
@@ -389,13 +399,15 @@ Spec = namedtuple("Spec", "protocol ports items groups")
 
 
 @lru_cache(maxsize=None)
-def protocol(name):
+def protocol(name, module="B"):
     """Spec of one protocol: its ports, the seed Items (valid packets with roles and
-    fields) and the items grouped by port (a group is what one case draws from)."""
+    fields) and the items grouped by port (a group is what one case draws from).
+    module: the module letter the seed packets name (default B; the fuzz variant on
+    another module uses OTHER_MODULE)."""
     if name not in BUILDERS:
         raise KeyError("unknown protocol %r (known: %s)" % (name, ", ".join(PROTOCOLS)))
     ports = PORTS[name]
-    items = tuple(it._replace(port=it.port or ports[0]) for it in BUILDERS[name]())
+    items = tuple(it._replace(port=it.port or ports[0]) for it in BUILDERS[name](module))
     groups = tuple(tuple(it for it in items if it.port == port) for port in ports)
     return Spec(name, ports, items, tuple(g for g in groups if g))
 
@@ -449,11 +461,11 @@ def boundaries(it):
 
 
 @lru_cache(maxsize=None)
-def truncation_plan(name):
+def truncation_plan(name, module="B"):
     """[(item index, cut length)]: every boundary of every seed packet, the
     k-th boundary of each packet before the (k+1)-th of any (so a short run
     still touches every packet)."""
-    spec = protocol(name)
+    spec = protocol(name, module)
     per = [[(i, c) for c in boundaries(it)] for i, it in enumerate(spec.items)]
     plan = []
     for rank in range(max(len(p) for p in per)):
@@ -689,14 +701,14 @@ def rng_for(name, seed, index):
     return random.Random("%s:%s:%d" % (name, seed, index))
 
 
-def generate(name, seed, index):
+def generate(name, seed, index, module="B"):
     """The index-th case of (protocol, seed): a pure function of its arguments."""
-    spec = protocol(name)
+    spec = protocol(name, module)
     rng = rng_for(name, seed, index)
     slot = index % len(MUTATORS)
     mutator = MUTATORS[slot]
     if mutator == "truncate":
-        plan = truncation_plan(name)
+        plan = truncation_plan(name, module)
         ordinal = (index // len(MUTATORS)) * len(_TRUNC_SLOTS) + _TRUNC_SLOTS.index(slot)
         item_index, cut = plan[ordinal % len(plan)]
         it = spec.items[item_index]
@@ -709,9 +721,9 @@ def generate(name, seed, index):
     return Case(name, seed, index, mutator, port, [_clip(_PACKET[mutator](rng, spec, group, it))])
 
 
-def cases(name, seed, start=0):
-    """Endless iterator of generate(name, seed, i) for i = start, start+1, ..."""
+def cases(name, seed, start=0, module="B"):
+    """Endless iterator of generate(name, seed, i, module) for i = start, start+1, ..."""
     index = start
     while True:
-        yield generate(name, seed, index)
+        yield generate(name, seed, index, module)
         index += 1

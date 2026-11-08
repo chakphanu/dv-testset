@@ -143,3 +143,27 @@ def test_bin_dir_is_required(tmp_path):
     proc = subprocess.run(["bash", str(WRAP)] + WORDS, cwd=tmp_path, env=env,
                           capture_output=True, text=True, timeout=30)
     assert proc.returncode != 0 and "DVT_DVR_BIN_DIR" in proc.stderr
+
+
+def test_extra_toml_is_merged_into_the_converted_file(tmp_path):
+    extra = tmp_path / "extra.toml"
+    extra.write_text('[edges.nxdn]\nenable = true\ntg_modules = "31672:F"\n[edges.usrp]\nenable = true\n')
+    proc, rec, work = _run(tmp_path, CONVERTER, env_extra={"DVT_DVR_EXTRA_TOML": str(extra)})
+    assert proc.returncode == 0, proc.stderr
+    text = (rec / "router.config").read_text()
+    assert "# stub toml" in text and text.count("[edges.usrp]") == 1       # merged key by key, not repeated
+    assert "[edges.nxdn]" in text and 'tg_modules = "31672:F"' in text
+    import tomllib
+    cfg = tomllib.loads(text)
+    assert cfg["edges"]["nxdn"]["enable"] is True and cfg["edges"]["usrp"]["enable"] is True
+    assert "merging" in proc.stderr and _lines(rec / "router.argv")[0] == "--config"
+
+
+def test_extra_toml_is_refused_without_the_one_shot_converter(tmp_path):
+    extra = tmp_path / "extra.toml"
+    extra.write_text("[edges.nxdn]\nenable = true\n")
+    proc, rec, work = _run(tmp_path, CONVERTER_OLD, env_extra={"DVT_DVR_EXTRA_TOML": str(extra)})
+    assert proc.returncode == 2 and "DVT_DVR_EXTRA_TOML" in proc.stderr
+    assert not (rec / "router.argv").exists()
+    proc, rec, work = _run(tmp_path / "direct", None, env_extra={"DVT_DVR_EXTRA_TOML": str(extra)})
+    assert proc.returncode == 2 and not (rec / "router.argv").exists()

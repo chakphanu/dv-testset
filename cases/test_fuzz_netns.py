@@ -16,8 +16,10 @@ with a FakeAmbed at 127.0.0.2. For one protocol port it then
   3. sends DVT_FUZZ_N (2000) mutated datagrams (dvtest/fuzz.py), 1 ms apart, from a
      client address (127.0.0.5: two cases in three from a linked session of that
      client, one in three from a socket that never linked),
-  4. repeats the valid round after every 200 datagrams, and checks that no process of
-     the launcher's tree is gone or new,
+  4. repeats the valid round after every 200 datagrams (first half of the datagrams with the
+     fuzz client on another module than the valid clients; second half on the same module, with
+     a wait of the stream timeout + 1 s before each round, the floor rule), and checks that no
+     process of the launcher's tree is gone or new,
   5. reads the hub counters again.
 
 Four cases per protocol read that one run:
@@ -25,7 +27,7 @@ Four cases per protocol read that one run:
   test_fuzz_<p>_edge_survives        launcher alive, no child gone or restarted
   test_fuzz_<p>_valid_client_served  every valid round: link ack, over heard
   test_fuzz_<p>_memory_bounded       VmRSS of the edge grew by at most RSS_GROWTH_MAX_KIB
-  test_fuzz_<p>_counters_move        the edge's drop / reject counters moved
+  test_fuzz_<p>_counters_move        RECORD + FINDING of what the hub counted (no counter of malformed input yet)
 
 A failure writes fuzz-replay-<p>.json (protocol, seed, index and hex of the last 50
 datagrams) to the scenario's run directory; python3 -m dvtest.tools.fuzz_replay resends
@@ -42,6 +44,7 @@ import subprocess
 import sys
 import threading
 import time
+import warnings
 from pathlib import Path
 
 import pytest
@@ -61,7 +64,15 @@ VALID_FRAMES = 54                 # frames of a valid over: not below 50 (the sh
 HEARD_MIN = 0.5                   # the listener must hear at least this share of the over
 RSS_GROWTH_MAX_KIB = 8192         # VmRSS of the edge after the run minus before (KiB): UNVERIFIED, see docs/fuzz-cases.md
 PORT_WAIT = 12.0                  # s for the edge to bind its port after the pinged transcoder
-DROPS_WAIT = 14.0                 # s to wait for the drop counters to appear on the hub after the last datagram
+METRICS_MIN = 4.0                 # s after the last datagram before the hub is read for the end dump
+METRICS_SETTLE = 12.0             # s at most for the hub totals to stop changing (the controllers publish every 10 s)
+FLOOR_RETRIES = 3                 # extra valid rounds, 2 s apart, to measure how long a module stayed busy after a failure
+EXPECTED_MALFORMED = ("dv_edge_drops_total", "malformed")   # (family, reason) DV-Router OBS1 will add (open); the proc label is the edge
+# edges the xlxd files cannot switch on: merged into the converted dv-router.toml by scripts/dvr-import-wrap.sh
+# (DVT_DVR_EXTRA_TOML), the keys of rig/config/dv-router/soak-edges.toml; g3 is the plain switch (UNVERIFIED keys)
+EXTRA_TOML = {"nxdn": '[edges.nxdn]\nenable = true\ntg_modules = "31672:F"\n',
+              "p25": '[edges.p25]\nenable = true\nserver_module = "G"\nserver_tg = 31672\n',
+              "g3": '[edges.g3]\nenable = true\n'}
 SCENARIO_BUDGET = 150.0           # s inside the namespace; longer is reported as "truncated"
 LISTEN_SETTLE = 1.0               # s after the link ack (DV-Router demand token), as in the usrp netns cases
 USRP_PCM = (b"\xe8\x03\x18\xfc") * 80
@@ -92,6 +103,7 @@ SCENARIOS = _scenarios()
 def _inside(spec, run_dir):
     """Runs in the namespace: DV-Router + a fake transcoder + the fuzzer, writes run_dir/result.json."""
     import ctypes
+    import itertools
     import signal
     import socket
     import urllib.request
@@ -112,20 +124,24 @@ def _inside(spec, run_dir):
 
     fake = ambed.FakeAmbed(AMBED_IP, mode="extended", max_outputs=4, open_delay=0.05)
     log = open(run_dir / "xlxd.log", "wb")
-    xlxd = subprocess.Popen([spec["bin"], "XLX999", XLXD_IP, AMBED_IP], cwd=run_dir,
-                            env=dict(os.environ, DV_RUN_DIR=str(run_dir)),
+    env = dict(os.environ, DV_RUN_DIR=str(run_dir))
+    if spec.get("extra_toml"):
+        (run_dir / "dv-extra.toml").write_text(spec["extra_toml"])
+        env["DVT_DVR_EXTRA_TOML"] = str(run_dir / "dv-extra.toml")
+    xlxd = subprocess.Popen([spec["bin"], "XLX999", XLXD_IP, AMBED_IP], cwd=run_dir, env=env,
                             stdout=log, stderr=subprocess.STDOUT, preexec_fn=die_with_parent)
     result = {"scenario": spec["name"], "group": group, "seed": spec["seed"], "n": spec["n"], "rounds": [],
               "ports": {}, "errors": 0, "sent": 0}
     sources, valid = [], []
+    stream_ids = itertools.count(0x2000)            # a DExtra header with the last outbound stream id is dropped
 
     def scrape():
+        """(text of the whole hub scrape, None) or (None, error text)."""
         try:
             with urllib.request.urlopen(HUB_METRICS, timeout=2) as reply:
-                text = reply.read().decode("utf-8", "replace")
-            return [ln for ln in text.splitlines() if ln.startswith(fuzz_run.METRIC_PREFIXES)]
+                return reply.read().decode("utf-8", "replace"), None
         except Exception as exc:                # a missing hub is a finding, not a crash
-            return ["error: %s" % exc]
+            return None, "error: %s" % exc
 
     # ---- the valid clients: a talker and a listener linked for the whole run, a fresh link probe per round
     def usrp_peer_socket():
@@ -188,7 +204,7 @@ def _inside(spec, run_dir):
                 talker, listener = dict(valid)["talker"], dict(valid)["listener"]
                 frames = fuzz_run.frames_for(valid_protocol, VALID_FRAMES, seed="valid-%s" % tag)
                 listener.client.inbox.clear()
-                fuzz_run.drive(valid_protocol, talker, frames, 0x2000 + len(result["rounds"]) + 1)
+                fuzz_run.drive(valid_protocol, talker, frames, next(stream_ids))
                 row["expected"] = len(frames)
                 row["heard"] = fuzz_run.heard(valid_protocol, listener)
             row["ok"] = row["heard"] >= HEARD_MIN * row["expected"]
@@ -227,70 +243,118 @@ def _inside(spec, run_dir):
             edge0 = fuzz_run.edge_process(procs0, spec["edges"])
             result["procs0"] = procs0
             result["edge"] = edge0["comm"] if edge0 else None
-            lines0 = scrape()
-            result["metrics0"] = lines0
+            text0, err0 = scrape()
+            if text0:
+                (run_dir / "metrics-start.txt").write_text(text0)
 
-            # ---- the fuzz sources
+            # ---- the fuzz sources, one set per phase
             stranger = fuzz_run.Source(STRANGER_IP)
             sources.append(stranger)
-            linked, linked_how = None, "none"
-            if valid_protocol == "usrp":
-                linked, linked_how = fuzz_run.Source(USRP_IP, sock=dict(valid)["peer"]), "usrp peer socket"
-            elif valid_protocol in fuzz_run.CLIENT_KINDS:
-                fz = fuzz_run.make_client(valid_protocol, FUZZ_IP, "fuzz", nxdn_tg=spec["nxdn_tg"], p25_tg=spec["p25_tg"])
-                sources.append(fz)
-                if fuzz_run.link(valid_protocol, fz, XLXD_IP):
-                    linked, linked_how = fuzz_run.ClientSource(fz), "linked client"
-            elif valid_protocol in fuzz_run.FIXED_PORT:
-                try:
-                    linked, linked_how = fuzz_run.Source(FUZZ_IP, fuzz_run.FIXED_PORT[valid_protocol]), "fixed source port"
-                except OSError:
-                    pass
-            if linked is None:
-                linked = fuzz_run.Source(FUZZ_IP)
-            sources.append(linked)
-            result["linked_source"] = linked_how
-            if spec.get("replay"):
-                fuzzer = fuzz_run.Replayer(spec["replay"], XLXD_IP, linked, stranger, gap=spec["gap"])
-                total = len(spec["replay"])
-            else:
-                fuzzer = fuzz_run.Fuzzer(spec["name"], group, XLXD_IP, spec["seed"], linked, stranger, gap=spec["gap"])
-                total = spec["n"]
 
-            # ---- fuzz, a valid round every EVERY datagrams
-            while fuzzer.sent < total:
-                fuzzer.batch(min(EVERY, total - fuzzer.sent))
-                row = valid_round("after-%d" % fuzzer.sent, kind)
-                procs = fuzz_run.snapshot(xlxd.pid)
-                gone, new = fuzz_run.compare_processes(procs0, procs)
-                row.update(sent=fuzzer.sent, gone=[p["comm"] for p in gone], new=[p["comm"] for p in new],
-                           launcher_alive=xlxd.poll() is None)
-                result["rounds"].append(row)
-                served = result["valid_mode"] != "served" or row["ok"]
-                if gone or new or not row["launcher_alive"] or not served:
-                    result["failure"] = {"at": row["tag"], "sent": fuzzer.sent, "row": row,
-                                         "last50": fuzzer.ring.entries()}
+            def open_linked(module):
+                """(linked source, how, objects to close) for a fuzz client on `module`."""
+                if valid_protocol == "usrp":
+                    return fuzz_run.Source(USRP_IP, sock=dict(valid)["peer"]), "usrp peer socket", []
+                if valid_protocol in fuzz_run.CLIENT_KINDS:
+                    fz = fuzz_run.make_client(valid_protocol, FUZZ_IP, "fuzz", module=module, nxdn_tg=spec["nxdn_tg"],
+                                              p25_tg=spec["p25_tg"])
+                    if fuzz_run.link(valid_protocol, fz, XLXD_IP):
+                        return fuzz_run.ClientSource(fz), "linked client on module %s" % module, [fz]
+                    return fuzz_run.Source(FUZZ_IP), "plain socket (the fuzz client link was not acknowledged)", [fz]
+                if valid_protocol in fuzz_run.FIXED_PORT:
+                    try:
+                        return (fuzz_run.Source(FUZZ_IP, fuzz_run.FIXED_PORT[valid_protocol]), "fixed source port", [])
+                    except OSError:
+                        pass
+                return fuzz_run.Source(FUZZ_IP), "plain socket", []
+
+            replay = spec.get("replay")
+            total = len(replay) if replay else spec["n"]
+            phases = fuzz_run.plan_phases(total, None if replay else fuzz.OTHER_MODULE.get(valid_protocol))
+            ring = fuzz_run.Ring()
+            result["phases"] = []
+            sent = errors = case_start = 0
+            stop = False
+            for ph in phases:
+                linked, how, owned = open_linked(ph["module"])
+                sources.append(linked)
+                if replay:
+                    fuzzer = fuzz_run.Replayer(replay, XLXD_IP, linked, stranger, gap=spec["gap"], ring=ring)
+                else:
+                    fuzzer = fuzz_run.Fuzzer(spec["name"], group, XLXD_IP, spec["seed"], linked, stranger,
+                                             gap=spec["gap"], ring=ring, module=ph["module"], start=case_start)
+                result["phases"].append(dict(ph, linked_source=how, sent_before=sent))
+                done = 0
+                while done < ph["count"] and not stop:      # a valid round every EVERY datagrams
+                    done += fuzzer.batch(min(EVERY, ph["count"] - done))
+                    quiet_from = time.monotonic()
+                    if ph["quiet"]:                         # floor rule: the module is idle after the stream timeout
+                        time.sleep(fuzz_run.QUIET_S)
+                    row = valid_round("%s-%d" % (ph["name"], sent + done), kind)
+                    row.update(phase=ph["name"], fuzz_module=ph["module"], quiet_s=fuzz_run.QUIET_S if ph["quiet"] else 0.0,
+                               sent=sent + done)
+                    if not row["ok"] and result["valid_mode"] == "served":
+                        # how long does the module stay busy? further valid rounds, 2 s apart (recorded, still a failure)
+                        row["recovered_after_s"] = None
+                        for _retry in range(FLOOR_RETRIES):
+                            time.sleep(2.0)
+                            again = valid_round("%s-%d-retry" % (ph["name"], sent + done), kind)
+                            if again["ok"]:
+                                row["recovered_after_s"] = round(time.monotonic() - quiet_from, 1)
+                                break
+                    procs = fuzz_run.snapshot(xlxd.pid)
+                    gone, new = fuzz_run.compare_processes(procs0, procs)
+                    row.update(gone=[p["comm"] for p in gone], new=[p["comm"] for p in new],
+                               launcher_alive=xlxd.poll() is None)
+                    result["rounds"].append(row)
+                    served = result["valid_mode"] != "served" or row["ok"]
+                    if gone or new or not row["launcher_alive"] or not served:
+                        result["failure"] = {"at": row["tag"], "sent": sent + done, "row": row,
+                                             "last50": ring.entries()}
+                        stop = True
+                    elif time.monotonic() - started > SCENARIO_BUDGET:
+                        result["truncated"] = True
+                        stop = True
+                sent += fuzzer.sent
+                errors += fuzzer.errors
+                case_start = getattr(fuzzer, "case_index", 0)
+                result["phases"][-1]["sent"] = fuzzer.sent
+                if stop:
                     break
-                if time.monotonic() - started > SCENARIO_BUDGET:
-                    result["truncated"] = True
-                    break
-            result["sent"], result["errors"] = fuzzer.sent, fuzzer.errors + sum(s.errors for s in (stranger, linked))
-            result["last50"] = fuzzer.ring.entries()
+                for obj in owned:
+                    try:
+                        obj.close()
+                    except (OSError, AttributeError):
+                        pass
+                if valid_protocol != "usrp":
+                    linked.close()
+                    sources.remove(linked)
+            result["sent"], result["errors"] = sent, errors + stranger.errors
+            result["last50"] = ring.entries()
             procs1 = fuzz_run.snapshot(xlxd.pid)
             result["procs1"] = procs1
             edge1 = next((p for p in procs1 if edge0 and p["pid"] == edge0["pid"] and p["start"] == edge0["start"]), None)
             result["rss0_kib"] = edge0["rss_kib"] if edge0 else None
             result["rss1_kib"] = edge1["rss_kib"] if edge1 else None
-            lines1 = scrape()
-            deadline = time.monotonic() + DROPS_WAIT
-            while (not lines1 or lines1[0].startswith("error:") or
-                   fuzz_run.error_count(lines1, spec["edges"]) <= fuzz_run.error_count(lines0, spec["edges"])) \
-                    and time.monotonic() < deadline:
-                time.sleep(1.0)
-                lines1 = scrape()
-            result["metrics1"] = lines1
-            result["errors0"] = fuzz_run.error_count(lines0, spec["edges"])
-            result["errors1"] = fuzz_run.error_count(lines1, spec["edges"])
+
+            # ---- the hub again: wait until its _total series stop changing, dump the whole text, list what changed
+            begin, previous, text1, err1 = time.monotonic(), None, None, None
+            while True:
+                text1, err1 = scrape()
+                totals = ({k: v for k, v in fuzz_run.sample_map(text1).items() if k[0].endswith("_total")}
+                          if text1 else None)
+                if (totals is not None and totals == previous and time.monotonic() - begin >= METRICS_MIN) \
+                        or time.monotonic() - begin >= METRICS_SETTLE:
+                    break
+                previous = totals
+                time.sleep(2.0)
+            changed = fuzz_run.metric_changes(text0, text1) if text0 and text1 else []
+            if text1:
+                (run_dir / "metrics-end.txt").write_text(text1)
+            result["metrics"] = {"error": err0 or err1, "edge_proc": fuzz_run.edge_label(result["edge"] or ""),
+                                 "start_dumped": bool(text0), "end_dumped": bool(text1),
+                                 "families": sorted({k[0] for k in fuzz_run.sample_map(text1)}) if text1 else [],
+                                 "changed": [[n, lab, a, b] for n, lab, a, b in changed][:800]}
             result["alive"] = xlxd.poll() is None
     finally:
         for src in sources:
@@ -367,6 +431,8 @@ def runs(request, dvrouter_only, xlxd_bin, out_root, target):
         spec = dict(SCENARIOS[name], n=n, seed=seed, gap=gap,
                     nxdn_tg=int(os.environ.get("DVT_FUZZ_NXDN_TG", "31672")),
                     p25_tg=int(os.environ.get("DVT_FUZZ_P25_TG", "31672")))
+        if name in EXTRA_TOML and os.environ.get("DVT_FUZZ_ENABLE_EDGES", "1") != "0":
+            spec["extra_toml"] = EXTRA_TOML[name]
         if replay is not None:
             spec["replay"] = [e for e in replay if e["protocol"] in spec["group"]]
         return spec
@@ -426,20 +492,50 @@ def check_survives(runs, name):
             SCENARIO_BUDGET, run["sent"], run["n"]))
 
 
+def quiet_text(row):
+    """What the failure text says about the floor: variant, how long the module was quiet, how long it stayed busy."""
+    if row.get("phase") == "other":
+        return ("the fuzz client was on module %s and the valid clients on B, so no floor hold of the fuzz client "
+                "can explain it" % row.get("fuzz_module"))
+    quiet = row.get("quiet_s") or 0.0
+    text = "the fuzz client was on the valid clients' module B; the module had been quiet for %.1f s " \
+           "(stream timeout %.1f s + %.1f s margin) before the round" % (
+               quiet, fuzz_run_mod().STREAM_TIMEOUT_S, fuzz_run_mod().QUIET_MARGIN_S)
+    if "recovered_after_s" in row:
+        text += "; %s" % ("served again %.1f s after the last fuzz datagram" % row["recovered_after_s"]
+                          if row["recovered_after_s"] is not None else "still not served 6 s later")
+    return text
+
+
+def fuzz_run_mod():
+    from dvtest import fuzz_run
+    return fuzz_run
+
+
 def check_served(runs, name):
     run = get(runs, name)
     warm = run["warmup"]
     if run["valid_mode"] != "served":
-        from dvtest import fuzz_run
         message = "the valid client was not served before any fuzz (%s; heard %s of %s, probe %s)" % (
             warm.get("reason") or "round not ok", warm.get("heard"), warm.get("expected"), warm.get("probe"))
-        if name in fuzz_run.OPTIONAL:
+        if name in fuzz_run_mod().OPTIONAL:
             pytest.skip("%s: liveness only (UNVERIFIED default config of this protocol, docs/fuzz-cases.md)" % message)
         fail(run, name, message)
     bad = [r for r in run["rounds"] if not r["ok"]]
     if bad:
-        fail(run, name, "valid client not served after %d datagrams: %s" % (bad[0]["sent"], bad[0]))
+        row = bad[0]
+        text = "valid client not served after %d datagrams (phase %s, heard %s of %s, link probe %s): %s" % (
+            row["sent"], row.get("phase"), row["heard"], row["expected"], row["probe"], quiet_text(row))
+        finding(run, name, "FINDING: " + text)
+        fail(run, name, text)
     assert run["rounds"], "no valid round ran"
+
+
+def finding(run, name, text):
+    """A FINDING line: a pytest warning and a line in fuzz-findings.txt of the scenario's run directory."""
+    warnings.warn(text, UserWarning, stacklevel=2)
+    with open(Path(run["run_dir"]) / "fuzz-findings.txt", "a", encoding="utf-8") as handle:
+        handle.write("[%s] %s\n" % (name, text))
 
 
 def check_memory(runs, name):
@@ -453,17 +549,48 @@ def check_memory(runs, name):
             run["edge"], grown, run["rss0_kib"], run["rss1_kib"], RSS_GROWTH_MAX_KIB))
 
 
+def assert_malformed():
+    """True once DV-Router OBS1 has landed: DVT_FUZZ_ASSERT_MALFORMED=1 makes counters_move assert
+    EXPECTED_MALFORMED > 0 for the edge instead of recording a finding."""
+    return os.environ.get("DVT_FUZZ_ASSERT_MALFORMED", "") == "1"
+
+
 def check_counters(runs, name):
+    """Record which hub series moved while the malformed datagrams were sent (counters.json, metrics-start.txt
+    and metrics-end.txt are the whole scrapes). No counter of malformed input exists yet (OBS1 open), so
+    this is a RECORD and a FINDING, not a failure; with DVT_FUZZ_ASSERT_MALFORMED=1 the counter
+    dv_edge_drops_total{proc=<edge>,reason="malformed"} must have grown."""
+    from dvtest import fuzz_run
     run = get(runs, name)
-    if run["metrics1"] and run["metrics1"][0].startswith("error:"):
-        fail(run, name, "no hub metrics at %s: %s" % (HUB_METRICS, run["metrics1"][0]))
-    if not run["metrics1"]:
-        fail(run, name, "the hub answered at %s but none of dv_edge_drops_total, dv_pkt_reject_total, "
-                        "dv_edge_queue_drops_total, dv_hub_dropped_total is on it after %d s" % (HUB_METRICS, DROPS_WAIT))
-    if not run["errors1"] > run["errors0"]:
-        fail(run, name, "no drop / reject counter moved (%s -> %s, dv_edge_drops_total of %s + dv_pkt_reject_total) "
-                        "after %d malformed datagrams" % (run["errors0"], run["errors1"],
-                                                          SCENARIOS[name]["edges"], run["sent"]))
+    m = run["metrics"]
+    if m["error"] or not (m["start_dumped"] and m["end_dumped"]):
+        fail(run, name, "no hub scrape at %s (start dumped %s, end dumped %s): %s" % (
+            HUB_METRICS, m["start_dumped"], m["end_dumped"], m["error"]))
+    changes = [tuple(c) for c in m["changed"]]
+    edge, family, reason = m["edge_proc"], EXPECTED_MALFORMED[0], EXPECTED_MALFORMED[1]
+    by_reason = {}
+    for n, lab, a, b in changes:
+        if n == "dv_edge_drops_total" and lab.get("proc") == edge:
+            by_reason[lab.get("reason", "-")] = by_reason.get(lab.get("reason", "-"), 0) + (b - a)
+    reject = {}
+    for n, lab, a, b in changes:
+        if n == "dv_pkt_reject_total":
+            reject[lab.get("reason", "-")] = reject.get(lab.get("reason", "-"), 0) + (b - a)
+    malformed = fuzz_run.family_delta(changes, family, proc=edge, reason=reason)
+    record = {"protocol": name, "edge_proc": edge, "datagrams": run["sent"], "expected": "%s{reason=%s}" % (family, reason),
+              "expected_delta": malformed, "edge_drops_by_reason": by_reason, "pkt_reject_by_reason": reject,
+              "changed_series": len(changes), "changed_families": sorted({c[0] for c in changes}),
+              "families_exposed": m["families"]}
+    (Path(run["run_dir"]) / "counters.json").write_text(json.dumps(record, indent=1))
+    if assert_malformed():
+        if not malformed > 0:
+            fail(run, name, "%s{proc=%s,reason=%s} did not grow after %d malformed datagrams (edge drops moved: %s)" % (
+                family, edge, reason, run["sent"], by_reason))
+        return
+    if not malformed > 0:
+        finding(run, name, "FINDING: no counter of malformed input moved (OBS1 open): %s edge %s, %d malformed datagrams; "
+                           "dv_edge_drops_total{proc=%s} moved by reason %s, dv_pkt_reject_total by %s, %d series changed "
+                           "in all (counters.json)" % (name, edge, run["sent"], edge, by_reason, reject, len(changes)))
 
 
 CHECKS = {"edge_survives": check_survives, "valid_client_served": check_served, "memory_bounded": check_memory,

@@ -278,7 +278,11 @@ def drive(protocol, client, frames, stream_id):
 
 
 def heard(protocol, listener, settle=0.5):
-    """Number of voice frames the listener received."""
+    """Number of voice frames the listener received. Every client has collect() except the DMR+ dongle
+    (DmrPlusClient): it pumps (keepalives on schedule) and its voice() packets are read with frames_of."""
+    if protocol == "dmrplus":
+        listener.pump(settle)
+        return len(dmrplus.frames_of(listener.voice()))
     return len(listener.collect(settle))
 
 
@@ -357,13 +361,16 @@ class Fuzzer:
     from two sources (source_for), keeping the last 50 in a Ring. The caller runs the valid
     clients between batches (batch() returns after `count` datagrams)."""
 
-    def __init__(self, scenario, group, host, seed, linked, stranger, gap=0.001, ring=None):
+    def __init__(self, scenario, group, host, seed, linked, stranger, gap=0.001, ring=None, module="B", start=0):
+        """module: the module letter the seed packets name (fuzz.protocol); start: first case index of the
+        run (a second phase continues after the first, so no case is sent twice)."""
         self.scenario, self.group, self.host, self.seed = scenario, tuple(group), host, str(seed)
+        self.module = module
         self.sources = {"linked": linked, "stranger": stranger}
         self.gap = gap
         self.ring = ring or Ring()
         self.sent = 0
-        self.case_index = 0                   # next case of the run (across the group)
+        self.case_index = start               # next case of the run (across the group)
         self.errors = 0
         self._start = time.monotonic()
 
@@ -372,7 +379,7 @@ class Fuzzer:
         protocol = self.group[self.case_index % len(self.group)]
         own = self.case_index // len(self.group)
         self.case_index += 1
-        return protocol, own, fuzz.generate(protocol, self.seed, own)
+        return protocol, own, fuzz.generate(protocol, self.seed, own, self.module)
 
     def batch(self, count):
         """Send at least `count` datagrams (whole cases); returns how many were sent."""
@@ -432,16 +439,63 @@ class Replayer:
 METRIC_PREFIXES = ("dv_edge_drops_total", "dv_pkt_reject_total", "dv_edge_queue_drops_total", "dv_hub_dropped_total")
 
 
-def error_count(lines, edges=()):
-    """The error / drop counters that a malformed datagram may move: dv_edge_drops_total (of the
-    processes named in edges, else of all when no sample carries a proc label) plus
-    dv_pkt_reject_total, from the text lines of a hub scrape."""
+def edge_label(comm):
+    """The proc label of dv_edge_drops_total for a child process name: "dv-edge-dextra" is proc="dextra"."""
+    return comm[len("dv-edge-"):] if comm.startswith("dv-edge-") else comm
+
+
+def sample_map(text):
+    """{(name, ((label, value), ...)): value} of the samples of a hub scrape (the text of /metrics)."""
     from . import metrics
+    return {(s.name, tuple(sorted(s.labels.items()))): s.value for s in metrics.parse(text)}
+
+
+def metric_changes(before, after):
+    """[(name, labels dict, before, after)] of every series whose value differs between two scrape
+    texts (a series that is new counts from 0), sorted by name and labels."""
+    old, new = sample_map(before), sample_map(after)
+    out = []
+    for key in sorted(set(old) | set(new)):
+        a, b = old.get(key, 0.0), new.get(key, 0.0)
+        if a != b and not (a != a and b != b):
+            out.append((key[0], dict(key[1]), a, b))
+    return out
+
+
+def family_delta(changes, name, **labels):
+    """Sum of (after - before) over the changed series of one family whose labels contain `labels`."""
+    return sum(b - a for n, lab, a, b in changes if n == name and all(lab.get(k) == v for k, v in labels.items()))
+
+
+def error_count(lines, edges=()):
+    """dv_edge_drops_total (of the processes named in edges, as child names or proc labels, else of all
+    when no sample carries a proc label) plus dv_pkt_reject_total, from the text lines of a hub scrape."""
+    from . import metrics
+    labels = {edge_label(e) for e in edges}
     samples = metrics.parse("\n".join(lines))
     drops = [s for s in samples if s.name == "dv_edge_drops_total"]
-    if edges and any("proc" in s.labels for s in drops):
-        drops = [s for s in drops if s.labels.get("proc") in edges]
+    if labels and any("proc" in s.labels for s in drops):
+        drops = [s for s in drops if s.labels.get("proc") in labels]
     return sum(s.value for s in drops) + metrics.total(samples, "dv_pkt_reject_total")
+
+
+# ---------------------------------------------------------------- floor rule and phases
+
+STREAM_TIMEOUT_S = 1.6          # silence timeout of a stream (dvtest/specs/dvrouter.py B3: "timeout_s": 1.6)
+QUIET_MARGIN_S = 1.0            # added before a valid round on a module the fuzz client also used
+QUIET_S = STREAM_TIMEOUT_S + QUIET_MARGIN_S
+
+
+def plan_phases(n, other_module, every=200):
+    """The phases of a run of n datagrams: [{name, module, quiet, count}]. With a module to move to
+    (fuzz.OTHER_MODULE) the first half fuzzes THAT module (the valid clients stay on B: a floor hold of the
+    fuzz client cannot explain a miss, no wait), the second half fuzzes B and waits QUIET_S of quiet before
+    each valid round. Without one the whole run is "same" with the wait."""
+    if other_module is None or n < 2:
+        return [dict(name="same", module="B", quiet=True, count=n)]
+    first = (n // 2 // every) * every or n // 2
+    return [dict(name="other", module=other_module, quiet=False, count=first),
+            dict(name="same", module="B", quiet=True, count=n - first)]
 
 
 def settings_from_env(environ=None):

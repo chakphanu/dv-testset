@@ -23,6 +23,12 @@
 # and $XDG_RUNTIME_DIR/dv-router; the netns scenarios run in parallel and must
 # not share it).
 #
+# Optional DVT_DVR_EXTRA_TOML=<file>: after the conversion (path=convert only) the file is merged into
+# the converted dv-router.toml with dvtest.sut_config.merge_extra (a plain [table] that the converted file
+# already has is merged key by key, anything else is appended), so a test can switch on an edge the xlxd
+# files cannot (cases/test_fuzz_netns.py: [edges.nxdn], [edges.p25], [edges.g3]). With the shim and direct
+# paths there is no TOML to extend: the wrapper then exits 2 instead of ignoring it.
+#
 # Which path was taken is printed on stderr ("dvr-import-wrap: path=..."),
 # so it lands in the scenario's xlxd.log:
 #   convert   the converter lists --out in its --help (one-shot mode): steps 1 and 2
@@ -57,8 +63,21 @@ if [ -x "$conv" ] && printf '%s\n' "$help" | grep -q -e '--out'; then
   toml="$PWD/dv-router.toml"
   echo "dvr-import-wrap: path=convert: $conv --dir $PWD --out $toml $*" >&2
   "$conv" --dir "$PWD" --out "$toml" "$@"
+  if [ -n "${DVT_DVR_EXTRA_TOML:-}" ]; then
+    echo "dvr-import-wrap: path=convert: merging $DVT_DVR_EXTRA_TOML into $toml" >&2
+    root="$(cd "$(dirname "$0")/.." && pwd)"
+    PYTHONPATH="$root" python3 -c '
+import sys
+from dvtest import sut_config
+base = open(sys.argv[1]).read()
+open(sys.argv[1], "w").write(sut_config.merge_extra(base, open(sys.argv[2]).read()))
+' "$toml" "$DVT_DVR_EXTRA_TOML"
+  fi
   echo "dvr-import-wrap: path=convert: $router --config $toml $*" >&2
   DV_CONFIG_DIR="$PWD" exec "$router" --config "$toml" "$@"
+elif [ -n "${DVT_DVR_EXTRA_TOML:-}" ]; then
+  echo "dvr-import-wrap: DVT_DVR_EXTRA_TOML needs a converter with a one-shot --out mode (path=convert)" >&2
+  exit 2
 elif [ -x "$conv" ]; then
   echo "dvr-import-wrap: path=shim (no one-shot --out in $conv): $conv --exec --dir $PWD $* -- $router" >&2
   exec "$conv" --exec --dir "$PWD" "$@" -- "$router"

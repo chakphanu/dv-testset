@@ -333,8 +333,8 @@ def test_replayer_resends_recorded_entries_from_their_source():
 
 
 def test_error_counters_and_settings():
-    lines = ['dv_edge_drops_total{proc="dv-edge-dextra",reason="bad_packet"} 5',
-             'dv_edge_drops_total{proc="dv-edge-ysf",reason="no_session"} 7',
+    lines = ['dv_edge_drops_total{proc="dextra",reason="bad_packet"} 5',
+             'dv_edge_drops_total{proc="ysf",reason="no_session"} 7',
              'dv_pkt_reject_total{reason="spoof"} 2']
     assert fuzz_run.error_count(lines, ("dv-edge-dextra",)) == 7
     assert fuzz_run.error_count(lines) == 14
@@ -445,3 +445,144 @@ def test_case_file_edge_names_follow_the_launcher_children():
                "dv-edge-p25", "dv-edge-usrp"}
     for spec in mod.SCENARIOS.values():
         assert set(spec["edges"]) <= allowed
+
+
+# ---------------------------------------------------------------- DMR+ listener, module variants, floor rule, hub diff
+
+def test_heard_reads_the_dmrplus_client_through_its_own_api():
+    client = fuzz_run.make_client("dmrplus", "127.0.0.1", "listener")
+    try:
+        assert fuzz_run.heard("dmrplus", client, settle=0.01) == 0
+        client.client.inbox.extend(dmrplus.stream(fuzz_run.frames_for("dmrplus", 54), 1023007, 4002))
+        client.client.inbox.append(dmrplus.ACK)                       # non-voice datagrams are ignored
+        assert fuzz_run.heard("dmrplus", client, settle=0.01) == 54
+    finally:
+        client.close()
+    for name in fuzz_run.CLIENT_KINDS:
+        c = fuzz_run.make_client(name, "127.0.0.1", "listener")
+        try:
+            assert fuzz_run.heard(name, c, settle=0.01) == 0, name       # no AttributeError for any client
+        finally:
+            c.close()
+
+
+def test_protocol_seeds_follow_the_module():
+    for name in fuzz.PROTOCOLS:
+        b, c = fuzz.protocol(name, "B"), fuzz.protocol(name, "C")
+        assert [i.role for i in b.items] == [i.role for i in c.items]
+        assert [len(i.data) for i in b.items] == [len(i.data) for i in c.items]
+        moved = sum(x.data != y.data for x, y in zip(b.items, c.items))
+        assert (moved > 0) == (name not in ("m17v3", "nxdn", "p25", "usrp")), name
+    assert fuzz.protocol("dextra", "C").items[0].data == dextra.link_packet(fuzz.CALL, "C")
+    assert fuzz.protocol("dmr", "C").items[6].data[8:11] == (4003).to_bytes(3, "big")
+    assert fuzz.protocol("dmrplus", "C").items[0].data == dmrplus.connect_packet(fuzz.DMR_ID, 4003)
+    assert fuzz.protocol("ysf", "C").items[3].data != fuzz.protocol("ysf", "B").items[3].data
+    assert fuzz.generate("dextra", "1", 7, "B") == fuzz.generate("dextra", "1", 7)
+    assert any(fuzz.generate("dextra", "1", i, "C") != fuzz.generate("dextra", "1", i, "B") for i in range(60))
+    assert set(fuzz.OTHER_MODULE) == set(fuzz.PORT_GROUPS)
+
+
+def test_fuzzer_second_phase_continues_after_the_first_on_another_module():
+    first = FakeSource()
+    fz = fuzz_run.Fuzzer("dextra", ("dextra",), "127.0.0.1", "9", first, FakeSource(), gap=0, module="C")
+    fz.batch(100)
+    second = FakeSource()
+    fz2 = fuzz_run.Fuzzer("dextra", ("dextra",), "127.0.0.1", "9", second, FakeSource(), gap=0, ring=fz.ring,
+                          module="B", start=fz.case_index)
+    fz2.batch(100)
+    seen = [e["index"] for e in fz.ring.entries()]
+    assert fz2.ring is fz.ring and seen == sorted(seen) and len(fz.ring.entries()) == 50
+    assert fz2.case_index > fz.case_index > 0
+    e = fz.ring.entries()[-1]
+    assert bytes.fromhex(e["hex"]) == fuzz.generate("dextra", "9", e["index"], "B").packets[e["sub"]]
+
+
+def test_phases_and_the_floor_rule():
+    assert fuzz_run.QUIET_S == fuzz_run.STREAM_TIMEOUT_S + fuzz_run.QUIET_MARGIN_S == 2.6
+    p = fuzz_run.plan_phases(2000, "C")
+    assert [(x["name"], x["module"], x["quiet"], x["count"]) for x in p] == [
+        ("other", "C", False, 1000), ("same", "B", True, 1000)]
+    assert fuzz_run.plan_phases(2000, None) == [dict(name="same", module="B", quiet=True, count=2000)]
+    assert [x["count"] for x in fuzz_run.plan_phases(450, "C")] == [200, 250]
+    assert sum(x["count"] for x in fuzz_run.plan_phases(1, "C")) == 1
+    from dvtest.specs import dvrouter
+    assert dvrouter.SPEC["test_stream_timeout_frees_module"]["timeout_s"] == fuzz_run.STREAM_TIMEOUT_S
+
+
+def test_hub_scrape_diff_and_edge_labels():
+    before = ('# HELP x\ndv_edge_drops_total{proc="dextra",reason="no_session"} 1\n'
+              'dv_edge_drops_total{proc="ysf",reason="no_session"} 4\ndv_up 1\n')
+    after = ('dv_edge_drops_total{proc="dextra",reason="no_session"} 3\ndv_edge_drops_total{proc="dextra",reason="x"} 2\n'
+             'dv_edge_drops_total{proc="ysf",reason="no_session"} 4\ndv_up 1\ndv_pkt_reject_total{reason="spoof"} 1\n')
+    ch = fuzz_run.metric_changes(before, after)
+    assert [(n, lab.get("reason"), a, b) for n, lab, a, b in ch] == [
+        ("dv_edge_drops_total", "no_session", 1.0, 3.0), ("dv_edge_drops_total", "x", 0.0, 2.0),
+        ("dv_pkt_reject_total", "spoof", 0.0, 1.0)]
+    assert fuzz_run.family_delta(ch, "dv_edge_drops_total", proc="dextra") == 4.0
+    assert fuzz_run.family_delta(ch, "dv_edge_drops_total", proc="dextra", reason="malformed") == 0
+    assert fuzz_run.family_delta(ch, "dv_edge_drops_total", proc="ysf") == 0
+    assert fuzz_run.metric_changes(before, before) == []
+    assert fuzz_run.edge_label("dv-edge-dmrhb") == "dmrhb" and fuzz_run.edge_label("dv-room") == "dv-room"
+
+
+def run_record(tmp_path, **kw):
+    metrics = dict(error=None, edge_proc="dextra", start_dumped=True, end_dumped=True, families=["dv_up"],
+                   changed=[["dv_edge_drops_total", {"proc": "dextra", "reason": "no_session"}, 1.0, 5.0],
+                            ["dv_pkt_reject_total", {"reason": "spoof"}, 0.0, 2.0]])
+    metrics.update(kw.pop("metrics", {}))
+    return dict(run_dir=str(tmp_path), pinged=True, sent=2000, seed="1", metrics=metrics, **kw)
+
+
+def test_counters_move_is_a_record_and_a_finding_until_obs1_lands(tmp_path, monkeypatch):
+    mod = load_cases()
+    monkeypatch.delenv("DVT_FUZZ_ASSERT_MALFORMED", raising=False)
+    runs = {"dextra": run_record(tmp_path)}
+    with pytest.warns(UserWarning, match=r"FINDING: no counter of malformed input moved \(OBS1 open\)"):
+        mod.check_counters(runs, "dextra")                                # passes: a record, not a failure
+    rec = json.loads((tmp_path / "counters.json").read_text())
+    assert rec["edge_drops_by_reason"] == {"no_session": 4.0} and rec["pkt_reject_by_reason"] == {"spoof": 2.0}
+    assert rec["expected"] == "dv_edge_drops_total{reason=malformed}" and rec["expected_delta"] == 0
+    assert "OBS1 open" in (tmp_path / "fuzz-findings.txt").read_text()
+    # the switch: once OBS1 landed the counter is asserted
+    monkeypatch.setenv("DVT_FUZZ_ASSERT_MALFORMED", "1")
+    with pytest.raises(pytest.fail.Exception, match="did not grow"):
+        mod.check_counters(runs, "dextra")
+    runs["dextra"]["metrics"]["changed"].append(
+        ["dv_edge_drops_total", {"proc": "dextra", "reason": "malformed"}, 0.0, 1990.0])
+    mod.check_counters(runs, "dextra")                                    # no finding, no failure
+    assert json.loads((tmp_path / "counters.json").read_text())["expected_delta"] == 1990.0
+    # an unreachable hub is a failure in both modes
+    monkeypatch.delenv("DVT_FUZZ_ASSERT_MALFORMED")
+    bad = run_record(tmp_path, metrics=dict(error="error: refused", end_dumped=False))
+    with pytest.raises(pytest.fail.Exception, match="no hub scrape"):
+        mod.check_counters({"dextra": bad}, "dextra")
+    assert mod.EXPECTED_MALFORMED == ("dv_edge_drops_total", "malformed")
+
+
+def test_a_miss_after_the_quiet_wait_is_a_failure_and_says_how_long_it_was_quiet(tmp_path):
+    mod = load_cases()
+    warm = dict(tag="warm", ok=True, heard=54, expected=54, probe=True, reason="")
+    row = dict(tag="same-1000", ok=False, heard=0, expected=54, probe=True, sent=1000, phase="same", fuzz_module="B",
+               quiet_s=2.6, recovered_after_s=4.8, gone=[], new=[], launcher_alive=True)
+    run = dict(run_dir=str(tmp_path), pinged=True, valid_mode="served", warmup=warm, rounds=[row], last50=[], seed="1")
+    with pytest.warns(UserWarning, match="FINDING"):
+        with pytest.raises(pytest.fail.Exception) as info:
+            mod.check_served({"dextra": run}, "dextra")
+    text = str(info.value)
+    assert "quiet for 2.6 s" in text and "stream timeout 1.6 s" in text and "served again 4.8 s after" in text
+    assert (tmp_path / "fuzz-replay-dextra.json").exists()
+    run["rounds"] = [dict(row, phase="other", fuzz_module="C", quiet_s=0.0)]
+    with pytest.warns(UserWarning), pytest.raises(pytest.fail.Exception, match="module C and the valid clients on B"):
+        mod.check_served({"dextra": run}, "dextra")
+    run["rounds"] = [dict(row, ok=True)]
+    mod.check_served({"dextra": run}, "dextra")
+
+
+def test_nxdn_p25_g3_are_switched_on_by_a_toml_merged_after_the_conversion():
+    import tomllib
+    mod = load_cases()
+    assert set(mod.EXTRA_TOML) == {"nxdn", "p25", "g3"}
+    for name, text in mod.EXTRA_TOML.items():
+        assert tomllib.loads(text)["edges"][name]["enable"] is True
+    assert tomllib.loads(mod.EXTRA_TOML["nxdn"])["edges"]["nxdn"]["tg_modules"] == "31672:F"
+    assert tomllib.loads(mod.EXTRA_TOML["p25"])["edges"]["p25"]["server_tg"] == 31672

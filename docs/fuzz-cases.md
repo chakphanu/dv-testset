@@ -90,11 +90,31 @@ written for the `usrp` scenario only).
 3. `DVT_FUZZ_N` (2000) datagrams, `DVT_FUZZ_GAP_MS` (1) apart, two cases in three from a linked session
    of the fuzz client (its own `dvtest/proto` client, identity `N0FUZZ`, so the valid clients are never
    the ones attacked by name), one in three from a socket that never linked. The m17 scenario alternates
-   `m17` and `m17v3`.
-4. After every 200 datagrams a valid round, then the process table is compared with the baseline.
-   The first failure stops the run and keeps the evidence.
-5. The hub is read again; when no counter moved yet it is polled for up to 14 s more (the controllers
-   publish every 10 s).
+   `m17` and `m17v3`. In two phases (`fuzz_run.plan_phases`): the first half with the fuzz client and the
+   seed packets on **module C** (xlx: E, DG-ID / TG / reflector of C) while the valid clients stay on B,
+   the second half on module B. usrp (bound to B by `xlxd.usrp`), nxdn and p25 (a TG, not a module) have
+   the second phase only.
+4. After every 200 datagrams a valid round, then the process table is compared with the baseline. In the
+   phase on B the round waits first until the module is idle: `QUIET_S` = 2.6 s (the stream timeout 1.6 s of
+   `dvtest/specs/dvrouter.py` B3 plus 1 s), because a half-open fuzzed stream (a mutated header, a header
+   without voice, a terminator storm) holds the floor until that timeout. In the phase on C there is no
+   wait: a floor hold of the fuzz client cannot explain a miss there. A valid client that is still not
+   served after the wait is a failure and a FINDING; the round is then repeated up to 3 times, 2 s apart, to
+   record how long the module stayed busy (`recovered_after_s` in `result.json`, the failure text). The first
+   failure stops the run and keeps the evidence.
+5. The hub is read in full at the start (`metrics-start.txt`) and again after the last datagram
+   (`metrics-end.txt`), after its `_total` series stopped changing (at least 4 s, at most 12 s; the
+   controllers publish every 10 s). Every series whose value differs is listed in `result.json`
+   (`metrics.changed`) and `counters.json`.
+
+nxdn, p25 and g3 are not enabled by the converted xlxd files. `scripts/dvr-import-wrap.sh` merges the file
+named by `DVT_DVR_EXTRA_TOML` into the converted `dv-router.toml` (`dvtest.sut_config.merge_extra`, a plain
+`[table]` the file already has is merged key by key); the scenarios of these three write `dv-extra.toml`
+(`EXTRA_TOML` in `cases/test_fuzz_netns.py`: `[edges.nxdn] enable, tg_modules = "31672:F"`, `[edges.p25]
+enable, server_module = "G", server_tg = 31672`, `[edges.g3] enable`, the keys of
+`rig/config/dv-router/soak-edges.toml`) into the scenario directory. `DVT_FUZZ_ENABLE_EDGES=0` leaves them off
+(the port-not-bound skip then applies again). The wrapper refuses the variable (exit 2) with the older shim /
+direct converters, which have no TOML to extend.
 
 The valid round, per protocol:
 
@@ -116,9 +136,9 @@ scenario). Ids are `FUZZ-<protocol>-<check>` in the docstrings.
 | Case | Asserts |
 |------|---------|
 | `test_fuzz_<p>_edge_survives` | the launcher is alive at the end; no process of the launcher's tree is gone or new (pid and start time) after any batch, so no crash and no restart of the edge, a room or a service; the run was not cut by `SCENARIO_BUDGET` (150 s) |
-| `test_fuzz_<p>_valid_client_served` | every valid round: link acknowledged, over heard |
+| `test_fuzz_<p>_valid_client_served` | every valid round: link acknowledged, over heard; on the idle wait of the phase on B and without one on C (see "What a scenario does"). The failure text names the phase, the module the fuzz client used, how long the module was quiet, and how long it took to be served again |
 | `test_fuzz_<p>_memory_bounded` | VmRSS of the edge after the run minus before is at most `RSS_GROWTH_MAX_KIB` (8192) |
-| `test_fuzz_<p>_counters_move` | `dv_edge_drops_total` (of the edge's `proc` label) plus `dv_pkt_reject_total` grew while the malformed datagrams were sent |
+| `test_fuzz_<p>_counters_move` | a RECORD and a FINDING, not a failure: no hub counter of malformed input exists yet (DV-Router OBS1 is open: `dv_edge_drops_total` has fixed reasons, `dv_pkt_reject_total` belongs to the data worker). `counters.json` lists what moved (the edge's `dv_edge_drops_total{proc=<edge>}` by reason, `dv_pkt_reject_total`, every changed family) and the case warns `FINDING: no counter of malformed input moved (OBS1 open)`. Fails only if the hub could not be scraped. With `DVT_FUZZ_ASSERT_MALFORMED=1` (once OBS1 landed) it asserts `dv_edge_drops_total{proc=<edge>,reason="malformed"}` > 0 (`EXPECTED_MALFORMED` in the case file) |
 
 Protocols (`<p>`): dextra, dplus, dcs, dmr, dmrplus, ysf, m17, nxdn, p25, usrp, xlx, imrs, g3.
 
@@ -133,14 +153,17 @@ One protocol: add `-k test_fuzz_ysf_`. Smaller or different run: `DVT_FUZZ_N=400
 `DVT_FUZZ_GAP_MS=2`. `DVT_NETNS_PARALLEL` stays 1 (a DV-Router scenario peaks near 435 of the 1024
 tasks of the scope, `docs/rig.md`). Under `DVT_SUT_PROFILE` xlxd the whole file skips.
 
-Budget (estimate, never run when this was written): a scenario is about 4 s start-up, 2000 datagrams
-(about 3 s), 11 valid rounds of about 1.7 to 2 s each and the hub read, so about 30 to 40 s; 13
-scenarios one after the other come to about 7 to 9 minutes, inside the 10 minute budget. The wait limit
+Budget: the first run (321 s for the cases that got that far) measured 34 to 50 s per scenario before the
+changes below; the idle wait adds 2.6 s to each of the 5 (usrp, nxdn, p25: 10) rounds on module B and the end
+read of the hub 4 to 12 s, so expect about 50 to 70 s a scenario and 11 to 15 minutes for 13 scenarios, over
+the 10 minute target: `DVT_FUZZ_N=1000` brings it back (not measured). The wait limit
 of a scenario is `fuzz_run.timeout_s(n)` (at least 240 s). `DVT_FUZZ_N` above 2000 grows the file by
 about 5 ms per datagram plus 3.5 s per 200.
 
-The run directory of a scenario is `out/<utc>/netns/fuzz-<protocol>/`: `result.json` (rounds, process
-tables before and after, RSS, hub lines, ports, the last 50 datagrams), `xlxd.log`, `harness.err`.
+The run directory of a scenario is `out/<utc>/netns/fuzz-<protocol>/`: `result.json` (phases, rounds,
+process tables before and after, RSS, hub changes, ports, the last 50 datagrams), `metrics-start.txt`,
+`metrics-end.txt` (the whole scrapes), `counters.json`, `fuzz-findings.txt`, `dv-extra.toml` (nxdn, p25,
+g3), `xlxd.log`, `harness.err`.
 
 ## Replay a failure
 
@@ -171,12 +194,12 @@ order, the valid round still runs after every 200). A single datagram can be reb
 
 ## UNVERIFIED (not confirmed when this was written; nothing here ran against a DV-Router build)
 
-1. **Which ports the converted config opens.** `docs/rig.md` lists DExtra 30001, MMDVM 62030, M17 17000,
-   DMR+ 8880, XLX 10002 and the `xlxd.usrp` ports as the xlxd contract; DPlus 20001, DCS 30051, YSF 42000,
-   IMRS 21110, G3 (12346 / 12345 / 40000), NXDN 41400 and P25 41000 are not in that contract (NXDN / P25
-   are switched on by `[edges.nxdn]` / `[edges.p25]` in the rig). The cases read the port table of the
-   namespace and skip with the list when a port is not bound; a skip is not a pass. Whether the netns
-   config of a given build enables them is open.
+1. **Which ports the converted config opens.** First run (wip-9a348ca): everything bound except NXDN
+   41400, P25 41000 and G3 (12346 / 12345 / 40000), which the xlxd files cannot enable; they are now
+   enabled by the merged TOML above. The keys of `[edges.nxdn]` / `[edges.p25]` are those of
+   `rig/config/dv-router/soak-edges.toml`; `[edges.g3] enable = true` is a guess (no G3 snippet exists in this
+   repository) and the NXDN / P25 module mapping (F, G) is the soak one. The cases still read the port table
+   of the namespace and skip with the list when a port is not bound; a skip is not a pass.
 2. **Edge process names** are the children in the `proc-stat` allow-list (`cases/unit/test_procstat.py`);
    `dv-edge-dmrhb` against `dv-edge-mmdvm` depends on the build (`DVT_SUT_GEN`), both are tried. M17 v3
    packets are assumed to go to the same edge and port 17000 as M17 v2.
@@ -187,10 +210,11 @@ order, the valid round still runs after every 200). A single datagram can be reb
    frames from one callsign refuse TX 3 s / 10 s / 300 s), avoided by 54-frame valid overs. A per-address
    login or auth back-off (DMR RPTL, DPlus, DCS) is not documented; it would act on the fuzz address
    (127.0.0.5) only.
-4. **The error counters.** `dv_edge_drops_total{proc,reason}` and `dv_pkt_reject_total{reason}` are on the
-   hub (`docs/web-soak-cases.md`, `docs/dp15-cases.md`); that a malformed datagram at every edge moves one
-   of them, that the `proc` label is the child name, and that they appear within 10 s plus the 14 s wait,
-   is assumed. An edge that drops silently fails `counters_move`: a finding for DV-Router to rule on.
+4. **The error counters.** Settled by the first run and the DV-Router answer: the `proc` label of
+   `dv_edge_drops_total` is the edge name without `dv-edge-` (`dextra`, `dmrhb`), my first filter used the
+   process name and saw 0; no per-edge counter counts malformed datagrams (OBS1 open), so `counters_move` is a
+   record. Open: the name and reason of the counter OBS1 adds (`dv_edge_drops_total{reason="malformed"}` is
+   assumed, `EXPECTED_MALFORMED`).
 5. **The memory bound** of 8192 KiB is a guess, not a measured slope (SOAK1 and the RSS isolation runs use
    other methods). It is a named constant (`RSS_GROWTH_MAX_KIB`); the baseline is taken after the warm-up
    round, so first-use allocations of the edge are mostly not counted.
