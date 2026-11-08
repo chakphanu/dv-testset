@@ -275,7 +275,7 @@ DVT_BASEMAP_FILE=.local/basemap-map2 scripts/run.sh ...      # as the DOM with a
 ```
 
 Defaults are `--profile hotspot --detail dvt=99.9,13.0,101.1,14.1` (the world overview z0-5 holds 9 tiles, the detail z6-12 holds 7); `--profile router` and any
-`--detail NAME=W,S,E,N` inside Thailand also work. The script runs `install --dry-run` first (its plan is saved as `<out>/install-plan.json`, beside `basemap/`), then `install` and `verify`, and refuses an `--out` that already holds a `basemap/`. The binary is any executable file of a MAP2g build (copy it out of the image with `docker create` and `docker cp`; where the new image keeps it is not known here: the 220e45b notes use `--entrypoint dv-svc-basemap`).
+`--detail NAME=W,S,E,N` inside Thailand also work. The script runs `install --dry-run` first (its plan is saved as `<out>/install-plan.json`, beside `basemap/`), then `install` and `verify`, and refuses an `--out` that already holds a `basemap/`. The binary is any executable file of a MAP2g build (copy it out of the image with `docker create` and `docker cp`; the image keeps it at `/usr/local/bin/dv-svc-basemap`; its entrypoint is `dv-router`, so either `docker cp` that path or run with `--entrypoint dv-svc-basemap`).
 `python3 -m dvtest.basemap_fixture serve --catalog-out FILE` keeps the server up for a manual run, `info` prints the
 sizes and digests (archive 2298 bytes, catalog 78981 bytes). Unit tests: `python3 -m pytest -m unit cases/unit/test_basemap_fixture.py` (31 tests; the last one installs and verifies for real
 when `DVT_BASEMAP_BIN=<binary>` is set and skips otherwise).
