@@ -204,3 +204,63 @@ def test_status_facts():
     assert len(bad) == 5
     assert any("accessibility tree" in f for f in mms.judge_status_facts(facts(visibility="hidden")))
     assert any("accessibility tree" in f for f in mms.judge_status_facts(facts(hidden_chain=True)))
+
+
+# ------------------------------------------------------------------ SIGSTOP / SIGCONT helpers
+
+def test_edge_listed_cuts_the_instance_suffix():
+    assert mms.edge_listed(state(), "ysf") and mms.edge_listed(state(), "dextra") and mms.edge_listed(state(), "dcs")
+    assert not mms.edge_listed(state(), "xlx")
+    gone, _ = mms.close_one_edge(state())
+    assert not mms.edge_listed(gone, "ysf")
+    assert not mms.edge_listed({}, "ysf") and not mms.edge_listed({"live": {"edges": None}}, "ysf") and not mms.edge_listed([], "ysf")
+
+
+def test_poll_until_returns_the_elapsed_time_or_none():
+    now = [0.0]
+    calls = []
+
+    def clock():
+        return now[0]
+
+    def sleep(s):
+        now[0] += s
+
+    def pred():
+        calls.append(now[0])
+        if len(calls) == 1:
+            raise RuntimeError("a dead hub counts as not yet")
+        return now[0] >= 6.0
+
+    assert mms.poll_until(pred, 30.0, every_s=2.0, clock=clock, sleep=sleep) == 6.0
+    now[0] = 0.0
+    assert mms.poll_until(lambda: False, 5.0, every_s=2.0, clock=clock, sleep=sleep) is None
+    assert now[0] >= 5.0
+    assert mms.poll_until(lambda: True, 5.0, clock=clock, sleep=sleep) == 0.0
+
+
+class FakeRig:
+    def __init__(self, fail=()):
+        self.calls, self.fail = [], set(fail)
+
+    def kill_proc(self, service, process, signal):
+        self.calls.append((service, process, signal))
+        if process in self.fail:
+            raise RuntimeError("error 3")
+
+
+def test_cont_all_sends_cont_twice_to_both_processes_and_never_raises():
+    rig = FakeRig()
+    assert mms.cont_all(rig) == 4
+    assert rig.calls == [("xlxd-sut", "dv-edge-xlx", "CONT"), ("xlxd-sut", "dv-svc-status", "CONT")] * 2
+    rig = FakeRig(fail={"dv-edge-xlx"})
+    assert mms.cont_all(rig) == 2                       # the hub still got both, the edge failures were swallowed
+    assert sum(1 for c in rig.calls if c[1] == "dv-edge-xlx") == 2
+
+
+def test_the_stoppable_processes_are_allow_listed_for_stop_and_cont():
+    from dvtest import control
+    for proc in mms.STOPPABLE:
+        for sig in ("STOP", "CONT"):
+            assert control.kill_proc_allowed(mms.SERVICE, proc, sig)
+    assert mms.CLOSED_SCENARIO not in mms.SCENARIOS

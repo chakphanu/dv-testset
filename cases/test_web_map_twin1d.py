@@ -5,6 +5,7 @@ WebKit, the fixtures of cases/browser_fixtures.py). Needs `scripts/run.sh --prof
 K22 cases do. Every case skips with the reason otherwise.
 
   test_map_thai_screenshot_matrix[<scenario>-<engine>]   decision section 3: scenario x EN/TH x light/dark x 360/1000/1440 px
+  test_map_closed_desk_sign_thai[<engine>]               the Closed sign EN/TH on a quiet Map with dv-edge-xlx really stopped
   test_map_status_announces_over_start_and_end[<engine>] the polite `map-status` region announces once per over start and end
 
 THE MATRIX. Four scenarios, one test each (12 combinations inside a test: 2 languages x 2 colour schemes x 3 widths; 48 per
@@ -19,11 +20,15 @@ image dv-router:wip-efd9eca and is therefore UNVERIFIED:
   map-busy       five rooms on air at once (USRP dynamic clients, tone) for the whole run
   map-quiet      no room on air, nothing fading
   map26          the rig's 26 rooms (the template serves A-Z) at rest plus one talker; fewer rooms is a finding, not a failure
-  map-hub-down   the status hub (dv-svc-status) killed again and again through the control channel until the page shows the
-                 `map-hub-down` callout; the page is reloaded once if the live indicator does not notice by itself
-A closed desk is not something the rig produces: the case rewrites the answer of GET /api/v1/public/state in the browser (page
-route) so that one enabled edge is missing from live.edges, which is exactly how the page decides a desk is closed. That is a UI
-test input, not a statement about the server; the evidence says which protocol was closed.
+  map-hub-down   SIGSTOP of the status hub (dv-svc-status) through the control channel (DV-Router: the public state becomes
+                 unavailable, the page shows the hub-down banner and dims the building), SIGCONT afterwards; the page is
+                 reloaded once if the live indicator does not notice by itself
+  map-closed-desk  (own test) quiet Map with SIGSTOP of dv-edge-xlx: web.md says a closed desk is "edge enabled but not in
+                 live.edges"; the case polls the public state until live.edges drops it, then judges the Closed sign
+Rules for every STOP: CONT (twice, idempotent) in the case's finally, in a module-scope autouse fixture and in atexit, so a crash
+cannot leave a process stopped; the case waits for the recovery (the edge listed again, the hub answering 200) before it ends, and
+only these two cases ever see a stopped process. DVT_MAP_ROUTE_FALLBACK=1 replaces the edge STOP by an in-browser rewrite of the
+state (screenshots only, labelled route-fallback, not evidence; off by default).
 
 THE STATUS REGION (TWIN1d, the product owner's spec for the next image): a MutationObserver injected before the page scripts records
 every change of the region's textContent; one 6 s over from a USRP client is driven. Exactly one change at the start, none during
@@ -33,6 +38,7 @@ has no map-status (the matrix then records that as a finding and runs on).
 
 UNVERIFIED and NOT RUN: see docs/web-browser-cases.md, "TWIN1d Thai screenshot matrix and map-status".
 """
+import atexit
 import json
 import os
 import re
@@ -64,7 +70,9 @@ OVER_CAP_S = 100.0              # a seeded matrix over never lasts longer (well 
 SEED_WAIT_S = 20.0              # the seeded rooms must show data-state=onair within this long
 HUB_NOTICE_S = 25.0             # the live page should notice the dead hub within this long ...
 HUB_RELOAD_S = 40.0             # ... else it is reloaded once and given this long
-HUB_BACK_S = 150.0              # the public state must answer 200 again within this long after the kills stop
+EDGE_DROP_S = 90.0              # live.edges must stop listing the SIGSTOPped edge within this long (UNVERIFIED how long the hub needs)
+EDGE_BACK_S = 150.0             # ... and list it again within this long after SIGCONT
+HUB_BACK_S = 150.0              # the public state must answer 200 again within this long after SIGCONT of the hub
 AUTH_SESSION = "/api/v1/auth/session"
 SSE_PATHS = ("/api/v1/public/events", "/api/v1/operator/stream")
 BUSY_ROOMS = (("F", "N0MBF"), ("G", "N0MBG"), ("I", "N0MBI"), ("O", "N0MBO"), ("P", "N0MBP"))
@@ -181,50 +189,57 @@ class OverLoop(threading.Thread):
             self.error = exc
 
 
-class HubKiller(threading.Thread):
-    """SIGKILL of dv-svc-status again and again (the launcher respawns it within 0.5 to 5 s; a respawn is killed before it can
-    publish), as kill_hub_for() of cases/test_web_k22.py does."""
+# ---------------------------------------------------------------- SIGSTOP / SIGCONT of the edge and the hub
 
-    def __init__(self, rig_control):
-        super().__init__(daemon=True)
-        self.rig = rig_control
-        self.halt = threading.Event()
-        self.kills = 0
-
-    def stop(self):
-        self.halt.set()
-
-    def run(self):
-        while not self.halt.is_set():
-            try:
-                self.rig.kill_proc("xlxd-sut", "dv-svc-status", "KILL")
-                self.kills += 1
-            except (RuntimeError, TimeoutError, ValueError):
-                pass                                # error 3: not running right now (between respawns)
-            self.halt.wait(0.3)
+GUARD = {"rig": None, "atexit": False}      # the control channel of the last STOP: the finalizers send CONT through it
 
 
-def wait_state_back(anon):
+def _guard_cont():
+    if GUARD["rig"] is not None:
+        mms.cont_all(GUARD["rig"])
+
+
+def stop_process(rig, process):
+    """SIGSTOP `process` of the sut through the control channel (dvtest/control.py). The guard is armed BEFORE the signal, so an
+    exception between the STOP and the case's own finally still ends in CONT (atexit and the module fixture below)."""
+    GUARD["rig"] = rig
+    if not GUARD["atexit"]:
+        atexit.register(_guard_cont)
+        GUARD["atexit"] = True
+    return rig.kill_proc(mms.SERVICE, process, "STOP")
+
+
+@pytest.fixture(scope="module", autouse=True)
+def cont_finalizer():
+    """Module finalizer: a CONT (twice) to the edge and the hub whatever the cases did, even after a crash."""
+    yield
+    _guard_cont()
+
+
+def public_state(anon):
+    return anon.get("/api/v1/public/state", pace=False, expect=200).json()
+
+
+def wait_state_back(anon, wait_s=None):
     """True once the public state answers 200 again."""
-    end = time.monotonic() + HUB_BACK_S
-    while time.monotonic() < end:
-        try:
-            if anon.get("/api/v1/public/state", pace=False).status == 200:
-                return True
-        except web.WebError:
-            pass
-        time.sleep(2.0)
-    return False
+    def ok():
+        return anon.get("/api/v1/public/state", pace=False).status == 200
+    return mms.poll_until(ok, wait_s or HUB_BACK_S, every_s=2.0) is not None
+
+
+def wait_edge_back(anon, wait_s=None):
+    """Seconds until the xlx edge is in live.edges again, or None."""
+    return mms.poll_until(lambda: mms.edge_listed(public_state(anon), mms.EDGE_PROTOCOL), wait_s or EDGE_BACK_S, every_s=2.0)
 
 
 class ClosedDesk:
-    """A page route on GET /api/v1/public/state that removes one enabled edge from live.edges (mms.close_one_edge), so the Map draws
-    that desk closed. `protocol` is the edge it closed (None until an answer was rewritten), `rewrites` how many answers."""
+    """OFF BY DEFAULT, screenshot-only fallback (DVT_MAP_ROUTE_FALLBACK=1), NOT EVIDENCE: a page route on GET /api/v1/public/state that
+    removes one enabled edge from live.edges (mms.close_one_edge), so the Map draws that desk closed without touching the
+    sut. The evidence says route-fallback. `protocol` is the edge it closed, `rewrites` how many answers."""
 
     def __init__(self):
         self.protocol = None
         self.rewrites = 0
-        self.passed = 0
 
     def handler(self, route):
         try:
@@ -248,7 +263,6 @@ class ClosedDesk:
                 headers["cache-control"] = "no-store"
                 route.fulfill(status=200, headers=headers, body=json.dumps(state).encode("utf-8"))
                 return
-        self.passed += 1
         route.fulfill(response=resp, body=body)
 
     def install(self, context):
@@ -261,8 +275,8 @@ def scenario_check(scenario, m):
     """Failures of the scenario's own precondition (the seeding worked), judged on every combination's measurement."""
     if scenario == "map-busy" and m.get("onair_rooms", 0) < 3:
         return ["map-busy: only %s room(s) on air, wanted at least 3" % m.get("onair_rooms")]
-    if scenario == "map-quiet" and m.get("onair_rooms", 0):
-        return ["map-quiet: %s room(s) on air" % m.get("onair_rooms")]
+    if scenario in ("map-quiet", mms.CLOSED_SCENARIO) and m.get("onair_rooms", 0):
+        return ["%s: %s room(s) on air" % (scenario, m.get("onair_rooms"))]
     if scenario == "map-hub-down" and not m.get("hub_down_callout"):
         return ["map-hub-down: the hub-down callout is not on the page"]
     return []
@@ -272,14 +286,14 @@ def measure(page):
     return page.evaluate(mms.MEASURE_JS, pages.map_matrix_selectors())
 
 
-def run_combo(bp, scenario, lang, scheme, width, closed, shots, record):
+def run_combo(bp, scenario, lang, scheme, width, closed_required, shots, record):
     """One combination: viewport and scheme in place, settle, measure, judge, screenshot. Returns the failures."""
     page = bp.page
     page.set_viewport_size({"width": width, "height": VIEW_HEIGHT})
     layout = settle(page)
     page.wait_for_timeout(150)
     m = measure(page)
-    failures, notes = mms.judge_measure(m, lang, scheme, closed_required=closed.protocol is not None and scenario != "map-hub-down")
+    failures, notes = mms.judge_measure(m, lang, scheme, closed_required=closed_required)
     failures += scenario_check(scenario, m)
     name = mms.shot_name(scenario, lang, scheme, width)
     shot = None
@@ -297,21 +311,31 @@ def run_combo(bp, scenario, lang, scheme, width, closed, shots, record):
     return ["%s: %s" % (mms.combo_id(scenario, lang, scheme, width), f) for f in failures]
 
 
-def hub_down_enter(bp, killer):
-    """Starts the kills and waits for the callout (the live indicator, else one reload). Returns how it was noticed."""
+def all_scheme_width(bp, scenario, lang, closed_required, shots, record):
+    failures = []
+    for scheme in mms.SCHEMES:
+        bp.page.emulate_media(color_scheme=scheme)
+        for width in mms.WIDTHS:
+            failures += run_combo(bp, scenario, lang, scheme, width, closed_required, shots, record)
+    return failures
+
+
+def hub_down_enter(bp, rig):
+    """SIGSTOP of the hub, then waits for the callout (the live page, else one reload). Returns (how, seconds): 'live', 'reload' or None."""
     page = bp.page
-    killer.start()
+    t0 = time.monotonic()
+    stop_process(rig, mms.HUB_PROCESS)
     try:
         pages.map_hub_down(page).wait_for(state="visible", timeout=int(HUB_NOTICE_S * 1000))
-        return "live"
+        return "live", round(time.monotonic() - t0, 1)
     except Exception:                               # noqa: BLE001 - not noticed by the live page: reload once
         pass
     page.reload()
     try:
         pages.map_hub_down(page).wait_for(state="visible", timeout=int(HUB_RELOAD_S * 1000))
-        return "reload"
+        return "reload", round(time.monotonic() - t0, 1)
     except Exception:                               # noqa: BLE001
-        return None
+        return None, round(time.monotonic() - t0, 1)
 
 
 def start_seed(scenario, bp, target, loops, peers):
@@ -341,6 +365,36 @@ def stop_seed(loops, peers):
         peer.close()
 
 
+def write_matrix(bp, scenario, record, failures, extra):
+    """Evidence JSON, the [RECORD] line and the page-log findings. Returns the JSON path."""
+    path = out_web() / ("map-matrix-%s-%s.json" % (bp.engine, scenario))
+    doc = dict(extra, engine=bp.engine, label=brlib.label(bp.engine), scenario=scenario, combos=record, failures=failures)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(doc, indent=1, sort_keys=True), encoding="utf-8")
+    except OSError as exc:
+        print("[RECORD] map-matrix: cannot write %s: %s" % (path, exc))
+    print("[RECORD] map-matrix %s %s: %d of %d combinations judged, %d failures -> %s" % (
+        brlib.label(bp.engine), scenario, len(record), len(mms.all_combos(scenario)), len(failures), path))
+    if record and not any(r.get("status_present") for r in record):
+        web.finding("%s: TWIN1d: no data-testid=map-status on #/map in any combination (%s): the image has no polite status region" % (
+            brlib.label(bp.engine), scenario))
+    for problem in bp.problems({(AUTH_SESSION, 401)} | {(p, 429) for p in SSE_PATHS}):
+        web.finding("%s: map matrix %s: %s" % (brlib.label(bp.engine), scenario, problem))
+    return path
+
+
+def final_assert(bp, scenario, failures, path, page_errors_are_findings=False):
+    shots = out_web() / "map-matrix" / bp.engine
+    if page_errors_are_findings:
+        if bp.log.errors:
+            web.finding("%s: %s: page error while a process was stopped: %s" % (brlib.label(bp.engine), scenario, bp.log.errors[:1]))
+    else:
+        assert not bp.log.errors, "%s: page error: %s" % (brlib.label(bp.engine), bp.log.errors[:1])
+    assert not failures, "%s: %s: %d failure(s) in %d combination(s) (evidence %s, screenshots %s):\n  %s" % (
+        brlib.label(bp.engine), scenario, len(failures), len({f.split(":")[0] for f in failures}), path, shots, "\n  ".join(failures))
+
+
 @pytest.fixture(params=mms.SCENARIOS)
 def scenario(request):
     return request.param
@@ -348,16 +402,16 @@ def scenario(request):
 
 def test_map_thai_screenshot_matrix(scenario, browser_page, target, web_client, request):
     """scenario x EN/TH x light/dark x 360/1000/1440 px on #/map, 12 combinations per scenario and engine (48 per engine over the
-    four scenarios). Per combination a full-page screenshot and the checks of map_matrix_support.judge_measure; every failing
-    combination is listed in one assertion at the end. The status region missing on the page is a finding (older images)."""
+    four scenarios). Per combination a full-page screenshot and the checks of map_matrix_support.judge_measure (the closed desk
+    sign is judged by test_map_closed_desk_sign_thai, which owns the stopped edge; no scenario here runs with a stopped edge).
+    Only map-hub-down stops a process (SIGSTOP dv-svc-status, CONT in finally, the module fixture and atexit; the public state
+    must answer again before the test ends). Every failing combination is listed in one assertion at the end. A page without
+    the status region is a finding (older images)."""
     bp = browser_page
     anon = web_client()
     rig = request.getfixturevalue("rig_control") if scenario == "map-hub-down" else None
     shots = out_web() / "map-matrix" / bp.engine
-    closed = ClosedDesk()
-    closed.install(bp.context)
-    record, failures, notes = [], [], []
-    loops, peers, killer = [], [], None
+    record, failures, notes, loops, peers = [], [], [], [], []
     hub_how = {}
     bp.page.emulate_media(color_scheme="light")
     bp.page.set_viewport_size({"width": mms.WIDTHS[0], "height": VIEW_HEIGHT})
@@ -367,64 +421,91 @@ def test_map_thai_screenshot_matrix(scenario, browser_page, target, web_client, 
             wait_quiet(bp.page)
         start_seed(scenario, bp, target, loops, peers)
         for lang in mms.LANGS:
-            via = set_language(bp, lang)
-            notes.append("language %s set by the %s" % (lang, via))
+            notes.append("language %s set by the %s" % (lang, set_language(bp, lang)))
             if scenario == "map26":
                 n_rooms = measure(bp.page).get("rooms")
                 if n_rooms != 26:
                     web.finding("TWIN1d map26: the Map draws %s rooms, not 26: the scenario ran with what the rig serves (UNVERIFIED meaning)" % n_rooms)
-            if scenario == "map-hub-down":
-                killer = HubKiller(rig)
-                hub_how[lang] = hub_down_enter(bp, killer)
-                if hub_how[lang] is None:
-                    failures.append("map-hub-down/%s: the page never showed the map-hub-down callout in %.0f s of hub kills (%d kills) and one reload: "
-                                    "the hub outage is not visible on the Map" % (lang, HUB_NOTICE_S + HUB_RELOAD_S, killer.kills))
-            if scenario != "map-hub-down" or hub_how.get(lang):
-                for scheme in mms.SCHEMES:
-                    bp.page.emulate_media(color_scheme=scheme)
-                    for width in mms.WIDTHS:
-                        failures += run_combo(bp, scenario, lang, scheme, width, closed, shots, record)
-            if killer is not None:
-                killer.stop()
-                killer.join(timeout=10)
-                notes.append("hub-down %s: noticed %s, %d kills" % (lang, hub_how.get(lang), killer.kills))
-                if not wait_state_back(anon):
-                    failures.append("map-hub-down/%s: the public state did not answer 200 within %.0f s after the kills stopped" % (lang, HUB_BACK_S))
-                    break
-                killer = None
+            if scenario != "map-hub-down":
+                failures += all_scheme_width(bp, scenario, lang, False, shots, record)
+                continue
+            try:
+                how, secs = hub_down_enter(bp, rig)
+                hub_how[lang] = {"noticed": how, "seconds": secs}
+                if how is None:
+                    failures.append("map-hub-down/%s: the page never showed the map-hub-down callout within %.0f s of a stopped hub and one reload: "
+                                    "the hub outage is not visible on the Map" % (lang, secs))
+                else:
+                    failures += all_scheme_width(bp, scenario, lang, False, shots, record)
+            finally:
+                mms.cont_all(rig)
+            back = wait_state_back(anon)
+            hub_how[lang]["state_back"] = back
+            if not back:
+                failures.append("map-hub-down/%s: the public state did not answer 200 within %.0f s after SIGCONT of the hub" % (lang, HUB_BACK_S))
+                break
     finally:
-        if killer is not None:
-            killer.stop()
-            killer.join(timeout=10)
-            wait_state_back(anon)
+        if rig is not None:
+            mms.cont_all(rig)
         stop_seed(loops, peers)
-    if scenario != "map-hub-down" and closed.protocol is None:
-        notes.append("no edge could be closed in the public state (no enabled edge in live.edges): the closed sign was not checked")
-    if record and not any(r.get("status_present") for r in record):
-        web.finding("%s: TWIN1d: no data-testid=map-status on #/map in any combination (%s): the image has no polite status region" % (
-            brlib.label(bp.engine), scenario))
     for loop in loops:
         if loop.error is not None:
             failures.append("%s: a seeding client failed: %s" % (scenario, loop.error))
-    path = out_web() / ("map-matrix-%s-%s.json" % (bp.engine, scenario))
-    doc = {"engine": bp.engine, "label": brlib.label(bp.engine), "scenario": scenario, "closed_protocol": closed.protocol,
-           "closed_rewrites": closed.rewrites, "route_passed": closed.passed, "hub_notice": hub_how, "notes": notes,
-           "combos": record, "failures": failures}
+    path = write_matrix(bp, scenario, record, failures, {"hub": hub_how, "notes": notes, "closed_sign": "not judged here (test_map_closed_desk_sign_thai)"})
+    final_assert(bp, scenario, failures, path, page_errors_are_findings=scenario == "map-hub-down")
+
+
+def test_map_closed_desk_sign_thai(browser_page, web_client, request):
+    """The Closed sign in EN and TH on a quiet Map with ONE desk really closed: SIGSTOP of dv-edge-xlx through the control channel
+    (web.md, Map: a closed desk is an edge that is enabled but not in live.edges), poll the public state until live.edges no
+    longer lists it, then the 12 combinations of the matrix (scenario map-closed-desk) with the sign text judged (TH: the Thai string
+    of the key Closed, EN: Closed). CONT in finally, the module fixture and atexit; the edge must be back in live.edges and the
+    hub answering before the test ends. DVT_MAP_ROUTE_FALLBACK=1: no process is stopped, a page route removes an edge from the
+    state instead (screenshots only, labelled route-fallback, not evidence of the product)."""
+    bp = browser_page
+    anon = web_client()
+    scenario = mms.CLOSED_SCENARIO
+    shots = out_web() / "map-matrix" / bp.engine
+    fallback = os.environ.get("DVT_MAP_ROUTE_FALLBACK") == "1"
+    route = ClosedDesk() if fallback else None
+    rig = None if fallback else request.getfixturevalue("rig_control")
+    if not fallback and not mms.edge_listed(public_state(anon), mms.EDGE_PROTOCOL):
+        pytest.skip("the %s edge is not in live.edges of the public state: nothing to stop (the rig runs without it)" % mms.EDGE_PROTOCOL)
+    record, failures, notes = [], [], []
+    timing = {}
+    bp.page.emulate_media(color_scheme="light")
+    bp.page.set_viewport_size({"width": mms.WIDTHS[0], "height": VIEW_HEIGHT})
+    if route is not None:
+        route.install(bp.context)
+        notes.append("ROUTE FALLBACK (DVT_MAP_ROUTE_FALLBACK=1): the closed desk is a rewrite of the state in the browser, not a stopped edge; screenshots only")
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(doc, indent=1, sort_keys=True), encoding="utf-8")
-    except OSError as exc:
-        print("[RECORD] map-matrix: cannot write %s: %s" % (path, exc))
-    print("[RECORD] map-matrix %s %s: %d of %d combinations judged, %d failures, closed desk %s -> %s" % (
-        brlib.label(bp.engine), scenario, len(record), len(mms.all_combos(scenario)), len(failures), closed.protocol, path))
-    for problem in bp.problems({(AUTH_SESSION, 401)} | {(p, 429) for p in SSE_PATHS}):
-        web.finding("%s: map matrix %s: %s" % (brlib.label(bp.engine), scenario, problem))
-    if scenario != "map-hub-down":
-        assert not bp.log.errors, "%s: page error: %s" % (brlib.label(bp.engine), bp.log.errors[:1])
-    elif bp.log.errors:
-        web.finding("%s: map-hub-down: page error while the hub was down: %s" % (brlib.label(bp.engine), bp.log.errors[:1]))
-    assert not failures, "%s: %s: %d failure(s) in %d combination(s) (evidence %s, screenshots %s):\n  %s" % (
-        brlib.label(bp.engine), scenario, len(failures), len({f.split(":")[0] for f in failures}), path, shots, "\n  ".join(failures))
+        if rig is not None:
+            try:
+                stop_process(rig, mms.EDGE_PROCESS)
+            except RuntimeError as exc:
+                pytest.skip("no %s process to stop in %s (%s)" % (mms.EDGE_PROCESS, mms.SERVICE, str(exc)[:80]))
+            t_drop = mms.poll_until(lambda: not mms.edge_listed(public_state(anon), mms.EDGE_PROTOCOL), EDGE_DROP_S, every_s=2.0)
+            timing["edge_dropped_s"] = t_drop
+            if t_drop is None:
+                failures.append("%s: live.edges still lists %s %.0f s after SIGSTOP of %s: the hub did not drop the stopped edge" % (
+                    scenario, mms.EDGE_PROTOCOL, EDGE_DROP_S, mms.EDGE_PROCESS))
+        if not failures:
+            open_map(bp)
+            wait_quiet(bp.page)
+            for lang in mms.LANGS:
+                notes.append("language %s set by the %s" % (lang, set_language(bp, lang)))
+                failures += all_scheme_width(bp, scenario, lang, True, shots, record)
+    finally:
+        if rig is not None:
+            mms.cont_all(rig)
+    if rig is not None:
+        timing["edge_back_s"] = wait_edge_back(anon)
+        timing["state_back"] = wait_state_back(anon, 30.0)
+        if timing["edge_back_s"] is None:
+            failures.append("%s: %s is not in live.edges again %.0f s after SIGCONT" % (scenario, mms.EDGE_PROTOCOL, EDGE_BACK_S))
+    path = write_matrix(bp, scenario, record, failures, {"stopped": mms.EDGE_PROCESS if rig is not None else None, "route_fallback": fallback,
+                                                        "route_closed_protocol": route.protocol if route else None, "timing": timing, "notes": notes})
+    final_assert(bp, scenario, failures, path)
 
 
 # ---------------------------------------------------------------- the status region

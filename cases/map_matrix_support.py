@@ -213,6 +213,54 @@ def close_one_edge(state, chosen=None):
     return state, pick
 
 
+# ------------------------------------------------------------------ SIGSTOP / SIGCONT of the edge and the hub (control channel)
+
+CLOSED_SCENARIO = "map-closed-desk"                  # the quiet Map with the xlx edge stopped: the one place the Closed sign is judged
+EDGE_PROCESS, EDGE_PROTOCOL = "dv-edge-xlx", "xlx"   # SIGSTOP of this process: the hub drops the edge, the desk is closed (web.md, Map)
+HUB_PROCESS = "dv-svc-status"                        # SIGSTOP of this process: the public state is unavailable, the Map shows the banner
+STOPPABLE = (EDGE_PROCESS, HUB_PROCESS)
+SERVICE = "xlxd-sut"
+
+
+def edge_listed(state, protocol):
+    """True when `protocol` is in live.edges of the parsed public state (an instance suffix -<16 hex> is cut off, as the page does)."""
+    live = state.get("live") if isinstance(state, dict) else None
+    edges = live.get("edges") if isinstance(live, dict) else None
+    return isinstance(edges, list) and any(isinstance(e, str) and EDGE_SUFFIX_RE.sub("", e) == protocol for e in edges)
+
+
+def poll_until(pred, timeout_s, every_s=2.0, clock=None, sleep=None):
+    """Seconds until pred() is truthy (checked at once, then every `every_s`), or None after `timeout_s`. A pred that raises counts
+    as false."""
+    import time
+    clock = clock or time.monotonic
+    sleep = sleep or time.sleep
+    t0 = clock()
+    while True:
+        try:
+            if pred():
+                return round(clock() - t0, 2)
+        except Exception:                           # noqa: BLE001 - a dead hub or a closing page is "not yet"
+            pass
+        if clock() - t0 >= timeout_s:
+            return None
+        sleep(every_s)
+
+
+def cont_all(rig, rounds=2):
+    """SIGCONT to every stoppable process, `rounds` times (CONT is idempotent; the second round covers a first one that met a
+    respawn or a timeout). Never raises. Returns the number of CONT requests that were acknowledged."""
+    acked = 0
+    for _ in range(rounds):
+        for proc in STOPPABLE:
+            try:
+                rig.kill_proc(SERVICE, proc, "CONT")
+                acked += 1
+            except Exception:                       # noqa: BLE001 - error 3 (no such process), a timeout, a refused request: go on
+                pass
+    return acked
+
+
 # ------------------------------------------------------------------ the map-status recorder and judge
 
 STATUS_INIT_JS = r"""
