@@ -544,6 +544,15 @@ services:
       # cases/test_transcoder_levels.py (docs/transcoder-levels.md): 1 = run it; the tag is the transcoder image of this run
       DVT_TRANSCODER_LEVELS: ${DVT_TRANSCODER_LEVELS:-}
       DVT_TRANSCODER_TAG: ${TRANSCODER_IMAGE:-}
+      # cases/test_prod_cross.py (docs/prod-checks.md): rig dry run only (DVT_PROD_HOST = the rig's xlxd-sut); the production run is done on the host,
+      # the rig network has no route out
+      DVT_PROD_CROSS: ${DVT_PROD_CROSS:-}
+      DVT_PROD_HOST: ${DVT_PROD_HOST:-}
+      DVT_PROD_CALL_DSTAR: ${DVT_PROD_CALL_DSTAR:-}
+      DVT_PROD_CALL_M17: ${DVT_PROD_CALL_M17:-}
+      DVT_PROD_CROSS_REF: ${DVT_PROD_CROSS_REF:-}
+      DVT_PROD_CROSS_TAG: ${DVT_PROD_CROSS_TAG:-}
+      DVT_AMBED_REF: ${DVT_AMBED_REF:-}
       # wire cases: transcoder under test when run inside the rig
       DVT_AMBED_ADDR: ${DVT_AMBED_ADDR:-${DVT_NET:-172.30.0}.21}
       # on when xlxd-sut has USRP endpoints (A/B -> allstar, C -> tester)
