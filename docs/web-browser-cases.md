@@ -515,3 +515,52 @@ Everything below was derived from the page sources of `dv-router:wip-efd9eca` (r
 8. Several USRP dynamic clients keying at once from one tester address (five in `map-busy`) is assumed to work like the single client of the fade case;
    a hub that refuses it fails the scenario with "seeding failed: N rooms show data-state=onair".
 9. Timing is estimated, not measured; the 25 minute budget per engine has a wide margin only if the hub-down detection is quick.
+
+# Talk echo return
+
+`cases/test_web_talk_echo_return.py` (1 case, 3 runs: Playwright Chromium, Firefox and Playwright WebKit; the fake microphone setup of `cases/browser_fixtures.py` exists for all three), helpers and the pure judges in `cases/talk_echo_support.py`, unit tests `cases/unit/test_talk_echo_support.py` (20 tests; they also run the in-page recorder in node against a fake `RTCPeerConnection` / `AudioContext` when node is installed). **NOT RUN on a rig yet.**
+
+Why: a PRODUCT FINDING on production image `wip-97c669d` (not on `wip-efd9eca`): a signed-in user in headless Chromium with a 700 Hz fake microphone listens on module E (the built-in ECHO), holds Talk 3 s and releases. Login, listen, "On air", the public state `onair E`, the echo replay (`units_published` rises) and "Ended: Button released." all happen, but the page's analyser sees no sample above rms 0.01 for 14 s (twice). On `wip-efd9eca` the same harness hears the echo at 5.65 to 8.6 s, 700 Hz. `rtc/offer` answered 200 twice (a listen session and a talk session), alive 204, close 204, ice 404 (no TURN). The question the case answers: does the media stop at the edge, or in the page?
+
+What it does: a signed-in user with `may_tx` (`N0BRU`, the `rtc_tx_page` fixture of the Talk cases) and a SECOND page, the user without `may_tx` (`N0BRX`, `br_rx`; guests are off in this rig), both listen on module E. Both pages are sampled every 500 ms from 2 s before the press to 14 s after the release. The user holds Talk (mouse down on `talk-ptt`) for 3.0 s and releases.
+
+| Check | Kind | What it asserts |
+|-------|------|-----------------|
+| listening / "On air" / "Ended: Button released." | evidence | both pages reach "Listening on module E"; the talk status becomes "On air" and, after the release, "Ended: Button released." (as the Talk cases) |
+| `talker_hears_echo` | **PRODUCT CHECK** | the TALKER page: analyser rms >= 0.01 (two 0.5 s samples) within 14 s after the release; Chromium also 700 Hz within 20 Hz (tone fraction >= 0.1; the judgement and thresholds of `dvtest.tools.prod_talk`, deploy check g) |
+| `listener_hears_live` | **PRODUCT CHECK** | the SECOND page: analyser rms >= 0.01 while Talk is held (from "On air" to 0.4 s after the release); the frequency is recorded, not asserted |
+| `listener_hears_echo` | **PRODUCT CHECK** | the SECOND page: the echo replay, from 1 s after the release (the echo's `delay_ms`) to 14 s: level, and on Chromium 700 Hz |
+
+The audio checks fail with the stage that stopped (`judge_window`), so the message says where the media stopped: `no_inbound_bytes` (no `inbound-rtp` bytes or packets on any RTCPeerConnection of the page in the window: the media stops before the page, at or before the edge), `decoder_silent` (bytes arrive, the decoded audio is silent: page/decoder), `analyser_silent_decoder_audible` (bytes arrive and `totalAudioEnergy` grows but the page's analyser is silent), `tap_dead_*` (the analyser got no audio callbacks: Firefox's suspended AudioContext), `wrong_frequency`. A one-line diagnosis follows the failures (for instance "the echo reaches the SECOND page but no bytes reach the TALKER page: it stops at the edge for the talker's session"). On Firefox and WebKit the fake source is not 700 Hz (about 1000 Hz and 500 Hz): the frequency is recorded and not asserted; when the analyser cannot run (no callbacks), the level is judged from `totalAudioEnergy` of getStats, then from the packet count (>= 50 packets), and the verdict says `via`.
+
+The shared probe (`RTC_PROBE_JS`) taps only the RTCPeerConnection that was the last one when `tap.start()` ran, so a page that swaps the Listen session for a new one at the Talk press would look silent to it even if the new session carried the echo. The case therefore installs its own recorder (`ECHO_RECORDER_JS`, after the probe) that taps the receiver of EVERY RTCPeerConnection the page creates, and compares the analyser with the decoder (`totalAudioEnergy`) and with the transport (bytes).
+
+Evidence, written in a `finally` block to `out/<run>/web/talk-echo-<engine>.json` also when a check fails or the flow breaks: per page (`talker`, `listener`): `recorder` (every RTCPeerConnection with `created_at`, `closed_at` and the three states, every 500 ms sample with the states, `inbound-rtp` bytes / packets / lost / `audioLevel` / `totalAudioEnergy` / samples, `outbound-rtp` bytes, the selected candidate pair's bytes, and the analyser of each live pc: rms of the last 0.5 s and 1 s, dominant frequency, tone fraction, audio callbacks; marks `listening`, `press`, `on_air`, `release`, `ended`, `final`), `series` (the same summed over the pcs), `analysis` (sampling regularity, `pcs`: whether the page created a NEW RTCPeerConnection at the Talk press and at the release, and which pc closed), `requests` and `requests_summary` (every `/api/v1/rtc/*` request with method, status, phase and time; no body, so no session id or SDP), `ctl` (the talker's ctl DataChannel frames, op / state / code / reason only); `resources` inside `recorder` is the same audit on the page's clock (Resource Timing). Top level: `meta`, `phases` (tester wall clock), `texts`, `timeline` (the status lines on change), `public_state_room_E` (is the module on air, and whose callsign, once a second, every 0.5 s during the hold), `checks`, `verdicts`, `diagnosis`, `failures`. The `[RECORD] talk-echo` line on stdout repeats the diagnosis.
+
+Run (about 3 minutes: three runs of about 40 s; the echo needs no USRP client, so `DVT_USRP_DYNAMIC` is not needed):
+
+```sh
+XLXD_SUT_IMAGE=dv-router:wip-97c669d DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-router DVT_SUT_LAUNCH=native DVT_SUT_GEN=compat1 \
+  DVT_SUT_CONFIG=<template path> DVT_TRANSCODER_FAKE=1 \
+  DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/admin.toml:rig/config/dv-router/totp-required.toml:rig/config/dv-router/echo.toml \
+  scripts/run.sh -m rig --capture --profile web,browser -- cases/test_web_talk_echo_return.py
+```
+
+`-k chromium` runs the engine of the finding only. Run it on the image with the finding (`wip-97c669d`) and on the good one (`wip-efd9eca`) and compare the two `talk-echo-chromium.json`: where the sums of `bytes` stop growing, whether `pcs.new_pc_at_talk` differs, which pc the echo arrives on. With `--capture` the pcap of the run shows whether RTP leaves the edge towards the browser (UDP 50000) after the release. The case skips with a reason unless the profile is DV-Router, the launch is native and the rendered config has `[echo] modules = { E = true }` (it reads `out/<run>/xlxd-config/xlxd-sut/dv-router.toml`, never edits it).
+
+## UNVERIFIED (Talk echo return)
+
+Everything below is assumed, not seen on a running rig; the case was written from the other Talk cases and the production check `prod_talk` only.
+
+1. The rig can run `web.toml`, `admin.toml`, `totp-required.toml` and `echo.toml` together, and module E is served by the template's `[node] rooms` (A-Z), as `echo.toml` says. No other web case combines the web profile with `echo.toml`.
+2. `N0BRU` (`may_tx`) may transmit on module E: the case assumes the permission is the account's, not per module. If the page shows no Hold Talk or "Denied", the case fails at the evidence step with the text.
+3. A local WebRTC over of 50 frames or more is replayed by `dv-svc-echo` 1 s after its end and is delivered to the WebRTC listeners of E, including the page that talked; 3 s of speech is 150 frames, well above the limit. The window of the echo check starts 1.0 s after the release (the `delay_ms` default) and ends 14 s after it.
+4. The `speech` the echo replays reaches the page as PCMU RTP on the same kind of session as a normal Listen; `inbound-rtp` is expected to exist (audio) on a pc that receives it. A page that receives the echo on a pc the recorder never saw (a pc created before the init script, in another frame) would read as silent.
+5. `window.AudioContext` can be created in a `track` event handler without a user gesture (Chromium: the `--autoplay-policy` flag of `launch_options`; Firefox: its prefs; Playwright WebKit: not known). A suspended context is told apart from a silent page by the callback count (`tap_callbacks`), and the level then falls back to `totalAudioEnergy` and the packet count.
+6. `totalAudioEnergy` and `responseStatus` of Resource Timing exist in the engines (Chromium: yes; Firefox and WebKit: not checked). A missing one is recorded as `null` and the judges skip it.
+7. `RTCPeerConnection.close()` is called by the page (the recorder wraps it); a pc closed by the page without `close()` (a discarded object) is noticed from `connectionState === "closed"` at the next sample, up to 500 ms late.
+8. Two pages (two contexts of one engine) from one address fit the service's cap of 4 event streams per client address: each user page opens one `public/events` stream.
+9. The headless pages are not throttled: `hidden_samples` and `max_gap_ms` in `analysis.sampling` show it. A sampler gap over 1 s would make the 0.5 s windows coarser and the `min_loud = 2` rule stricter.
+10. The tester's and the browsers' clocks are the host clock (`phases` against the recorder's `t0_wall`), as in the other cases; the page clock is used for every judgement, the wall clock only for the request audit.
+11. The thresholds (rms floor 0.01, 700 Hz within 20 Hz, tone fraction 0.1, `MIN_LOUD` = two 0.5 s samples, energy floor 1e-4, 50 packets) are `prod_talk`'s or derived from it (1 s at the floor); `MIN_LOUD` and the packet count are this case's own.
+12. `--capture` with the echo module and the web rig together (the wire check of the run) was not tried.
