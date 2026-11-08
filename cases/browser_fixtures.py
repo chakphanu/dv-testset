@@ -50,9 +50,21 @@ INIT_SCRIPT = """
   window.__dvtInstalled = true;
   document.addEventListener('securitypolicyviolation', (e) => {
     try {
-      window.__dvtReport('csp', JSON.stringify({ directive: e.violatedDirective, blocked: e.blockedURI,
-        sample: (e.sample || '').slice(0, 60), source: e.sourceFile,
-        tag: (e.target && e.target.tagName) ? String(e.target.tagName).toLowerCase() : '' }));
+      const nav = (performance.getEntriesByType && performance.getEntriesByType('navigation')[0]) || null;
+      const styles = Array.from(document.querySelectorAll('style')).slice(0, 8).map((el) => ({
+        parent: el.parentNode && el.parentNode.nodeName ? String(el.parentNode.nodeName).toLowerCase() : '',
+        svg: !!(el.ownerSVGElement || (el.namespaceURI || '').indexOf('svg') >= 0),
+        nonce: !!(el.nonce || el.getAttribute('nonce')), html: (el.outerHTML || '').slice(0, 200) }));
+      const links = Array.from(document.querySelectorAll('link[rel~=stylesheet]')).slice(0, 8).map((el) => ({
+        href: (el.getAttribute('href') || '').split('?')[0], nonce: !!(el.nonce || el.getAttribute('nonce')) }));
+      window.__dvtReport('csp', JSON.stringify({ directive: e.violatedDirective, effective: e.effectiveDirective,
+        blocked: e.blockedURI, sample: (e.sample || '').slice(0, 60), source: e.sourceFile,
+        line: e.lineNumber, column: e.columnNumber, disposition: e.disposition,
+        page: (e.documentURI || location.href).split('?')[0].split('#')[0], hash: location.hash,
+        t_ms: Math.round(performance.now()), nav_type: nav ? nav.type : '',
+        tag: (e.target && e.target.tagName) ? String(e.target.tagName).toLowerCase() : '',
+        target: (e.target && e.target.outerHTML) ? String(e.target.outerHTML).slice(0, 200) : '',
+        styles: styles, stylesheet_links: links }));
     } catch (err) { /* the binding is not there yet */ }
   }, true);
 })();
@@ -341,6 +353,13 @@ class BrowserPage:
                 self.log.csp.append(json.loads(data))
             except ValueError:
                 self.log.csp.append({"directive": "?", "blocked": str(data)[:80]})
+            # every report in full, one JSON line (no query strings: page/href are cut at '?'), for CSP3-style questions
+            try:
+                with open(os.path.join(_out_dir(), "web", "csp-reports.jsonl"), "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(dict(self.log.csp[-1], engine=self.engine,
+                                             case=os.environ.get("PYTEST_CURRENT_TEST", "").split(" ")[0])) + "\n")
+            except OSError:
+                pass
         else:
             self.log.reports.append((kind, str(data)[:80]))
 
