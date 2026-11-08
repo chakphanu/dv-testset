@@ -465,6 +465,7 @@ services:
       DVT_TALK_CYCLES_ENGINE: ${DVT_TALK_CYCLES_ENGINE:-}
       # a forced navigator.connection change in the Talk echo return case (off | talk | release | echo; cases/test_web_talk_echo_return.py)
       DVT_TALK_ECHO_CONN_CHANGE: ${DVT_TALK_ECHO_CONN_CHANGE:-}
+      DVT_TALK_ECHO_RELAY: ${DVT_TALK_ECHO_RELAY:-}
       # how xlxd-sut starts (direct | import | native); the M17 peer cases skip with import
       DVT_SUT_LAUNCH: ${DVT_SUT_LAUNCH:-direct}
       # [data] require_ident of the native config (rig/config/dv-router/data-ident.toml); cases/test_data_ident.py

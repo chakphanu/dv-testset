@@ -230,6 +230,8 @@ def run_talk_echo(engine, tx_page, rx_page, echo_on_e, web_client, request, phas
         control = None
     ice_before = ice_after = None
     for bp in (tx, rx):
+        if tes.relay_forced(os.environ):
+            bp.context.add_init_script(tes.RELAY_JS)            # TURN-only: iceTransportPolicy 'relay' on every RTCPeerConnection
         bp.context.add_init_script(tes.ECHO_RECORDER_JS)         # after the shared probe, before the first dashboard navigation
     run = Run(engine, tx, rx)
     rtc_tx, rtc_rx = Rtc(tx), Rtc(rx)

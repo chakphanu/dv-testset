@@ -612,3 +612,10 @@ def test_over_tracker_does_not_take_the_echo_as_the_over():
     assert len(tr.overs) == 1
     assert tr.summary(1002.0, 1003.0) is None                                         # its end is 2.6 s after the release: that is the echo's
     assert tes.OverTracker().summary(0.0, 1.0) is None
+
+
+
+def test_relay_switch_parses():
+    assert tes.relay_forced({"DVT_TALK_ECHO_RELAY": "1"}) and tes.relay_forced({"DVT_TALK_ECHO_RELAY": "on"})
+    assert not tes.relay_forced({}) and not tes.relay_forced({"DVT_TALK_ECHO_RELAY": "0"})
+    assert "iceTransportPolicy: 'relay'" in tes.RELAY_JS

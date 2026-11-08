@@ -1024,3 +1024,29 @@ def write_evidence(path, doc):
         return True
     except (OSError, TypeError, ValueError):
         return False
+
+
+# ------------------------------------------------------------------------- TURN-only relay (DVT_TALK_ECHO_RELAY=1)
+# Production goes through the public HTTPS proxy and TURN over the internet; the rig is a LAN. With DVT_TALK_ECHO_RELAY=1 every
+# RTCPeerConnection the page creates gets iceTransportPolicy 'relay' (a test-side override of the page's configuration), so the
+# media must go through the rig's coturn (--profile web,browser,nat with turn.toml). The relay pair is then visible in the
+# recorder's selected-pair stats and in the coturn log.
+RELAY_ENV = "DVT_TALK_ECHO_RELAY"
+RELAY_JS = """
+(() => {
+  const Orig = window.RTCPeerConnection;
+  if (!Orig || Orig.__dvtRelay) return;
+  function Relay(cfg, ...rest) {
+    const c = Object.assign({}, cfg || {}, { iceTransportPolicy: 'relay' });
+    return new Orig(c, ...rest);
+  }
+  Relay.prototype = Orig.prototype;
+  Object.setPrototypeOf(Relay, Orig);
+  Relay.__dvtRelay = true;
+  window.RTCPeerConnection = Relay;
+})();
+"""
+
+
+def relay_forced(env):
+    return str(env.get(RELAY_ENV, "")).strip() in ("1", "true", "yes", "on")
