@@ -273,7 +273,9 @@ let T = 0;
 globalThis.performance = { now: () => T, getEntriesByType: () => [
   {name: 'https://h/api/v1/rtc/offer', startTime: 10, duration: 5, responseStatus: 200},
   {name: 'https://h/api/v1/public/state', startTime: 11, duration: 5, responseStatus: 200}] };
-const UI = { talk: 'Ready', listen: 'Listening on module E' };
+const EL = { talk: { textContent: 'Ready' }, listen: { textContent: 'Listening on module E' }, replace: false };
+const setText = (k, v) => { if (EL.replace) EL[k] = { textContent: v }; else EL[k].textContent = v; };
+const UI = { get talk() { return EL.talk.textContent; }, set talk(v) { setText('talk', v); }, get listen() { return EL.listen.textContent; }, set listen(v) { setText('listen', v); } };
 let SEQ = 0;
 class Ev { constructor() { this.h = {}; } addEventListener(n, f) { (this.h[n] = this.h[n] || []).push(f); } emit(n, e) { (this.h[n] || []).forEach((f) => f(e || {})); } }
 globalThis.MediaStream = class extends Ev {
@@ -287,7 +289,8 @@ globalThis.HTMLMediaElement = HME;
 const ELEM = Object.assign(new HME(), { paused: false, muted: false, volume: 1, readyState: 4 });
 const ANALYSER = { amp: 0 };
 globalThis.document = { hidden: false, documentElement: {}, createElement: () => ({ muted: false, play: () => Promise.resolve() }),
-  querySelector: (s) => (s === '#talk-status' ? { textContent: UI.talk } : (s === "[data-testid='listen-connection'] p[role=status]" ? { textContent: UI.listen } : (s === "[data-testid='listen-audio']" ? ELEM : null))) };
+  querySelector: (s) => (s === '#talk-status' ? EL.talk : (s === "[data-testid='listen-connection'] p[role=status]" ? EL.listen : (s === "[data-testid='listen-audio']" ? ELEM : null))),
+  querySelectorAll: (s) => { const e = document.querySelector(s); return e ? [e] : []; } };
 globalThis.MutationObserver = class { constructor(f) { globalThis.__mo = f; } observe() {} };
 const connHandlers = [];
 Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { connection: { effectiveType: '4g', rtt: 50, downlink: 10,
@@ -334,6 +337,7 @@ const feed = (proc, amp, seconds) => {
 };
 (async () => {
   const rec = window.__dvtEcho;
+  EL.replace = !!P.replace_el;
   let cur = new RTCPeerConnection();
   let curTrack = makeTrack('t0');
   cur.emit('track', {track: curTrack});
@@ -378,14 +382,15 @@ const feed = (proc, amp, seconds) => {
     await rec.tick();
   }
   rec.mark('final');
+  rec.stop();
   console.log(JSON.stringify(rec.dump()));
 })();
 """
 
 
-def run_recorder(**params):
+def run_recorder(prelude=None, **params):
     params = dict({"swap": True, "live": True, "echo": True, "tap": True, "energy": True, "bytes_always": False}, **params)
-    script = PRELUDE + tes.ECHO_RECORDER_JS + SCENARIO
+    script = (prelude or PRELUDE) + tes.ECHO_RECORDER_JS + SCENARIO
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "scenario.js"
         path.write_text(script, encoding="utf-8")
@@ -839,3 +844,33 @@ def test_recorder_in_node_logs_every_status_change_even_a_34_ms_transient():
     assert talk[3]["rel_release_ms"] == 0.0
     listen = tes.status_timeline(d, "listen_status_timeline")
     assert [r["text"] for r in listen] == ["Listening on module E", "Idle"] and listen[1]["t_ms"] == 9000.0
+
+
+@needs_node
+def test_recorder_in_node_follows_a_status_element_the_page_replaces_on_every_render():
+    d = run_recorder(pending=True, replace_el=True)
+    assert d["errors"] == []
+    talk = tes.status_timeline(d, "talk_status_timeline")
+    # "On air" appears twice: the page renders it again at 2.5 s with a NEW node and the same text, which is recorded too
+    assert [r["text"] for r in talk] == ["Ready", "Pending - queued / waiting for the floor", "On air", "On air", "Ended: Button released."]
+    assert [r["el_changed"] for r in talk] == [False, True, True, True, True]           # a new node each time, its identity is recorded
+    assert len({r["el"] for r in talk}) == 5 and all(r["matches"] == 1 for r in talk)
+    assert talk[1]["held_ms"] == 34.0 and talk[2]["rel_press_ms"] == 34.0
+    assert "[node replaced]" in tes.status_timeline_line(talk)
+    listen = tes.status_timeline(d, "listen_status_timeline")
+    assert [r["text"] for r in listen] == ["Listening on module E", "Idle"] and listen[1]["el_changed"]
+    # the same page without replacement keeps one node
+    same = tes.status_timeline(run_recorder(pending=True), "talk_status_timeline")
+    assert len({r["el"] for r in same}) == 1 and not any(r["el_changed"] for r in same)
+
+
+@needs_node
+def test_recorder_observes_the_document_even_when_the_root_element_does_not_exist_yet():
+    # an init script runs before document.documentElement exists: observing it threw and left no observer (one 'Ready' row only)
+    prelude = PRELUDE.replace("documentElement: {}", "documentElement: null")
+    assert "documentElement: null" in prelude
+    d = run_recorder(prelude=prelude, pending=True)
+    assert d["errors"] == [] and d["observer"]["target"] == "document"
+    assert [r["text"] for r in tes.status_timeline(d, "talk_status_timeline")][:3] == ["Ready", "Pending - queued / waiting for the floor", "On air"]
+    assert ".observe(document," in tes.ECHO_RECORDER_JS and "document.documentElement" not in tes.ECHO_RECORDER_JS.split("rec.observer = ")[1].split("rec.fastTimer")[0]
+    assert "rec.fast(30000)" in tes.ECHO_RECORDER_JS and "rec.fast(15000)" in tes.ECHO_RECORDER_JS

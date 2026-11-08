@@ -77,18 +77,30 @@ ECHO_RECORDER_JS = r"""
   rec.sels = { talk: '#talk-status', listen: "[data-testid='listen-connection'] p[role=status]" };
   rec.talk_tl = [];
   rec.listen_tl = [];
-  const textOf = (sel) => { const e = document.querySelector(sel); return e ? String(e.textContent).trim() : null; };
-  const tlNote = (tl, text, ts) => {
+  // The element is looked up AGAIN at every call (the page re-renders and may replace the node): the CURRENT text of the CURRENT first
+  // match, its identity (a serial per DOM node) and how many nodes match. A row is kept when the text OR the identity changed.
+  const ids = new WeakMap();
+  let idSeq = 0;
+  const idOf = (e) => { if (!e) return null; if (!ids.has(e)) ids.set(e, ++idSeq); return ids.get(e); };
+  const readSel = (sel) => {
+    const all = document.querySelectorAll(sel);
+    const e = all.length ? all[0] : null;
+    return { text: e ? String(e.textContent).trim() : null, el: idOf(e), n: all.length };
+  };
+  const tlNote = (tl, r, ts) => {
     const last = tl[tl.length - 1];
-    if ((last ? last.text : undefined) !== text && tl.length < 300) tl.push({ t: ts, wall: Date.now(), text: text });
+    if ((!last || last.text !== r.text || last.el !== r.el) && tl.length < 300) {
+      tl.push({ t: ts, wall: Date.now(), text: r.text, el: r.el, n: r.n, el_changed: !!last && last.el !== r.el });
+    }
   };
   const uiNote = () => {
     try {
       const ts = rd(now(), 1);
       const card = document.querySelector("[data-testid='listen-connection']");
-      const r = { talk: textOf(rec.sels.talk), listen: textOf(rec.sels.listen), state: card ? card.getAttribute('data-state') : null };
-      tlNote(rec.talk_tl, r.talk, ts);
-      tlNote(rec.listen_tl, r.listen, ts);
+      const tk = readSel(rec.sels.talk), ls = readSel(rec.sels.listen);
+      const r = { talk: tk.text, listen: ls.text, state: card ? card.getAttribute('data-state') : null };
+      tlNote(rec.talk_tl, tk, ts);
+      tlNote(rec.listen_tl, ls, ts);
       const last = rec.ui[rec.ui.length - 1];
       if (!last || last.talk !== r.talk || last.listen !== r.listen || last.state !== r.state) {
         r.t = ts; r.wall = Date.now();
@@ -97,10 +109,25 @@ ECHO_RECORDER_JS = r"""
     } catch (e) { err('ui', e); }
   };
   rec.uiNote = uiNote;
+  // The observer sits on the DOCUMENT: when an init script runs, document.documentElement and document.body do not exist yet (observing
+  // them threw and left no observer at all), and the document node also survives the page replacing its whole tree.
+  rec.observer = { target: 'document', callbacks: 0 };
   try {
-    new MutationObserver(uiNote).observe(document.documentElement,
+    new MutationObserver(() => { rec.observer.callbacks += 1; uiNote(); }).observe(document,
       { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['data-state'] });
-  } catch (e) { err('observer', e); }
+  } catch (e) { err('observer', e); rec.observer.target = null; }
+  // fallback: sample the two lines every 10 ms from the 'listening' mark until 15 s after the press (a text set and replaced
+  // without a mutation the observer reports, or a node the observer misses)
+  rec.fastTimer = null;
+  rec.fastUntil = 0;
+  rec.fast = (ms) => {
+    rec.fastUntil = now() + ms;
+    if (rec.fastTimer) return;
+    rec.fastTimer = setInterval(() => {
+      uiNote();
+      if (now() > rec.fastUntil) { clearInterval(rec.fastTimer); rec.fastTimer = null; }
+    }, 10);
+  };
   if (!Prev) { rec.missing = true; return; }
 
   const rmsOf = (x) => { let e = 0; for (let i = 0; i < x.length; i++) e += x[i] * x[i]; return x.length ? Math.sqrt(e / x.length) : 0; };
@@ -414,9 +441,16 @@ ECHO_RECORDER_JS = r"""
   rec.stop = () => {
     if (rec.timer) { clearInterval(rec.timer); rec.timer = null; }
     if (rec.el.timer) { clearInterval(rec.el.timer); rec.el.timer = null; }
+    if (rec.fastTimer) { clearInterval(rec.fastTimer); rec.fastTimer = null; }
     return true;
   };
-  rec.mark = (name) => { const m = { name: name, t: rd(now(), 1), wall: Date.now() }; rec.marks.push(m); return m; };
+  rec.mark = (name) => {
+    const m = { name: name, t: rd(now(), 1), wall: Date.now() };
+    rec.marks.push(m);
+    if (name === 'listening') rec.fast(30000);
+    if (name === 'press') rec.fast(15000);
+    return m;
+  };
   // the request audit of the page's own clock (Resource Timing; responseStatus where the engine has it)
   rec.resources = () => {
     const out = [];
@@ -439,7 +473,7 @@ ECHO_RECORDER_JS = r"""
       tap_error: r.tap_error || null, play_error: r.play_error || null,
       final: { conn: r.pc.connectionState, ice: r.pc.iceConnectionState, sig: r.pc.signalingState } })),
     element: { selector: rec.el.selector, changes: rec.el.changes, log: rec.el.log, assignments: rec.el.assignments },
-    connection: rec.connection, ui: rec.ui, talk_status_timeline: rec.talk_tl, listen_status_timeline: rec.listen_tl, samples: rec.samples, marks: rec.marks, resources: rec.resources() }));
+    observer: rec.observer, connection: rec.connection, ui: rec.ui, talk_status_timeline: rec.talk_tl, listen_status_timeline: rec.listen_tl, samples: rec.samples, marks: rec.marks, resources: rec.resources() }));
 })();
 """
 
@@ -875,7 +909,8 @@ def status_timeline(dump, key):
         nxt = rows[i + 1]["t"] if i + 1 < len(rows) else None
         out.append({"text": r.get("text"), "t_ms": r["t"], "rel_press_ms": None if press is None else round(r["t"] - press, 1),
                     "rel_release_ms": None if release is None else round(r["t"] - release, 1),
-                    "held_ms": None if nxt is None else round(nxt - r["t"], 1)})
+                    "held_ms": None if nxt is None else round(nxt - r["t"], 1), "el": r.get("el"), "matches": r.get("n"),
+                    "el_changed": bool(r.get("el_changed"))})
     return out
 
 
@@ -883,7 +918,7 @@ def status_timeline_line(rows):
     """One line: 'text' @ offset from the press (offset from the release), held N ms; ... (the transient states are in it)."""
     fmt = lambda v: "?" if v is None else "%+.0f" % v                             # noqa: E731
     return "; ".join("%r @ %s ms from the press (%s from the release)%s" % (
-        r["text"], fmt(r["rel_press_ms"]), fmt(r["rel_release_ms"]), "" if r["held_ms"] is None else ", held %.0f ms" % r["held_ms"])
+        r["text"], fmt(r["rel_press_ms"]), fmt(r["rel_release_ms"]), ("" if r["held_ms"] is None else ", held %.0f ms" % r["held_ms"]) + (" [node replaced]" if r.get("el_changed") else ""))
         for r in rows) or "no change recorded"
 
 
