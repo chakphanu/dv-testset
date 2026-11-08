@@ -584,5 +584,5 @@ Everything below is assumed, not seen on a running rig; the case was written fro
 `navigator.connection` 'change' 1 s into a held Talk) five times per image, plus the plain flow `test_talk_echo_returns_to_the_page`.
 Reproduced on wip-97c669d (out 20261108T092955Z: the talker page sent 4 extra offers with sess_id, the edge's ICE restart counter +4, the
 talker heard almost nothing, the second page received no media at all); wip-efd9eca passes (no ICE1 listener). Expected to FAIL before
-the PTTRX1 fix and PASS after it. Run (about 6 minutes): the "Talk echo return" command with `-k "pttrx1 or returns_to_the_page" -k chromium`.
+the PTTRX1 fix and PASS after it. Run (about 6 minutes): the "Talk echo return" command with `-k "chromium and (pttrx1 or returns_to_the_page)"`.
 Evidence per repeat: `out/<run>/web/talk-echo-chromium-conn-talk-<n>.json`.
