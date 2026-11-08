@@ -23,7 +23,7 @@ METRICS_LIB = Path(__file__).resolve().parents[2] / "scripts" / "lib" / "metrics
 SERVICES = ["xlxd-sut", "xlxd-ref", "tester", "transcoder-sut", "allstar", "XLXD-SUT", "", "xlxd-sut ", "*"]
 PROCESSES = ["dv-edge-xlx", "dv-edge-nxdn", "dv-edge-p25", "dv-edge-allstar", "dv-router", "dv-codec-ambed", "dv-svc-web", "dv-svc-admin", "dv-edge-webrtc", "dv-svc-status", "dv-data-worker", "dv-data-worker2", "dv-data-worker[pkt]", "dv-data", "dv-room", "dv-room2", "dv-codec", "dv-codec-ambed2", "dv-codec-*", "dv-edge-dextra", "dv-edge-*", "dv-edge",
              "dv-router2", "DV-ROUTER", "xlxd", "sh", "", "dv-edge-xlx;id", "../dv-router", "-1", "1"]
-SIGNALS = ["KILL", "USR1", "TERM", "SIGKILL", "kill", "9", "HUP", "USR2", "INT", "STOP", "", "-9", "KILL;id"]
+SIGNALS = ["KILL", "USR1", "TERM", "SIGKILL", "kill", "9", "HUP", "USR2", "INT", "STOP", "CONT", "SIGSTOP", "stop", "", "-9", "KILL;id"]
 
 
 def bash(script, *args, lib=LIB):
@@ -44,6 +44,13 @@ def test_python_table():
     for sig in ("KILL", "USR1", "TERM", "HUP", "INT", "STOP"):
         assert not control.kill_proc_allowed("xlxd-sut", "dv-router", sig)      # the launcher is never signalled
     assert not control.kill_proc_allowed("xlxd-sut", "dv-edge-xlx", "TERM")
+    # STOP / CONT only for the closed-desk edge and the status hub (TWIN1d)
+    for proc in ("dv-edge-xlx", "dv-svc-status"):
+        assert control.kill_proc_allowed("xlxd-sut", proc, "STOP") and control.kill_proc_allowed("xlxd-sut", proc, "CONT")
+    for proc in ("dv-edge-nxdn", "dv-edge-p25", "dv-edge-allstar", "dv-edge-webrtc", "dv-svc-web", "dv-codec-ambed",
+                 "dv-data-worker", "dv-router"):
+        assert not control.kill_proc_allowed("xlxd-sut", proc, "STOP") and not control.kill_proc_allowed("xlxd-sut", proc, "CONT")
+    assert not control.kill_proc_allowed("xlxd-ref", "dv-edge-xlx", "STOP")
     assert not control.kill_proc_allowed("xlxd-ref", "dv-edge-xlx", "KILL")
     # the codec worker: KILL only (never the launcher)
     assert control.kill_proc_allowed("xlxd-sut", "dv-codec-ambed", "KILL")
@@ -57,7 +64,7 @@ def test_python_table():
     # the WebRTC edge and the status hub (K22): KILL only
     for proc in ("dv-edge-webrtc", "dv-svc-status", "dv-data-worker"):
         assert control.kill_proc_allowed("xlxd-sut", proc, "KILL")
-        for sig in ("USR1", "TERM", "HUP", "INT", "STOP"):
+        for sig in ("USR1", "TERM", "HUP", "INT") + (() if proc == "dv-svc-status" else ("STOP",)):
             assert not control.kill_proc_allowed("xlxd-sut", proc, sig)
         assert not control.kill_proc_allowed("xlxd-ref", proc, "KILL")
     # the room controller: KILL only, and only with a rooms selector
@@ -67,7 +74,7 @@ def test_python_table():
     for sig in ("USR1", "TERM", "HUP", "INT", "STOP"):
         assert not control.kill_proc_allowed("xlxd-sut", "dv-room", sig, "B")
     assert not control.kill_proc_allowed("xlxd-ref", "dv-room", "KILL", "B")
-    assert sum(len(v) for v in control.KILL_PROC_ALLOWED.values()) == 14
+    assert sum(len(v) for v in control.KILL_PROC_ALLOWED.values()) == 18
     assert not any(proc == "dv-router" for _svc, proc in control.KILL_PROC_ALLOWED)
 
 
@@ -124,7 +131,7 @@ def test_bash_and_python_agree_on_every_combination():
     allowed_bash = {combos[int(i)] for v, i in verdicts if v == "1"}
     allowed_py = {c for c in combos if control.kill_proc_allowed(*c)}
     assert allowed_bash == allowed_py
-    assert len(allowed_py) == 13                    # dv-room is not among them: it needs a selector
+    assert len(allowed_py) == 17                    # dv-room is not among them: it needs a selector
     assert not any(p == "dv-router" for _s, p, _g in allowed_bash)
     assert not any(p == "dv-room" for _s, p, _g in allowed_bash)
 

@@ -15,6 +15,8 @@
 # contains the letter), so one dv-room room controller can be killed without
 # touching the others.
 #
+# STOP and CONT (TWIN1d, Map cases): ONLY for dv-edge-xlx (a closed desk: the edge stops renewing, the hub
+# drops it) and dv-svc-status (the hub-down banner); a case that sends STOP must send CONT in a finalizer.
 # Allow-list (anything else is "error refused", nothing runs):
 #   service xlxd-sut only; dv-edge-xlx, dv-edge-nxdn, dv-edge-p25 with KILL or
 #   USR1 (quiet restart: the edge saves its sessions, exits, the launcher
@@ -52,7 +54,7 @@ dvt_killproc_allowed() {
     return 1                                      # dv-room needs rooms=<LETTER>
   fi
   case "$2:$3" in
-    dv-edge-xlx:KILL|dv-edge-xlx:USR1|dv-edge-nxdn:KILL|dv-edge-nxdn:USR1|dv-edge-p25:KILL|dv-edge-p25:USR1|dv-edge-allstar:KILL|dv-edge-allstar:USR1|dv-codec-ambed:KILL|dv-svc-web:KILL|dv-edge-webrtc:KILL|dv-svc-status:KILL|dv-data-worker:KILL|dv-room:KILL) return 0 ;;
+    dv-edge-xlx:KILL|dv-edge-xlx:USR1|dv-edge-xlx:STOP|dv-edge-xlx:CONT|dv-edge-nxdn:KILL|dv-edge-nxdn:USR1|dv-edge-p25:KILL|dv-edge-p25:USR1|dv-edge-allstar:KILL|dv-edge-allstar:USR1|dv-codec-ambed:KILL|dv-svc-web:KILL|dv-edge-webrtc:KILL|dv-svc-status:KILL|dv-svc-status:STOP|dv-svc-status:CONT|dv-data-worker:KILL|dv-room:KILL) return 0 ;;
   esac
   return 1
 }
