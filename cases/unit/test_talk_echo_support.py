@@ -273,7 +273,7 @@ let T = 0;
 globalThis.performance = { now: () => T, getEntriesByType: () => [
   {name: 'https://h/api/v1/rtc/offer', startTime: 10, duration: 5, responseStatus: 200},
   {name: 'https://h/api/v1/public/state', startTime: 11, duration: 5, responseStatus: 200}] };
-const UI = { talk: 'Ready' };
+const UI = { talk: 'Ready', listen: 'Listening on module E' };
 let SEQ = 0;
 class Ev { constructor() { this.h = {}; } addEventListener(n, f) { (this.h[n] = this.h[n] || []).push(f); } emit(n, e) { (this.h[n] || []).forEach((f) => f(e || {})); } }
 globalThis.MediaStream = class extends Ev {
@@ -287,7 +287,7 @@ globalThis.HTMLMediaElement = HME;
 const ELEM = Object.assign(new HME(), { paused: false, muted: false, volume: 1, readyState: 4 });
 const ANALYSER = { amp: 0 };
 globalThis.document = { hidden: false, documentElement: {}, createElement: () => ({ muted: false, play: () => Promise.resolve() }),
-  querySelector: (s) => (s === '#talk-status' ? { textContent: UI.talk } : (s === "[data-testid='listen-audio']" ? ELEM : null)) };
+  querySelector: (s) => (s === '#talk-status' ? { textContent: UI.talk } : (s === "[data-testid='listen-connection'] p[role=status]" ? { textContent: UI.listen } : (s === "[data-testid='listen-audio']" ? ELEM : null))) };
 globalThis.MutationObserver = class { constructor(f) { globalThis.__mo = f; } observe() {} };
 const connHandlers = [];
 Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { connection: { effectiveType: '4g', rtt: 50, downlink: 10,
@@ -340,9 +340,11 @@ const feed = (proc, amp, seconds) => {
   let proc = procs[procs.length - 1];
   if (P.element) { rec.el.selector = "[data-testid='listen-audio']"; ELEM.srcObject = new MediaStream([curTrack]); }
   for (T = 0; T <= 20000; T += 500) {
-    if (T === 0) rec.mark('listening');
+    if (T === 0) { rec.mark('listening'); __mo(); }
+    if (T === 9000) { UI.listen = 'Idle'; __mo(); }
     if (T === 2000) {
       rec.mark('press');
+      if (P.pending) { UI.talk = 'Pending - queued / waiting for the floor'; __mo(); T = 2034; UI.talk = 'On air'; __mo(); T = 2000; }
       if (P.swap) {
         const old = curTrack;
         cur.close(); cur = new RTCPeerConnection();
@@ -806,3 +808,34 @@ def test_webrtc_max_tx_snippet_merges_into_the_web_edge_table():
     out = sut_config.render(template, "172.30.0", extras=[(root / "web.toml").read_text(encoding="utf-8"), text])
     edge = tomllib.loads(out)["edges"]["webrtc"]
     assert edge["max_tx"] == 1 and edge["enable"] is True and edge["public_ips"] == ["172.30.0.11"]
+
+
+def test_status_timeline_offsets_and_the_record_line():
+    d = {"marks": [{"name": "press", "t": 2000.0}, {"name": "release", "t": 5500.0}],
+         "talk_status_timeline": [{"t": 0.5, "text": "Ready"}, {"t": 2003.0, "text": "Requesting"},
+                                  {"t": 2010.0, "text": "Pending - queued / waiting for the floor"}, {"t": 2044.0, "text": "On air"},
+                                  {"t": 5502.0, "text": "Ended: Button released."}]}
+    rows = tes.status_timeline(d, "talk_status_timeline")
+    assert [r["text"] for r in rows] == ["Ready", "Requesting", "Pending - queued / waiting for the floor", "On air", "Ended: Button released."]
+    assert rows[2]["rel_press_ms"] == 10.0 and rows[2]["held_ms"] == 34.0 and rows[3]["held_ms"] == 3458.0 and rows[4]["held_ms"] is None
+    assert rows[4]["rel_release_ms"] == 2.0 and rows[0]["rel_press_ms"] == -1999.5
+    line = tes.status_timeline_line(rows)
+    assert "'Pending - queued / waiting for the floor' @ +10 ms from the press (-3490 from the release), held 34 ms" in line
+    assert line.endswith("'Ended: Button released.' @ +3502 ms from the press (+2 from the release)")
+    assert tes.status_timeline({}, "x") == [] and tes.status_timeline_line([]) == "no change recorded"
+    no_marks = tes.status_timeline({"listen_status_timeline": [{"t": 1.0, "text": None}]}, "listen_status_timeline")
+    assert no_marks[0]["rel_press_ms"] is None and "None @ ? ms from the press (? from the release)" in tes.status_timeline_line(no_marks)
+
+
+@needs_node
+def test_recorder_in_node_logs_every_status_change_even_a_34_ms_transient():
+    d = run_recorder(pending=True)
+    assert d["errors"] == []
+    talk = tes.status_timeline(d, "talk_status_timeline")
+    texts = [r["text"] for r in talk]
+    assert texts == ["Ready", "Pending - queued / waiting for the floor", "On air", "Ended: Button released."], texts
+    pending = talk[1]
+    assert pending["rel_press_ms"] == 0.0 and pending["held_ms"] == 34.0 and talk[2]["rel_press_ms"] == 34.0
+    assert talk[3]["rel_release_ms"] == 0.0
+    listen = tes.status_timeline(d, "listen_status_timeline")
+    assert [r["text"] for r in listen] == ["Listening on module E", "Idle"] and listen[1]["t_ms"] == 9000.0

@@ -72,20 +72,31 @@ ECHO_RECORDER_JS = r"""
   // the status lines of the Listen / Talk card with their page-clock time, kept when one of them (or the card's data-state) changes:
   // "Ended: Button released." appearing BEFORE the user released is the page's interrupted() path
   rec.ui = [];
+  // every text change of the Talk status line and of the Listen status line on its own (evidence: a transient such as "Pending - queued /
+  // waiting for the floor" that lasts tens of ms); the selectors are set by start() from cases/web_pages.py, these are the same defaults
+  rec.sels = { talk: '#talk-status', listen: "[data-testid='listen-connection'] p[role=status]" };
+  rec.talk_tl = [];
+  rec.listen_tl = [];
+  const textOf = (sel) => { const e = document.querySelector(sel); return e ? String(e.textContent).trim() : null; };
+  const tlNote = (tl, text, ts) => {
+    const last = tl[tl.length - 1];
+    if ((last ? last.text : undefined) !== text && tl.length < 300) tl.push({ t: ts, wall: Date.now(), text: text });
+  };
   const uiNote = () => {
     try {
-      const talk = document.querySelector('#talk-status');
+      const ts = rd(now(), 1);
       const card = document.querySelector("[data-testid='listen-connection']");
-      const line = card ? card.querySelector('p[role=status]') : null;
-      const r = { talk: talk ? String(talk.textContent).trim() : null, listen: line ? String(line.textContent).trim() : null,
-                  state: card ? card.getAttribute('data-state') : null };
+      const r = { talk: textOf(rec.sels.talk), listen: textOf(rec.sels.listen), state: card ? card.getAttribute('data-state') : null };
+      tlNote(rec.talk_tl, r.talk, ts);
+      tlNote(rec.listen_tl, r.listen, ts);
       const last = rec.ui[rec.ui.length - 1];
       if (!last || last.talk !== r.talk || last.listen !== r.listen || last.state !== r.state) {
-        r.t = rd(now(), 1); r.wall = Date.now();
+        r.t = ts; r.wall = Date.now();
         if (rec.ui.length < 300) rec.ui.push(r);
       }
     } catch (e) { err('ui', e); }
   };
+  rec.uiNote = uiNote;
   try {
     new MutationObserver(uiNote).observe(document.documentElement,
       { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['data-state'] });
@@ -386,9 +397,11 @@ ECHO_RECORDER_JS = r"""
       return row;
     } catch (e) { err('tick', e); return null; } finally { rec.busy = false; }
   };
-  rec.start = (ms, selector) => {
+  rec.start = (ms, selector, sels) => {
     if (rec.timer) return false;
     rec.interval_ms = ms || 500;
+    if (sels) { if (sels.talk) rec.sels.talk = sels.talk; if (sels.listen) rec.sels.listen = sels.listen; }
+    rec.uiNote();
     if (selector) {
       rec.el.selector = selector;
       rec.el.timer = setInterval(rec.elPoll, 250);
@@ -426,7 +439,7 @@ ECHO_RECORDER_JS = r"""
       tap_error: r.tap_error || null, play_error: r.play_error || null,
       final: { conn: r.pc.connectionState, ice: r.pc.iceConnectionState, sig: r.pc.signalingState } })),
     element: { selector: rec.el.selector, changes: rec.el.changes, log: rec.el.log, assignments: rec.el.assignments },
-    connection: rec.connection, ui: rec.ui, samples: rec.samples, marks: rec.marks, resources: rec.resources() }));
+    connection: rec.connection, ui: rec.ui, talk_status_timeline: rec.talk_tl, listen_status_timeline: rec.listen_tl, samples: rec.samples, marks: rec.marks, resources: rec.resources() }));
 })();
 """
 
@@ -851,6 +864,29 @@ def timing_lines(rows):
                                     fmt(r["audio_track_after_assignment_ms"]), fmt(r["unmute_after_assignment_ms"])) for r in rows]
 
 
+def status_timeline(dump, key):
+    """The text changes of one status line from a recorder dump (key 'talk_status_timeline' or 'listen_status_timeline'), each as {text,
+    t_ms, rel_press_ms, rel_release_ms, held_ms}: the offsets are against the press / release marks of the same dump (None without the
+    mark), held_ms is how long the text stayed until the next change (None for the last one)."""
+    press, release = mark_t(dump, "press"), mark_t(dump, "release")
+    rows = list((dump or {}).get(key) or [])
+    out = []
+    for i, r in enumerate(rows):
+        nxt = rows[i + 1]["t"] if i + 1 < len(rows) else None
+        out.append({"text": r.get("text"), "t_ms": r["t"], "rel_press_ms": None if press is None else round(r["t"] - press, 1),
+                    "rel_release_ms": None if release is None else round(r["t"] - release, 1),
+                    "held_ms": None if nxt is None else round(nxt - r["t"], 1)})
+    return out
+
+
+def status_timeline_line(rows):
+    """One line: 'text' @ offset from the press (offset from the release), held N ms; ... (the transient states are in it)."""
+    fmt = lambda v: "?" if v is None else "%+.0f" % v                             # noqa: E731
+    return "; ".join("%r @ %s ms from the press (%s from the release)%s" % (
+        r["text"], fmt(r["rel_press_ms"]), fmt(r["rel_release_ms"]), "" if r["held_ms"] is None else ", held %.0f ms" % r["held_ms"])
+        for r in rows) or "no change recorded"
+
+
 def talk_offer_answer_ms(dump, offer_walls):
     """Page-clock ms of the answer of the first rtc/offer that came back at or after the press (offer_walls: the tester's wall seconds of
     the POST /rtc/offer responses of this page), or None."""
@@ -978,6 +1014,8 @@ def analyse_run(dumps, engine, floor=RMS_FLOOR, sut=None, offers_wall=None):
                      "recorder_errors": d.get("errors") or [], "ctx_state": d.get("ctx_state"), "rate": d.get("rate")}
         answer = talk_offer_answer_ms(d, (offers_wall or {}).get(name))
         out[name]["talk_offer_answer_ms"] = answer
+        out[name]["talk_status_timeline"] = status_timeline(d, "talk_status_timeline")
+        out[name]["listen_status_timeline"] = status_timeline(d, "listen_status_timeline")
         out[name]["element_timing"] = element_timing(d, answer)
 
     def add(name, kind, verdict=None, ok=None, stage="", detail=""):

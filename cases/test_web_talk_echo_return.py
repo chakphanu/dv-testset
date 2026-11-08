@@ -171,9 +171,16 @@ def read_ice_metrics(control):
     return tes.ice_metrics([{"name": m.name, "labels": dict(m.labels), "value": m.value} for m in samples])
 
 
+def status_timelines(dump):
+    """talk_status_timeline / listen_status_timeline of one page for the evidence JSON (evidence only, no assertion)."""
+    return {"talk_status_timeline": tes.status_timeline(dump, "talk_status_timeline"),
+            "listen_status_timeline": tes.status_timeline(dump, "listen_status_timeline")}
+
+
 def start_recorders(*bps):
     for bp in bps:
-        got = bp.page.evaluate("([ms, sel]) => window.__dvtEcho ? window.__dvtEcho.start(ms, sel) : null", [tes.SAMPLE_MS, pages.MODULE_AUDIO_CSS])
+        got = bp.page.evaluate("([ms, sel, sels]) => window.__dvtEcho ? window.__dvtEcho.start(ms, sel, sels) : null",
+                          [tes.SAMPLE_MS, pages.MODULE_AUDIO_CSS, {"talk": pages.TALK_STATUS_CSS, "listen": pages.LISTEN_STATUS_CSS}])
         assert got is not None, "the recorder is not installed in the page"
 
 
@@ -331,10 +338,10 @@ def run_talk_echo(engine, tx_page, rx_page, echo_on_e, web_client, request, phas
                          "note": "dv_edge_webrtc_* families with 'restart' or 'ice' in the name; the edge publishes every 10 s", **ice1},
                 "failures": list(failures), "errors": run.errors,
                 "talker": {"analysis": analysis.get("talker"), "requests": tables["talker"], "requests_summary": tes.requests_summary(tables["talker"]),
-                           "recorder": run.dumps["talker"], "ctl": run.ctl,
+                           "recorder": run.dumps["talker"], "ctl": run.ctl, **status_timelines(run.dumps["talker"]),
                            "series": tes.series(run.dumps["talker"]) if run.dumps["talker"] else []},
                 "listener": {"analysis": analysis.get("listener"), "requests": tables["listener"],
-                             "requests_summary": tes.requests_summary(tables["listener"]), "recorder": run.dumps["listener"],
+                             "requests_summary": tes.requests_summary(tables["listener"]), "recorder": run.dumps["listener"], **status_timelines(run.dumps["listener"]),
                              "series": tes.series(run.dumps["listener"]) if run.dumps["listener"] else []}}
             tes.write_evidence(tes.evidence_path(os.environ.get("DVT_OUT", "out"), engine, phase, rep), doc)
         except Exception as exc:                         # noqa: BLE001 - the evidence must never mask the case's own outcome
@@ -342,6 +349,9 @@ def run_talk_echo(engine, tx_page, rx_page, echo_on_e, web_client, request, phas
 
     for who in ("talker", "listener"):
         if ice1.get(who):
+            for key, label in (("talk_status_timeline", "talk status"), ("listen_status_timeline", "listen status")):
+                print("[RECORD] talk-echo %s %s page %s: %s" % (brlib.label(engine), who, label,
+                                                              tes.status_timeline_line(tes.status_timeline(run.dumps[who], key))))
             print("[RECORD] talk-echo %s %s page ICE1: %s" % (brlib.label(engine), who, ice1[who]["diagnosis"]))
             print("[RECORD] talk-echo %s %s page rtc close/offer around the press: %s" % (
                 brlib.label(engine), who, (ice1[who].get("session_order") or {}).get("order") or "none"))

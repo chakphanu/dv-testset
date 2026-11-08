@@ -367,6 +367,10 @@ def talk_controls(page):
     return page.locator(".talk-controls")
 
 
+TALK_STATUS_CSS = "#talk-status"                             # the Talk status line (talk_status below); the recorder's MutationObserver reads it
+LISTEN_STATUS_CSS = "[data-testid='listen-connection'] p[role=status]"      # the Listen card's status line (listen_status above)
+
+
 def talk_status(page):
     """fallback (read-only, p#talk-status): 'Ready', 'Requesting', 'Pending - queued / waiting for the floor',
     'On air', 'Denied: ...', 'Ended: ...'."""
