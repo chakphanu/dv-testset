@@ -407,3 +407,101 @@ def test_csp_select_isolation_matrix(browser_page):
         pass
     harness = [k for k, v in cells.items() if v and (k.startswith("none|") or k.endswith("|no-select-control"))]
     assert not harness, "violations where none can be expected (harness problem): %s" % harness
+
+
+# Isolation matrix (CSP3): which case ACTION raises the WebKit style-src-elem (inline) report seen in TWIN1d and #/positions
+# (24 reports, sourceFile empty, line 5 col 30, no <style> in the DOM, 12 per scenario = one per screenshot combination;
+# not caused by the Playwright trace nor by the caret style of the screenshot: same 12 with DVT_BROWSER_TRACE=0 and caret=initial).
+ELEM_HEAD = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
+             '<meta name="viewport" content="width=device-width, initial-scale=1">'
+             '<meta name="color-scheme" content="light dark"><title>csp3</title>'
+             '<script src="/csp3-l.js"></script><link rel="stylesheet" href="/csp3.css"></head>'
+             '<body><main><h1>x</h1><p>y</p></main></body></html>')
+ELEM_CSS = "body{font-family:sans-serif}@media (prefers-color-scheme: dark){body{background:#111;color:#eee}}"
+ELEM_ACTIONS = ("idle", "screenshot", "screenshot-full", "viewport-360", "viewport-1440", "media-dark", "media-light", "reload")
+
+
+def _elem_action(page, name):
+    if name == "screenshot":
+        page.screenshot()
+    elif name == "screenshot-full":
+        page.screenshot(full_page=True)
+    elif name.startswith("viewport-"):
+        page.set_viewport_size({"width": int(name.split("-")[1]), "height": 800})
+    elif name.startswith("media-"):
+        page.emulate_media(color_scheme=name.split("-")[1])
+    elif name == "reload":
+        page.reload()
+    page.wait_for_timeout(500)
+
+
+def test_csp_style_elem_action_matrix(browser_page):
+    """CSP3 evidence, never a failure on a violation: for each case action of the TWIN1d matrix (screenshot, full-page screenshot,
+    viewport change, emulate_media dark/light, reload, and idle as control) the number of style-src-elem reports on (a) a synthetic
+    page with the product's head shape (viewport and color-scheme metas, one same-origin stylesheet) under the product's policy and
+    under no policy, and (b) the product's own #/map. Record per cell (directive, line, column, sourceFile) in
+    out/<run>/web/csp-elem-matrix-<engine>.json. Fails only when the no-policy synthetic page reports (harness problem)."""
+    bp = browser_page
+    page = bp.page
+    state = {"policy": None}
+
+    def serve(route):
+        url = route.request.url
+        headers = {"Content-Type": "text/html; charset=utf-8"}
+        if state["policy"]:
+            headers["Content-Security-Policy"] = state["policy"]
+        if url.endswith("/csp3-l.js"):
+            headers["Content-Type"] = "text/javascript"
+            route.fulfill(status=200, body=LISTENER_JS, headers=headers)
+        elif url.endswith("/csp3.css"):
+            headers["Content-Type"] = "text/css"
+            route.fulfill(status=200, body=ELEM_CSS, headers=headers)
+        else:
+            route.fulfill(status=200, body=ELEM_HEAD, headers=headers)
+    page.route("**/csp3*", serve)
+    version = bp.context.browser.version if bp.context.browser else "?"
+    cells = {}
+
+    def take(key, before):
+        got = page.evaluate("window.__v || []")[before:]
+        elem = [v for v in got if str(v.get("d", "")).startswith("style-src-elem")]
+        cells[key] = got
+        print("[RECORD] csp-elem %s %s: %s style-src-elem=%d all=%d %s" % (
+            brlib.label(bp.engine), version, key, len(elem), len(got), json.dumps(got[:2])))
+        return elem
+
+    for policy in ("none", "product"):
+        for action in ELEM_ACTIONS:
+            state["policy"] = POLICY_PRODUCT if policy == "product" else None
+            page.set_viewport_size({"width": 1000, "height": 800})
+            page.emulate_media(color_scheme="light")
+            page.goto(bp.url("/csp3.html?p=%s&a=%s" % (policy, action)))
+            page.wait_for_timeout(700)
+            before = len(page.evaluate("window.__v || []"))
+            if action == "reload":
+                before = 0                                   # the listener list starts again after the reload
+            _elem_action(page, action)
+            take("synthetic|%s|%s" % (policy, action), before)
+    page.unroute("**/csp3*")
+    # (b) the product's own #/map, counted with the fixture's INIT_SCRIPT listener (runs before the page's scripts in every document)
+    for action in ELEM_ACTIONS:
+        page.set_viewport_size({"width": 1000, "height": 800})
+        page.emulate_media(color_scheme="light")
+        bp.goto("/#/map")
+        page.wait_for_timeout(1500)
+        before = len(bp.log.csp)
+        _elem_action(page, action)
+        page.wait_for_timeout(1000 if action == "reload" else 0)
+        got = bp.log.csp[before:]
+        elem = [v for v in got if str(v.get("directive", "")).startswith("style-src-elem")]
+        cells["product-map|%s" % action] = got
+        print("[RECORD] csp-elem %s %s: product-map|%s style-src-elem=%d all=%d %s" % (
+            brlib.label(bp.engine), version, action, len(elem), len(got),
+            json.dumps([{k: v.get(k) for k in ("directive", "line", "column", "source", "t_ms")} for v in got[:2]])))
+    out = Path(os.environ.get("DVT_OUT", "out")) / "web" / ("csp-elem-matrix-%s.json" % bp.engine)
+    try:
+        out.write_text(json.dumps({"engine": bp.engine, "version": version, "cells": cells}, indent=1, sort_keys=True) + "\n")
+    except OSError:
+        pass
+    harness = [k for k, v in cells.items() if v and k.startswith("synthetic|none|")]
+    assert not harness, "violations without a policy (harness problem): %s" % harness
