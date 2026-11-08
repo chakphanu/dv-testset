@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: MIT
+# P25Gateway settings of the rig's hotspot (rig/mmdvmstack-entry.sh fills in the placeholders).
+# The startup link is a STATIC talkgroup (Static=): polled at start, never unlinked. The reflector is the one
+# row of P25Hosts.txt. No parrot, no P252DMR, no voice files, no APRS, no GPSD, no remote commands.
+
+[General]
+Callsign=@CALLSIGN@
+RptAddress=127.0.0.1
+RptPort=32010
+LocalPort=42020
+Debug=0
+Daemon=0
+
+[Info]
+RXFrequency=438800000
+TXFrequency=438800000
+Latitude=0.0
+Longitude=0.0
+Height=0
+
+[APRS]
+Enable=0
+
+[Id Lookup]
+Name=/tmp/mmdvm/DMRIds.dat
+Time=0
+
+[Voice]
+Enabled=0
+Language=en_GB
+Directory=/tmp/mmdvm/Audio
+
+[Log]
+MQTTLevel=0
+DisplayLevel=@LOG_LEVEL@
+
+[MQTT]
+Address=127.0.0.1
+Port=1883
+Keepalive=60
+Auth=0
+Name=p25-gateway
+
+[Network]
+Port=42010
+HostsFile1=/tmp/mmdvm/P25Hosts.json
+HostsFile2=/tmp/mmdvm/P25Hosts.txt
+ReloadTime=0
+Static=@P25_TG@
+RFHangTime=120
+NetHangTime=60
+Debug=0
+
+[GPSD]
+Enable=0
+
+[Remote Commands]
+Enable=0

@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: MIT
+# NXDNGateway settings of the rig's hotspot (rig/mmdvmstack-entry.sh fills in the placeholders).
+# MMDVMHost speaks the Icom protocol to it on loopback. The startup link is a STATIC talkgroup (Static=):
+# polled at start, never unlinked. The reflector is the one row of NXDNHosts.txt. No parrot, no NXDN2DMR, no
+# voice files, no APRS, no GPSD, no remote commands.
+
+[General]
+Callsign=@CALLSIGN@
+Suffix=NXDN
+RptProtocol=Icom
+RptAddress=127.0.0.1
+RptPort=14021
+LocalPort=14020
+Debug=0
+Daemon=0
+
+[Info]
+RXFrequency=438800000
+TXFrequency=438800000
+Power=1
+Latitude=0.0
+Longitude=0.0
+Height=0
+Name=Rig
+Description=dv-testset hotspot
+
+[Voice]
+Enabled=0
+Language=en_GB
+Directory=/tmp/mmdvm/Audio
+
+[APRS]
+Enable=0
+
+[Id Lookup]
+Name=/tmp/mmdvm/DMRIds.dat
+Time=0
+
+[Log]
+MQTTLevel=0
+DisplayLevel=@LOG_LEVEL@
+
+[MQTT]
+Address=127.0.0.1
+Port=1883
+Keepalive=60
+Auth=0
+Name=nxdn-gateway
+
+[Network]
+Port=14050
+HostsFile1=/tmp/mmdvm/NXDNHosts.json
+HostsFile2=/tmp/mmdvm/NXDNHosts.txt
+ReloadTime=0
+Static=@NXDN_TG@
+RFHangTime=120
+NetHangTime=60
+Debug=0
+
+[GPSD]
+Enable=0
+
+[Remote Commands]
+Enable=0

@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: MIT
+# YSFGateway settings of the rig's hotspot (rig/mmdvmstack-entry.sh fills in the placeholders).
+# The startup reflector is the single entry of YSFHosts.json (the reflector under test). No FCS network, no
+# parrot, no YSF2xxx links, no APRS, no GPSD, no remote commands.
+
+[General]
+Callsign=@CALLSIGN@
+Suffix=RPT
+Id=@DMR_ID@
+RptAddress=127.0.0.1
+RptPort=3200
+LocalAddress=127.0.0.1
+LocalPort=4200
+WiresXCommandPassthrough=0
+Debug=0
+Daemon=0
+
+[Info]
+RXFrequency=438800000
+TXFrequency=438800000
+Power=1
+Latitude=0.0
+Longitude=0.0
+Height=0
+Name=Rig
+Description=dv-testset hotspot
+
+[Log]
+MQTTLevel=0
+DisplayLevel=@LOG_LEVEL@
+
+[APRS]
+Enable=0
+
+[MQTT]
+Address=127.0.0.1
+Port=1883
+Keepalive=60
+Auth=0
+Name=ysf-gateway
+
+[Network]
+# "<country>-<name>" of the YSFHosts.json entry; the country is XX there
+Startup=XX-DVR@REFLECTOR_NUM@
+# minutes without RF before the gateway drops the link (a day: it never fires in a test)
+InactivityTimeout=1440
+Revert=0
+Debug=0
+
+[YSF Network]
+Enable=1
+Port=42000
+Hosts=/tmp/mmdvm/YSFHosts.json
+ReloadTime=0
+
+[FCS Network]
+Enable=0
+
+[GPSD]
+Enable=0
+
+[Remote Commands]
+Enable=0

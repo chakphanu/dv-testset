@@ -84,6 +84,12 @@
 #                      Use with web (--profile web,dw: the cases post room text through the web service). The tester
 #                      gets DVT_DW=on, DVT_DW_A, DVT_DW_B. RF transmit stays off unless DVT_DP15_TX_ENABLE=true (then
 #                      also name rig/config/dv-router/dp15-rf-out.toml in DVT_SUT_CONFIG_EXTRA)
+#   --profile mmdvm    the REAL client stack of a hotspot (docs/mmdvm-stack-cases.md): the service mmdvm-stack (.100, image
+#                      dvt-mmdvmstack:local, built from .cache/mmdvmstack, run scripts/pre-fetch-mmdvmstack.sh once) runs MMDVMHost
+#                      with DMRGateway, YSFGateway, P25Gateway, NXDNGateway and DStarGateway against xlxd-sut; its modem is the
+#                      VIRTUAL MMDVM modem (dvtest/mmdvm_modem.py) that the tester runs on UDP DVT_MMDVM_MODEM_PORT (3334), so no radio
+#                      is needed. No internet. Use with web (--profile web,mmdvm) to see the call in the public state. The tester gets
+#                      DVT_MMDVM=on, DVT_MMDVM_STACK (the address) and the modules / talk groups of the gateways
 #   --profile twonode  a SECOND DV-Router node (dvr-peer .16, XLX998, the image XLXD_SUT_IMAGE started natively with its own
 #                      rendered config) with its own transcoder (transcoder-peer .17) as a plain XLX interlink peer of
 #                      xlxd-sut on modules DE, for DP15 7b-7d (cases/test_dp15_peer.py, docs/dp15-cases.md, docs/rig.md
@@ -416,6 +422,13 @@ if [ "$has_dw" = 1 ]; then
   esac
   export DVT_SUT_CONFIG_EXTRA
 fi
+# --profile mmdvm: the MMDVMHost stack; only its sources have to be fetched (any reflector can be the SUT)
+has_mmdvm=0
+case ",$profile," in *,mmdvm,*) has_mmdvm=1 ;; esac
+if [ "$has_mmdvm" = 1 ]; then
+  [ -f .cache/mmdvmstack/MMDVMHost/MMDVM-Host.cpp ] \
+    || { echo "run.sh: .cache/mmdvmstack missing; run scripts/pre-fetch-mmdvmstack.sh" >&2; exit 2; }
+fi
 # --profile twonode: the second DV-Router node; the SUT's peer row and recorder come from dp15-twonode-a.toml
 has_twonode=0
 case ",$profile," in *,twonode,*) has_twonode=1 ;; esac
@@ -522,7 +535,7 @@ fi
 compose_all=(docker compose -p "${COMPOSE_PROJECT_NAME:-dvt}" "${compose_files[@]}" "${DVT_ENV_FILES[@]}"
   --profile core --profile twonode --profile allstar --profile nxdn --profile capture --profile capture-allstar
   --profile capture-nxdn --profile p25 --profile capture-p25 --profile interlink
-  --profile capture-interlink --profile load --profile netem --profile g3
+  --profile capture-interlink --profile load --profile netem --profile g3 --profile mmdvm
   --profile urfd --profile capture-urfd --profile mrefd --profile capture-mrefd --profile web --profile browser
   --profile webload --profile nat --profile aprs --profile dw --profile asl-lab --profile asl-ext --profile asl-nat)
 
@@ -648,6 +661,11 @@ for p in "${wanted[@]}"; do
       profiles+=(--profile dw)
       export DVT_DW=on
       ;;
+    mmdvm)
+      # checked above (the sources)
+      profiles+=(--profile mmdvm)
+      export DVT_MMDVM=on
+      ;;
     twonode)
       # checked above (native launch, XLXD_SUT_IMAGE, the SUT's snippet)
       profiles+=(--profile twonode)
@@ -665,7 +683,7 @@ for p in "${wanted[@]}"; do
     mrefd)
       has_mrefd=1
       ;;
-    *) echo "run.sh: --profile takes core, allstar, asl-lab, asl-edge, asl-ext, nxdn, p25, interlink, twonode, load, g3, urfd, mrefd, web, browser, webload, nat, aprs, dw or a comma list" >&2; exit 2 ;;
+    *) echo "run.sh: --profile takes core, allstar, asl-lab, asl-edge, asl-ext, nxdn, p25, interlink, twonode, load, g3, urfd, mrefd, web, browser, webload, mmdvm, nat, aprs, dw or a comma list" >&2; exit 2 ;;
   esac
 done
 # native launch reads no xlxd.* file: these settings only change the reference side
@@ -1137,7 +1155,7 @@ watch_control() {
           *) rc=refused ;;
         esac
       elif [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] && [ -z "$extra" ]; then
-        case "$svc" in transcoder-ref|transcoder-sut|allstar|xlxd-ref|xlxd-sut|asl-reg|asl-a|asl-b|asl-e) ;; *) action="" ;; esac
+        case "$svc" in transcoder-ref|transcoder-sut|allstar|xlxd-ref|xlxd-sut|asl-reg|asl-a|asl-b|asl-e|mmdvm-stack) ;; *) action="" ;; esac
         rc=0
         sniffer=""
         [[ " ${capture_svcs[*]} " != *" capture-$svc "* ]] || sniffer="capture-$svc"
@@ -1215,6 +1233,7 @@ printf 'markers=%s profile=%s xlxd_ref=%s xlxd_sut=%s transcoder=%s sut_divergen
   > "$out/run.txt"
 [ "$has_aprs" = 0 ] || echo "aprs=on aprsc_commit=${APRSC_COMMIT:-} sut_config_extra=${DVT_SUT_CONFIG_EXTRA}" >> "$out/run.txt"
 [ "$has_web" = 0 ] || echo "web=on sut_config_extra=${DVT_SUT_CONFIG_EXTRA}" >> "$out/run.txt"
+[ "$has_mmdvm" = 0 ] || echo "mmdvm=on mmdvmhost_commit=${MMDVMSTACK_MMDVMHOST_COMMIT:-}" >> "$out/run.txt"
 [ "$has_twonode" = 0 ] || echo "twonode=on image=${XLXD_SUT_IMAGE} sut_config_extra=${DVT_SUT_CONFIG_EXTRA}" >> "$out/run.txt"
 [ "$has_nat" = 0 ] || echo "nat=on turn=$([ "$has_turn" = 1 ] && echo on || echo off) coturn_image=${COTURN_IMAGE} nat_net=${DVT_NAT_NET}" >> "$out/run.txt"
 cat ".cache/xlxd/${XLXD_REF_DIR:-ref}.fetched" ".cache/xlxd/${XLXD_SUT_DIR:-sut}.fetched" >> "$out/run.txt" 2>/dev/null || true

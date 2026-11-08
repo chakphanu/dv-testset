@@ -1,0 +1,180 @@
+# SPDX-License-Identifier: MIT
+# MMDVMHost settings of the rig's hotspot (rig/mmdvmstack-entry.sh fills in the placeholders).
+# A plain hotspot with a VIRTUAL modem (Protocol=udp, the tester plays the modem) and D-Star, DMR, YSF, P25
+# and NXDN enabled, each mode's network pointing at its gateway on loopback. Written for this rig; the keys
+# are the ones MMDVMHost reads. Comment lines start in column 0 (MMDVMHost reads no others).
+
+[General]
+Callsign=@CALLSIGN@
+Id=@DMR_ID@
+Timeout=180
+Duplex=@DUPLEX@
+RFModeHang=@RF_MODE_HANG@
+NetModeHang=@NET_MODE_HANG@
+Daemon=0
+
+[Log]
+# 0 = none, 1 = debug, 2 = message, 3 = info, 4 = warning, 5 = error. Stdout only (the container log).
+MQTTLevel=0
+DisplayLevel=@LOG_LEVEL@
+
+[MQTT]
+# the loopback broker of the container (P25Gateway and NXDNGateway insist on one); nothing is exposed
+Host=127.0.0.1
+Port=1883
+Auth=0
+Keepalive=60
+Name=mmdvm
+
+[CW Id]
+Enable=0
+Time=10
+
+[DMR Id Lookup]
+File=/tmp/mmdvm/DMRIds.dat
+Time=0
+
+[NXDN Id Lookup]
+File=/tmp/mmdvm/DMRIds.dat
+Time=0
+
+[Modem]
+# the virtual modem: the tester listens on ModemAddress:ModemPort, MMDVMHost binds LocalAddress:LocalPort
+Protocol=udp
+ModemAddress=@MODEM_ADDR@
+ModemPort=@MODEM_PORT@
+LocalAddress=@LOCAL_ADDR@
+LocalPort=@LOCAL_PORT@
+RXFrequency=438800000
+TXFrequency=438800000
+TXInvert=1
+RXInvert=0
+PTTInvert=0
+TXDelay=100
+RXOffset=0
+TXOffset=0
+DMRDelay=0
+RXLevel=50
+TXLevel=50
+RXDCOffset=0
+TXDCOffset=0
+RFLevel=100
+UseCOSAsLockout=0
+Trace=0
+Debug=0
+
+[Transparent Data]
+Enable=0
+
+[D-Star]
+Enable=1
+# the local module letter: RPT1 of an RF header must be the callsign padded to 7 plus this letter
+Module=B
+SelfOnly=0
+AckReply=1
+AckTime=750
+AckMessage=0
+ErrorReply=1
+RemoteGateway=0
+
+[DMR]
+Enable=1
+Beacons=0
+ColorCode=1
+SelfOnly=0
+EmbeddedLCOnly=1
+DumpTAData=0
+CallHang=3
+TXHang=4
+Protect=0
+
+[DMR Trunking]
+Enable=0
+
+[System Fusion]
+Enable=1
+LowDeviation=0
+SelfOnly=0
+TXHang=4
+RemoteGateway=0
+
+[P25]
+Enable=1
+# hexadecimal: $293
+NAC=293
+SelfOnly=0
+OverrideUIDCheck=0
+RemoteGateway=0
+SoftId=0
+TXHang=5
+
+[NXDN]
+Enable=1
+Id=1001
+RAN=1
+SelfOnly=0
+RemoteGateway=0
+TXHang=5
+
+[POCSAG]
+Enable=0
+Frequency=439987500
+
+[FM]
+Enable=0
+
+[D-Star Network]
+Enable=1
+LocalAddress=127.0.0.1
+LocalPort=20011
+GatewayAddress=127.0.0.1
+GatewayPort=20010
+Debug=0
+
+[DMR Network]
+Enable=1
+LocalAddress=127.0.0.1
+LocalPort=62032
+GatewayAddress=127.0.0.1
+GatewayPort=62031
+Jitter=360
+Slot1=1
+Slot2=1
+Debug=0
+
+[System Fusion Network]
+Enable=1
+LocalAddress=127.0.0.1
+LocalPort=3200
+GatewayAddress=127.0.0.1
+GatewayPort=4200
+Debug=0
+
+[P25 Network]
+Enable=1
+LocalAddress=127.0.0.1
+LocalPort=32010
+GatewayAddress=127.0.0.1
+GatewayPort=42020
+Debug=0
+
+[NXDN Network]
+Enable=1
+Protocol=Icom
+LocalAddress=127.0.0.1
+LocalPort=14021
+GatewayAddress=127.0.0.1
+GatewayPort=14020
+Debug=0
+
+[POCSAG Network]
+Enable=0
+
+[FM Network]
+Enable=0
+
+[Lock File]
+Enable=0
+
+[Remote Control]
+Enable=0

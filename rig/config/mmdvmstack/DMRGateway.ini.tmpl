@@ -1,0 +1,77 @@
+# SPDX-License-Identifier: MIT
+# DMRGateway settings of the rig's hotspot (rig/mmdvmstack-entry.sh fills in the placeholders).
+# Only the [XLX Network] is on: a Homebrew login to the reflector under test (port 62030, password passw0rd,
+# the XLX conventions), linked at start to one module by the private-call burst to 4001..4026. RF talks on
+# slot 2, TG 6 (the Pi-Star convention); DMRGateway maps it to slot 2, TG 9 towards the reflector. No
+# [DMR Network N] section, no APRS, no GPSD, no remote commands, no voice files.
+
+[General]
+Id=@DMR_ID@
+Timeout=10
+RptAddress=127.0.0.1
+RptPort=62032
+LocalAddress=127.0.0.1
+LocalPort=62031
+RuleTrace=0
+Daemon=0
+TrunkingEnabled=0
+Debug=0
+
+[Log]
+MQTTLevel=0
+DisplayLevel=@LOG_LEVEL@
+
+[Voice]
+Enabled=0
+Language=en_GB
+Directory=/tmp/mmdvm/Audio
+
+[Info]
+Callsign=@CALLSIGN@
+TXFrequency=438800000
+RXFrequency=438800000
+Power=1
+ColorCode=1
+Duplex=@DUPLEX@
+Slot1=1
+Slot2=1
+Latitude=0.0
+Longitude=0.0
+Height=0
+Location=Rig
+Description=dv-testset hotspot
+URL=none
+
+[XLX Network]
+Enabled=1
+File=/tmp/mmdvm/XLXHosts.txt
+Port=62030
+Password=passw0rd
+ReloadTime=0
+Slot=2
+TG=6
+Base=64000
+Startup=@REFLECTOR_NUM@
+Relink=60
+Debug=0
+UserControl=1
+Module=@MODULE_DMR@
+
+[GPSD]
+Enable=0
+
+[APRS]
+Enable=0
+
+[MQTT]
+Address=127.0.0.1
+Port=1883
+Keepalive=60
+Auth=0
+Name=dmr-gateway
+
+[Dynamic TG Control]
+Enable=0
+
+[Remote Commands]
+Enable=0

@@ -1,0 +1,84 @@
+# SPDX-License-Identifier: MIT
+# The real client stack: the Pi-Star hotspot software as black-box clients of the server under test.
+# MMDVMHost (driven by a VIRTUAL MMDVM modem that the tester runs over UDP, [Modem] Protocol=udp) plus its
+# gateways DMRGateway, YSFGateway, P25Gateway, NXDNGateway and DStarGateway, all in ONE container
+# (rig/mmdvmstack-entry.sh). The programs are GPL-2.0 / GPL-2.0-or-later and run as processes in this
+# separate image; dv-testset itself stays MIT and copies none of their code.
+#
+# Sources are six named build contexts (scripts/pre-fetch-mmdvmstack.sh at MMDVMSTACK_*_REPO @
+# MMDVMSTACK_*_COMMIT of .env.example), one per repository, under .cache/mmdvmstack/.
+# Build by hand, inside scripts/contained.sh --name build, never while the rig runs:
+#   docker build -f rig/Dockerfile.mmdvmstack --build-arg MMDVMSTACK_BASE_IMAGE=$MMDVMSTACK_BASE_IMAGE \
+#     --build-arg MAKE_JOBS=$DVT_BUILD_JOBS \
+#     --build-context mmdvmhost=.cache/mmdvmstack/MMDVMHost --build-context dmrgw=.cache/mmdvmstack/DMRGateway \
+#     --build-context ysfclients=.cache/mmdvmstack/YSFClients --build-context p25clients=.cache/mmdvmstack/P25Clients \
+#     --build-context nxdnclients=.cache/mmdvmstack/NXDNClients --build-context dstargw=.cache/mmdvmstack/DStarGateway \
+#     -t dvt-mmdvmstack:local rig
+#
+# Build choices:
+#  * no M17: this MMDVMHost has no M17 mode, and M17Gateway is not built;
+#  * MMDVMHost, DMRGateway, YSFGateway, P25Gateway, NXDNGateway compile with their own Makefiles (flags
+#    unchanged). Their only libraries are pthread, libmosquitto (logs and state go out over MQTT) and the
+#    header-only nlohmann-json; none is built with gpsd. The git id in the version header is the zero id
+#    (the .git directories are removed, YSF/P25/NXDN are copied as their subdirectory only);
+#  * DStarGateway: only the dstargateway program (not the five accessory tools). ircDDB code is compiled in
+#    but the config has no ircDDB section, so it never connects; no GPSD; libboost-dev is header-only
+#    (string helpers) and exists in the build stage only. Its Makefile links libcurl for the host file
+#    downloader, which this rig never uses (every hostfileUrl is empty): the build links a 20 line stand-in
+#    (rig/mmdvmstack/shim/) instead of libcurl and its twenty-odd dependencies. -Werror is dropped (a newer
+#    compiler than upstream's must not stop the build on a warning);
+#  * the C++ runtime is linked dynamically: the base image already has libstdc++6, so a static copy would add
+#    about 2 MB to every one of the six binaries;
+#  * the final image holds the six stripped binaries, the libcurl stand-in, libmosquitto1 and a mosquitto
+#    broker (P25Gateway and NXDNGateway exit when no broker answers on 127.0.0.1:1883; it listens on loopback
+#    only), the entry script and the config templates. No id database download: MMDVMHost reads the synthetic
+#    rig/config/dmrid.dat that compose mounts read-only at /mmdvm/dmrid.dat. No spoken-announcement audio.
+#  * run it with a read-only root file system and tmpfs /tmp (everything is rendered to /tmp/mmdvm).
+ARG MMDVMSTACK_BASE_IMAGE
+FROM ${MMDVMSTACK_BASE_IMAGE} AS build
+ARG MAKE_JOBS=4
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        g++ make libc6-dev libmosquitto-dev nlohmann-json3-dev libboost-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# the curl stand-in for DStarGateway
+COPY mmdvmstack/shim /shim
+RUN mkdir -p /shim/lib \
+    && gcc -shared -fPIC -O2 -Wl,-soname,libcurl.so.4 -o /shim/lib/libcurl.so.4 /shim/curl-stub.c \
+    && ln -s libcurl.so.4 /shim/lib/libcurl.so
+
+COPY --from=mmdvmhost . /src/MMDVMHost/
+COPY --from=dmrgw . /src/DMRGateway/
+COPY --from=ysfclients YSFGateway/ /src/YSFGateway/
+COPY --from=p25clients P25Gateway/ /src/P25Gateway/
+COPY --from=nxdnclients NXDNGateway/ /src/NXDNGateway/
+COPY --from=dstargw . /src/DStarGateway/
+RUN rm -rf /src/MMDVMHost/.git /src/DMRGateway/.git /src/DStarGateway/.git
+
+RUN mkdir -p /out \
+    && make -C /src/MMDVMHost -j"${MAKE_JOBS}" MMDVM-Host \
+    && make -C /src/DMRGateway -j"${MAKE_JOBS}" DMRGateway \
+    && make -C /src/YSFGateway -j"${MAKE_JOBS}" YSFGateway \
+    && make -C /src/P25Gateway -j"${MAKE_JOBS}" P25Gateway \
+    && make -C /src/NXDNGateway -j"${MAKE_JOBS}" NXDNGateway \
+    && LDFLAGS="-L/shim/lib" make -C /src/DStarGateway -j"${MAKE_JOBS}" \
+        CPPFLAGS="-W -O3 -Wall -std=c++17 -I/shim" DStarGateway/dstargateway \
+    && cp /src/MMDVMHost/MMDVM-Host /src/DMRGateway/DMRGateway /src/YSFGateway/YSFGateway \
+          /src/P25Gateway/P25Gateway /src/NXDNGateway/NXDNGateway /src/DStarGateway/DStarGateway/dstargateway /out/ \
+    && strip --strip-unneeded /out/* \
+    && for b in MMDVM-Host DMRGateway YSFGateway P25Gateway NXDNGateway dstargateway; do test -x /out/$b; done
+
+FROM ${MMDVMSTACK_BASE_IMAGE}
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libstdc++6 libmosquitto1 mosquitto \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10005 --home-dir /nonexistent --shell /usr/sbin/nologin mmdvm
+COPY --from=build /out/ /usr/local/bin/
+COPY --from=build /shim/lib/libcurl.so.4 /usr/local/lib/libcurl.so.4
+RUN ldconfig
+COPY mmdvmstack-entry.sh /mmdvm/entry.sh
+COPY config/mmdvmstack/ /mmdvm/tmpl/
+RUN chmod 755 /mmdvm/entry.sh && chmod -R a+rX /mmdvm
+USER mmdvm
+WORKDIR /tmp
+ENTRYPOINT ["/mmdvm/entry.sh"]

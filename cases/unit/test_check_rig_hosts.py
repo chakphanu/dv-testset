@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 """The wire checker's list of rig hosts (dvtest.check.rig_config) against
 rig/compose.yml: a service added by a profile (twonode dvr-peer .16 and
-transcoder-peer .17, aprsc .47, dw-a .48 / dw-b .49, the T5n alias .46) must
+transcoder-peer .17, aprsc .47, dw-a .48 / dw-b .49, mmdvm-stack .100, the T5n alias .46) must
 not make every datagram to it an 'xlx.unknown_peer ... is not a rig host'."""
 import os
 import re
@@ -43,7 +43,7 @@ def test_new_profile_hosts_are_rig_hosts():
     hosts = check.rig_config("172.30.0.0/24")["hosts"]
     assert hosts["dvr_peer"] == "172.30.0.16" and hosts["ambed_peer"] == "172.30.0.17"
     assert hosts["aprsc"] == "172.30.0.47" and hosts["dw_a"] == "172.30.0.48" and hosts["dw_b"] == "172.30.0.49"
-    assert hosts["asl_nat_alias"] == "172.30.0.46"
+    assert hosts["asl_nat_alias"] == "172.30.0.46" and hosts["mmdvm_stack"] == "172.30.0.100"
     # follows the subnet
     assert check.rig_config("10.9.8.0/24")["hosts"]["dvr_peer"] == "10.9.8.16"
     assert not set(HOST_OFFSETS) & set(CHECK_HOST_OFFSETS)

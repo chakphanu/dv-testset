@@ -54,6 +54,10 @@
 #            config) with its own transcoder transcoder-peer (.17), a plain XLX interlink peer of xlxd-sut on modules
 #            DE (DP15 cases 7b-7d, cases/test_dp15_peer.py, docs/dp15-cases.md); needs XLXD_SUT_IMAGE, DVT_SUT_LAUNCH=native;
 #            the tester gets DVT_TWONODE=on and DVT_DVR_PEER
+#   mmdvm    the REAL client stack of a hotspot: mmdvm-stack (.100, image dvt-mmdvmstack:local) runs upstream MMDVMHost with
+#            DMRGateway, YSFGateway, P25Gateway, NXDNGateway and DStarGateway against xlxd-sut; its modem is the virtual MMDVM
+#            modem (dvtest/mmdvm_modem.py) that the tester runs on UDP DVT_MMDVM_MODEM_PORT (docs/mmdvm-stack-cases.md);
+#            the tester gets DVT_MMDVM=on
 #   capture  sniffers on xlxd-ref, xlxd-sut, transcoder-sut (capture-allstar: on
 #            allstar, capture-nxdn: on nxdn-*, capture-p25: on p25-*)
 #
@@ -82,7 +86,7 @@
 # transcoder-sut .21, tester .30, allstar .40, asl-reg .41 / asl-a .42 / asl-b .43 / asl-e .44 (profile asl-lab), asl-ext .45 (profile asl-ext), .46 (alias address of asl-nat-a, profile asl-nat), web-proxy .90, browser .91 (profile nat: nat-router .92,
 # alias .93, coturn .94, nat-ref-a .95, nat-ref-b .96; the browser is then at <DVT_NAT_NET>.91 behind the router),
 # webload .97 (profile webload), aprsc .47 (profile aprs; .46 is taken by the alias address of asl-nat-a), dw-a .48 / dw-b .49 (profile dw).,
-# dvr-peer .16 / transcoder-peer .17 (profile twonode).
+# dvr-peer .16 / transcoder-peer .17 (profile twonode), mmdvm-stack .100 (profile mmdvm).
 
 name: dvt
 
@@ -405,6 +409,15 @@ services:
       DVT_TWONODE: ${DVT_TWONODE:-off}
       DVT_DVR_PEER: ${DVT_NET:-172.30.0}.16
       DVT_DVR_PEER_TRANSCODER: ${DVT_NET:-172.30.0}.17
+      # profile mmdvm (cases/test_mmdvm_stack.py): on when the real client stack runs; the tester listens as its virtual modem
+      DVT_MMDVM: ${DVT_MMDVM:-off}
+      DVT_MMDVM_STACK: ${DVT_NET:-172.30.0}.100
+      DVT_MMDVM_MODEM_PORT: ${DVT_MMDVM_MODEM_PORT:-3334}
+      DVT_MMDVM_MODULE_DSTAR: ${DVT_MMDVM_MODULE_DSTAR:-H}
+      DVT_MMDVM_MODULE_DMR: ${DVT_MMDVM_MODULE_DMR:-I}
+      DVT_MMDVM_MODULE_YSF: ${DVT_MMDVM_MODULE_YSF:-J}
+      DVT_MMDVM_P25_TG: ${DVT_MMDVM_P25_TG:-31672}
+      DVT_MMDVM_NXDN_TG: ${DVT_MMDVM_NXDN_TG:-31672}
       # profile browser (cases/browser_fixtures.py): on when the browser service runs
       DVT_BROWSER: ${DVT_BROWSER:-off}
       # profile webload (cases/test_web_load.py): on when the load generator runs
@@ -997,6 +1010,60 @@ services:
       DW_PEER: ${DVT_NET:-172.30.0}.48:7355
     networks:
       rig: {ipv4_address: "${DVT_NET:-172.30.0}.49"}
+
+  # ---- The real client stack of a hotspot (profile mmdvm; docs/mmdvm-stack-cases.md) ----
+  # Upstream MMDVMHost with DMRGateway, YSFGateway, P25Gateway, NXDNGateway and DStarGateway (GPL programs, built from the pinned
+  # sources of .env.example by rig/Dockerfile.mmdvmstack, run as processes by rig/mmdvmstack-entry.sh) against xlxd-sut. MMDVMHost's
+  # modem is the VIRTUAL MMDVM modem of dvtest/mmdvm_modem.py: the tester listens on UDP MODEM_PORT and MMDVMHost ([Modem] Protocol=udp)
+  # talks to it from LOCAL_PORT, so no serial line, no pty and no hardware are involved. Nothing in the container needs the internet
+  # (every host file points at the reflector). Read-only root, tmpfs /tmp (the rendered configuration), no capabilities, uid 10005.
+  # The log of all the programs, each line prefixed with its name, goes to stdout: out/<run>/logs/mmdvm-stack.log. The gateways link
+  # at start; `stop mmdvm-stack` through the control channel makes them unlink (SIGTERM, 20 s grace). The limit set is small
+  # (about 60 MB for the seven processes); the task limit is higher than the other small services (several programs with threads).
+  mmdvm-stack:
+    <<: *limits-small
+    pids_limit: ${DVT_PIDS_MMDVM:-256}
+    profiles: [mmdvm]
+    init: true
+    restart: "no"
+    stop_grace_period: 20s
+    image: dvt-mmdvmstack:local
+    build:
+      context: .
+      dockerfile: Dockerfile.mmdvmstack
+      args:
+        <<: *build-jobs
+        MMDVMSTACK_BASE_IMAGE: ${MMDVMSTACK_BASE_IMAGE:-error-set-mmdvmstack-base-image-see-env-example}
+      additional_contexts:
+        mmdvmhost: ../.cache/mmdvmstack/MMDVMHost
+        dmrgw: ../.cache/mmdvmstack/DMRGateway
+        ysfclients: ../.cache/mmdvmstack/YSFClients
+        p25clients: ../.cache/mmdvmstack/P25Clients
+        nxdnclients: ../.cache/mmdvmstack/NXDNClients
+        dstargw: ../.cache/mmdvmstack/DStarGateway
+    environment:
+      MODEM_ADDR: ${DVT_NET:-172.30.0}.30
+      MODEM_PORT: ${DVT_MMDVM_MODEM_PORT:-3334}
+      LOCAL_ADDR: ${DVT_NET:-172.30.0}.100
+      LOCAL_PORT: ${DVT_MMDVM_LOCAL_PORT:-3335}
+      REFLECTOR_IP: ${DVT_NET:-172.30.0}.11
+      REFLECTOR_NAME: ${DVT_REFLECTOR:-XLX999}
+      CALLSIGN: N0CALL
+      DMR_ID: "1023007"
+      MODULE_DSTAR: ${DVT_MMDVM_MODULE_DSTAR:-H}
+      MODULE_DMR: ${DVT_MMDVM_MODULE_DMR:-I}
+      MODULE_YSF: ${DVT_MMDVM_MODULE_YSF:-J}
+      P25_TG: ${DVT_MMDVM_P25_TG:-31672}
+      NXDN_TG: ${DVT_MMDVM_NXDN_TG:-31672}
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - ./config/dmrid.dat:/mmdvm/dmrid.dat:ro
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.100"}
 
   # Load generator of the web load test (profile webload, together with web): many receive-only WebRTC
   # listeners (aiortc, pinned in .env.example) through the real HTTP signalling relay. A control server

@@ -51,6 +51,7 @@ internet, and every address is fixed.
 | dvr-peer / transcoder-peer | 172.30.0.16 / .17 | twonode | a SECOND DV-Router node (XLX998, the image of `XLXD_SUT_IMAGE`, native launch, own rendered config) with its own transcoder, a plain XLX interlink peer of xlxd-sut on modules DE; the second node of the DP15 cases 7b-7d; see "Two DV-Router nodes (profile twonode)" |
 | aprsc | 172.30.0.47 | aprs | a PRIVATE aprsc (APRS-IS server), standalone, client port TCP 14580, no uplink, no internet; the server side of the APRS-IS cases of DV-Router; see "Private APRS-IS server (profile aprs)" |
 | dw-a / dw-b | 172.30.0.48 / .49 | dw | two real Dire Wolf TNCs on a modem loop (KISS TCP 8001 each, audio relayed over UDP 7355, no hardware); the TNC side of the DP15 RF tier B cases; see "Dire Wolf TNCs on a modem loop (profile dw)" |
+| mmdvm-stack | 172.30.0.100 | mmdvm | the REAL client stack of a hotspot: upstream MMDVMHost with DMRGateway, YSFGateway, P25Gateway, NXDNGateway and DStarGateway against xlxd-sut, its modem a VIRTUAL MMDVM modem that the tester runs on UDP 3334 (no hardware, no internet); see "Real client stack (profile mmdvm)" |
 | webload | 172.30.0.97 | webload | WebRTC load generator (aiortc), control server :3100 for the tester only; see "Web load profile" |
 | web-proxy | 172.30.0.90 (aliases `dvt-web`, `dvt-admin`) | web | TLS reverse proxy: HTTPS 443 to dv-svc-web of the SUT (`<net>.11:8081`) and HTTPS 8443 to dv-svc-admin (`<net>.11:8080`), self-signed CA in `out/<run>/web/ca.pem`; see "Web profile" |
 | browser | 172.30.0.91 | browser | Playwright browsers (`playwright run-server`, chromium + firefox + WebKit) for the browser cases, used with `web`; see "Browser profile" |
@@ -76,6 +77,7 @@ internet, and every address is fixed.
 | UDP 41400 | NXDNReflector network (xlxd connects out) | nxdn-ref, nxdn-sut |
 | UDP 41000 | P25Reflector network (xlxd connects out) | p25-ref, p25-sut |
 | UDP 10002 | XLX interlink | xlxd-*, xlxd-peer-* |
+| UDP 3334 / 3335 | MMDVM serial frames over UDP: the virtual modem (tester) / MMDVMHost (`[Modem] Protocol=udp`) | tester, mmdvm-stack (profile mmdvm) |
 | TCP 443 | HTTPS (TLS proxy, `dvt-web`) | web-proxy (profile web) |
 | TCP 8443 | HTTPS (TLS proxy, admin host `dvt-admin:8443`) | web-proxy (profile web) |
 | TCP 3000 | Playwright websocket server (`DVT_BROWSER_PORT`) | browser (profile browser) |
@@ -803,6 +805,25 @@ a second DV-Router node next to the SUT. Nothing is built: it is the prebuilt im
   (the xlxd peer is also XLX998). Free host numbers used: `.16` and `.17` (`.12` to `.15` are the xlxd peers of `interlink`).
 * Limits: the second node has no web service (the proxy `web-proxy` forwards to `<net>.11:8081` only); the web-side observations of 7b-7d are not part of the rig (dp15-cases.md).
 * Run command: [dp15-cases.md](dp15-cases.md), "Two DV-Router nodes".
+
+## Real client stack (profile mmdvm)
+
+`cases/test_mmdvm_stack.py` ([mmdvm-stack-cases.md](mmdvm-stack-cases.md)) runs the software of a Pi-Star hotspot against the reflector under test. The service
+`mmdvm-stack` (172.30.0.100, image `dvt-mmdvmstack:local`, built by `run.sh` on first use from `rig/Dockerfile.mmdvmstack` after `scripts/pre-fetch-mmdvmstack.sh`; the pins are `MMDVMSTACK_*` in
+`.env.example`) is ONE container with MMDVMHost, DMRGateway, YSFGateway, P25Gateway, NXDNGateway, DStarGateway and a loopback-only mosquitto broker, each under a restart loop
+(`rig/mmdvmstack-entry.sh`; every log line prefixed with the program name: `out/<run>/logs/mmdvm-stack.log`). Its modem is the VIRTUAL modem of `dvtest/mmdvm_modem.py` in the
+tester.
+
+* Configuration: the templates `rig/config/mmdvmstack/*.tmpl` are rendered at start from the compose environment (`MODEM_ADDR` = the tester, `MODEM_PORT` 3334, `LOCAL_ADDR` = `.100`,
+  `LOCAL_PORT` 3335, `REFLECTOR_IP` = `.11`, `CALLSIGN` N0CALL, `DMR_ID` 1023007, the modules `MODULE_DSTAR`/`MODULE_DMR`/`MODULE_YSF` = `H`/`I`/`J`, the talk groups `P25_TG`/`NXDN_TG` 31672;
+  tester side: `DVT_MMDVM_*`). Every host file points at `.11` and nothing needs the internet (D-STAR over DExtra, no ircDDB, no DPlus authentication, no id database download;
+  the synthetic `rig/config/dmrid.dat` is mounted read-only).
+* Hardening and limits: read-only root, tmpfs `/tmp`, no capabilities, `no-new-privileges`, uid 10005, `x-limits-small` with `pids_limit` 256 (`DVT_PIDS_MMDVM`), `stop_grace_period` 20 s.
+* The gateways link at start; `scripts/run.sh` lets the control channel `stop` / `start` / `restart` / `kill` the service `mmdvm-stack` (case MMDVM3). D-STAR and DMR send an unlink at
+  SIGTERM, YSF, P25 and NXDN do not.
+* `scripts/run.sh --profile mmdvm` (use with `web` to read the public state) checks `.cache/mmdvmstack/MMDVMHost` exists (exit 2 otherwise) and gives the tester `DVT_MMDVM=on`,
+  `DVT_MMDVM_STACK`, `DVT_MMDVM_MODEM_PORT` and the module / talk group variables. Free host numbers used: `.100` (`.98` to `.127` are free; `.128/25` is the load nodes).
+* The wire checker knows `.100` as a rig host (`CHECK_HOST_OFFSETS`); the modem traffic (tester <-> `.100`, UDP 3334 / 3335) is not on any captured service.
 
 ## Control channel
 
