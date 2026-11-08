@@ -309,6 +309,9 @@ def test_the_webkit_navigation_error_is_tolerated_only_near_a_navigation():
     assert [t for _t, t in bad] == [other] and len(ok) == 1
     bad, _ = mms.split_tolerated_errors([(T_NAV, "Error: Fetch API cannot load https://dvt-web/api/v1/public/state due to access control checks.")], [T_NAV], "webkit")
     assert len(bad) == 1                                                                             # exactly the auth/session message
+    spaced = "Error: Fetch API cannot load https: /dvt-web/api/v1/auth/session due to access control checks."
+    bad, ok = mms.split_tolerated_errors([(T_NAV + 0.01, spaced)], [T_NAV], "webkit")                  # the form logged on 220e45b
+    assert bad == [] and len(ok) == 1
 
 
 def test_error_near_any_main_frame_navigation_is_tolerated_and_far_ones_are_not():

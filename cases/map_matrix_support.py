@@ -261,7 +261,8 @@ def close_one_edge(state, chosen=None):
 
 NAV_ERROR_WINDOW_S = 1.0
 # Playwright WebKit: a fetch that the page still had in flight when the case reloaded or navigated it fails with this message
-TOLERATED_NAV_ERROR_RE = re.compile(r"Fetch API cannot load \S*/api/v1/auth/session due to access control checks")
+# WebKit prints the URL either whole or as "https: /dvt-web/..." (a space after the scheme, seen on wip-220e45b)
+TOLERATED_NAV_ERROR_RE = re.compile(r"Fetch API cannot load https?:\s?/{1,2}[^\s/]+/api/v1/auth/session due to access control checks")
 
 
 def split_tolerated_errors(errors, navs, engine, window_s=NAV_ERROR_WINDOW_S):
