@@ -337,45 +337,73 @@ def test_csp_probe_operator(operator_page):
     plan.append(("dashboard-operator", bp.url(pages.dashboard_url("/")), act_dashboard, True))
     conclude(bp, run_pages(bp, "operator", plan))
 
-SELECT_HTML = """<!doctype html><html><head><meta charset="utf-8"><title>csp select</title></head><body>
-<select id="static-select" class="form-select"><option>a</option><option>b</option></select>
-<script src="/csp-select.js"></script></body></html>"""
-SELECT_JS = """
-window.__csp = [];
-document.addEventListener('securitypolicyviolation', function (e) {
-  window.__csp.push({directive: e.effectiveDirective, blocked: e.blockedURI, file: e.sourceFile, line: e.lineNumber, col: e.columnNumber});
-});
-var s = document.createElement('select');
-s.id = 'created-select'; s.className = 'form-select';
-s.appendChild(new Option('a', 'a')); s.appendChild(new Option('b', 'b'));
-document.body.appendChild(s);
-s.value = 'b';
-"""
+# Isolation matrix (CSP2): which <select> variant raises style-src-attr under which policy, in every engine, with no product code.
+POLICY_PRODUCT = "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+POLICIES = {
+    "none": None,                                                   # no CSP header at all: must be silent
+    "product": POLICY_PRODUCT,                                      # as served by the product
+    "product+style-src": POLICY_PRODUCT + "; style-src 'self'",     # style-src explicit: does WebKit map style-src-attr differently?
+}
+VARIANTS = {
+    # name: (static markup of <body>, script)
+    "static-bare": ('<select id="s"></select>', ""),
+    "static-options": ('<select id="s"><option>a</option><option>b</option></select>', ""),
+    "static-class": ('<select id="s" class="form-select"><option>a</option><option>b</option></select>', ""),
+    "created-bare": ("", "var s=document.createElement('select');s.id='s';document.body.appendChild(s);"),
+    "created-options": ("", "var s=document.createElement('select');s.id='s';s.appendChild(new Option('a','a'));"
+                            "s.appendChild(new Option('b','b'));document.body.appendChild(s);"),
+    "created-class-value": ("", "var s=document.createElement('select');s.id='s';s.className='form-select';"
+                                "s.appendChild(new Option('a','a'));s.appendChild(new Option('b','b'));"
+                                "document.body.appendChild(s);s.value='b';"),
+    "no-select-control": ('<div id="s">x</div>', ""),
+}
+PAGE = ('<!doctype html><html><head><meta charset="utf-8"><title>csp</title>'
+        '<script src="/csp-iso.js"></script></head><body>%s<script src="/csp-iso-run.js"></script></body></html>')
+LISTENER_JS = ("window.__v=[];document.addEventListener('securitypolicyviolation',function(e){window.__v.push("
+               "{d:e.effectiveDirective,b:e.blockedURI,f:e.sourceFile,l:e.lineNumber,c:e.columnNumber});});")
 
 
-def test_csp_bare_select_isolation(browser_page):
-    """Isolation of the WebKit finding: every style-src-attr violation of the product's pages targets a <select class="form-select">.
-    Serve a synthetic page with the product's policy (default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self')
-    holding one static <select> and one created by script, no product code (no preact), and record any securitypolicyviolation. A
-    violation here means the engine itself raises it for a <select> under this policy (not the product's code); none means the product's
-    code path matters. Records only, never fails on a violation."""
+def test_csp_select_isolation_matrix(browser_page):
+    """Isolation of the WebKit finding (CSP2): every style-src-attr violation of the product's pages targets a <select class="form-select">.
+    Synthetic pages, no product code: select variants (bare, with options, with the product's class and a value, static markup vs
+    createElement + appendChild, and a div as control) x policies (no CSP header, the product's policy, the product's policy plus an
+    explicit style-src 'self'). The listener is installed in a script that runs before the markup. Records the violations per cell and the
+    engine version; a violation in the no-CSP cell or in the div control would be a harness problem and fails the case, everything else is
+    evidence (web.finding for each cell with a violation)."""
     bp = browser_page
-    policy = "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
     page = bp.page
+    state = {"policy": None, "variant": None}
 
     def serve(route):
         url = route.request.url
-        if url.endswith("/csp-select.js"):
-            route.fulfill(status=200, body=SELECT_JS, headers={"Content-Type": "text/javascript", "Content-Security-Policy": policy})
+        headers = {"Content-Type": "text/html; charset=utf-8"}
+        if state["policy"]:
+            headers["Content-Security-Policy"] = state["policy"]
+        if url.endswith("/csp-iso.js") or url.endswith("/csp-iso-run.js"):
+            body = LISTENER_JS if url.endswith("/csp-iso.js") else VARIANTS[state["variant"]][1]
+            headers["Content-Type"] = "text/javascript"
+            route.fulfill(status=200, body=body, headers=headers)
         else:
-            route.fulfill(status=200, body=SELECT_HTML, headers={"Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": policy})
-    page.route("**/csp-select.*", serve)
-    page.add_init_script("window.__early=[];document.addEventListener('securitypolicyviolation',function(e){window.__early.push({d:e.effectiveDirective,b:e.blockedURI,f:e.sourceFile,l:e.lineNumber,c:e.columnNumber});});")
-    page.goto(bp.url("/csp-select.html"))
-    page.wait_for_timeout(1500)
-    got = page.evaluate("({early: window.__early, late: window.__csp})")
-    n = len(got["early"])
-    print("[RECORD] csp-select %s: violations %d %s" % (brlib.label(bp.engine), n, json.dumps(got["early"][:4])))
-    if n:
-        web.finding("%s: a bare <select> under the product's policy raises %s without any product code (%s)" % (
-            brlib.label(bp.engine), sorted({v["d"] for v in got["early"]}), json.dumps(got["early"][:2])))
+            route.fulfill(status=200, body=PAGE % VARIANTS[state["variant"]][0], headers=headers)
+    page.route("**/csp-iso*", serve)
+    version = bp.context.browser.version if bp.context.browser else "?"
+    cells = {}
+    for policy, header in POLICIES.items():
+        for variant in VARIANTS:
+            state.update(policy=header, variant=variant)
+            page.goto(bp.url("/csp-iso.html?p=%s&v=%s" % (policy, variant)))
+            page.wait_for_timeout(700)
+            got = page.evaluate("window.__v || []")
+            cells["%s|%s" % (policy, variant)] = got
+            print("[RECORD] csp-select %s %s: policy=%s variant=%s violations=%d %s" % (
+                brlib.label(bp.engine), version, policy, variant, len(got), json.dumps(got[:2])))
+            if got and policy != "none" and variant != "no-select-control":
+                web.finding("%s %s: policy=%s variant=%s raises %s" % (
+                    brlib.label(bp.engine), version, policy, variant, sorted({v["d"] for v in got})))
+    out = Path(os.environ.get("DVT_OUT", "out")) / "web" / ("csp-select-matrix-%s.json" % bp.engine)
+    try:
+        out.write_text(json.dumps({"engine": bp.engine, "version": version, "cells": cells}, indent=1, sort_keys=True) + "\n")
+    except OSError:
+        pass
+    harness = [k for k, v in cells.items() if v and (k.startswith("none|") or k.endswith("|no-select-control"))]
+    assert not harness, "violations where none can be expected (harness problem): %s" % harness
