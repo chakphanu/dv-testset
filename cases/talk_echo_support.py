@@ -769,8 +769,40 @@ def ice1_diagnosis(dump, offers, restarts, ended_text="Ended: Button released.",
 
 # ------------------------------------------------------------------------- the evidence file
 
-def evidence_path(out_dir, engine):
-    return Path(out_dir) / "web" / ("talk-echo-%s.json" % re.sub(r"[^a-z0-9]+", "-", engine.lower()))
+def evidence_path(out_dir, engine, phase="off"):
+    """out/<run>/web/talk-echo-<engine>.json, or talk-echo-<engine>-conn-<phase>.json for a run with a forced connection change."""
+    name = re.sub(r"[^a-z0-9]+", "-", engine.lower())
+    return Path(out_dir) / "web" / ("talk-echo-%s.json" % name if phase == "off" else "talk-echo-%s-conn-%s.json" % (name, phase))
+
+
+# ------------------------------------------------------------------------- forced navigator.connection change (DVT_TALK_ECHO_CONN_CHANGE)
+
+CONN_PHASES = ("off", "talk", "release", "echo")
+FORCE_ENV = "DVT_TALK_ECHO_CONN_CHANGE"
+FORCE_DELAY_S = 1.0             # 'talk': this long after the press, while held; 'echo': this long after the release
+FORCE_JS = """() => {
+  const c = navigator.connection;
+  if (!c) return {dispatched: false, why: 'navigator.connection is undefined'};
+  const t = window.__dvtEcho ? window.__dvtEcho.mark('forced_change') : null;
+  c.dispatchEvent(new Event('change'));
+  return {dispatched: true, t_ms: t ? t.t : null, effectiveType: c.effectiveType === undefined ? null : c.effectiveType};
+}"""
+HAS_CONNECTION_JS = "() => !!navigator.connection"
+
+
+def conn_phase(environ):
+    """The forced-change phase from the environment: off (default), talk, release or echo. ValueError for anything else."""
+    value = (environ.get(FORCE_ENV) or "off").strip().lower()
+    if value not in CONN_PHASES:
+        raise ValueError("%s=%r: wanted one of %s" % (FORCE_ENV, value, ", ".join(CONN_PHASES)))
+    return value
+
+
+def forced_lines(lines, phase):
+    """Failure lines of a run with a forced change say so: 'after a forced connection change at <phase>: <line>' (unchanged for off)."""
+    if phase == "off":
+        return list(lines)
+    return ["after a forced connection change at %s: %s" % (phase, line) for line in lines]
 
 
 def write_evidence(path, doc):

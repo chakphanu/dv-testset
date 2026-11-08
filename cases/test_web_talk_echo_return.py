@@ -172,8 +172,38 @@ def start_recorders(*bps):
         assert got is not None, "the recorder is not installed in the page"
 
 
+def force_change(run, phase, record):
+    """Dispatch a synthetic navigator.connection 'change' in the TALKER page (the path of the page's ICE1 handler) and note when."""
+    got = run.tx.page.evaluate(tes.FORCE_JS)
+    got = dict(got or {}, phase=phase, wall=time.time(), since_start_s=run.since_start())
+    record.clear()
+    record.update(got)
+    run.phases["forced_change"] = got["wall"]
+    return got
+
+
 def test_talk_echo_returns_to_the_page(engine, rtc_tx_page, echo_rx_page, echo_on_e, web_client, request):
-    tx, rx = rtc_tx_page, echo_rx_page
+    """The plain flow; DVT_TALK_ECHO_CONN_CHANGE=talk|release|echo forces a connection change in the talker page (see the module doc)."""
+    try:
+        phase = tes.conn_phase(os.environ)
+    except ValueError as exc:
+        pytest.fail(str(exc))
+    run_talk_echo(engine, rtc_tx_page, echo_rx_page, echo_on_e, web_client, request, phase)
+
+
+@pytest.mark.parametrize("phase", ["talk", "release", "echo"])
+def test_talk_echo_after_a_forced_connection_change(engine, phase, rtc_tx_page, echo_rx_page, echo_on_e, web_client, request):
+    """The suspected ICE1 path, forced: a synthetic navigator.connection 'change' in the talker page 1 s after the press (talk), right after
+    the release (release) or 1 s after the release (echo). The product checks stay: the talker page must still hear the echo, the second page
+    live and echo. Chromium only (the other engines have no navigator.connection in practice). Select with -k conn."""
+    if engine != "chromium":
+        pytest.skip("the forced connection change runs on Chromium only (set %s on another engine to try it)" % tes.FORCE_ENV)
+    run_talk_echo(engine, rtc_tx_page, echo_rx_page, echo_on_e, web_client, request, phase)
+
+
+def run_talk_echo(engine, tx_page, rx_page, echo_on_e, web_client, request, phase):
+    tx, rx = tx_page, rx_page
+    forced = {}
     try:
         control = request.getfixturevalue("rig_control")      # optional: DVT_RIG_CONTROL=1 (run.sh sets it)
     except pytest.skip.Exception:
@@ -197,6 +227,8 @@ def test_talk_echo_returns_to_the_page(engine, rtc_tx_page, echo_rx_page, echo_o
             got = rtc.connect(tes.ROOM)
             assert got["status"] == "Listening on module %s" % tes.ROOM, "%s page: %s" % (who, got)
         assert pages.talk_button(tx.page).is_enabled(), "Hold Talk is not enabled after Listen"
+        if phase != "off" and not tx.page.evaluate(tes.HAS_CONNECTION_JS):
+            pytest.skip("%s: navigator.connection is undefined, a connection change cannot be forced" % brlib.label(engine))
         run.mark("listening")
         run.wait(tes.PRE_S, rtc_tx, rtc_rx, anon)
 
@@ -213,17 +245,29 @@ def test_talk_echo_returns_to_the_page(engine, rtc_tx_page, echo_rx_page, echo_o
             pytest.skip("%s: no fake microphone (talk status %r)" % (brlib.label(engine), text))
         if text != pages.TALK_ON_AIR_TEXT:
             release(rtc_tx)
-            failures.append("evidence: the talk status after the press is %r, not %r (Listen line %r)" % (text, pages.TALK_ON_AIR_TEXT, rtc_tx.status()))
+            failures += tes.forced_lines(["evidence: the talk status after the press is %r, not %r (Listen line %r)"
+                                          % (text, pages.TALK_ON_AIR_TEXT, rtc_tx.status())], phase)
         else:
-            run.wait(tes.HOLD_S, rtc_tx, rtc_rx, anon, every=0.25, public_every=0.5)
+            if phase == "talk":
+                run.wait(tes.FORCE_DELAY_S, rtc_tx, rtc_rx, anon, every=0.25, public_every=0.5)
+                force_change(run, phase, forced)
+                run.wait(tes.HOLD_S - tes.FORCE_DELAY_S, rtc_tx, rtc_rx, anon, every=0.25, public_every=0.5)
+            else:
+                run.wait(tes.HOLD_S, rtc_tx, rtc_rx, anon, every=0.25, public_every=0.5)
             run.mark("release")
             release(rtc_tx)
+            if phase == "release":
+                force_change(run, phase, forced)
             ended, took_end = wait_talk_text(rtc_tx, lambda s: s != pages.TALK_ON_AIR_TEXT, 8.0)
             run.mark("ended")
             run.texts["after_release"] = {"status": ended, "seconds": round(took_end, 2) if took_end else None}
             if ended != pages.TALK_RELEASED_TEXT:
-                failures.append("evidence: after the release the talk status is %r, not %r" % (ended, pages.TALK_RELEASED_TEXT))
+                failures += tes.forced_lines(["evidence: after the release the talk status is %r, not %r" % (ended, pages.TALK_RELEASED_TEXT)], phase)
             elapsed = time.time() - run.phases["release"]
+            if phase == "echo":
+                run.wait(max(0.0, tes.FORCE_DELAY_S - elapsed), rtc_tx, rtc_rx, anon)
+                force_change(run, phase, forced)
+                elapsed = time.time() - run.phases["release"]
             run.wait(max(0.0, tes.TAIL_S - elapsed), rtc_tx, rtc_rx, anon)
             run.mark("tail_end")
             ice_after = read_ice_metrics(control)
@@ -234,7 +278,7 @@ def test_talk_echo_returns_to_the_page(engine, rtc_tx_page, echo_rx_page, echo_o
                 ice_after = read_ice_metrics(control)
             if "release" in run.phases:
                 analysis = tes.analyse_run(run.dumps, engine)
-                failures += tes.failure_lines(analysis["checks"], analysis["diagnosis"])
+                failures += tes.forced_lines(tes.failure_lines(analysis["checks"], analysis["diagnosis"]), phase)
             tables = {who: tes.requests_table(a.rows, run.phases) for who, a in run.audits.items()}
             delta = tes.metrics_delta(ice_before, ice_after)
             restarts = tes.restarts_delta(delta)
@@ -249,13 +293,13 @@ def test_talk_echo_returns_to_the_page(engine, rtc_tx_page, echo_rx_page, echo_o
             doc = {
                 "meta": {"engine": brlib.label(engine), "room": tes.ROOM, "hold_s": tes.HOLD_S, "pre_s": tes.PRE_S, "tail_s": tes.TAIL_S,
                          "sample_ms": tes.SAMPLE_MS, "rms_floor": tes.RMS_FLOOR, "expect_hz": tes.EXPECT_HZ.get(engine),
-                         "image": os.environ.get("XLXD_SUT_IMAGE", ""), "echo": echo_on_e,
+                         "image": os.environ.get("XLXD_SUT_IMAGE", ""), "echo": echo_on_e, "forced_change_phase": phase,
                          "note": "checks of kind product are the audio assertions, kind evidence the rest; times of a recorder are ms on its "
                                  "own page clock, phases are the tester's wall clock (seconds)"},
                 "phases": run.phases, "texts": run.texts, "timeline": run.timeline, "public_state_room_E": run.public,
                 "checks": [{k: c[k] for k in ("name", "kind", "ok", "stage", "detail")} for c in analysis.get("checks", [])],
                 "verdicts": {c["name"]: c["verdict"] for c in analysis.get("checks", []) if c.get("verdict")},
-                "diagnosis": analysis.get("diagnosis", ""),
+                "diagnosis": analysis.get("diagnosis", ""), "forced_change": forced or None,
                 "ice1": {"edge_metrics_before_talk": ice_before, "edge_metrics_after_echo": ice_after, "edge_metrics_delta": delta,
                          "restarts_delta": restarts, "control_channel": control is not None,
                          "note": "dv_edge_webrtc_* families with 'restart' or 'ice' in the name; the edge publishes every 10 s", **ice1},
@@ -266,7 +310,7 @@ def test_talk_echo_returns_to_the_page(engine, rtc_tx_page, echo_rx_page, echo_o
                 "listener": {"analysis": analysis.get("listener"), "requests": tables["listener"],
                              "requests_summary": tes.requests_summary(tables["listener"]), "recorder": run.dumps["listener"],
                              "series": tes.series(run.dumps["listener"]) if run.dumps["listener"] else []}}
-            tes.write_evidence(tes.evidence_path(os.environ.get("DVT_OUT", "out"), engine), doc)
+            tes.write_evidence(tes.evidence_path(os.environ.get("DVT_OUT", "out"), engine, phase), doc)
         except Exception as exc:                         # noqa: BLE001 - the evidence must never mask the case's own outcome
             print("talk-echo: evidence not written: %s: %s" % (type(exc).__name__, exc))
 

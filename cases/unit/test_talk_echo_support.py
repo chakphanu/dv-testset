@@ -458,3 +458,16 @@ def test_ice_metrics_filter_and_delta():
     assert tes.restarts_delta(delta) == 2.0
     assert tes.metrics_delta(None, after) is None and tes.restarts_delta(None) is None
     assert tes.restarts_delta(tes.metrics_delta([kept[1]], [kept[1]])) == "absent"
+
+
+def test_forced_change_phase_lines_and_paths(tmp_path):
+    assert tes.conn_phase({}) == "off" and tes.conn_phase({tes.FORCE_ENV: " Talk "}) == "talk"
+    for good in ("off", "talk", "release", "echo"):
+        assert tes.conn_phase({tes.FORCE_ENV: good}) == good
+    with pytest.raises(ValueError):
+        tes.conn_phase({tes.FORCE_ENV: "now"})
+    assert tes.forced_lines(["a", "b"], "off") == ["a", "b"]
+    assert tes.forced_lines(["PRODUCT CHECK x"], "release") == ["after a forced connection change at release: PRODUCT CHECK x"]
+    assert tes.evidence_path(tmp_path, "chromium").name == "talk-echo-chromium.json"
+    assert tes.evidence_path(tmp_path, "chromium", "echo").name == "talk-echo-chromium-conn-echo.json"
+    assert "dispatchEvent(new Event('change'))" in tes.FORCE_JS and tes.FORCE_JS.isascii()
