@@ -336,3 +336,46 @@ def test_csp_probe_operator(operator_page):
     plan.append(("login-operator", bp.url(pages.LOGIN), act_heading_only, True))
     plan.append(("dashboard-operator", bp.url(pages.dashboard_url("/")), act_dashboard, True))
     conclude(bp, run_pages(bp, "operator", plan))
+
+SELECT_HTML = """<!doctype html><html><head><meta charset="utf-8"><title>csp select</title></head><body>
+<select id="static-select" class="form-select"><option>a</option><option>b</option></select>
+<script src="/csp-select.js"></script></body></html>"""
+SELECT_JS = """
+window.__csp = [];
+document.addEventListener('securitypolicyviolation', function (e) {
+  window.__csp.push({directive: e.effectiveDirective, blocked: e.blockedURI, file: e.sourceFile, line: e.lineNumber, col: e.columnNumber});
+});
+var s = document.createElement('select');
+s.id = 'created-select'; s.className = 'form-select';
+s.appendChild(new Option('a', 'a')); s.appendChild(new Option('b', 'b'));
+document.body.appendChild(s);
+s.value = 'b';
+"""
+
+
+def test_csp_bare_select_isolation(browser_page):
+    """Isolation of the WebKit finding: every style-src-attr violation of the product's pages targets a <select class="form-select">.
+    Serve a synthetic page with the product's policy (default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self')
+    holding one static <select> and one created by script, no product code (no preact), and record any securitypolicyviolation. A
+    violation here means the engine itself raises it for a <select> under this policy (not the product's code); none means the product's
+    code path matters. Records only, never fails on a violation."""
+    bp = browser_page
+    policy = "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+    page = bp.page
+
+    def serve(route):
+        url = route.request.url
+        if url.endswith("/csp-select.js"):
+            route.fulfill(status=200, body=SELECT_JS, headers={"Content-Type": "text/javascript", "Content-Security-Policy": policy})
+        else:
+            route.fulfill(status=200, body=SELECT_HTML, headers={"Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": policy})
+    page.route("**/csp-select.*", serve)
+    page.add_init_script("window.__early=[];document.addEventListener('securitypolicyviolation',function(e){window.__early.push({d:e.effectiveDirective,b:e.blockedURI,f:e.sourceFile,l:e.lineNumber,c:e.columnNumber});});")
+    page.goto(bp.url("/csp-select.html"))
+    page.wait_for_timeout(1500)
+    got = page.evaluate("({early: window.__early, late: window.__csp})")
+    n = len(got["early"])
+    print("[RECORD] csp-select %s: violations %d %s" % (brlib.label(bp.engine), n, json.dumps(got["early"][:4])))
+    if n:
+        web.finding("%s: a bare <select> under the product's policy raises %s without any product code (%s)" % (
+            brlib.label(bp.engine), sorted({v["d"] for v in got["early"]}), json.dumps(got["early"][:2])))
