@@ -51,7 +51,8 @@ INIT_SCRIPT = """
   document.addEventListener('securitypolicyviolation', (e) => {
     try {
       window.__dvtReport('csp', JSON.stringify({ directive: e.violatedDirective, blocked: e.blockedURI,
-        sample: (e.sample || '').slice(0, 60), source: e.sourceFile }));
+        sample: (e.sample || '').slice(0, 60), source: e.sourceFile,
+        tag: (e.target && e.target.tagName) ? String(e.target.tagName).toLowerCase() : '' }));
     } catch (err) { /* the binding is not there yet */ }
   }, true);
 })();
@@ -302,7 +303,7 @@ class BrowserPage:
         self.engine = engine
         self.base = base_url.rstrip("/")
         self.name = name
-        self.log = brlib.PageLog(origin=self.base)
+        self.log = brlib.PageLog(origin=self.base, engine=engine)
         self.art = brlib.artifact_dir(_out_dir(), engine, name)
         self._har_tmp = None
         opts = dict(ignore_https_errors=True, locale="en-US", timezone_id="UTC",

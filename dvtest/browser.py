@@ -71,6 +71,7 @@ class PageLog:
     """Everything a page did while a case drove it. The fixture fills the lists from
     Playwright events; `problems()` judges them."""
     origin: str = ""
+    engine: str = ""                                  # chromium | firefox | webkit (the CSP2 allowance below is WebKit's)
     console: list = field(default_factory=list)       # {type, text, url}
     errors: list = field(default_factory=list)        # uncaught page exceptions (strings)
     requests: list = field(default_factory=list)      # {method, url, path, status, ctype, resource}
@@ -78,6 +79,19 @@ class PageLog:
     dialogs: list = field(default_factory=list)       # {type, message}
     csp: list = field(default_factory=list)           # securitypolicyviolation events
     reports: list = field(default_factory=list)      # window.__dvtReport(kind, data) calls
+
+    def accepted_csp(self, v):
+        """CSP2 (DV-Router decision, wip-efd9eca): Playwright WebKit 27.2 reports style-src-attr (blockedURI inline) for every native
+        <select> under a policy without 'unsafe-inline', whatever the page does (proved with synthetic pages, cases/test_web_csp_probe.py,
+        csp-select matrix); Chromium and Firefox report nothing. That ONE report is accepted: engine WebKit, directive style-src-attr,
+        blocked inline, the violating element a <select>. Any other CSP report, in any engine, is a failure. Real Safari is not verified
+        (owner check)."""
+        return (self.engine == "webkit" and str(v.get("directive", "")).startswith("style-src-attr")
+                and (v.get("blocked") or "") == "inline" and str(v.get("tag", "")).lower() == "select")
+
+    def unexpected_csp(self):
+        """The CSP reports that are not the accepted WebKit <select> report."""
+        return [v for v in self.csp if not self.accepted_csp(v)]
 
     def same_origin(self, url):
         return bool(self.origin) and url.startswith(self.origin + "/") or url == self.origin
@@ -123,7 +137,7 @@ class PageLog:
             out.append("request failed: %s %s (%s)" % (f["method"], f["path"], f["why"]))
         for d in self.dialogs:
             out.append("dialog opened: %s %r" % (d["type"], d["message"][:80]))
-        for v in self.csp:
+        for v in self.unexpected_csp():
             out.append("CSP violation: %s blocked %s" % (v.get("directive"), (v.get("blocked") or "")[:80]))
         out.extend("script of a payload ran: %s" % (r[1],) for r in self.pwned())
         return out

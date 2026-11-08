@@ -235,3 +235,33 @@ def test_arrival_deviations_skip_lost_packets_and_survive_the_rtp_wrap():
     assert got["n"] == 57 and got["max"] == 0.0
     assert b.arrival_deviations(samples[:10]) is None
     assert b.arrival_deviations([]) is None
+
+
+# ---- CSP2: the one accepted CSP report (WebKit, style-src-attr, inline, a <select>)
+
+def _csp(**kw):
+    base = {"directive": "style-src-attr", "blocked": "inline", "tag": "select"}
+    base.update(kw)
+    return base
+
+
+def test_csp2_accepts_only_the_webkit_select_report():
+    from dvtest import browser as brlib
+    wk = brlib.PageLog(engine="webkit")
+    assert wk.accepted_csp(_csp()) and wk.accepted_csp(_csp(directive="style-src-attr 'none'"))
+    for bad in (_csp(tag="div"), _csp(tag=""), _csp(blocked="https://x/y.css"), _csp(directive="script-src-elem"),
+                _csp(directive="default-src"), _csp(directive="style-src-elem")):
+        assert not wk.accepted_csp(bad)
+    for engine in ("chromium", "firefox", ""):
+        assert not brlib.PageLog(engine=engine).accepted_csp(_csp())       # the allowance is WebKit's alone
+
+
+def test_csp2_problems_ignore_only_the_accepted_report():
+    from dvtest import browser as brlib
+    wk = brlib.PageLog(engine="webkit")
+    wk.csp.extend([_csp(), _csp(directive="script-src-elem", blocked="inline", tag="script")])
+    assert wk.unexpected_csp() == [wk.csp[1]]
+    assert any("script-src-elem" in p for p in wk.problems()) and not any("style-src-attr" in p for p in wk.problems())
+    ch = brlib.PageLog(engine="chromium")
+    ch.csp.append(_csp())
+    assert any("style-src-attr" in p for p in ch.problems())              # a real inline style in Chromium still fails

@@ -169,14 +169,12 @@ def test_dashboard_renders_the_state(dashboard_page):
     if len(streams) > 1:
         finding(bp.engine, "the six routes of one document opened %d event streams" % len(streams))
     assert not bp.log.errors, "page error on the dashboard as served: %s" % bp.log.errors[:1]
-    if bp.log.csp and bp.engine == "webkit":
-        # DASH1 removed the style= attributes of web/site, yet Playwright WebKit still reports style-src-attr
-        # (inline) with the vendored htm-preact module as the source: recorded, not hidden, and asserted for the others
-        for v in bp.log.csp[:3]:
-            finding(bp.engine, "CSP report on the dashboard as served after DASH1: %s blocked %s (source %s)" % (
-                v.get("directive"), v.get("blocked"), (v.get("source") or "-").rsplit("/", 1)[-1]))
-    else:
-        assert not bp.log.csp, "%s: CSP report on the dashboard as served: %s" % (brlib.label(bp.engine), bp.log.csp[:2])
+    # CSP2: the one accepted report is Playwright WebKit's style-src-attr for a native <select> (PageLog.accepted_csp); it is
+    # recorded as a finding line, everything else is a failure in every engine
+    for v in bp.log.csp:
+        if bp.log.accepted_csp(v):
+            finding(bp.engine, "CSP2 accepted report on the dashboard as served: %s blocked %s on a <select>" % (v.get("directive"), v.get("blocked")))
+    assert not bp.log.unexpected_csp(), "%s: CSP report on the dashboard as served: %s" % (brlib.label(bp.engine), bp.log.unexpected_csp()[:2])
     report(bp, EXPECT_401, "public dashboard")
     # a recorded note, not asserted: the 401 of the identity probe is the documented answer of a signed-out
     # GET /api/v1/auth/session; Chromium and Playwright WebKit write a console line for any non-2xx answer
@@ -970,14 +968,14 @@ def test_csp_header_and_enforcement(browser_page):
     bp.goto(pages.ops_url("accounts"))
     expect(pages.ops_denied(bp.page)).to_be_visible()             # anonymous: the denial view renders too
     bp.page.wait_for_timeout(500)
-    seen = ["%s blocked %s (source %s)" % (v.get("directive"), v.get("blocked"), (v.get("source") or "-").rsplit("/", 1)[-1])
-            for v in bp.log.csp]
-    for v in seen:
-        finding(bp.engine, "CSP report in normal use: %s" % v)
-    if bp.engine != "webkit":
-        # Playwright WebKit still reports style-src-attr from the vendored htm-preact module after DASH1: the
-        # finding lines above record it; Chromium and Firefox report none and that is asserted
-        assert not seen, "%s: CSP reports in normal use: %s" % (brlib.label(bp.engine), seen[:3])
+    seen = ["%s blocked %s on <%s> (source %s)" % (v.get("directive"), v.get("blocked"), v.get("tag") or "?",
+                                                 (v.get("source") or "-").rsplit("/", 1)[-1])
+            for v in bp.log.unexpected_csp()]
+    for v in bp.log.csp:
+        if bp.log.accepted_csp(v):
+            finding(bp.engine, "CSP2 accepted report in normal use: %s blocked %s on a <select>" % (v.get("directive"), v.get("blocked")))
+    # CSP2: only the WebKit <select> report is accepted (real Safari is unverified: owner check); any other report fails
+    assert not seen, "%s: CSP reports in normal use: %s" % (brlib.label(bp.engine), seen[:3])
     bp.log.csp.clear()
     # deliberate violations: an inline script and an inline event handler are blocked by this engine and reported
     bp.goto(pages.LOGIN)
