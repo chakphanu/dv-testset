@@ -219,8 +219,9 @@ def gnss_over(rig, mlist, call, info, near):
 
 def lsf_text(view):
     """For the log: per stream id the packet count, the number of distinct (TYPE, META) LSF copies and the TYPES."""
-    return "; ".join("stream %#06x: %d packets, %d distinct LSF META, TYPES %s, GNSS-typed %d" % (
-        sid, v["packets"], len(v["lsfs"]), sorted({hex(t) for t, _m in v["lsfs"]}), len(v["typed"])) for sid, v in sorted(view.items())) or "no stream"
+    return "; ".join("stream %#06x: %d packets, %d distinct LSF META, TYPES %s, GNSS-typed %d, META %s" % (
+        sid, v["packets"], len(v["lsfs"]), sorted({hex(t) for t, _m in v["lsfs"]}), len(v["typed"]),
+        [(hex(t), bytes(m).hex()) for t, m in v["lsfs"]][:4]) for sid, v in sorted(view.items())) or "no stream"
 
 
 @pytest.mark.parametrize("level", [1, 2, 3, 4])
@@ -301,7 +302,7 @@ def check_line_level(info, level):
     """The information field `info` (bytes) of a D-PRS line / uplinked report starts with `!` or `=` and then the position text with `level`
     blanked digits, exactly as sent: returns the empty string when right, else the reason."""
     want = ps.plain_text(ps.APRS_LAT, ps.APRS_LON, level, "/>")
-    text = bytes(info).decode("latin-1")
+    text = info if isinstance(info, str) else bytes(info).decode("latin-1")
     if not text or text[0] not in "!=":
         return "the report starts with %r, want ! or =" % text[:1]
     if text[1:1 + len(want)] != want:

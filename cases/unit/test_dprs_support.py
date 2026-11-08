@@ -354,3 +354,8 @@ def test_m17p_packets_parses_packet_mode_datagrams_only():
     assert len(dp.m17p_packets(inbox, [1.0, 2.0, 3.0])) == 1
     assert dp.m17p_packets(inbox, [1.0, 2.0, 3.0])[0]["at"] == 2.0
     assert dp.m17p_packets(inbox, start=2) == []
+
+
+def test_check_line_level_accepts_str_and_bytes():
+    info = "=4903.  N/07201.  W>up2"
+    assert td.check_line_level(info, 2) == "" and td.check_line_level(info.encode("latin-1"), 2) == ""
