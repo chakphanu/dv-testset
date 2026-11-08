@@ -12,6 +12,7 @@ host name, an address, a callsign, an account or a secret built in: they are arg
 | `python3 -m dvtest.tools.prod_echo` | per protocol: link one client to the echo module E, send ONE over of 3.0 s, judge the replay, unlink |
 | `python3 -m dvtest.tools.prod_listen` | ONE anonymous WebRTC Listen on module E of the public web service, measures what arrives (run it during one echo over) |
 | `python3 -m dvtest.tools.prod_iax` | deploy check **f**: an AllStar phone call on the host (IAX2 to 127.0.0.1:4569): register, dial module E, 3 s of 700 Hz, judge the echo replay, hang up ([below](#production-check-f-allstar-phone-call-prod_iax)) |
+| `cases/test_prod_cross.py` | cross-mode levels THROUGH the live reflector on module E (M17 talker / D-STAR listener and back, tone and speech) against the rig unity rows, with the local transcoder as codec ([below](#production-cross-mode-level-check-casestest_prod_crosspy)) |
 | `python3 -m dvtest.tools.prod_talk` | deploy check **g**: a browser Hold Talk on module E with a fake 700 Hz microphone in headless Chromium, judge the replay in the page's analyser ([below](#production-check-g-browser-hold-talk-prod_talk)) |
 
 Checks f and g are the two voice-path deploy checks of the DV-Router lead's decision (production tool tests, deploy
@@ -395,6 +396,101 @@ the check user to be allowed to browse recordings (an active user).
 | web listen | packets / silence_ratio | seconds heard | first_audio_s | rms / peak | connected, error | JSON line |
 
 (The first row shows the shape, not a result.)
+
+## Production cross-mode level check (cases/test_prod_cross.py)
+
+Question: does the production transcoder (the image the reflector was switched to) give the same levels through the LIVE reflector
+as the rig did with the same tag? One short check on module E, the built-in echo module, E only: an M17 talker (Codec2 3200) with a
+D-STAR listener (DExtra), then the reverse, one pair after the other. Each over is the 700 Hz tone (amp 8000, 3 s) or one speech
+clip scaled to an active level of -20 dBFS (3 s): `thai_fixed` from `.cache/speech-levels/` when it is there, else the CMU ARCTIC
+stand-in `cases/test_transcoder_levels.py` uses (the row says `arctic_0001@-20`). Four overs, about one minute.
+
+It is a rig-side pytest file (marker `rig`) that uses the rig's `transcoder-ref` only as the LOCAL codec, exactly as
+`cases/test_transcoder_levels.py` does: the talker's PCM is encoded into the talker's codec by the local transcoder, the production
+reflector transcodes, and the listener's frames are decoded by the same local transcoder and scored (rms, active dBFS, dominant
+frequency for the tone, envelope correlation for the speech). The rig's `xlxd-sut` is not used. The production transcoder tag and the
+local one should be the same image (`vocoder-ambed:64s-pcm-688d9bf7-unity`), otherwise the reference decoder differs from the rig run.
+
+**Echo split.** Module E replays every over to everybody on the module about a second after its end, so the listener of the other
+protocol hears the live cross-mode copy first and may hear an echo copy after it. Only the FIRST stream (it starts before the talker
+ends) is decoded and judged; every later stream is counted in the row (`echo_overs`, `echo_frames`) and never scored. If the first
+stream starts after the end of the over, the live copy is missing: the row has `live: false`, 0 frames heard, and the echo is not
+used in its place. Streams are separated by a silence of 0.4 s or a change of stream id
+(`prod_cross_support.live_and_echo`, unit-tested for both).
+
+### Safety rails
+
+- Module E only: `DVT_PROD_MODULE` is not needed, and any value but `E` is a hard refusal (the case fails, it does not skip); there
+  is no switch for another module.
+- One pair after the other, one over at a time, at least 6 s from the end of an over to the start of the next, each over 3.0 s
+  (cap 3.2 s, 161 frames or more are refused), the listener is read 5.5 s after each over.
+- A global timeout (240 s): no over starts after it; both clients of a pair are unlinked and closed in a `finally` block, also after a
+  failed link or an error. The local encoding is done before the first packet and the decoding after the last unlink.
+- Nothing is built in: `DVT_PROD_HOST`, `DVT_PROD_CALL_DSTAR` (exactly 8 characters, a `CALL T` form; nothing is padded or cut) and
+  `DVT_PROD_CALL_M17` (1 to 9 characters) have no default; without them (or without `DVT_PROD_CROSS=1`) the case skips. Ports are the
+  production ones (DExtra 30001, M17 17000). The D-STAR header's RPT2 name is `XLX999` unless `DVT_PROD_REFLECTOR` says otherwise.
+- The rows hold no host, address or callsign.
+
+### Run
+
+The rig network is internal (no route out), so the case runs on the host, next to a running `transcoder-ref` (its address in
+`DVT_AMBED_REF`, port in `DVT_AMBED_PORT`, default 10100), not inside the tester container. Only after the owner approved the check:
+
+```sh
+export DVT_PROD_HOST=HOST DVT_PROD_CALL_DSTAR="N0CALL T" DVT_PROD_CALL_M17=N0CALL \
+  DVT_AMBED_REF=<address of transcoder-ref> DVT_PROD_CROSS_TAG=688d9bf7-unity DVT_OUT=out/prod-cross
+
+# 1. the plan: links, signals, timing, tolerances; no socket, no name lookup, no transcoder contact, no file
+DVT_PROD_CROSS=1 DVT_PROD_CROSS_DRY=1 python3 -m pytest cases/test_prod_cross.py -s -q
+
+# 2. the check (the owner approved it); DVT_PROD_CROSS_REF = the rig run of the same tag
+DVT_PROD_CROSS=1 DVT_PROD_CROSS_REF=out/<run>/transcoder-levels.jsonl \
+  scripts/contained.sh --name test -- python3 -m pytest cases/test_prod_cross.py -s -q
+
+# 3. the table again, later or without the rig (exit 1 when a row fails)
+python3 cases/prod_cross_support.py out/prod-cross/<stamp>/prod-cross.jsonl --ref out/<run>/transcoder-levels.jsonl --tag 688d9bf7-unity
+```
+
+`python3 -m pytest cases/test_prod_cross.py --collect-only -q` works without a rig (the case skips without the variables).
+`DVT_PROD_CROSS_TAG` names the tag of both sides (the long form `vocoder-ambed:64s-pcm-688d9bf7-unity` is shortened); a reference
+file with one tag needs no `--tag`. Output: one JSON line per measurement in `<out>/<stamp>/prod-cross.jsonl` (keys of
+`transcoder-levels.jsonl`: `tag`, `pair`, `signal`, `in_active_dbfs`, `sent`, `got`, `rms`, `out_active_dbfs`, `delta_db`,
+`dominant`, `share`, `env_corr`, `ok`, plus `live`, `echo_overs`, `echo_frames`; `python3 -m dvtest.tools.levels_table` reads it too) and
+the compact table at the end:
+
+```
+pair       signal           heard/sent    rms act dBFS   delta  rig dlt   diff    Hz env  echo  verdict
+m17>dstar  tone             152/150       985    -30.4   -15.1    -15.2   +0.1   696 -    1     PASS
+```
+
+(Shape, not a result.)
+
+### What is judged
+
+Per pair and direction, against the rig `unity` row of the same tag (same pair, same signal name; the speech here is the first 3 s of
+the 6 s clip of the rig run, so the level is compared as the change to the source, `delta_db`, not as an absolute):
+
+| Check | Passes when | Set by |
+|-------|-------------|--------|
+| frames | frames heard of the live copy >= frames sent (0 loss, like the same-mode echo; extra frames of the M17 EOT pair and DMR/YSF padding are fine) | DV-Router |
+| level, speech | change of the active level within +-1.0 dB of the rig row | DV-Router |
+| level, tone | change of the level within +-1.0 dB of the rig row | DV-Router |
+| frequency (tone) | dominant frequency within +-20 Hz of the rig row (of 700 Hz without a reference) | DV-Router |
+| envelope (speech) | envelope correlation with the source >= 0.90 | DV-Router |
+
+These numbers are the constants `TOL_SPEECH_DB`, `TOL_TONE_DB`, `TOL_TONE_HZ`, `MIN_ENV_CORR`, `MAX_LOSS_FRAMES` of
+`cases/prod_cross_support.py`, set by DV-Router for this production comparison. They are not the numbers found in this repository:
+`docs/transcoder-levels.md` has the VOC1 image-acceptance rules (mean speech delta within 0.5 dB of the production image, rows
+identical within 0.05 dB and tone rms within 1 percent for a carrier image), and the vocoder delivery notes (`LEVELS.md`) state no
+tolerance at all. A row outside a tolerance is printed as `FINDING <pair> <signal>: <check>: <difference>` and the case fails after
+the table and the JSON lines are written; without `DVT_PROD_CROSS_REF` only the absolute checks (frames, frequency near 700 Hz,
+envelope) are judged and the level column says so. The case also asserts that all four measurements were taken and both clients linked.
+
+Unit tests (`cases/unit/test_prod_cross_support.py`): configuration and the module rail, the limits, the plan with socket and name lookup
+patched to fail, the source signals (Thai clip, ARCTIC stand-in, missing clip), the live/echo split (echo closer than the gap,
+missing live copy, two echoes, older traffic, M17), the row, every tolerance at its boundary, the reference pick by tag and the
+reader. Not covered offline: the real link rules of the production reflector for the two callsigns, the real timing of the live copy
+and of the echo, and the local transcoder round trip in this case (the same helpers as `test_transcoder_levels.py`).
 
 ## Not covered offline
 
