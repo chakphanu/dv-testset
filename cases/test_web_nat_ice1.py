@@ -494,8 +494,8 @@ def test_ice1_address_change_restarts_ice_on_the_same_circuit(engine, nat_type, 
             brlib.label(engine), nat_type, m["operator_before"].get("error"), m["operator_after"].get("error")))
     restart = ice1.restart_seen(m["view_before"]["sdp"], m["view_after"]["sdp"])
     note(engine, nat_type, "ICE restart seen in the SDP (new ice-ufrag)", restart)
-    if not restart["any"]:
-        bad.append("no ICE restart: the ice-ufrag of the local and the remote description are the same after the change")
+    # DV-Router (ICE1c, 2026-11-08): the page cannot see a pure NAT rebinding, so no page-side ICE restart is expected; the EDGE must
+    # follow the new address. The SDP comparison stays as evidence only.
 
     # ---- (2) the audio
     if not an["resumed"]:
@@ -524,8 +524,10 @@ def test_ice1_address_change_restarts_ice_on_the_same_circuit(engine, nat_type, 
                     "SUT-side remote address of the circuit is seen only through the router (conntrack, unmapped-media counter)" % (
                         brlib.label(engine), nat_type, after_row.get("keys")))
     elif any(old_ip in v for v in addr_after.values()) and not any(new_ip in v for v in addr_after.values()):
-        web.finding("ICE1 %s / %s: the operator client list still shows the OLD address %s for the circuit after the restart (%s); the field "
-                    "may be the HTTP client address, which this case does not move (UNVERIFIED)" % (brlib.label(engine), nat_type, old_ip, sorted(addr_after)))
+        # DV-Router: field 'ip' of the operator client list is the UDP media destination (peer.remote): after the edge follows the
+        # rebinding it must name the new mapping
+        bad.append("the operator client list still names the OLD media address %s for the circuit after the change (%s), want the new "
+                   "mapping %s (peer.remote)" % (old_ip, sorted(addr_after), new_ip))
     elif any(new_ip in v for v in addr_after.values()):
         note(engine, nat_type, "operator client list shows the new address", {"before": before_row.get("address_like"), "after": addr_after})
 

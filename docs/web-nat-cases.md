@@ -465,3 +465,11 @@ DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml \
 `-k classification`, `-k direct`, `-k turn_relay`, `-k blackhole`, `-k talk`, `-k expiry`, `-k 429`, `-k 404` and `-k chromium` select parts (`--capture` is left out of the commands here: the cases do not need the capture check and a pcap makes the run directory larger); the cases
 that need TURN skip without `turn.toml` and the 404 case skips with it. `DVT_NAT_EXPIRY_S` (default 660) sets the length of the expiry
 case. Pull `COTURN_IMAGE` once (`docker pull coturn/coturn:4.18.0`). Run alone and one rig at a time (`scripts/run.sh` takes the lock).
+
+ICE1c expectation (DV-Router, 2026-11-08): a pure NAT rebinding is invisible to the page, so the case no longer asserts a page-side ICE
+restart (the SDP ufrag comparison is evidence only); it asserts that the EDGE follows the new mapping within the budget (8 s Chromium and
+Firefox, 12 s WebKit), stops sending to the old mapping, keeps the circuit, and that the operator client list field `ip` (the UDP media
+destination, peer.remote) names the new mapping. Root cause on wip-97c669d per DV-Router: every remote candidate is prflx, the rebinding
+yields an equal-priority pair and the ICE library keeps the current pair on a tie (Chromium/WebKit recover at the 15 s prune, Firefox never
+sends USE-CANDIDATE after nomination and does not recover). The cases run signed in (br_user), never as a guest: guest renewal is bound
+to the client address (web.md guest lease), a separate rule.
