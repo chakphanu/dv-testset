@@ -217,11 +217,15 @@ def gnss_over(rig, mlist, call, info, near):
     return types.SimpleNamespace(run=ran, packets=packets, m17p=m17p, scan=scan, m17p_scan=dp.gnss_scan(m17p, near=near))
 
 
-def lsf_text(view):
-    """For the log: per stream id the packet count, the number of distinct (TYPE, META) LSF copies and the TYPES."""
+def lsf_text(view, t0=None):
+    """For the log: per stream id the packet count, the number of distinct (TYPE, META) LSF copies and the TYPES, and each distinct
+    (TYPE, META hex, seconds from the over's start to its first copy when t0 is given)."""
+    def when(at):
+        return None if at is None or t0 is None else round(at - t0, 2)
     return "; ".join("stream %#06x: %d packets, %d distinct LSF META, TYPES %s, GNSS-typed %d, META %s" % (
         sid, v["packets"], len(v["lsfs"]), sorted({hex(t) for t, _m in v["lsfs"]}), len(v["typed"]),
-        [(hex(t), bytes(m).hex()) for t, m in v["lsfs"]][:4]) for sid, v in sorted(view.items())) or "no stream"
+        [(hex(t), bytes(m).hex(), when(a)) for (t, m), a in zip(v["lsfs"], v.get("first_at") or [None] * len(v["lsfs"]))][:4])
+        for sid, v in sorted(view.items())) or "no stream"
 
 
 @pytest.mark.parametrize("level", [1, 2, 3, 4])
@@ -251,7 +255,7 @@ def test_dp7_dprs_c_ambiguous_position_gives_no_m17_gnss_meta(rig, target, hub, 
         look = dp.gnss_in_lsf(control.packets, ps.LAT, ps.LON, ps.POSITION_E7)
         note(target, case, "RECORD", "control: %d M17 stream packets (%s); GNSS-typed LSF copies %d, decodable with a position %d, matching %d, off %s; "
              "stray %d; M17P datagrams %d (position-like %d); first GNSS fn/time %s" % (
-                 len(control.packets), lsf_text(look["streams"]), len(look["typed"]), len(look["decoded"]), len(look["matches"]),
+                 len(control.packets), lsf_text(look["streams"], control.run.t0), len(look["typed"]), len(look["decoded"]), len(look["matches"]),
                  [(round(a, 5), round(b, 5)) for a, b in look["off"]][:3], len(control.scan["stray"]), len(control.m17p),
                  len(control.m17p_scan["typed"]) + len(control.m17p_scan["stray"]),
                  None if not look["typed"] else (look["typed"][0]["fn"], None if look["typed"][0]["at"] is None else round(look["typed"][0]["at"] - control.run.t0, 2))))
@@ -272,14 +276,14 @@ def test_dp7_dprs_c_ambiguous_position_gives_no_m17_gnss_meta(rig, target, hub, 
                 why = "no GNSS META anywhere (no GNSS TYPE in the stream LSF, no position in any META, no M17P position)"
             text = ("FINDING DP7-DPRS-GNSS: the unambiguous D-PRS position of %s (10.5 N 20.25 E) did not appear as GNSS META in the LSF META of the M17 "
                     "voice stream on a listener of the room: %s. %s. The negative of this case has no control." % (
-                        GNSS_CONTROL_CALL[level], why, lsf_text(look["streams"])))
+                        GNSS_CONTROL_CALL[level], why, lsf_text(look["streams"], control.run.t0)))
             note(target, case, "FINDING", text)
             raise AssertionError(text)
         near = (float(ps.APRS_LAT), float(ps.APRS_LON))
         ambiguous = gnss_over(rig, mlist, GNSS_AMBIGUOUS_CALL[level], ambiguous_info, near=near)
     amb_look = dp.lsf_view(ambiguous.packets)
     note(target, case, "RECORD", "ambiguous: %d M17 stream packets (%s); GNSS-typed with nonzero META %d, stray %d; M17P datagrams %d" % (
-        len(ambiguous.packets), lsf_text(amb_look), len(ambiguous.scan["typed"]), len(ambiguous.scan["stray"]), len(ambiguous.m17p)))
+        len(ambiguous.packets), lsf_text(amb_look, ambiguous.run.t0), len(ambiguous.scan["typed"]), len(ambiguous.scan["stray"]), len(ambiguous.m17p)))
     assert len(ambiguous.packets) * 2 >= len(control.packets), \
         "%s: the listener got %d stream packets of the ambiguous over against %d of the control: it did not listen, the absence proves nothing" % (
             case, len(ambiguous.packets), len(control.packets))

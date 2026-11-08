@@ -269,11 +269,12 @@ def lsf_view(packets):
     Text META (TYPE 0x0005) and zero META are in "lsfs" only."""
     streams = {}
     for pkt in packets:
-        view = streams.setdefault(pkt["stream_id"], {"packets": 0, "lsfs": [], "typed": []})
+        view = streams.setdefault(pkt["stream_id"], {"packets": 0, "lsfs": [], "typed": [], "first_at": []})
         view["packets"] += 1
         key = (pkt["type"], bytes(pkt["meta"]))
         if key not in view["lsfs"]:
             view["lsfs"].append(key)
+            view["first_at"].append(pkt.get("at"))          # arrival time (monotonic, the clock of the over's t0) of the first copy
         if is_gnss_type(pkt["type"]) and any(pkt["meta"]):
             view["typed"].append({"fn": pkt["fn"], "at": pkt.get("at"), "type": pkt["type"], "decoded": decode_gnss_or_none(pkt["meta"])})
     return streams
