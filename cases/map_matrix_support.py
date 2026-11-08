@@ -48,6 +48,14 @@ MEASURE_JS = r"""
     const id = el.getAttribute('data-testid') || el.id || (el.getAttribute('class') || '').split(/\s+/)[0] || '';
     return el.tagName.toLowerCase() + (id ? '[' + id + ']' : '') + ' "' + (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40) + '"';
   };
+  const cache = new Map();
+  const facts = (e) => {
+    if (cache.has(e)) return cache.get(e);
+    const c = getComputedStyle(e), r = e.getBoundingClientRect();
+    const f = { clip: c.clip, clip_path: c.clipPath, w: r.width, h: r.height, position: c.position, overflow_x: c.overflowX, overflow_y: c.overflowY };
+    cache.set(e, f);
+    return f;
+  };
   const seen = new Set();
   for (const scope of sel.scopes) {
     for (const root of document.querySelectorAll(scope)) {
@@ -57,8 +65,14 @@ MEASURE_JS = r"""
         const own = Array.from(el.childNodes).some((n) => n.nodeType === 3 && n.textContent.trim());
         if (!own || !visible(el) || out.items.length >= 400) continue;
         const cs = getComputedStyle(el), r = el.getBoundingClientRect();
+        // the style facts of the element and of every ancestor that could hide it: Python decides (visually_hidden)
+        const chain = [];
+        for (let a = el; a && a !== document.documentElement; a = a.parentElement) {
+          const f = facts(a);
+          if (f.clip !== 'auto' || (f.clip_path && f.clip_path !== 'none') || f.w <= 1 || f.h <= 1) chain.push(f);
+        }
         out.items.push({ desc: desc(el), sw: el.scrollWidth, cw: el.clientWidth, display: cs.display, overflow_x: cs.overflowX,
-          text_overflow: cs.textOverflow, left: r.left, right: r.right });
+          text_overflow: cs.textOverflow, left: r.left, right: r.right, hidden_chain: chain });
       }
     }
   }
@@ -93,6 +107,7 @@ MEASURE_JS = r"""
   }
   out.closed_texts = Array.from(document.querySelectorAll(sel.closed_text)).map((e) => (e.textContent || '').trim());
   out.closed_desks = document.querySelectorAll(sel.desk_down).length;
+  out.desk_ids = Array.from(document.querySelectorAll(sel.desk_any)).map((e) => (e.getAttribute('data-id') || '') + ':' + (e.getAttribute('data-state') || ''));
   out.desks = document.querySelectorAll(sel.desk_any).length;
   out.rooms = document.querySelectorAll(sel.room_any).length;
   out.onair_rooms = Array.from(document.querySelectorAll(sel.room_any)).filter((r) => r.getAttribute('data-state') === 'onair').length;
@@ -127,7 +142,36 @@ def has_thai(text):
     return bool(THAI_RE.search(text or ""))
 
 
+CLIP_ZERO_RE = re.compile(r"^rect\(\s*0(px)?[,\s]+0(px)?[,\s]+0(px)?[,\s]+0(px)?\s*\)$")
+CLIP_PATH_HIDE_RE = re.compile(r"^inset\(\s*(50|100)(\.0+)?%")
+
+
+def visually_hidden(f):
+    """True when the style facts `f` of ONE element (clip, clip_path, w, h in px, position, overflow_x, overflow_y) make it
+    visually hidden the way a screen-reader-only class does: a clip of rect(0,0,0,0), a clip-path of inset(50%) or more, a box of at
+    most 1 x 1 px, or an absolutely positioned box with hidden overflow that is at most 1 px wide or high. aria-hidden is NOT a reason
+    (an aria-hidden element can be on screen)."""
+    clip = (f.get("clip") or "").strip().lower()
+    if CLIP_ZERO_RE.match(clip):
+        return True
+    if CLIP_PATH_HIDE_RE.match((f.get("clip_path") or "").strip().lower()):
+        return True
+    w, h = f.get("w"), f.get("h")
+    if w is not None and h is not None and w <= 1.0 and h <= 1.0:
+        return True
+    clipping = (f.get("overflow_x") not in (None, "visible")) or (f.get("overflow_y") not in (None, "visible"))
+    small = (w is not None and w <= 1.0) or (h is not None and h <= 1.0)
+    return f.get("position") == "absolute" and clipping and small
+
+
+def item_hidden(item):
+    """True when the measured element, or an ancestor in its `hidden_chain`, is visually hidden: its text is not on screen."""
+    return any(visually_hidden(f) for f in item.get("hidden_chain") or [])
+
+
 def _html_failures(item, inner):
+    if item_hidden(item):
+        return []
     out = []
     display = item.get("display") or ""
     sw, cw = item.get("sw", 0), item.get("cw", 0)
@@ -211,6 +255,54 @@ def close_one_edge(state, chosen=None):
     if isinstance(live.get("edges_up"), int):
         live["edges_up"] = len(live["edges"])
     return state, pick
+
+
+# ------------------------------------------------------------------ page errors that a navigation of the case itself causes
+
+NAV_ERROR_WINDOW_S = 1.0
+# Playwright WebKit: a fetch that the page still had in flight when the case reloaded or navigated it fails with this message
+TOLERATED_NAV_ERROR_RE = re.compile(r"Fetch API cannot load \S*/api/v1/auth/session due to access control checks")
+
+
+def split_tolerated_errors(errors, navs, engine, window_s=NAV_ERROR_WINDOW_S):
+    """(unexpected, tolerated) of a list of page errors `(t, text)` (t in seconds on the clock of `navs`, the times at which the
+    case started a navigation or reload). EXACTLY one message is tolerated, only on Playwright WebKit, and only when it falls within
+    `window_s` of a navigation the case started; everything else stays unexpected. `tolerated` are `(t, text, seconds from the
+    nearest navigation)` for the notes."""
+    unexpected, tolerated = [], []
+    for t, text in errors:
+        near = min((abs(t - n) for n in navs), default=None)
+        if engine == "webkit" and near is not None and near <= window_s and TOLERATED_NAV_ERROR_RE.search(text or ""):
+            tolerated.append((t, text, round(near, 2)))
+        else:
+            unexpected.append((t, text))
+    return unexpected, tolerated
+
+
+# ------------------------------------------------------------------ the stopped edge: is its desk drawn closed?
+
+def edge_lists(state):
+    """{'edges_enabled': [...], 'live_edges': [...]} of the parsed public state (None for a missing list)."""
+    info = state.get("info") if isinstance(state, dict) else None
+    live = state.get("live") if isinstance(state, dict) else None
+    return {"edges_enabled": info.get("edges_enabled") if isinstance(info, dict) else None,
+            "live_edges": live.get("edges") if isinstance(live, dict) else None}
+
+
+def closed_desk_finding(protocol, ids_before, ids_after, lists_after):
+    """None when the desk of `protocol` is drawn closed (a `<protocol>:down` entry in `ids_after`), else the text of the FINDING for the
+    product owner. `ids_*` are the `data-id:data-state` entries of the drawn desks, `lists_after` is edge_lists() of the public state
+    at the time of the check (enabled but not in live.edges is the spec, web.md Map)."""
+    if "%s:down" % protocol in (ids_after or []):
+        return None
+    drawn = [i.split(":")[0] for i in ids_after or []]
+    if protocol in drawn:
+        state = [i.split(":", 1)[1] for i in ids_after if i.split(":")[0] == protocol][0]
+        what = "the desk of the stopped edge %s is drawn but not closed (data-state %s)" % (protocol, state)
+    else:
+        what = "the desk of the stopped edge %s is not drawn (desks %d -> %d)" % (protocol, len(ids_before or []), len(ids_after or []))
+    return ("FINDING: %s, want it drawn with the Closed sign (web.md: enabled but not in live.edges); info.edges_enabled=%s live.edges=%s desks before=%s after=%s" % (
+        what, lists_after.get("edges_enabled"), lists_after.get("live_edges"), list(ids_before or []), list(ids_after or [])))
 
 
 # ------------------------------------------------------------------ SIGSTOP / SIGCONT of the edge and the hub (control channel)

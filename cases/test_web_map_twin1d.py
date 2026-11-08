@@ -90,8 +90,34 @@ def out_web():
 
 # ---------------------------------------------------------------- page helpers
 
+class NavWatch:
+    """Times of the navigations and reloads the case itself starts, and every page error with its time, so that the one WebKit error
+    a navigation causes (a fetch still in flight when the page is reloaded; mms.split_tolerated_errors) is told from a real one."""
+
+    def __init__(self, bp):
+        self.engine = bp.engine
+        self.navs, self.errors = [], []
+        bp.page.on("pageerror", self._error)
+
+    def _error(self, exc):
+        self.errors.append((time.monotonic(), "%s: %s" % (getattr(exc, "name", "Error"), getattr(exc, "message", exc))))
+
+    def mark(self):
+        self.navs.append(time.monotonic())
+
+    def split(self):
+        return mms.split_tolerated_errors(self.errors, self.navs, self.engine)
+
+
+def mark_nav(bp):
+    watch = getattr(bp, "watch", None)
+    if watch is not None:
+        watch.mark()
+
+
 def open_map(bp):
     """Opens #/map and waits for the heading, the page wrapper and the building."""
+    mark_nav(bp)
     bp.goto(pages.map_url())
     expect(pages.map_building(bp.page)).to_be_visible(timeout=int(LOAD_S * 1000))
     expect(pages.map_caption(bp.page)).to_be_visible(timeout=int(LOAD_S * 1000))
@@ -150,11 +176,13 @@ def set_language(bp, lang):
     via = "switch"
     if button.count():
         if button.get_attribute("aria-pressed") != "true":
+            mark_nav(bp)
             with page.expect_navigation(timeout=20000):
                 button.click()
     else:
         via = "storage"
         page.evaluate("(a) => { try { localStorage.setItem(a[0], a[1]); } catch (e) { /* denied */ } }", [pages.LANG_STORAGE_KEY, lang])
+        mark_nav(bp)
         page.reload()
     expect(pages.map_building(page)).to_be_visible(timeout=int(LOAD_S * 1000))
     page.wait_for_function("(l) => document.documentElement.lang === l", arg=lang, timeout=int(LOAD_S * 1000))
@@ -282,6 +310,12 @@ def scenario_check(scenario, m):
     return []
 
 
+def drawn_desks(page):
+    """['<data-id>:<data-state>', ...] of the desks the Map draws now."""
+    return page.evaluate("(s) => Array.from(document.querySelectorAll(s)).map((e) => (e.getAttribute('data-id') || '') + ':' + (e.getAttribute('data-state') || ''))",
+                         pages.map_matrix_selectors()["desk_any"])
+
+
 def measure(page):
     return page.evaluate(mms.MEASURE_JS, pages.map_matrix_selectors())
 
@@ -304,7 +338,7 @@ def run_combo(bp, scenario, lang, scheme, width, closed_required, shots, record)
     except Exception as exc:                        # noqa: BLE001 - evidence only; a failed screenshot is a note
         notes.append("screenshot failed: %s" % str(exc).splitlines()[0][:120])
     record.append({"combo": mms.combo_id(scenario, lang, scheme, width), "layout": layout, "mode": m.get("mode"), "rooms": m.get("rooms"),
-                   "desks": m.get("desks"), "closed_desks": m.get("closed_desks"), "closed_texts": m.get("closed_texts"),
+                   "desks": m.get("desks"), "desk_ids": m.get("desk_ids"), "closed_desks": m.get("closed_desks"), "closed_texts": m.get("closed_texts"),
                    "onair_rooms": m.get("onair_rooms"), "status_present": m.get("status_present"), "items": len(m.get("items") or []),
                    "svg_texts": len(m.get("svg_texts") or []), "doc_scroll": m.get("doc_scroll"), "doc_client": m.get("doc_client"),
                    "screenshot": shot, "failures": failures, "notes": notes})
@@ -330,6 +364,7 @@ def hub_down_enter(bp, rig):
         return "live", round(time.monotonic() - t0, 1)
     except Exception:                               # noqa: BLE001 - not noticed by the live page: reload once
         pass
+    mark_nav(bp)
     page.reload()
     try:
         pages.map_hub_down(page).wait_for(state="visible", timeout=int(HUB_RELOAD_S * 1000))
@@ -368,7 +403,9 @@ def stop_seed(loops, peers):
 def write_matrix(bp, scenario, record, failures, extra):
     """Evidence JSON, the [RECORD] line and the page-log findings. Returns the JSON path."""
     path = out_web() / ("map-matrix-%s-%s.json" % (bp.engine, scenario))
-    doc = dict(extra, engine=bp.engine, label=brlib.label(bp.engine), scenario=scenario, combos=record, failures=failures)
+    _unexpected, tolerated = bp.watch.split()
+    doc = dict(extra, engine=bp.engine, label=brlib.label(bp.engine), scenario=scenario, combos=record, failures=failures,
+               tolerated_navigation_errors=[{"seconds_from_navigation": near, "text": text[:200]} for _t, text, near in tolerated])
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(doc, indent=1, sort_keys=True), encoding="utf-8")
@@ -386,11 +423,15 @@ def write_matrix(bp, scenario, record, failures, extra):
 
 def final_assert(bp, scenario, failures, path, page_errors_are_findings=False):
     shots = out_web() / "map-matrix" / bp.engine
+    unexpected, tolerated = bp.watch.split()
+    for t, text, near in tolerated:
+        print("[RECORD] map-matrix %s %s: tolerated the WebKit navigation error %.2f s from a navigation of the case: %s" % (
+            brlib.label(bp.engine), scenario, near, text[:120]))
     if page_errors_are_findings:
-        if bp.log.errors:
-            web.finding("%s: %s: page error while a process was stopped: %s" % (brlib.label(bp.engine), scenario, bp.log.errors[:1]))
+        if unexpected:
+            web.finding("%s: %s: page error while a process was stopped: %s" % (brlib.label(bp.engine), scenario, unexpected[0][1][:300]))
     else:
-        assert not bp.log.errors, "%s: page error: %s" % (brlib.label(bp.engine), bp.log.errors[:1])
+        assert not unexpected, "%s: page error: %s (%d tolerated navigation errors)" % (brlib.label(bp.engine), unexpected[0][1][:300], len(tolerated))
     assert not failures, "%s: %s: %d failure(s) in %d combination(s) (evidence %s, screenshots %s):\n  %s" % (
         brlib.label(bp.engine), scenario, len(failures), len({f.split(":")[0] for f in failures}), path, shots, "\n  ".join(failures))
 
@@ -408,6 +449,7 @@ def test_map_thai_screenshot_matrix(scenario, browser_page, target, web_client, 
     must answer again before the test ends). Every failing combination is listed in one assertion at the end. A page without
     the status region is a finding (older images)."""
     bp = browser_page
+    bp.watch = NavWatch(bp)
     anon = web_client()
     rig = request.getfixturevalue("rig_control") if scenario == "map-hub-down" else None
     shots = out_web() / "map-matrix" / bp.engine
@@ -463,6 +505,7 @@ def test_map_closed_desk_sign_thai(browser_page, web_client, request):
     hub answering before the test ends. DVT_MAP_ROUTE_FALLBACK=1: no process is stopped, a page route removes an edge from the
     state instead (screenshots only, labelled route-fallback, not evidence of the product)."""
     bp = browser_page
+    bp.watch = NavWatch(bp)
     anon = web_client()
     scenario = mms.CLOSED_SCENARIO
     shots = out_web() / "map-matrix" / bp.engine
@@ -478,8 +521,13 @@ def test_map_closed_desk_sign_thai(browser_page, web_client, request):
     if route is not None:
         route.install(bp.context)
         notes.append("ROUTE FALLBACK (DVT_MAP_ROUTE_FALLBACK=1): the closed desk is a rewrite of the state in the browser, not a stopped edge; screenshots only")
+    desks = {}
+    closed_required = True
     try:
         if rig is not None:
+            open_map(bp)                                            # the Map before the stop: which desks are drawn
+            desks["before"] = drawn_desks(bp.page)
+            desks["state_before"] = mms.edge_lists(public_state(anon))
             try:
                 stop_process(rig, mms.EDGE_PROCESS)
             except RuntimeError as exc:
@@ -492,9 +540,18 @@ def test_map_closed_desk_sign_thai(browser_page, web_client, request):
         if not failures:
             open_map(bp)
             wait_quiet(bp.page)
+            if rig is not None:
+                # the moment of the check: the state the page was drawn from, and the desks it drew
+                desks["state_after"] = mms.edge_lists(public_state(anon))
+                desks["after"] = drawn_desks(bp.page)
+                text = mms.closed_desk_finding(mms.EDGE_PROTOCOL, desks["before"], desks["after"], desks["state_after"])
+                if text is not None:
+                    web.finding("%s: %s" % (brlib.label(bp.engine), text))
+                    failures.append(text)
+                    closed_required = False                         # the sign cannot be judged; overflow and Thai checks still run
             for lang in mms.LANGS:
                 notes.append("language %s set by the %s" % (lang, set_language(bp, lang)))
-                failures += all_scheme_width(bp, scenario, lang, True, shots, record)
+                failures += all_scheme_width(bp, scenario, lang, closed_required, shots, record)
     finally:
         if rig is not None:
             mms.cont_all(rig)
@@ -504,7 +561,8 @@ def test_map_closed_desk_sign_thai(browser_page, web_client, request):
         if timing["edge_back_s"] is None:
             failures.append("%s: %s is not in live.edges again %.0f s after SIGCONT" % (scenario, mms.EDGE_PROTOCOL, EDGE_BACK_S))
     path = write_matrix(bp, scenario, record, failures, {"stopped": mms.EDGE_PROCESS if rig is not None else None, "route_fallback": fallback,
-                                                        "route_closed_protocol": route.protocol if route else None, "timing": timing, "notes": notes})
+                                                        "route_closed_protocol": route.protocol if route else None, "timing": timing, "notes": notes,
+                                                        "desks_and_state_lists": desks})
     final_assert(bp, scenario, failures, path)
 
 

@@ -590,3 +590,21 @@ SUT ended the over about 1 s after the press although Talk was held 3 s; an earl
 the PTTRX1 fix and PASS after it. Run (about 6 minutes): the "Talk echo return" command with `-k "chromium and (pttrx1 or returns_to_the_page)"`.
 Evidence per repeat: `out/<run>/web/talk-echo-chromium-conn-talk-<n>.json`.
 15. Over window: the public state of room E has `last.end_ms` (the Map fade case reads it) and `now_ms`; whether `onair` or `last` carries a start field (`start_ms`, `started_ms`, `since_ms`, `begin_ms`) and a `duration_ms` is not known (the tracker uses them when present and records every distinct room entry in `sut_room_entries`); the 0.5 s poll cadence catches the original over's end before the echo's own over replaces `last` 1 s later (a miss gives the `first_packet` anchor); the server clock and the tester's differ by the skew measured at each poll (the host clock on the rig); the 0.5 s tolerance of `over_not_cut_short` and the 0.6 s guard of the listener's echo window are this case's own.
+
+## After the first rig run (wip-97c669d)
+
+10 of 18 passed. Three corrections, one product finding:
+
+1. Case defect, fixed: the text checks flagged a span of the `sr-only` live text ("spans 15..1286 of 360 px") although the page did not overflow. Visually hidden
+   elements are no longer judged: `visually_hidden()` in `cases/map_matrix_support.py` (a clip of `rect(0,0,0,0)`, a clip-path of `inset(50%)` or more, a box of
+   at most 1 x 1 px, or an absolutely positioned box with hidden overflow that is at most 1 px wide or high; `aria-hidden` alone is not a reason), applied to the
+   element and to each ancestor (`hidden_chain`, the style facts the measurement returns), with unit tests.
+2. Case defect (probable), fixed: Playwright WebKit reported `Fetch API cannot load .../api/v1/auth/session due to access control checks` as a page error. The
+   case now records the time of every navigation or reload it starts (`open_map`, the language switch, the hub-down reload) and every page error; exactly that
+   message on WebKit within 1 s of such a navigation is tolerated and recorded (`tolerated_navigation_errors` in the JSON, a `[RECORD]` line); the same message
+   anywhere else, or any other message, still fails the case. Whether the fetch really is the page's session probe aborted by the reload is an inference.
+3. Product evidence, `test_map_closed_desk_sign_thai`: after SIGSTOP of `dv-edge-xlx` the page drew 11 desks instead of 12 and none closed, i.e. the desk of the
+   stopped edge disappeared. The case now opens the Map before the stop, records `data-id:data-state` of every desk before and after, and the public state's
+   `info.edges_enabled` and `live.edges` at the moment of the check (`desks_and_state_lists` in the JSON), and fails with a `FINDING: the desk of the stopped edge
+   xlx is not drawn (desks 12 -> 11), want it drawn with the Closed sign (web.md: enabled but not in live.edges)` plus the two lists, so DV-Router can tell whether
+   the page or the state is wrong. The assertion stays (it is the spec); the 12 combinations still run for the overflow and Thai checks, the sign is not judged.

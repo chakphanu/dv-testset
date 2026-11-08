@@ -258,6 +258,72 @@ def test_cont_all_sends_cont_twice_to_both_processes_and_never_raises():
     assert sum(1 for c in rig.calls if c[1] == "dv-edge-xlx") == 2
 
 
+SR_ONLY = {"clip": "rect(0px, 0px, 0px, 0px)", "clip_path": "none", "w": 1, "h": 1, "position": "absolute", "overflow_x": "hidden", "overflow_y": "hidden"}
+VISIBLE = {"clip": "auto", "clip_path": "none", "w": 300, "h": 20, "position": "static", "overflow_x": "visible", "overflow_y": "visible"}
+
+
+def test_visually_hidden_predicate():
+    assert mms.visually_hidden(SR_ONLY)
+    assert mms.visually_hidden(dict(VISIBLE, clip="rect(0, 0, 0, 0)"))
+    assert mms.visually_hidden(dict(VISIBLE, clip="rect(0px 0px 0px 0px)"))
+    assert mms.visually_hidden(dict(VISIBLE, clip_path="inset(50%)"))
+    assert mms.visually_hidden(dict(VISIBLE, clip_path="inset(100%)"))
+    assert mms.visually_hidden(dict(VISIBLE, w=1, h=1))
+    assert mms.visually_hidden(dict(VISIBLE, position="absolute", overflow_x="hidden", w=1, h=40))
+    assert not mms.visually_hidden(VISIBLE)
+    assert not mms.visually_hidden(dict(VISIBLE, clip="rect(0px, 10px, 10px, 0px)"))
+    assert not mms.visually_hidden(dict(VISIBLE, clip_path="inset(10%)"))
+    assert not mms.visually_hidden(dict(VISIBLE, w=1, h=40))                           # a thin element that is not clipped away
+    assert not mms.visually_hidden(dict(VISIBLE, position="absolute", w=1, h=40))     # absolute but nothing hidden by overflow
+    assert not mms.visually_hidden({})
+
+
+def test_text_inside_a_visually_hidden_ancestor_is_not_judged():
+    span = {"desc": "span", "sw": 1271, "cw": 0, "display": "inline", "overflow_x": "visible", "text_overflow": "clip", "left": 15, "right": 1286,
+            "hidden_chain": [SR_ONLY]}
+    failures, _ = mms.judge_measure(good(items=[span]), "en", "light")
+    assert failures == []
+    assert mms.item_hidden(span)
+    shown = dict(span, hidden_chain=[])
+    failures, _ = mms.judge_measure(good(items=[shown]), "en", "light")
+    assert any("outside the viewport" in f for f in failures)
+    # aria-hidden alone never hides: it carries no style facts, so a visible aria-hidden element is still judged
+    assert not mms.item_hidden(dict(shown, hidden_chain=[dict(VISIBLE)]))
+
+
+T_NAV = 100.0
+ERR = "Error: Fetch API cannot load https://dvt-web/api/v1/auth/session due to access control checks."
+
+
+def test_the_webkit_navigation_error_is_tolerated_only_near_a_navigation():
+    bad, ok = mms.split_tolerated_errors([(T_NAV + 0.4, ERR)], [T_NAV], "webkit")
+    assert bad == [] and ok == [(T_NAV + 0.4, ERR, 0.4)]
+    bad, ok = mms.split_tolerated_errors([(T_NAV + 2.5, ERR)], [T_NAV], "webkit")                    # too late
+    assert len(bad) == 1 and ok == []
+    bad, ok = mms.split_tolerated_errors([(T_NAV + 0.4, ERR)], [], "webkit")                         # no navigation at all
+    assert len(bad) == 1 and ok == []
+    bad, ok = mms.split_tolerated_errors([(T_NAV + 0.4, ERR)], [T_NAV], "chromium")                  # another engine
+    assert len(bad) == 1 and ok == []
+    other = "TypeError: undefined is not an object (evaluating 'x.y')"
+    bad, ok = mms.split_tolerated_errors([(T_NAV + 0.4, other), (T_NAV + 0.5, ERR)], [T_NAV], "webkit")
+    assert [t for _t, t in bad] == [other] and len(ok) == 1
+    bad, _ = mms.split_tolerated_errors([(T_NAV, "Error: Fetch API cannot load https://dvt-web/api/v1/public/state due to access control checks.")], [T_NAV], "webkit")
+    assert len(bad) == 1                                                                             # exactly the auth/session message
+
+
+def test_closed_desk_finding_text():
+    before = ["dcs:up", "xlx:up", "ysf:up"]
+    lists = {"edges_enabled": ["dcs", "xlx", "ysf"], "live_edges": ["dcs", "ysf"]}
+    assert mms.closed_desk_finding("xlx", before, ["dcs:up", "xlx:down", "ysf:up"], lists) is None
+    text = mms.closed_desk_finding("xlx", before, ["dcs:up", "ysf:up"], lists)
+    assert text.startswith("FINDING: the desk of the stopped edge xlx is not drawn (desks 3 -> 2), want it drawn with the Closed sign (web.md: enabled but not in live.edges)")
+    assert "info.edges_enabled=['dcs', 'xlx', 'ysf']" in text and "live.edges=['dcs', 'ysf']" in text and "after=['dcs:up', 'ysf:up']" in text
+    text = mms.closed_desk_finding("xlx", before, ["dcs:up", "xlx:up", "ysf:up"], lists)
+    assert "is drawn but not closed (data-state up)" in text
+    assert mms.edge_lists(state()) == {"edges_enabled": state()["info"]["edges_enabled"], "live_edges": state()["live"]["edges"]}
+    assert mms.edge_lists({}) == {"edges_enabled": None, "live_edges": None}
+
+
 def test_the_stoppable_processes_are_allow_listed_for_stop_and_cont():
     from dvtest import control
     for proc in mms.STOPPABLE:
