@@ -386,7 +386,8 @@ def run_combo(bp, scenario, lang, scheme, width, closed_required, shots, record)
     shot = None
     try:
         shots.mkdir(parents=True, exist_ok=True)
-        page.screenshot(path=str(shots / name), full_page=True)
+        # DVT_SCREENSHOT_CARET=initial: Playwright does not inject its caret-hiding <style> (CSP3: style-src-elem reports)
+        page.screenshot(path=str(shots / name), full_page=True, caret=os.environ.get("DVT_SCREENSHOT_CARET", "hide"))
         shot = name
     except Exception as exc:                        # noqa: BLE001 - evidence only; a failed screenshot is a note
         notes.append("screenshot failed: %s" % str(exc).splitlines()[0][:120])

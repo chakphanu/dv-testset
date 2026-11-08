@@ -422,6 +422,9 @@ services:
       DVT_BROWSER: ${DVT_BROWSER:-off}
       # profile webload (cases/test_web_load.py): on when the load generator runs
       DVT_WEBLOAD: ${DVT_WEBLOAD:-off}
+      # cases/browser_fixtures.py / test_web_map_twin1d.py: 0 = no Playwright trace; caret mode of the matrix screenshots (CSP3)
+      DVT_BROWSER_TRACE: ${DVT_BROWSER_TRACE:-1}
+      DVT_SCREENSHOT_CARET: ${DVT_SCREENSHOT_CARET:-hide}
       # cases/test_web_soak.py: 1 starts the 60 minute soak; timing, seed and modules of the mix (docs/web-soak-cases.md)
       DVT_SOAK: ${DVT_SOAK:-}
       DVT_SOAK_SHORT: ${DVT_SOAK_SHORT:-}

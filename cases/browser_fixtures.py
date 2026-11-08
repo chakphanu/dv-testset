@@ -342,7 +342,10 @@ class BrowserPage:
         self.context.set_default_navigation_timeout(NAV_TIMEOUT_MS)
         self.context.add_init_script(INIT_SCRIPT)
         self.context.expose_function("__dvtReport", self._report)
-        self.context.tracing.start(screenshots=True, snapshots=True)
+        # DVT_BROWSER_TRACE=0: no Playwright trace (to tell its injected snapshot styles apart from the page in CSP reports)
+        self.tracing = os.environ.get("DVT_BROWSER_TRACE", "1") != "0"
+        if self.tracing:
+            self.context.tracing.start(screenshots=True, snapshots=True)
         self.page = self.context.new_page()
         self._hook(self.page)
 
