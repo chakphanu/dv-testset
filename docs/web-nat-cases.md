@@ -336,7 +336,7 @@ Without `turn.toml` the case runs unchanged (the route answers 404). The relay p
 | hub metrics | the family names and label KEYS of every `webrtc` metric and `dv_edge_sessions` | recorded once; UNVERIFIED that any carries a per-circuit remote address. `dv_edge_webrtc_listeners` counts peers (published every 10 s, cached by the hub), not addresses, and is not used |
 | the edge's candidate-pair table, its STUN state | - | NOT observable from outside; marked UNVERIFIED |
 
-**Router-side evidence: `firsts` (ICE1c).** After `readdress on` the router records, from a small AF_PACKET sniffer on its outside interface
+**Router-side evidence: `firsts` (ICE1c).** After `readdress on` the router records, from a small AF_PACKET sniffer (`ETH_P_ALL`, so that the frames the router sends are seen too) on its outside interface
 (`PacketSniffer` in `dvtest/tools/nat_router.py`; the image has no tcpdump, and `nat-router` now has `CAP_NET_RAW` besides `NET_ADMIN`, this service only,
 `rig/compose.yml`), every UDP datagram of the SUT's media port, both directions, as it is on the wire after the NAT (browser to SUT) or before it is undone
 (SUT to browser). It is started before the rules change, stops at `off` (or after 22 s) and is read with the read-only word `firsts` (`NatClient.firsts()`;
@@ -389,8 +389,11 @@ DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/turn.tom
    which it used), and which field, if any, is an address and of which kind.
 4. The Listen card alert selector (`pages.listen_alerts`) and the error word list (`pages.LISTEN_ERROR_WORDS`): not confirmed from `public.js`. The data-state and the exact status line are the verified part.
 5. The 8 s and 12 s budgets are DV-Router's ICE1c figures, not measurements.
-9. The `firsts` evidence (below): the AF_PACKET sniffer and its `CAP_NET_RAW` on `nat-router` were checked only against a socket pair in a unit test; the first rig run shows
-   whether the capability is enough (the self-test asserts the answer `sniffer: ok`). Times come from the router's clock at the moment its packet socket receives a
+9. The `firsts` evidence (below). First run (wip-9a348ca, 9 browser cases): `CAP_NET_RAW` was enough and the SUT directions worked (`first_sut_to_new_s` 1.15 to 5.66 s; stale sends
+   50 per second for about 14 s in Chromium and WebKit, the whole 20 s in Firefox), but `first_stun_new_s` and `first_udp_new_s` were None in all nine: the packet socket was bound to
+   `ETH_P_IP`, and the kernel gives the frames a host SENDS (the browser's datagrams leaving the router's outside interface after SNAT) only to sockets that listen for `ETH_P_ALL`.
+   The sniffer now uses `ETH_P_ALL` (unit tests: the socket arguments, and synthetic outgoing frames for the three NAT types); this is unconfirmed until the next rig run, which
+   should show `browser_to_sut_new_kinds` filled. Times come from the router's clock at the moment its packet socket receives a
    frame, a few milliseconds late at most; they are seconds after the router began the change (the tester's own change time is a few milliseconds earlier).
 6. A real client address change moves TCP too; this case moves UDP only (see above), so the HTTP ownership rule under an address change is not tested.
 7. Whether Firefox and Playwright WebKit report the address of a `prflx` local candidate in `getStats` (Chromium does).

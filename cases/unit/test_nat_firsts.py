@@ -329,6 +329,81 @@ def test_packet_sniffer_survives_a_failing_callback_and_reports_a_missing_capabi
         nat_router.PacketSniffer("eth0", seen.append, 1.0, open_socket=denied).start()
 
 
+class FakePacketSocket:
+    def __init__(self, calls, args):
+        self.calls = calls
+        calls.append(("socket",) + args)
+
+    def setsockopt(self, *a):
+        self.calls.append(("setsockopt",) + a)
+
+    def bind(self, addr):
+        self.calls.append(("bind", addr))
+
+    def close(self):
+        self.calls.append(("close",))
+
+
+class FakeSocketModule:
+    """Just enough of the socket module for PacketSniffer._open_packet_socket; the real constants, a recording socket."""
+    AF_PACKET, SOCK_RAW, SOL_SOCKET, SO_RCVBUF = socket.AF_PACKET, socket.SOCK_RAW, socket.SOL_SOCKET, socket.SO_RCVBUF
+    htons = staticmethod(socket.htons)
+
+    def __init__(self):
+        self.calls = []
+
+    def socket(self, *args):
+        return FakePacketSocket(self.calls, args)
+
+
+def test_the_packet_socket_listens_for_every_protocol_so_that_outgoing_frames_arrive(monkeypatch):
+    """ICE1c, first run of `firsts`: a packet socket bound to ETH_P_IP got the SUT's datagrams (incoming) and none of the browser's,
+    which leave the router's outside interface after SNAT (outgoing). The kernel gives sent frames only to ETH_P_ALL sockets."""
+    fake = FakeSocketModule()
+    monkeypatch.setattr(nat_router, "socket", fake)
+    nat_router.PacketSniffer._open_packet_socket("eth0")
+    assert nat_router.ETH_P_ALL == 0x0003 and not hasattr(nat_router, "ETH_P_IP")
+    assert fake.calls[0] == ("socket", socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0003))
+    assert ("bind", ("eth0", 0x0003)) in fake.calls
+
+
+def test_a_bind_failure_closes_the_packet_socket(monkeypatch):
+    fake = FakeSocketModule()
+
+    def failing_bind(self, addr):
+        raise OSError("no such device")
+    monkeypatch.setattr(FakePacketSocket, "bind", failing_bind)
+    monkeypatch.setattr(nat_router, "socket", fake)
+    with pytest.raises(OSError):
+        nat_router.PacketSniffer._open_packet_socket("nope0")
+    assert ("close",) in fake.calls
+
+
+@pytest.mark.parametrize("mode,old,new,sport", [("port_restricted", OLD_IP, NEW_IP, 41000), ("symmetric", OLD_IP, NEW_IP, 28506),
+                                                ("full_cone", NEW_IP, OLD_IP, 41000)])
+def test_the_browsers_datagrams_leaving_the_router_after_nat_are_the_new_mapping(mode, old, new, sport):
+    """The outgoing direction: browser -> SUT as it is on the router's outside interface after SNAT (source = the new outside
+    address, in the symmetric NAT with a port the browser never used), a STUN binding request first and RTCP later. These
+    are the frames the packet socket delivers as PACKET_OUTGOING; the figures DV-Router asked for come from them."""
+    from dvtest import ice1
+    r, clock = sniffing_router(mode)
+    r.handle({"op": "readdress", "state": "on"})
+    sniff = FakeSniffer.made[0]
+    clock.now = 100.31
+    sniff.on_frame(eth_udp(new, SUT_IP, sport, 50000, stun(0x0001)))
+    clock.now = 100.51
+    sniff.on_frame(eth_udp(new, SUT_IP, sport, 50000, stun(0x0001)))
+    clock.now = 100.91
+    sniff.on_frame(eth_udp(SUT_IP, new, 50000, sport, stun(0x0101)))
+    clock.now = 101.4
+    sniff.on_frame(eth_udp(new, SUT_IP, sport, 50000, bytes([0x80, 201]) + b"\x00" * 30))
+    ev = ice1.firsts_evidence(r.handle({"op": "firsts"})["firsts"])
+    assert ev["first_stun_new_s"] == 0.31 and ev["first_udp_new_s"] == 0.31 and ev["first_udp_new_kind"] == "stun-binding-request"
+    assert ev["first_sut_to_new_s"] == 0.91 and ev["first_sut_stun_response_new_s"] == 0.91
+    assert ev["browser_to_sut_new_kinds"] == {"stun-binding-request": 2, "rtcp": 1}
+    assert ev["browser_from_old_total"] == 0 and ev["stale_to_old_total"] == 0
+
+
 def test_the_sniffer_stops_by_itself_after_its_duration():
     a, b = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
     sniff = nat_router.PacketSniffer("eth0", lambda frame: None, 0.3, open_socket=lambda ifname: a)

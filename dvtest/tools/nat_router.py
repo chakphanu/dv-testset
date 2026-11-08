@@ -21,13 +21,16 @@ import time
 
 from dvtest import nat
 
-ETH_P_IP = 0x0800
+# ETH_P_ALL, not ETH_P_IP: the kernel hands the frames a host SENDS (here: the browser's datagrams leaving the router's outside
+# interface after SNAT) only to packet sockets that listen for every protocol (dev_queue_xmit_nit walks ptype_all); a socket bound
+# to ETH_P_IP gets the incoming frames only. The first run of the evidence saw the SUT's datagrams and none of the browser's.
+ETH_P_ALL = 0x0003
 SNAP_BYTES = 128            # enough for the Ethernet, IPv4 (with options) and UDP headers and the 20 byte STUN header
 
 
 class PacketSniffer:
-    """A small AF_PACKET reader for the `firsts` evidence (ICE1c): every IPv4 frame of one interface, both directions (what
-    the router sends out after NAT and what arrives before it is undone), cut to SNAP_BYTES, handed to on_frame(bytes) on a
+    """A small AF_PACKET reader for the `firsts` evidence (ICE1c): every frame of one interface, both directions (what
+    the router sends out after NAT and what arrives before it is undone; the parser keeps only IPv4 UDP), cut to SNAP_BYTES, handed to on_frame(bytes) on a
     daemon thread for `duration_s` seconds or until stop(). Needs CAP_NET_RAW (rig/compose.yml gives it to nat-router only).
     `open_socket(ifname)` is injectable for the unit tests."""
 
@@ -40,10 +43,10 @@ class PacketSniffer:
 
     @staticmethod
     def _open_packet_socket(ifname):
-        sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_IP))
+        sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_ALL))
         try:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
-            sock.bind((ifname, ETH_P_IP))
+            sock.bind((ifname, ETH_P_ALL))
         except OSError:
             sock.close()
             raise
