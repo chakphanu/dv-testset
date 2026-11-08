@@ -224,9 +224,11 @@ DVT_TRANSCODER_FAKE=1 DVT_REQUIRE_IDENT=true`); `R` = `rig/config/dv-router`; `W
 | DOM without a basemap (about 10 min) | `R/web.toml:R/admin.toml:R/totp-required.toml:R/data-ident.toml` | `DVT_USRP_DYNAMIC=1 DVT_REQUIRE_IDENT=true DVT_TRANSCODER_FAKE=1 scripts/run.sh -m rig --capture --profile web,browser -- cases/test_dp7_positions_page.py` | `without a basemap` x3; `refuses a v1 basemap` and `with a basemap` skip with the reason | `docker pull` of `BROWSER_BASE_IMAGE` once; M17 module C |
 | DOM v1 basemap refused (about 12 min) | as above | as above with `DVT_BASEMAP_FILE=.local/basemap-20261106.tar.gz` | `without a basemap` x3, `refuses a v1 basemap` x3 (expected: not installed) | the old MAP1 file |
 | DOM with a basemap (about 15 min) | as above | as above with `DVT_BASEMAP_FILE=.local/basemap-map2` | `without a basemap` x3, `with a basemap` x3 | a tree written by `dv-svc-basemap` (below) |
+| Retention (about 40 min, its own run) | as ETag | `DVT_DP7_RETENTION_LONG=1 scripts/run.sh -m rig --profile web -- cases/test_dp15_positions2.py -k retention` | DP7-i | the data worker |
 
 **BLOCKED by DV-Router MAP2g (2026-11-08):** `dv-svc-basemap install` of 220e45b fetches its 431 pinned glyph files from fixed https URLs with no override, and the rig has neither internet nor exec into the SUT, so no installed tree can be made in the rig; `with a basemap` skips until then. MAP2g adds `--glyph-base URL` (https; plain http only for 127.0.0.1 / [::1]; no redirects; same pinned relative names and sha256) plus a catalog override for tests. Then the case installs from a local fixture server: `builds.json`, a small PMTiles with a strong ETag and byte ranges, and a few glyph PBFs under the fixture catalog, `--profile hotspot`. No internet install for the rig.
-| Retention (about 40 min, its own run) | as ETag | `DVT_DP7_RETENTION_LONG=1 scripts/run.sh -m rig --profile web -- cases/test_dp15_positions2.py -k retention` | DP7-i | the data worker |
+
+**Fixture exists (not yet run on a rig):** `dvtest/basemap_fixture.py` and `scripts/basemap-install-fixture.sh` produce that tree offline (below, "Producing the tree without internet"). The BLOCKED marker stays until a rig run of `with a basemap` against a tree made by the MAP2g image passes.
 
 ## The basemap tree (what the lead supplies, MAP2)
 
@@ -255,6 +257,28 @@ detail box of the MANIFEST (the default Thailand box `97.3,5.6,105.7,20.5` when 
 
 Any other `DVT_BASEMAP_FILE` (a directory with a top-level `MANIFEST`, a `.tar` / `.tar.gz` of one, a bare `.pmtiles`) is a MAP1 basemap: only the
 `refuses a v1 basemap` case uses it. The old tarball `.local/basemap-20261106.tar.gz` is such a file; "not installed" is the expected answer for it.
+
+### Producing the tree without internet (MAP2g fixture)
+
+`dvtest/basemap_fixture.py` is a loopback server plus encoders (Python standard library, deterministic bytes) for the four MAP2g overrides of
+`dv-svc-basemap install`: `--source-index` (`/builds.json`: one build `20261107.pmtiles`, schema `4.15.2`), `--source-base` (`/archives/`: HEAD with size and a
+strong ETag, ranged GET answered 206 with an exact `Content-Range`, `If-Match` mismatch 412, unsatisfiable range 416), `--glyph-base` (`/mirror/<catalog path>`,
+plain 200) and `--glyph-catalog` (260 entries: the 256 BMP ranges, the two `OFL.txt`, `FONT-FACES.json`, `Fixture.ttf`). The archive is a PMTiles v3 file of 18
+gzip MVT tiles (one per zoom 0 to 14 containing 100.5 E, 13.75 N, plus the other three tiles of z1), enough for both profiles; every tile is one `earth` square.
+It is a structural fixture, not a map: the glyph ranges are empty, the font is a 32-byte sfnt envelope, no visual result is implied.
+
+```sh
+# the binary must be a dv-svc-basemap of DV-Router MAP2g or later (an older one has no --glyph-base); it runs inside scripts/contained.sh --name test
+scripts/basemap-install-fixture.sh --bin <path to dv-svc-basemap> --out .local/basemap-map2
+#   ... prints, last line on stdout:  DVT_BASEMAP_FILE=.local/basemap-map2
+DVT_BASEMAP_FILE=.local/basemap-map2 scripts/run.sh ...      # as the DOM with a basemap row above
+```
+
+Defaults are `--profile hotspot --detail dvt=99.9,13.0,101.1,14.1` (the world overview z0-5 holds 9 tiles, the detail z6-12 holds 7); `--profile router` and any
+`--detail NAME=W,S,E,N` inside Thailand also work. The script runs `install --dry-run` first (its plan is saved as `<out>/install-plan.json`, beside `basemap/`), then `install` and `verify`, and refuses an `--out` that already holds a `basemap/`. The binary is any executable file of a MAP2g build (copy it out of the image with `docker create` and `docker cp`; where the new image keeps it is not known here: the 220e45b notes use `--entrypoint dv-svc-basemap`).
+`python3 -m dvtest.basemap_fixture serve --catalog-out FILE` keeps the server up for a manual run, `info` prints the
+sizes and digests (archive 2298 bytes, catalog 78981 bytes). Unit tests: `python3 -m pytest -m unit cases/unit/test_basemap_fixture.py` (31 tests; the last one installs and verifies for real
+when `DVT_BASEMAP_BIN=<binary>` is set and skips otherwise).
 
 ## UNVERIFIED shapes of the second set
 
