@@ -5,10 +5,11 @@ restart seen in the SDP, the checks on what the NAT router saw, and readers of t
 unit-tested in cases/unit/test_ice1.py."""
 import re
 
-# ICE1 (DV-Router wip-97c669d, e439f62): after the client address changes the page performs an ICE restart on the SAME circuit
-# and voice frames reach the listener again within these many seconds of the change. ICE1b (not landed when this was written)
-# is expected to bring Firefox and Playwright WebKit to the Chromium figure: lower the two 12 s values then.
-RESUME_BUDGET_S = {"chromium": 8.0, "firefox": 12.0, "webkit": 12.0}
+# ICE1 (DV-Router wip-97c669d, e439f62) and ICE1c (the edge fix, open): after a pure NAT rebinding (the page cannot see it) the EDGE
+# must follow the browser's new address on the SAME circuit and voice frames reach the listener again within these many seconds of
+# the change: 8 s for Chromium and Firefox, 12 s for Playwright WebKit (DV-Router, 2026-11-08). On wip-97c669d all nine browser cases
+# fail (about 14 s in Chromium and WebKit, no recovery within 20 s in Firefox); they stay as standing cases until ICE1c lands.
+RESUME_BUDGET_S = {"chromium": 8.0, "firefox": 8.0, "webkit": 12.0}   # DV-Router ICE1c: the edge must follow a NAT rebinding within these
 RESUME_BUDGET_DEFAULT_S = 12.0
 
 STALL_MIN_S = 0.3         # no new packet for this long = the audio stopped (15 missed packets of 20 ms)

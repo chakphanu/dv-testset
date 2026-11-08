@@ -20,7 +20,7 @@ def series(rate_before, stall, rate_after, t_change=10.0, step=0.1, total=6.0, s
 
 def test_budgets_are_named_and_per_engine():
     assert ice1.resume_budget_s("chromium") == 8.0
-    assert ice1.resume_budget_s("firefox") == 12.0 and ice1.resume_budget_s("webkit") == 12.0
+    assert ice1.resume_budget_s("firefox") == 8.0 and ice1.resume_budget_s("webkit") == 12.0
     assert ice1.resume_budget_s("other") == ice1.RESUME_BUDGET_DEFAULT_S == 12.0
 
 
