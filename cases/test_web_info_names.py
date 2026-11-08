@@ -50,6 +50,8 @@ def test_info_names_the_configured_room(target, web_client):
     state = json.loads(web_client().get("/api/v1/public/state", expect=200).body)
     info = state.get("info") or {}
     print("[RECORD] info-names: info keys %s; info.rooms %s" % (sorted(info), json.dumps(info.get("rooms"))[:400]))
+    # INFO1: the public info carries `available` (false when dv-svc-web has no configuration file)
+    assert info.get("available") is True, "info.available is %r, want true (INFO1: the launcher passes DV_CONFIG_FILE)" % (info.get("available"),)
     entry = info_room_entry(state, ROOM)
     assert entry is not None, "info.rooms has no entry for room %s (info.rooms = %s): INFO1, the public info does not come from " \
                               "the file the launcher loaded" % (ROOM, json.dumps(info.get("rooms"))[:300])
