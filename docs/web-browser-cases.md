@@ -577,3 +577,12 @@ Everything below is assumed, not seen on a running rig; the case was written fro
 12. `--capture` with the echo module and the web rig together (the wire check of the run) was not tried.
 13. ICE1 evidence: the Talk status line is `#talk-status` and the Listen card `[data-testid='listen-connection']` with `p[role=status]` (web_pages.py selectors); `navigator.connection` exists in the engine (Chromium yes, Firefox and WebKit usually not: `supported: false`); `request.post_data` of the offer is readable through the proxy; the edge family name contains `restart` (the exact name `dv_edge_webrtc_ice_restarts_total` is the coordinator's, not seen on a rig); a timestamp from the tester's wall clock and one from a page clock differ by the sampling skew, so "-1000 ms from the release" is page-clock against the recorder's `release` mark, which Python sets a few milliseconds after the click.
 14. Forced change: a synthetic `Event('change')` on `navigator.connection` reaches the page's ICE1 listener like a real one (the page does not check `isTrusted`) (not checked on a page). The compose forwarding of `DVT_TALK_ECHO_CONN_CHANGE` was added without a rig run; the `-k conn` selection needs no variable.
+
+### PTTRX1 standing regression
+
+`test_pttrx1_talk_survives_a_connection_change[chromium-1..5]` (cases/test_web_talk_echo_return.py): the forced `talk` phase (one synthetic
+`navigator.connection` 'change' 1 s into a held Talk) five times per image, plus the plain flow `test_talk_echo_returns_to_the_page`.
+Reproduced on wip-97c669d (out 20261108T092955Z: the talker page sent 4 extra offers with sess_id, the edge's ICE restart counter +4, the
+talker heard almost nothing, the second page received no media at all); wip-efd9eca passes (no ICE1 listener). Expected to FAIL before
+the PTTRX1 fix and PASS after it. Run (about 6 minutes): the "Talk echo return" command with `-k "pttrx1 or returns_to_the_page" -k chromium`.
+Evidence per repeat: `out/<run>/web/talk-echo-chromium-conn-talk-<n>.json`.

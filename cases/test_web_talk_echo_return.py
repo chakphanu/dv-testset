@@ -201,7 +201,22 @@ def test_talk_echo_after_a_forced_connection_change(engine, phase, rtc_tx_page, 
     run_talk_echo(engine, rtc_tx_page, echo_rx_page, echo_on_e, web_client, request, phase)
 
 
-def run_talk_echo(engine, tx_page, rx_page, echo_on_e, web_client, request, phase):
+# PTTRX1 (DV-Router, wip-97c669d): a navigator.connection 'change' while Talk is held makes the page restart ICE on the talk circuit,
+# the talker hears no echo and a second listener loses the media. Standing regression: the forced 'talk' phase PTTRX1_REPEATS times per
+# image, plus the plain flow; expected to FAIL on images before the PTTRX1 fix and PASS after it.
+PTTRX1_REPEATS = 5
+
+
+@pytest.mark.parametrize("rep", range(1, PTTRX1_REPEATS + 1))
+def test_pttrx1_talk_survives_a_connection_change(engine, rep, rtc_tx_page, echo_rx_page, echo_on_e, web_client, request):
+    """PTTRX1 regression (run N of PTTRX1_REPEATS): the forced connection change 1 s into a held Talk must not cost the talker the echo
+    nor the second page the media. Chromium only. Select with -k pttrx1."""
+    if engine != "chromium":
+        pytest.skip("PTTRX1 is forced through navigator.connection, which only Chromium has")
+    run_talk_echo(engine, rtc_tx_page, echo_rx_page, echo_on_e, web_client, request, "talk", rep=rep)
+
+
+def run_talk_echo(engine, tx_page, rx_page, echo_on_e, web_client, request, phase, rep=None):
     tx, rx = tx_page, rx_page
     forced = {}
     try:
@@ -310,7 +325,7 @@ def run_talk_echo(engine, tx_page, rx_page, echo_on_e, web_client, request, phas
                 "listener": {"analysis": analysis.get("listener"), "requests": tables["listener"],
                              "requests_summary": tes.requests_summary(tables["listener"]), "recorder": run.dumps["listener"],
                              "series": tes.series(run.dumps["listener"]) if run.dumps["listener"] else []}}
-            tes.write_evidence(tes.evidence_path(os.environ.get("DVT_OUT", "out"), engine, phase), doc)
+            tes.write_evidence(tes.evidence_path(os.environ.get("DVT_OUT", "out"), engine, phase, rep), doc)
         except Exception as exc:                         # noqa: BLE001 - the evidence must never mask the case's own outcome
             print("talk-echo: evidence not written: %s: %s" % (type(exc).__name__, exc))
 

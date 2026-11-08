@@ -769,10 +769,14 @@ def ice1_diagnosis(dump, offers, restarts, ended_text="Ended: Button released.",
 
 # ------------------------------------------------------------------------- the evidence file
 
-def evidence_path(out_dir, engine, phase="off"):
-    """out/<run>/web/talk-echo-<engine>.json, or talk-echo-<engine>-conn-<phase>.json for a run with a forced connection change."""
+def evidence_path(out_dir, engine, phase="off", rep=None):
+    """out/<run>/web/talk-echo-<engine>.json, or talk-echo-<engine>-conn-<phase>.json for a run with a forced connection change
+    (talk-echo-<engine>-conn-<phase>-<rep>.json for a numbered repeat of the PTTRX1 regression)."""
     name = re.sub(r"[^a-z0-9]+", "-", engine.lower())
-    return Path(out_dir) / "web" / ("talk-echo-%s.json" % name if phase == "off" else "talk-echo-%s-conn-%s.json" % (name, phase))
+    if phase == "off":
+        return Path(out_dir) / "web" / ("talk-echo-%s.json" % name)
+    suffix = "" if rep is None else "-%d" % int(rep)
+    return Path(out_dir) / "web" / ("talk-echo-%s-conn-%s%s.json" % (name, phase, suffix))
 
 
 # ------------------------------------------------------------------------- forced navigator.connection change (DVT_TALK_ECHO_CONN_CHANGE)

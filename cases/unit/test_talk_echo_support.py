@@ -471,3 +471,9 @@ def test_forced_change_phase_lines_and_paths(tmp_path):
     assert tes.evidence_path(tmp_path, "chromium").name == "talk-echo-chromium.json"
     assert tes.evidence_path(tmp_path, "chromium", "echo").name == "talk-echo-chromium-conn-echo.json"
     assert "dispatchEvent(new Event('change'))" in tes.FORCE_JS and tes.FORCE_JS.isascii()
+
+
+def test_evidence_path_numbers_the_pttrx1_repeats(tmp_path):
+    assert tes.evidence_path(tmp_path, "chromium", "talk", 3).name == "talk-echo-chromium-conn-talk-3.json"
+    assert tes.evidence_path(tmp_path, "chromium", "talk").name == "talk-echo-chromium-conn-talk.json"
+    assert tes.evidence_path(tmp_path, "chromium").name == "talk-echo-chromium.json"
