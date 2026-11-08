@@ -14,6 +14,7 @@ import collections
 import json
 import os
 import socket
+import threading
 import time
 
 from . import fuzz
@@ -243,6 +244,49 @@ def link(protocol, client, host):
     if protocol == "dmrplus":
         return dmrplus.ACK in got
     return bool(got)
+
+
+KEEPALIVE_S = 5.0     # NXDNGateway / YSFGateway / P25Gateway poll every 5 s; DV-Router drops a silent client at 30 s
+
+
+def keepalive_off():
+    """DVT_FUZZ_NO_KEEPALIVE=1: the valid clients send nothing between rounds (the behaviour before the
+    keeper existed: a listener silent for 30 s is dropped by the server, a harness artifact, not a finding)."""
+    return os.environ.get("DVT_FUZZ_NO_KEEPALIVE", "") == "1"
+
+
+class Keeper:
+    """Sends keepalive() of each valid client every KEEPALIVE_S seconds from a thread, as the real
+    gateways do, so a long run or the 30 s replay check does not lose the listener to the server's
+    silence timeout. keepalive() only sends; the DMR+ client is left out (it keeps alive while it
+    pumps, and pumping from two threads would race on its inbox)."""
+
+    def __init__(self, protocol, clients, every=KEEPALIVE_S):
+        self.clients = [c for c in clients if protocol != "dmrplus" and hasattr(c, "keepalive")]
+        self.every = every
+        self.sent = 0
+        self.errors = 0
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        if self.clients:
+            self._thread.start()
+        return self
+
+    def _run(self):
+        while not self._stop.wait(self.every):
+            for client in self.clients:
+                try:
+                    client.keepalive()
+                    self.sent += 1
+                except (OSError, TypeError, AttributeError):
+                    self.errors += 1
+
+    def stop(self):
+        self._stop.set()
+        if self._thread.is_alive():
+            self._thread.join(2)
 
 
 def frames_for(protocol, count, seed="fuzz-valid"):

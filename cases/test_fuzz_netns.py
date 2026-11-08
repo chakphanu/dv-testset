@@ -134,6 +134,7 @@ def _inside(spec, run_dir):
     result = {"scenario": spec["name"], "group": group, "seed": spec["seed"], "n": spec["n"], "rounds": [],
               "ports": {}, "errors": 0, "sent": 0}
     sources, valid = [], []
+    keeper = [None]                                 # fuzz_run.Keeper of the valid talker and listener
     stream_ids = itertools.count(0x2000)            # a DExtra header with the last outbound stream id is dropped
 
     def scrape():
@@ -236,7 +237,9 @@ def _inside(spec, run_dir):
                               "has no %s edge enabled" % (want, spec["name"]))
         else:
             ok, reason, kind = valid_setup()
-            warm = valid_round("warm", kind) if ok and kind != "liveness" else {"tag": "warm", "ok": False, "probe": None, "heard": None,
+            if ok and kind == "voice" and not fuzz_run.keepalive_off():
+                keeper[0] = fuzz_run.Keeper(valid_protocol, [o for n, o in valid if n in ("talker", "listener")]).start()
+            warm =valid_round("warm", kind) if ok and kind != "liveness" else {"tag": "warm", "ok": False, "probe": None, "heard": None,
                                                          "expected": None}
             result["warmup"] = dict(warm, setup_ok=ok, reason=reason, kind=kind)
             result["valid_mode"] = "served" if (ok and warm["ok"] and kind != "liveness") else "liveness"
@@ -408,6 +411,11 @@ def _inside(spec, run_dir):
                                  "changed": [[n, lab, a, b] for n, lab, a, b in changed][:800]}
             result["alive"] = xlxd.poll() is None
     finally:
+        if keeper[0] is not None:
+            keeper[0].stop()
+            result["keepalive"] = {"every_s": keeper[0].every, "sent": keeper[0].sent, "errors": keeper[0].errors}
+        else:
+            result["keepalive"] = {"off": fuzz_run.keepalive_off()}
         for src in sources:
             try:
                 src.close()
@@ -435,8 +443,11 @@ def _launch(binary, name, spec, out_root):
     run_dir = out_root / "netns" / ("fuzz-" + name)
     run_dir.mkdir(parents=True, exist_ok=True)
     spec = dict({"name": name}, **spec, bin=str(Path(binary).resolve()))
+    # the spec goes through a file: a replay of a whole failed case (1000+ datagrams) is over the argv limit
+    spec_file = run_dir / "spec.json"
+    spec_file.write_text(json.dumps(spec))
     cmd = ["unshare", "-rn", sys.executable, "-I", str(Path(__file__).resolve()),
-           "--inside", json.dumps(spec), str(run_dir)]
+           "--inside", "@" + str(spec_file), str(run_dir)]
     stderr = open(run_dir / "harness.err", "wb")
     return run_dir, subprocess.Popen(cmd, stdout=stderr, stderr=subprocess.STDOUT), stderr
 
@@ -694,4 +705,5 @@ for _name in PROTOCOL_NAMES:
 
 
 if __name__ == "__main__" and len(sys.argv) == 4 and sys.argv[1] == "--inside":
-    _inside(json.loads(sys.argv[2]), sys.argv[3])
+    _arg = sys.argv[2]
+    _inside(json.loads(Path(_arg[1:]).read_text() if _arg.startswith("@") else _arg), sys.argv[3])

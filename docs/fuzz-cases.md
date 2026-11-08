@@ -121,6 +121,7 @@ The valid round, per protocol:
 | Protocol | Valid round |
 |----------|-------------|
 | dextra, dplus, dcs, dmr, dmrplus, m17, ysf, nxdn, p25 | the talker (`N0CALL` / 1023007 / 1001) and listener (`N0TEST` / 1023008 / 1002) linked once on module B (nxdn / p25: TG `DVT_FUZZ_NXDN_TG` / `DVT_FUZZ_P25_TG`, default 31672); every round a fresh `N0PROB` client gets its link acknowledged (in a thread beside the over, because DPlus and DCS ack after a random delay of up to 2 s on xlxd) and the talker sends an over of `VALID_FRAMES` = 54 frames (not below 50: the short-stream guard counts overs under 50) that the listener must hear at `HEARD_MIN` = 50 percent or more |
+| (keepalive) | from the link on, `fuzz_run.Keeper` sends `keepalive()` of the talker and the listener every 5 s from a thread, as NXDNGateway / YSFGateway / P25Gateway and the D-STAR / DMR gateways do (DMR+ excluded: its client keeps alive while it pumps). Without it a listener stays silent for the whole run and DV-Router drops it at its 30 s client timeout, so a later round hears nothing: that was the nxdn "failure" of wip-9a348ca / wip-220e45b (A/B below). `DVT_FUZZ_NO_KEEPALIVE=1` restores the silent clients; `result.json` `keepalive` holds the count sent |
 | usrp | the configured peer sends a 54-frame PCM over; a D-STAR listener on module B must hear it with the fake transcoder's AMBE+ payload (same shape as `test_open_wait_`) |
 | xlx, g3 | a valid connect (xlx) or presence request (g3) must be answered (ack or nack; any reply) |
 | imrs | liveness only (the peer list is static, no reply to check) |
@@ -218,7 +219,20 @@ datagrams were sent, regenerate it:
 `python3 -m dvtest.tools.fuzz_replay --regen nxdn --seed 1 --from 0 --count 1269 --write full.json`
 (checked: this equals the last 50 of the failing nxdn run byte for byte). With `-k test_fuzz_nxdn_` instead of
 `-k test_fuzz_replay_` the same file runs as a normal scenario with a valid round every 200 datagrams and the idle
-wait, which recreates the original timeline.
+wait, which recreates the original timeline. The scenario spec reaches the namespace through
+`<run dir>/spec.json` (a 1269-entry replay on the command line failed with `Argument list too long`).
+
+Result on wip-220e45b (2026-11-08), valid over heard at +2.6 / +10 / +30 s:
+
+| Replay | keeper on | `DVT_FUZZ_NO_KEEPALIVE=1` |
+|--------|-----------|---------------------------|
+| last 50 of the failing nxdn run | 96, 56, 56 of 54: pass | 96, 56, 0 of 54: fail |
+| all 1269 (regenerated, seed 1) | 228, 56, 56 of 54: pass | 228, 56, 0 of 54: fail |
+
+So the nxdn miss was the harness's silent listener, not the edge (its stop line counts `LinkTimeout`). The
+replayed datagrams moved `rx_ignored` 1209, `id_held` 5 and `rts_limited` 1 of `dv_edge_drops_total{proc=nxdn}`;
+the first over heard more than 54 frames because the replayed streams on the same TG reached the listener too
+(not separated by the count).
 
 ## UNVERIFIED (not confirmed when this was written; nothing here ran against a DV-Router build)
 

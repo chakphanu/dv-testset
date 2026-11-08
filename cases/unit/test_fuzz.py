@@ -679,3 +679,50 @@ def test_replay_case_fails_only_when_the_valid_client_is_not_served_at_30_s(tmp_
     assert mod.REPLAY_CASES == "test_fuzz_replay_"
     from dvtest import netns_runs
     assert netns_runs.scenarios_for(mod.SCENARIOS, {"test_fuzz_replay_served"}) == []   # not a normal scenario
+
+
+# ---------------------------------------------------------------- keeper of the valid clients
+
+class _Counting:
+    def __init__(self, fail=False):
+        self.calls = 0
+        self.fail = fail
+
+    def keepalive(self):
+        self.calls += 1
+        if self.fail:
+            raise OSError("closed")
+
+
+@pytest.mark.unit
+def test_keeper_sends_keepalive_on_schedule_and_stops():
+    import time
+    good, bad = _Counting(), _Counting(fail=True)
+    keeper = fuzz_run.Keeper("nxdn", [good, bad, object()], every=0.05).start()
+    time.sleep(0.3)
+    keeper.stop()
+    calls = good.calls
+    time.sleep(0.15)
+    assert calls >= 3 and good.calls == calls
+    assert keeper.sent == good.calls and keeper.errors == bad.calls >= 3
+
+
+@pytest.mark.unit
+def test_keeper_leaves_dmrplus_alone(monkeypatch):
+    keeper = fuzz_run.Keeper("dmrplus", [_Counting()], every=0.05).start()
+    keeper.stop()
+    assert keeper.clients == [] and keeper.sent == 0
+    monkeypatch.setenv("DVT_FUZZ_NO_KEEPALIVE", "1")
+    assert fuzz_run.keepalive_off()
+
+
+@pytest.mark.unit
+def test_every_valid_client_kind_has_a_keepalive():
+    for kind in fuzz_run.CLIENT_KINDS:
+        if kind in ("dmrplus", "m17"):
+            continue                           # dmrplus pumps; m17 answers the server's PING (responder)
+        client = fuzz_run.make_client(kind, "127.0.0.1", "listener")
+        try:
+            assert hasattr(client, "keepalive"), kind
+        finally:
+            client.close()
