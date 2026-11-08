@@ -552,7 +552,6 @@ services:
       DVT_PROD_CALL_M17: ${DVT_PROD_CALL_M17:-}
       DVT_PROD_CROSS_REF: ${DVT_PROD_CROSS_REF:-}
       DVT_PROD_CROSS_TAG: ${DVT_PROD_CROSS_TAG:-}
-      DVT_AMBED_REF: ${DVT_AMBED_REF:-}
       # wire cases: transcoder under test when run inside the rig
       DVT_AMBED_ADDR: ${DVT_AMBED_ADDR:-${DVT_NET:-172.30.0}.21}
       # on when xlxd-sut has USRP endpoints (A/B -> allstar, C -> tester)
