@@ -79,8 +79,8 @@ def report(bp, expected=(), what="page", ignore=None):
 
 def assert_inert(bp, what="page"):
     """Nothing hostile ran and no hostile markup became a live element. A CSP report for a script is a
-    failure too (an injected script reached the DOM and only the policy stopped it); style reports are
-    not about the payloads and go to the findings."""
+    failure too (an injected script reached the DOM and only the policy stopped it); since CSP2 every
+    other report fails as well, except the one accepted WebKit <select> report (PageLog.accepted_csp)."""
     flag = bp.page.evaluate("typeof window.__pwn")
     assert flag == "undefined", "%s on %s: a payload set window.__pwn (%s)" % (what, brlib.label(bp.engine), flag)
     live = bp.page.locator(brlib.LIVE_MARKUP_SELECTOR).count()
@@ -88,10 +88,13 @@ def assert_inert(bp, what="page"):
     assert not bp.log.dialogs, "%s on %s: dialog %r" % (what, brlib.label(bp.engine), bp.log.dialogs[:1])
     scripts = [v for v in bp.log.csp if str(v.get("directive", "")).startswith(("script-src", "default-src"))]
     assert not scripts, "%s on %s: script blocked by the CSP %r (markup reached the DOM?)" % (what, brlib.label(bp.engine), scripts[:1])
-    for v in bp.log.csp:
-        if v not in scripts:
-            finding(bp.engine, "%s: CSP report %s blocked %s from %s" % (what, v.get("directive"), v.get("blocked"),
-                                                                       (v.get("source") or "-").rsplit("/", 1)[-1]))
+    others = [v for v in bp.log.csp if v not in scripts]
+    for v in others:
+        if bp.log.accepted_csp(v):
+            finding(bp.engine, "%s: CSP2 accepted report %s blocked %s on a <select>" % (what, v.get("directive"), v.get("blocked")))
+    # CSP2: every other report is a failure in every engine (a real inline style of the product would show here)
+    odd = [v for v in others if not bp.log.accepted_csp(v)]
+    assert not odd, "%s on %s: CSP report that is not the accepted WebKit <select> report: %s" % (what, brlib.label(bp.engine), odd[:2])
 
 
 def wait_live(bp):
