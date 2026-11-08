@@ -164,6 +164,24 @@ def one_user(web_user):
 
 # ==================================================================== (c) public
 
+
+ADDRESS_KEYS = {"ip", "port", "addr", "address", "remote", "remote_addr", "peer", "src_ip", "source_ip"}
+
+
+def _address_keys(node, path=""):
+    """JSON paths of keys that name a network address (ADDRESS_KEYS) anywhere in a decoded document."""
+    out = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            here = "%s/%s" % (path, key)
+            if str(key).lower() in ADDRESS_KEYS:
+                out.append(here)
+            out.extend(_address_keys(value, here))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            out.extend(_address_keys(value, "%s[%d]" % (path, index)))
+    return out
+
 def test_public_state_and_lastheard_contract(anon):
     for path in ("/api/v1/public/state", "/api/v1/public/lastheard?limit=5"):
         resp = anon.get(path, expect=200)
@@ -183,8 +201,10 @@ def test_public_state_and_lastheard_contract(anon):
     assert isinstance(heard, (dict, list)), type(heard)
     if isinstance(heard, dict):
         assert "items" in heard, sorted(heard)
-    text = json.dumps(state)
-    assert '"ip"' not in text and '"port"' not in text, "public state carries no client addresses"
+    # No CLIENT address in the public state. The server's own public ports are published since INFO1 as
+    # info.edge_ports[] {edge, proto, port} (DV-Router, wip-220e45b): that one path is allowed, every other ip/port/address key fails.
+    leaks = [p for p in _address_keys(state) if not re.fullmatch(r"/info/edge_ports\[\d+\]/port", p)]
+    assert not leaks, "public state carries client address fields at %s" % leaks[:10]
 
 
 @pytest.mark.parametrize("path", ["/api/v1/public/state", "/api/v1/public/lastheard"])
