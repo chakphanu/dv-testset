@@ -1,0 +1,4 @@
+# INFO1 acceptance (DV-Router): a room with a configured name; the public info must carry it from the file the
+# launcher loaded (info.rooms is an array of {room, name}). Used by cases/test_web_info_names.py.
+[room.B]
+name = "Example room"
