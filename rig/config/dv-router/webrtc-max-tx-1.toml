@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/rig.md): the WebRTC edge allows ONE concurrent transmit per peer, as the production
+# host does. The edge's own default is 20; an account's limits.max_tx (default 1 for a may_tx account) may not exceed the edge's value, and a
+# peer that already owns max_tx transmit sessions is answered "denied/full" (DV-Router crates/edge/webrtc tx.rs, assertion.rs). Name it after
+# web.toml (it merges key by key into the [edges.webrtc] table web.toml makes):
+#   DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/admin.toml:rig/config/dv-router/totp-required.toml:rig/config/dv-router/echo.toml:rig/config/dv-router/webrtc-max-tx-1.toml
+# UNVERIFIED: the key name and its place ([edges.webrtc] max_tx) are the DV-Router lead's word for the production configuration; this
+# repository has no run with it yet.
+[edges.webrtc]
+max_tx = 1

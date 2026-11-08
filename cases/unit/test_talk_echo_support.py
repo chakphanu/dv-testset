@@ -21,8 +21,28 @@ NODE = shutil.which("node")
 
 # ------------------------------------------------------------------ hand-built dumps (no node)
 
-def sample(t, pcs):
-    return {"t": float(t), "wall": 1000000 + int(t), "hidden": False, "ctx": "running", "pcs": pcs}
+def element(t, owner, rms=None, ready="live", muted=False, paused=False, stream=None, tracks=None, ctx="running"):
+    """The page's audio element bound to the stream of pc `owner` (a dict of pc()), as the recorder reports it."""
+    if tracks is None:
+        tracks = [{"id": "t%s" % owner["id"], "kind": "audio", "ready": ready, "enabled": True, "muted": muted, "pc": owner["id"]}]
+    a = owner.get("a") or {}
+    level = a.get("rms05", 0.0) if rms is None else rms
+    return {"present": True, "stream": stream or "s%s" % owner["id"], "tracks": tracks, "paused": paused, "muted": False, "volume": 1.0, "ready": 4,
+            "attached": True, "attach_error": None, "changes": 1, "polls": int(t // 250), "an_rms": level, "an_last": level, "an_n": 2, "ctx": ctx}
+
+
+def sample(t, pcs, el="auto"):
+    if el == "auto":                                   # a healthy page: the element plays the newest live session
+        live = [p for p in pcs if not p.get("stale")]
+        el = element(t, live[-1]) if live else None
+    return {"t": float(t), "wall": 1000000 + int(t), "hidden": False, "ctx": "running", "pcs": pcs, "el": el}
+
+
+RECEIVER = ("talker_hears_echo", "listener_hears_live", "listener_hears_echo")
+
+
+def stages(out, names=RECEIVER):
+    return [c["stage"] for c in out["checks"] if c["name"] in names]
 
 
 def pc(pid, b=0, p=0, energy=0.0, calls=0, rms05=0.0, rms1=0.0, peak=0.0, frac=0.0, stale=False, conn="connected", tapped=True):
@@ -77,14 +97,14 @@ def test_no_bytes_after_the_release_is_the_edge_stage():
     assert got["listener_hears_live"]["ok"] and got["listener_hears_echo"]["ok"]
     assert "SECOND page" in out["diagnosis"] and "TALKER page" in out["diagnosis"]
     lines = tes.failure_lines(out["checks"], out["diagnosis"])
-    assert lines[0].startswith("PRODUCT CHECK talker_hears_echo stopped at stage no_inbound_bytes: ")
+    assert lines[0].startswith("evidence talker_hears_echo stopped at stage no_inbound_bytes: ")
     assert "stops before the page" in lines[0] and lines[-1].startswith("diagnosis: ")
 
 
 def test_no_bytes_anywhere_says_the_media_stops_at_the_edge():
     quiet = dump(healthy_rows(live=False, echo=False, bytes_=False))
     out = tes.analyse_run({"talker": quiet, "listener": quiet}, "chromium")
-    assert [c["stage"] for c in out["checks"] if c["name"] != "over_not_cut_short"] == ["no_inbound_bytes"] * 3
+    assert stages(out) == ["no_inbound_bytes"] * 3
     assert "stops at or before the edge" in out["diagnosis"]
 
 
@@ -101,7 +121,7 @@ def test_bytes_but_a_silent_decoder_is_the_page_stage():
     got = {c["name"]: c for c in out["checks"]}
     assert got["talker_hears_echo"]["stage"] == "decoder_silent"
     assert "page/decoder" in got["talker_hears_echo"]["detail"]
-    assert "page/decoder, not the edge" in out["diagnosis"]
+    assert "page/decoder, not the edge" in out["diagnosis"]                       # the element sits on the live pc and is silent like the receiver
 
 
 def test_audible_decoder_but_silent_analyser_is_its_own_stage():
@@ -162,7 +182,7 @@ def test_a_swapped_session_is_summed_and_detected():
 
 def test_missing_data_is_a_failed_check_not_an_exception():
     out = tes.analyse_run({"talker": None, "listener": None}, "chromium")
-    assert [c["stage"] for c in out["checks"] if c["name"] != "over_not_cut_short"] == ["no_data"] * 3
+    assert stages(out) == ["no_data"] * 3
     out = tes.analyse_run({"talker": dump([]), "listener": dump([sample(0, [])])}, "webkit")
     assert not any(c["ok"] for c in out["checks"] if c["name"] != "over_not_cut_short")
     assert tes.analyse_run({}, "chromium")["checks"][0]["stage"] == "no_data"
@@ -254,18 +274,35 @@ globalThis.performance = { now: () => T, getEntriesByType: () => [
   {name: 'https://h/api/v1/rtc/offer', startTime: 10, duration: 5, responseStatus: 200},
   {name: 'https://h/api/v1/public/state', startTime: 11, duration: 5, responseStatus: 200}] };
 const UI = { talk: 'Ready' };
+let SEQ = 0;
+class Ev { constructor() { this.h = {}; } addEventListener(n, f) { (this.h[n] = this.h[n] || []).push(f); } emit(n, e) { (this.h[n] || []).forEach((f) => f(e || {})); } }
+globalThis.MediaStream = class extends Ev {
+  constructor(t) { super(); this.id = 's' + (++SEQ); this.tracks = (t || []).slice(); }
+  getAudioTracks() { return this.tracks.filter((x) => x.kind === 'audio'); }
+  addTrack(t) { this.tracks.push(t); this.emit('addtrack', {track: t}); }
+};
+const makeTrack = (id, muted) => Object.assign(new Ev(), {id: id, kind: 'audio', readyState: 'live', enabled: true, muted: !!muted});
+class HME { get srcObject() { return this._s || null; } set srcObject(v) { this._s = v; } matches(sel) { return sel === "[data-testid='listen-audio']"; } }
+globalThis.HTMLMediaElement = HME;
+const ELEM = Object.assign(new HME(), { paused: false, muted: false, volume: 1, readyState: 4 });
+const ANALYSER = { amp: 0 };
 globalThis.document = { hidden: false, documentElement: {}, createElement: () => ({ muted: false, play: () => Promise.resolve() }),
-  querySelector: (s) => (s === '#talk-status' ? { textContent: UI.talk } : null) };
+  querySelector: (s) => (s === '#talk-status' ? { textContent: UI.talk } : (s === "[data-testid='listen-audio']" ? ELEM : null)) };
 globalThis.MutationObserver = class { constructor(f) { globalThis.__mo = f; } observe() {} };
 const connHandlers = [];
 Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { connection: { effectiveType: '4g', rtt: 50, downlink: 10,
   saveData: false, addEventListener: (n, f) => connHandlers.push(f) } } });
-globalThis.MediaStream = class { constructor(t) { this.tracks = t; } };
 const procs = [];
 globalThis.AudioContext = class {
   constructor() { this.sampleRate = 48000; this.state = 'running'; this.destination = {}; }
   resume() { return Promise.resolve(); }
-  createMediaStreamSource() { return { connect() {} }; }
+  createMediaStreamSource(stream) {
+    if (stream.getAudioTracks && !stream.getAudioTracks().length) throw new Error('no audio tracks in the stream');
+    return { connect() {}, disconnect() {} };
+  }
+  createAnalyser() {
+    return { fftSize: 0, connect() {}, getFloatTimeDomainData(buf) { for (let i = 0; i < buf.length; i++) buf[i] = ANALYSER.amp * Math.sin(2 * Math.PI * 700 * i / 48000); } };
+  }
   createScriptProcessor() { const p = { connect() {}, onaudioprocess: null }; procs.push(p); return p; }
 };
 globalThis.RTCPeerConnection = class {
@@ -298,15 +335,28 @@ const feed = (proc, amp, seconds) => {
 (async () => {
   const rec = window.__dvtEcho;
   let cur = new RTCPeerConnection();
-  cur.emit('track', {track: {kind: 'audio'}});
+  let curTrack = makeTrack('t0');
+  cur.emit('track', {track: curTrack});
   let proc = procs[procs.length - 1];
+  if (P.element) { rec.el.selector = "[data-testid='listen-audio']"; ELEM.srcObject = new MediaStream([curTrack]); }
   for (T = 0; T <= 20000; T += 500) {
     if (T === 0) rec.mark('listening');
     if (T === 2000) {
       rec.mark('press');
-      if (P.swap) { cur.close(); cur = new RTCPeerConnection(); cur.emit('track', {track: {kind: 'audio'}}); proc = procs[procs.length - 1]; }
+      if (P.swap) {
+        const old = curTrack;
+        cur.close(); cur = new RTCPeerConnection();
+        curTrack = makeTrack('t1', P.element === 'late_track');
+        cur.emit('track', {track: curTrack});
+        proc = procs[procs.length - 1];
+        if (P.element === 'rebind') ELEM.srcObject = new MediaStream([curTrack]);
+        if (P.element === 'stale') { old.readyState = 'ended'; old.emit('ended'); }
+        if (P.element === 'late_track') ELEM.srcObject = new MediaStream([]);
+      }
     }
     if (T === 2500) rec.mark('on_air');
+    if (T === 2500 && P.element === 'late_track') ELEM.srcObject.addTrack(curTrack);
+    if (T === 3000 && P.element === 'late_track') { curTrack.muted = false; curTrack.emit('unmute'); }
     if (P.conn_change && T === 4500) { navigator.connection.effectiveType = '3g'; navigator.connection.rtt = 300; connHandlers.forEach((f) => f()); }
     if (T === 2500) { UI.talk = 'On air'; __mo(); }
     if (P.early_end && T === 4500) { UI.talk = 'Ended: Button released.'; __mo(); }
@@ -319,6 +369,10 @@ const feed = (proc, amp, seconds) => {
     if (P.tap && proc) feed(proc, tone ? 0.25 : 0, 0.5);
     if (tone || P.bytes_always) { cur.s.bytes += 4000; cur.s.packets += 25; }
     if (tone && P.energy) cur.s.energy += 0.25 * 0.25 / 2 * 0.5;
+    if (P.element) {
+      ANALYSER.amp = tone && ELEM.srcObject && ELEM.srcObject.getAudioTracks().indexOf(curTrack) >= 0 && curTrack.readyState === 'live' ? 0.25 : 0;
+      const base = T; T = base - 250; rec.elPoll(); T = base; rec.elPoll();
+    }
     await rec.tick();
   }
   rec.mark('final');
@@ -370,7 +424,7 @@ def test_recorder_in_node_sees_the_swap_the_tone_and_the_requests():
     quiet = [s["pcs"][1]["a"] for s in d["samples"] if s["t"] == 12000.0]
     assert quiet[0]["rms05"] == 0.0
     out = tes.analyse_run({"talker": d, "listener": d}, "chromium")
-    assert all(c["ok"] for c in out["checks"]), [(c["name"], c["stage"], c["detail"]) for c in out["checks"]]
+    assert all(c["ok"] for c in out["checks"] if c["name"] in RECEIVER), [(c["name"], c["stage"], c["detail"]) for c in out["checks"]]
     assert out["talker"]["sampling"]["samples"] == 41
 
 
@@ -619,3 +673,136 @@ def test_relay_switch_parses():
     assert tes.relay_forced({"DVT_TALK_ECHO_RELAY": "1"}) and tes.relay_forced({"DVT_TALK_ECHO_RELAY": "on"})
     assert not tes.relay_forced({}) and not tes.relay_forced({"DVT_TALK_ECHO_RELAY": "0"})
     assert "iceTransportPolicy: 'relay'" in tes.RELAY_JS
+
+
+# ------------------------------------------------------------------ the page's audio element (what the user hears)
+
+ELEMENT_CHECKS = ("talker_page_audio_element_hears_echo", "listener_page_audio_element_hears_live", "listener_page_audio_element_hears_echo")
+
+
+def element_stages(out):
+    return {c["name"]: c["stage"] for c in out["checks"] if c["name"] in ELEMENT_CHECKS}
+
+
+def swapped_dump(element_for):
+    """healthy_rows(swap=True) with the audio element supplied by element_for(t, pc0, pc1) from the swap (2000 ms) on."""
+    rows = healthy_rows(swap=True)
+    for r in rows:
+        if r["t"] >= 2000:
+            r["el"] = element_for(r["t"], r["pcs"][0], r["pcs"][1])
+    return dump(rows, pcs=[{"id": 0, "created_at": 100.0, "closed_at": 2000.0}, {"id": 1, "created_at": 2010.0, "closed_at": None}])
+
+
+def test_a_page_that_plays_the_closed_listen_stream_fails_the_element_check_while_the_receiver_hears():
+    # production: the Talk press closes the Listen session and offers a talk session; the audio element keeps the OLD stream (track ended)
+    d = swapped_dump(lambda t, p0, p1: element(t, {"id": 0}, rms=0.0, ready="ended"))
+    out = tes.analyse_run({"talker": d, "listener": d}, "chromium")
+    got = {c["name"]: c for c in out["checks"]}
+    assert got["talker_hears_echo"]["ok"] and got["talker_hears_echo"]["kind"] == tes.EVIDENCE            # the receiver-level evidence row
+    el = got["talker_page_audio_element_hears_echo"]
+    assert not el["ok"] and el["kind"] == tes.PRODUCT and el["stage"] == "element_on_closed_stream"
+    assert "the page plays the closed listen stream (track ended) while the talk session receives the echo" in el["detail"]
+    assert "pc1(talk, live) +32000 bytes +200 packets" in el["detail"] and "audio element analyser: best rms 0.0000" in el["detail"], el["detail"]
+    assert out["diagnosis"].startswith("talker_page_audio_element_hears_echo: the page plays the closed listen stream (track ended)")
+    lines = tes.failure_lines(out["checks"], out["diagnosis"])
+    assert any(x.startswith("PRODUCT CHECK talker_page_audio_element_hears_echo stopped at stage element_on_closed_stream") for x in lines)
+    assert not any("talker_hears_echo stopped" in x for x in lines)                                         # the receiver is fine
+
+
+def test_the_other_element_stages_are_told_apart():
+    def stage(**kw):
+        d = swapped_dump(lambda t, p0, p1: element(t, p1, **kw))
+        return element_stages(tes.analyse_run({"talker": d, "listener": d}, "chromium"))["talker_page_audio_element_hears_echo"]
+    assert stage() == "ok"
+    assert stage(rms=0.0) == "element_silent_on_live_stream"
+    assert stage(rms=0.0, paused=True) == "element_paused_or_muted"
+    assert stage(rms=0.0, tracks=[]) == "element_stream_without_audio_track"
+    assert stage(rms=0.0, tracks=[{"id": "x", "kind": "audio", "ready": "live", "enabled": True, "muted": False, "pc": None}]) == "element_stream_foreign"
+    assert stage(rms=0.0, ctx="suspended") == "not_observable"
+    d = swapped_dump(lambda t, p0, p1: dict(element(t, p1, rms=0.0), stream=None, tracks=[]))
+    assert element_stages(tes.analyse_run({"talker": d, "listener": d}, "chromium"))["talker_page_audio_element_hears_echo"] == "element_without_stream"
+    d = swapped_dump(lambda t, p0, p1: dict(element(t, p1, rms=0.0), present=False))
+    assert element_stages(tes.analyse_run({"talker": d, "listener": d}, "chromium"))["talker_page_audio_element_hears_echo"] == "no_audio_element"
+    d = swapped_dump(lambda t, p0, p1: None)
+    assert element_stages(tes.analyse_run({"talker": d, "listener": d}, "chromium"))["talker_page_audio_element_hears_echo"] == "no_element_data"
+
+
+def test_element_timing_and_the_session_order():
+    d = dump(healthy_rows(), marks=MARKS)
+    d["t0_wall"] = T0_WALL
+    d["element"] = {"assignments": [
+        {"t": 100.0, "via": "setter", "stream": "s0", "tracks_at": 1, "first_audio_track_t": 100.0, "first_unmute_t": 100.0, "ev": []},
+        {"t": 2100.0, "via": "setter", "stream": "s1", "tracks_at": 0, "first_audio_track_t": 2600.0, "first_unmute_t": 3100.0,
+         "ev": [{"t": 2600.0, "what": "addtrack", "track": "t1"}]}]}
+    answer = tes.talk_offer_answer_ms(d, [(T0_WALL + 300.0) / 1000.0, (T0_WALL + 2050.0) / 1000.0, (T0_WALL + 9000.0) / 1000.0])
+    assert answer == 2050.0
+    rows = tes.element_timing(d, answer)
+    assert rows[1]["rel_press_ms"] == 100.0 and rows[1]["rel_offer_answer_ms"] == 50.0
+    assert rows[1]["audio_track_after_assignment_ms"] == 500.0 and rows[1]["unmute_after_assignment_ms"] == 1000.0
+    assert rows[1]["audio_track_rel_press_ms"] == 600.0 and rows[1]["unmute_rel_offer_answer_ms"] == 1050.0
+    assert rows[0]["audio_track_after_assignment_ms"] == 0.0
+    assert tes.timing_lines(rows)[1] == ("audio element srcObject s1 (setter): assigned +100 ms from the press, +50 ms from the offer answer; "
+                                         "audio track +500 ms after the assignment, unmute +1000 ms after it")
+    assert tes.talk_offer_answer_ms(d, []) is None and tes.element_timing({}) == []
+    table = [{"method": "POST", "path": "/api/v1/rtc/offer", "t_s": 1.0, "response_s": 1.2, "status": 200, "body": {"sdp": "x"}},
+             {"method": "POST", "path": "/api/v1/rtc/close", "t_s": 5.05, "response_s": None, "status": None},
+             {"method": "POST", "path": "/api/v1/rtc/offer", "t_s": 5.2, "response_s": 5.4, "status": 200, "body": {"sess_id": "S"}},
+             {"method": "POST", "path": "/api/v1/rtc/alive", "t_s": 5.1, "response_s": 5.2, "status": 204},
+             {"method": "POST", "path": "/api/v1/rtc/close", "t_s": 40.0, "response_s": None, "status": None}]
+    order = tes.session_order(table, {"listening": 100.0, "press": 105.0})
+    assert order["order"] == "close -> offer" and [r["rel_press_s"] for r in order["rows"]] == [0.05, 0.2]
+    assert order["rows"][1]["sess_id_in_body"] is True and tes.session_order(table, {"listening": 1.0}) is None
+
+
+@needs_node
+def test_recorder_in_node_follows_the_element_when_the_page_rebinds():
+    d = run_recorder(element="rebind")
+    assert d["errors"] == []
+    a = d["element"]["assignments"]
+    assert [x["via"] for x in a] == ["setter", "setter"] and [x["tracks_at"] for x in a] == [1, 1]
+    assert [[t["pc"] for t in e["tracks"]] for e in d["element"]["log"]] == [[0], [1]]
+    out = tes.analyse_run({"talker": d, "listener": d}, "chromium")
+    assert all(s == "ok" for s in element_stages(out).values()), [(c["name"], c["stage"], c["detail"]) for c in out["checks"]]
+    row = next(s for s in d["samples"] if s["t"] == 8500.0)["el"]
+    assert row["an_rms"] > 0.1 and row["attached"] and [t["pc"] for t in row["tracks"]] == [1]
+
+
+@needs_node
+def test_recorder_in_node_finds_the_stale_stream_after_the_swap():
+    d = run_recorder(element="stale")
+    out = tes.analyse_run({"talker": d, "listener": d}, "chromium")
+    got = {c["name"]: c for c in out["checks"]}
+    assert got["talker_hears_echo"]["ok"]                                                    # the talk session receives and decodes
+    el = got["talker_page_audio_element_hears_echo"]
+    assert el["stage"] == "element_on_closed_stream" and "(track ended)" in el["detail"], el["detail"]
+    row = next(s for s in d["samples"] if s["t"] == 8500.0)["el"]
+    assert row["an_rms"] == 0.0 and [(t["ready"], t["pc"]) for t in row["tracks"]] == [("ended", 0)]
+
+
+@needs_node
+def test_recorder_in_node_reattaches_when_the_track_is_added_to_the_same_stream_later():
+    d = run_recorder(element="late_track")
+    assert d["errors"] == []
+    a = d["element"]["assignments"][1]
+    assert a["tracks_at"] == 0 and a["first_audio_track_t"] == 2500.0 and a["first_unmute_t"] == 3000.0
+    assert [e["what"] for e in a["ev"]] == ["addtrack", "unmute"]
+    timing = tes.element_timing(d)[1]
+    assert timing["audio_track_after_assignment_ms"] == 500.0 and timing["unmute_after_assignment_ms"] == 1000.0
+    assert timing["rel_press_ms"] == 0.0 and timing["audio_track_rel_press_ms"] == 500.0
+    # the analyser was attached again on 'addtrack' and hears the echo (an attach to the empty stream threw and was recorded, then recovered)
+    out = tes.analyse_run({"talker": d, "listener": d}, "chromium")
+    assert all(s == "ok" for s in element_stages(out).values()), [(c["name"], c["stage"], c["detail"]) for c in out["checks"]]
+    assert len(d["element"]["log"]) >= 3
+
+
+def test_webrtc_max_tx_snippet_merges_into_the_web_edge_table():
+    import tomllib
+    from dvtest import sut_config
+    root = Path(__file__).resolve().parents[2] / "rig" / "config" / "dv-router"
+    template = 'schema = 1\n[node]\ncallsign = "XLX999"\nbind_ip = "<OWN_IP>"\nrooms = "A-Z"\n'
+    text = (root / "webrtc-max-tx-1.toml").read_text(encoding="utf-8")
+    text.encode("ascii")
+    assert text.startswith("# SPDX-License-Identifier: MIT")
+    out = sut_config.render(template, "172.30.0", extras=[(root / "web.toml").read_text(encoding="utf-8"), text])
+    edge = tomllib.loads(out)["edges"]["webrtc"]
+    assert edge["max_tx"] == 1 and edge["enable"] is True and edge["public_ips"] == ["172.30.0.11"]

@@ -173,7 +173,7 @@ def read_ice_metrics(control):
 
 def start_recorders(*bps):
     for bp in bps:
-        got = bp.page.evaluate("(ms) => window.__dvtEcho ? window.__dvtEcho.start(ms) : null", tes.SAMPLE_MS)
+        got = bp.page.evaluate("([ms, sel]) => window.__dvtEcho ? window.__dvtEcho.start(ms, sel) : null", [tes.SAMPLE_MS, pages.MODULE_AUDIO_CSS])
         assert got is not None, "the recorder is not installed in the page"
 
 
@@ -301,7 +301,9 @@ def run_talk_echo(engine, tx_page, rx_page, echo_on_e, web_client, request, phas
                 ice_after = read_ice_metrics(control)
             if "release" in run.phases:
                 sut = run.tracker.summary(run.phases.get("press", 0.0), run.phases["release"])
-                analysis = tes.analyse_run(run.dumps, engine, sut=sut)
+                walls = {who: [r["wall_response"] for r in a.rows if r["method"] == "POST" and r["path"].endswith("/rtc/offer")
+                                and r["wall_response"] is not None] for who, a in run.audits.items()}
+                analysis = tes.analyse_run(run.dumps, engine, sut=sut, offers_wall=walls)
                 failures += tes.forced_lines(tes.failure_lines(analysis["checks"], analysis["diagnosis"]), phase)
             tables = {who: tes.requests_table(a.rows, run.phases) for who, a in run.audits.items()}
             delta = tes.metrics_delta(ice_before, ice_after)
@@ -311,7 +313,7 @@ def run_talk_echo(engine, tx_page, rx_page, echo_on_e, web_client, request, phas
                 d = run.dumps[who]
                 rel = tes.mark_t(d, "release") if d else None
                 ice1[who] = {"diagnosis": tes.ice1_diagnosis(d, tes.offers_summary(tables[who]), restarts),
-                             "offers": tes.offers_summary(tables[who]),
+                             "offers": tes.offers_summary(tables[who]), "session_order": tes.session_order(tables[who], run.phases),
                              "connection": (d or {}).get("connection"), "ui": (d or {}).get("ui"),
                              "pcs_inbound_in_echo_window": tes.per_pc_inbound(d, rel, rel + tes.TAIL_S * 1000.0) if rel is not None else []}
             doc = {
@@ -341,6 +343,10 @@ def run_talk_echo(engine, tx_page, rx_page, echo_on_e, web_client, request, phas
     for who in ("talker", "listener"):
         if ice1.get(who):
             print("[RECORD] talk-echo %s %s page ICE1: %s" % (brlib.label(engine), who, ice1[who]["diagnosis"]))
+            print("[RECORD] talk-echo %s %s page rtc close/offer around the press: %s" % (
+                brlib.label(engine), who, (ice1[who].get("session_order") or {}).get("order") or "none"))
+            for line in tes.timing_lines(((analysis.get(who) or {}).get("element_timing")) or []):
+                print("[RECORD] talk-echo %s %s page %s" % (brlib.label(engine), who, line))
     if analysis.get("diagnosis"):
         print("[RECORD] talk-echo %s: %s" % (brlib.label(engine), analysis["diagnosis"]))
     if failures:

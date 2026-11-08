@@ -135,17 +135,21 @@ ECHO_RECORDER_JS = r"""
     return out;
   };
 
+  const ensureCtx = () => {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    if (!rec.ctx) {
+      rec.ctx = new AC();
+      rec.rate = rec.ctx.sampleRate;
+      try { const p = rec.ctx.resume(); if (p && p.catch) p.catch(() => {}); } catch (e) { err('resume', e); }
+    }
+    return rec.ctx;
+  };
   const tapTrack = (r, track) => {
     r.audioTracks += 1;
     if (r.tapped) return;
     try {
-      const AC = window.AudioContext || window.webkitAudioContext;
-      if (!AC) { r.tap_error = 'no AudioContext'; return; }
-      if (!rec.ctx) {
-        rec.ctx = new AC();
-        rec.rate = rec.ctx.sampleRate;
-        try { const p = rec.ctx.resume(); if (p && p.catch) p.catch(() => {}); } catch (e) { err('resume', e); }
-      }
+      if (!ensureCtx()) { r.tap_error = 'no AudioContext'; return; }
       const stream = new MediaStream([track]);
       // a remote stream only flows into Web Audio in Chromium when a media element has it too (as RTC_PROBE_JS)
       const el = document.createElement('audio');
@@ -209,7 +213,7 @@ ECHO_RECORDER_JS = r"""
 
   function Wrapped(...args) {
     const pc = new Prev(...args);
-    const r = { id: rec.pcs.length, pc: pc, createdAt: now(), closedAt: null, audioTracks: 0, tapped: false, buf: [], have: 0, calls: 0,
+    const r = { id: rec.pcs.length, pc: pc, createdAt: now(), closedAt: null, audioTracks: 0, tapped: false, buf: [], have: 0, calls: 0, trackIds: [],
                 lastIn: null, lastOut: null, lastPair: null };
     rec.pcs.push(r);
     try {
@@ -223,7 +227,10 @@ ECHO_RECORDER_JS = r"""
         return origClose();
       };
       pc.addEventListener('connectionstatechange', () => { if (pc.connectionState === 'closed' && r.closedAt === null) r.closedAt = now(); });
-      pc.addEventListener('track', (e) => { if (e.track && e.track.kind === 'audio') tapTrack(r, e.track); });
+      pc.addEventListener('track', (e) => {
+        if (e.track) r.trackIds.push(e.track.id);
+        if (e.track && e.track.kind === 'audio') tapTrack(r, e.track);
+      });
     } catch (e) { err('wrap', e); }
     return pc;
   }
@@ -232,12 +239,135 @@ ECHO_RECORDER_JS = r"""
   window.RTCPeerConnection = Wrapped;
   if (window.webkitRTCPeerConnection) window.webkitRTCPeerConnection = Wrapped;
 
+  // The page's own audio element (what the USER hears): an AnalyserNode on its CURRENT srcObject, polled every 250 ms and re-attached
+  // whenever the stream or its audio tracks change; each track is matched to the RTCPeerConnection that owns it (by track id).
+  rec.el = { selector: null, timer: null, sig: null, src: null, analyser: null, buf: null, log: [], polls: 0, changes: 0, an_max: 0, an_last: 0,
+             an_n: 0, attach_error: null, assignments: [], cur: null, cur_sid: undefined, hooked: new WeakSet() };
+  // srcObject assignments of the element (the setter is wrapped, so the time is exact; the poll notes one it missed) with the time of the
+  // first audio track and the first 'unmute' of that stream; 'addtrack' / 'removetrack' of the stream and 'ended' / 'unmute' of a track
+  // re-attach the analyser at once (a stream that gets its track AFTER the assignment is the case the page itself got wrong)
+  const hookTrack = (a, t) => {
+    if (rec.el.hooked.has(t)) return;
+    rec.el.hooked.add(t);
+    for (const what of ['unmute', 'mute', 'ended']) {
+      t.addEventListener(what, () => {
+        const ts = rd(now(), 1);
+        if (a.ev.length < 60) a.ev.push({ t: ts, what: what, track: t.id });
+        if (what === 'unmute' && a.first_unmute_t === null) a.first_unmute_t = ts;
+        if (what === 'ended' || what === 'unmute') { rec.el.sig = null; rec.elPoll(); }
+      });
+    }
+  };
+  const noteAssignment = (stream, via) => {
+    const E = rec.el;
+    const a = { t: rd(now(), 1), wall: Date.now(), via: via, stream: stream ? stream.id : null, tracks_at: 0, first_audio_track_t: null,
+                first_unmute_t: null, ev: [] };
+    E.assignments.push(a);
+    E.cur = a;
+    E.cur_sid = a.stream;
+    if (!stream) return;
+    const audio = stream.getAudioTracks ? stream.getAudioTracks() : [];
+    a.tracks_at = audio.length;
+    if (audio.length) a.first_audio_track_t = a.t;
+    audio.forEach((t) => { hookTrack(a, t); if (t.muted === false && a.first_unmute_t === null) a.first_unmute_t = a.t; });
+    if (stream.addEventListener) {
+      stream.addEventListener('addtrack', (e) => {
+        const ts = rd(now(), 1);
+        if (a.ev.length < 60) a.ev.push({ t: ts, what: 'addtrack', track: e.track ? e.track.id : null });
+        if (e.track && e.track.kind === 'audio') {
+          if (a.first_audio_track_t === null) a.first_audio_track_t = ts;
+          hookTrack(a, e.track);
+          if (e.track.muted === false && a.first_unmute_t === null) a.first_unmute_t = ts;
+        }
+        rec.elPoll();
+      });
+      stream.addEventListener('removetrack', (e) => {
+        if (a.ev.length < 60) a.ev.push({ t: rd(now(), 1), what: 'removetrack', track: e.track ? e.track.id : null });
+        rec.elPoll();
+      });
+    }
+  };
+  try {
+    if (typeof HTMLMediaElement !== 'undefined') {
+      const d = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'srcObject');
+      if (d && d.set && d.configurable) {
+        Object.defineProperty(HTMLMediaElement.prototype, 'srcObject', { configurable: true, enumerable: d.enumerable, get: d.get,
+          set: function (v) {
+            d.set.call(this, v);
+            try { if (rec.el.selector && this.matches && this.matches(rec.el.selector)) { noteAssignment(v, 'setter'); rec.elPoll(); } } catch (e) { err('srcObject', e); }
+          } });
+      }
+    }
+  } catch (e) { err('srcObject setter', e); }
+  const ownerOf = (track) => {
+    for (const r of rec.pcs) {
+      if (r.trackIds.indexOf(track.id) >= 0) return r.id;
+      try { if (r.pc.getReceivers().some((x) => x.track && x.track.id === track.id)) return r.id; } catch (e) { /* closed */ }
+    }
+    return null;
+  };
+  const trackInfo = (t) => ({ id: t.id, kind: t.kind, ready: t.readyState, enabled: t.enabled, muted: t.muted, pc: ownerOf(t) });
+  const elDetach = () => {
+    const E = rec.el;
+    try { if (E.src) E.src.disconnect(); } catch (e) { /* ignore */ }
+    E.src = null; E.analyser = null; E.buf = null;
+  };
+  const elAttach = (stream) => {
+    const E = rec.el;
+    try {
+      const ctx = ensureCtx();
+      if (!ctx) { E.attach_error = 'no AudioContext'; return; }
+      E.src = ctx.createMediaStreamSource(stream);
+      E.analyser = ctx.createAnalyser();
+      E.analyser.fftSize = 2048;
+      E.buf = new Float32Array(E.analyser.fftSize);
+      E.src.connect(E.analyser);
+    } catch (e) { E.attach_error = String((e && e.message) || e).slice(0, 100); E.analyser = null; }
+  };
+  rec.elPoll = () => {
+    const E = rec.el;
+    try {
+      const el = document.querySelector(E.selector);
+      E.polls += 1;
+      const stream = el ? el.srcObject : null;
+      const tracks = stream && stream.getAudioTracks ? stream.getAudioTracks() : [];
+      const sid = stream ? stream.id : null;
+      if (sid !== E.cur_sid && !(sid === null && E.cur_sid === undefined)) noteAssignment(stream, 'poll');
+      const sig = stream ? (stream.id + '|' + tracks.map((t) => t.id).join(',')) : null;
+      if (sig !== E.sig) {
+        E.sig = sig; E.changes += 1; E.attach_error = null;
+        elDetach();
+        E.log.push({ t: rd(now(), 1), wall: Date.now(), stream: stream ? stream.id : null, tracks: tracks.map(trackInfo) });
+        if (stream && tracks.length) elAttach(stream);
+      }
+      if (E.analyser) {
+        E.analyser.getFloatTimeDomainData(E.buf);
+        const v = rmsOf(E.buf);
+        E.an_last = v; E.an_max = Math.max(E.an_max, v); E.an_n += 1;
+      }
+    } catch (e) { err('element', e); }
+  };
+  const elSnapshot = () => {
+    const E = rec.el;
+    if (!E.selector) return null;
+    const el = document.querySelector(E.selector);
+    const stream = el ? el.srcObject : null;
+    const out = { present: !!el, stream: stream ? stream.id : null,
+                  tracks: (stream && stream.getAudioTracks ? stream.getAudioTracks() : []).map(trackInfo),
+                  paused: el ? el.paused : null, muted: el ? el.muted : null, volume: el ? el.volume : null, ready: el ? el.readyState : null,
+                  attached: !!E.analyser, attach_error: E.attach_error, changes: E.changes, polls: E.polls,
+                  an_rms: rd(E.an_max, 5), an_last: rd(E.an_last, 5), an_n: E.an_n, ctx: rec.ctx ? rec.ctx.state : null };
+    E.an_max = 0; E.an_n = 0;
+    return out;
+  };
+
   rec.tick = async () => {
     if (rec.busy) { rec.skipped += 1; return null; }
     rec.busy = true;
     try {
       const t = now();
       const row = { t: rd(t, 1), wall: Date.now(), hidden: !!document.hidden, ctx: rec.ctx ? rec.ctx.state : null, pcs: [] };
+      try { row.el = elSnapshot(); } catch (e) { err('elSnapshot', e); }
       if (rec.ctx && rec.ctx.state === 'suspended') { try { const p = rec.ctx.resume(); if (p && p.catch) p.catch(() => {}); } catch (e) { /* needs a gesture */ } }
       for (const r of rec.pcs) {
         const pc = r.pc;
@@ -256,14 +386,23 @@ ECHO_RECORDER_JS = r"""
       return row;
     } catch (e) { err('tick', e); return null; } finally { rec.busy = false; }
   };
-  rec.start = (ms) => {
+  rec.start = (ms, selector) => {
     if (rec.timer) return false;
     rec.interval_ms = ms || 500;
+    if (selector) {
+      rec.el.selector = selector;
+      rec.el.timer = setInterval(rec.elPoll, 250);
+      rec.elPoll();
+    }
     rec.timer = setInterval(() => { rec.tick(); }, rec.interval_ms);
     rec.tick();
     return true;
   };
-  rec.stop = () => { if (rec.timer) { clearInterval(rec.timer); rec.timer = null; } return true; };
+  rec.stop = () => {
+    if (rec.timer) { clearInterval(rec.timer); rec.timer = null; }
+    if (rec.el.timer) { clearInterval(rec.el.timer); rec.el.timer = null; }
+    return true;
+  };
   rec.mark = (name) => { const m = { name: name, t: rd(now(), 1), wall: Date.now() }; rec.marks.push(m); return m; };
   // the request audit of the page's own clock (Resource Timing; responseStatus where the engine has it)
   rec.resources = () => {
@@ -286,6 +425,7 @@ ECHO_RECORDER_JS = r"""
       tapped: r.tapped, tap_at: r.tap_at === undefined ? null : rd(r.tap_at, 1), calls: r.calls,
       tap_error: r.tap_error || null, play_error: r.play_error || null,
       final: { conn: r.pc.connectionState, ice: r.pc.iceConnectionState, sig: r.pc.signalingState } })),
+    element: { selector: rec.el.selector, changes: rec.el.changes, log: rec.el.log, assignments: rec.el.assignments },
     connection: rec.connection, ui: rec.ui, samples: rec.samples, marks: rec.marks, resources: rec.resources() }));
 })();
 """
@@ -450,7 +590,8 @@ def series(dump):
     for s in (dump or {}).get("samples") or []:
         row = {"t": float(s["t"]), "wall": s.get("wall"), "bytes": 0, "packets": 0, "lost": 0, "energy": None, "calls": 0,
                "rms05": 0.0, "rms1": 0.0, "peak_hz": 0.0, "fraction": 0.0, "out_bytes": 0, "out_packets": 0,
-               "pcs_live": 0, "pcs_total": 0, "ctx": s.get("ctx"), "hidden": s.get("hidden")}
+               "pcs_live": 0, "pcs_total": 0, "ctx": s.get("ctx"), "hidden": s.get("hidden"),
+               "el": s.get("el"), "el_rms": float((s.get("el") or {}).get("an_rms") or 0.0), "el_polls": int((s.get("el") or {}).get("polls") or 0)}
         for p in s.get("pcs") or []:
             row["pcs_total"] += 1
             row["calls"] += p.get("calls") or 0
@@ -579,6 +720,170 @@ def _ctx(rows):
     return next((r["ctx"] for r in reversed(rows) if r.get("ctx")), "?")
 
 
+def _pcs(ids):
+    return ", ".join("pc%s" % i for i in sorted(ids)) or "no pc"
+
+
+def element_rows(rows):
+    """series() rows seen through the page's AUDIO ELEMENT: the AnalyserNode's rms stands for the analyser columns, its poll count for the
+    callbacks (the byte, packet and energy columns stay the receiver's), so judge_window judges what the user hears."""
+    return [dict(r, rms05=r["el_rms"], rms1=r["el_rms"], peak_hz=0.0, fraction=0.0, calls=r["el_polls"]) for r in rows]
+
+
+def receiver_summary(dump, lo, hi):
+    """getStats inbound-rtp of every RTCPeerConnection in the window, in one line; the pc created at the Talk press is marked 'talk'."""
+    created = ((pc_story(dump).get("at_talk") or {}).get("created")) or []
+    parts = []
+    for p in per_pc_inbound(dump, lo, hi):
+        closed = p["closed_at"] is not None and p["closed_at"] <= hi
+        parts.append("pc%s(%s%s) +%d bytes +%d packets" % (p["id"], "talk, " if p["id"] in created else "", "closed" if closed else "live",
+                                                          p["bytes"], p["packets"]))
+    return "getStats inbound-rtp in the window: " + ("; ".join(parts) if parts else "no RTCPeerConnection")
+
+
+def element_text(facts):
+    """The audio element's state in one line for a failure text."""
+    if not facts:
+        return "audio element: no samples"
+    last = facts["last"]
+    tracks = ", ".join("%s %s%s pc%s" % (t.get("id"), t.get("ready"), " muted" if t.get("muted") else "", t.get("pc")) for t in last.get("tracks") or []) or "no audio track"
+    return ("audio element analyser: best rms %.4f in %d samples, stream %s, tracks [%s], paused %s muted %s volume %s, AudioContext %s%s"
+            % (facts["best_an_rms"], facts["samples"], last.get("stream"), tracks, last.get("paused"), last.get("muted"), last.get("volume"),
+               last.get("ctx"), (", attach error: %s" % last["attach_error"]) if last.get("attach_error") else ""))
+
+
+def element_facts(rows, lo, hi):
+    """The audio element's evidence in [lo, hi]: {samples, present, streams, best_an_rms, last} or None without element samples."""
+    inside = [r for r in rows if lo <= r["t"] <= hi and r.get("el")]
+    if not inside:
+        return None
+    return {"samples": len(inside), "present": any(r["el"].get("present") for r in inside),
+            "streams": sorted({str(r["el"].get("stream")) for r in inside}), "best_an_rms": round(max(r["el_rms"] for r in inside), 5),
+            "last": inside[-1]["el"], "last_t": inside[-1]["t"], "polls": inside[-1]["el_polls"] - inside[0]["el_polls"]}
+
+
+def judge_element(rows, dump, lo, hi, floor=RMS_FLOOR, min_loud=MIN_LOUD):
+    """Judge what the page's AUDIO ELEMENT plays in [lo, hi] (page clock ms): its AnalyserNode must rise above the floor in `min_loud` samples.
+    A failure names the stage, with the element and the receiver (getStats inbound-rtp of every pc) side by side:
+      no_audio_element / element_without_stream / element_stream_without_audio_track   nothing is bound to play
+      element_on_closed_stream      the element plays the stream of a closed session (track ended) while another session receives
+      element_on_other_session      the element's session receives nothing while another one does
+      element_stream_foreign        its tracks belong to no RTCPeerConnection of the page
+      element_paused_or_muted       the element's live session receives and it is paused / muted / volume 0
+      element_silent_on_live_stream the element's live session receives and plays, the analyser still hears nothing
+      no_inbound_bytes              (receiver level) nothing reaches the page at all
+      not_observable                the AudioContext is not running: the analyser cannot read (Firefox in the container)"""
+    facts = element_facts(rows, lo, hi)
+    recv = receiver_summary(dump, lo, hi)
+    if facts is None:
+        return {"ok": False, "stage": "no_element_data", "via": None, "element": None, "receiver": recv,
+                "detail": "the recorder has no audio element sample in the window (the element watch was not started or the selector matches nothing); " + recv}
+    v = judge_window(element_rows(rows), lo, hi, expect_hz=None, floor=floor, min_loud=min_loud)
+    v["element"], v["receiver"] = facts, recv
+    tail = " | " + recv + " | " + element_text(facts)
+    if v["ok"]:
+        v.update(stage="ok", via="element analyser", detail="the page's audio element is audible: %d loud 0.5 s samples, best rms %.3f%s" % (v["loud_samples"], v["best_rms05"], tail))
+        return v
+    if v["stage"] == "no_inbound_bytes":
+        v["detail"] = "no bytes reach the page, so the audio element has nothing to play" + tail
+        return v
+    last = facts["last"]
+    tracks = last.get("tracks") or []
+    owners = {t["pc"] for t in tracks if t.get("pc") is not None}
+    per = {p["id"]: p for p in per_pc_inbound(dump, lo, hi)}
+    receiving = {i for i, p in per.items() if p["bytes"] > 0}
+    last_t = facts["last_t"]
+    closed = {i for i in per if per[i]["closed_at"] is not None and per[i]["closed_at"] <= last_t}
+    if not facts["present"]:
+        stage, why = "no_audio_element", "the page has no audio element for the selector (nothing can play the stream)"
+    elif last.get("ctx") not in ("running", None):
+        v.update(ok=True, stage="not_observable", via="none", detail="the AudioContext is %s, so the element's analyser cannot read; judged by the receiver only%s" % (last.get("ctx"), tail))
+        return v
+    elif last.get("stream") is None:
+        stage, why = "element_without_stream", "the page's audio element has no srcObject (no stream is bound to it)"
+    elif not tracks:
+        stage, why = "element_stream_without_audio_track", ("the audio element's stream %s has no audio track (the stream was bound before its track "
+                                                              "arrived and no track was added, or the track was removed)" % last.get("stream"))
+    elif not owners:
+        stage, why = "element_stream_foreign", "the audio element plays a stream whose tracks belong to no RTCPeerConnection of the page"
+    elif (owners <= closed or all(t.get("ready") == "ended" for t in tracks)) and (receiving - owners):
+        ended = any(t.get("ready") == "ended" for t in tracks)
+        stage, why = "element_on_closed_stream", ("the page plays the closed listen stream (%s) while the talk session receives the echo "
+                                                    "(element on %s, receiving %s)" % ("track ended" if ended else "its session is closed",
+                                                                                          _pcs(owners), _pcs(receiving - owners)))
+    elif owners & receiving:
+        if last.get("paused") or last.get("muted") or last.get("volume") == 0:
+            stage, why = "element_paused_or_muted", "the audio element is paused, muted or at volume 0 while its session receives the echo"
+        else:
+            stage, why = "element_silent_on_live_stream", ("the audio element plays the live session (%s) that receives the echo, "
+                                                           "but its AnalyserNode hears nothing" % _pcs(owners & receiving))
+    else:
+        stage, why = "element_on_other_session", "the audio element plays %s, which receives nothing, while %s receives" % (_pcs(owners), _pcs(receiving))
+    v.update(stage=stage, detail=why + tail)
+    return v
+
+
+def element_timing(dump, offer_answer_ms=None):
+    """Per srcObject assignment of the page's audio element (the page clock, ms): when it happened relative to the Talk press and to the answer
+    of the Talk circuit's rtc/offer, and how long the stream took to get its first audio track and its first 'unmute' (0 = it had one at the
+    assignment; None = never). A primary result to compare between images."""
+    press = mark_t(dump, "press")
+    out = []
+    for a in ((dump or {}).get("element") or {}).get("assignments") or []:
+        row = {"stream": a.get("stream"), "via": a.get("via"), "assigned_ms": a["t"], "tracks_at_assignment": a.get("tracks_at"),
+               "rel_press_ms": None if press is None else round(a["t"] - press, 1),
+               "rel_offer_answer_ms": None if offer_answer_ms is None else round(a["t"] - offer_answer_ms, 1), "events": a.get("ev") or []}
+        for key, field in (("audio_track", "first_audio_track_t"), ("unmute", "first_unmute_t")):
+            at = a.get(field)
+            row[key + "_after_assignment_ms"] = None if at is None else round(at - a["t"], 1)
+            row[key + "_rel_press_ms"] = None if at is None or press is None else round(at - press, 1)
+            row[key + "_rel_offer_answer_ms"] = None if at is None or offer_answer_ms is None else round(at - offer_answer_ms, 1)
+        out.append(row)
+    return out
+
+
+def timing_lines(rows):
+    """One line per srcObject assignment of element_timing(): when it happened (from the press and from the Talk offer's answer) and how long
+    the stream took to get its audio track and its first unmute."""
+    fmt = lambda v: "never" if v is None else "%+.0f ms" % v                    # noqa: E731
+    return ["audio element srcObject %s (%s): assigned %s from the press, %s from the offer answer; audio track %s after the assignment, "
+            "unmute %s after it" % (r["stream"], r["via"], fmt(r["rel_press_ms"]), fmt(r["rel_offer_answer_ms"]),
+                                    fmt(r["audio_track_after_assignment_ms"]), fmt(r["unmute_after_assignment_ms"])) for r in rows]
+
+
+def talk_offer_answer_ms(dump, offer_walls):
+    """Page-clock ms of the answer of the first rtc/offer that came back at or after the press (offer_walls: the tester's wall seconds of
+    the POST /rtc/offer responses of this page), or None."""
+    press = mark_t(dump, "press")
+    if press is None:
+        return None
+    for w in sorted(offer_walls or ()):
+        t = page_ms(dump, w)
+        if t is not None and t >= press - 200.0:
+            return t
+    return None
+
+
+def session_order(table, phases, before=0.5, after=3.0):
+    """The POST /rtc/close and /rtc/offer requests around the Talk press, in time order: {'order': 'close -> offer', 'rows': [...]} (production:
+    the Listen session is closed, then the talk session is offered). `table` is requests_table(), `phases` the wall-clock phases."""
+    press = phases.get("press")
+    if press is None:
+        return None
+    base = min(v for v in phases.values() if v is not None)
+    p = press - base
+    rows = []
+    for r in table:
+        if r["method"] != "POST" or r["t_s"] is None or not (p - before <= r["t_s"] <= p + after):
+            continue
+        what = "close" if r["path"].endswith("/rtc/close") else ("offer" if r["path"].endswith("/rtc/offer") else None)
+        if what:
+            rows.append({"what": what, "t_s": r["t_s"], "rel_press_s": round(r["t_s"] - p, 2), "response_s": r["response_s"], "status": r["status"],
+                         "sess_id_in_body": bool((r.get("body") or {}).get("sess_id")) if what == "offer" else None})
+    rows.sort(key=lambda x: x["t_s"])
+    return {"order": " -> ".join(x["what"] for x in rows), "rows": rows}
+
+
 CUT_SHORT_TOL_S = 0.5           # the SUT may end the over this much earlier than the release (grant delay, the page's own timing)
 ECHO_MARGIN_S = 3.0             # the echo window is [anchor, anchor + the over's duration + this]
 ECHO_GUARD_MS = 600.0           # the listener's echo window starts this late after the over's end: the 0.5 s analyser window must not hold the live tail
@@ -653,7 +958,7 @@ def echo_anchor(dump, sut, listener_rows=None, listener_dump=None):
     return mark_t(dump, "release"), "release"
 
 
-def analyse_run(dumps, engine, floor=RMS_FLOOR, sut=None):
+def analyse_run(dumps, engine, floor=RMS_FLOOR, sut=None, offers_wall=None):
     """Judge a whole run from the two recorder dumps {'talker': dump, 'listener': dump} (either may be None). `sut` is OverTracker.summary():
     the over as the SUT reports it (end_wall_s, start_wall_s, duration_s, ...) or None. The echo windows are anchored to the SUT's over end, not
     to the tester's release (PTTRX1: the SUT ended a 3 s hold's over after 1 s and replayed it BEFORE the tester released). Returns {'checks':
@@ -671,6 +976,9 @@ def analyse_run(dumps, engine, floor=RMS_FLOOR, sut=None):
             continue
         out[name] = {"sampling": sampling_facts(rows[name]), "pcs": pc_story(d), "pc_states": [p.get("final") for p in d.get("pcs") or []],
                      "recorder_errors": d.get("errors") or [], "ctx_state": d.get("ctx_state"), "rate": d.get("rate")}
+        answer = talk_offer_answer_ms(d, (offers_wall or {}).get(name))
+        out[name]["talk_offer_answer_ms"] = answer
+        out[name]["element_timing"] = element_timing(d, answer)
 
     def add(name, kind, verdict=None, ok=None, stage="", detail=""):
         if verdict is not None:
@@ -694,15 +1002,19 @@ def analyse_run(dumps, engine, floor=RMS_FLOOR, sut=None):
     loud_needed = min_loud_for(dur)
 
     if tx is None or mark_t(tx, "release") is None:
-        add("talker_hears_echo", PRODUCT, ok=False, stage="no_data", detail="no recorder data of the talker page after the release")
+        add("talker_hears_echo", EVIDENCE, ok=False, stage="no_data", detail="no recorder data of the talker page after the release")
+        add("talker_page_audio_element_hears_echo", PRODUCT, ok=False, stage="no_data", detail="no recorder data of the talker page after the release")
     else:
         anchor, kind = echo_anchor(tx, sut, rows.get("listener"), rx)
         lo, hi = (anchor, anchor + tail_ms) if kind == "release" else (anchor, anchor + dur * 1000.0 + ECHO_MARGIN_S * 1000.0)
         out["windows"]["talker_echo"] = {"anchor": kind, "from_ms": round(lo, 1), "to_ms": round(hi, 1)}
-        add("talker_hears_echo", PRODUCT, judge_window(rows["talker"], lo, hi, expect_hz=want, floor=floor, min_loud=loud_needed))
+        add("talker_hears_echo", EVIDENCE, judge_window(rows["talker"], lo, hi, expect_hz=want, floor=floor, min_loud=loud_needed))
+        add("talker_page_audio_element_hears_echo", PRODUCT, judge_element(rows["talker"], tx, lo, hi, floor=floor, min_loud=loud_needed))
     if rx is None or mark_t(rx, "release") is None or mark_t(rx, "on_air") is None:
-        add("listener_hears_live", PRODUCT, ok=False, stage="no_data", detail="no recorder data of the second page during the over")
-        add("listener_hears_echo", PRODUCT, ok=False, stage="no_data", detail="no recorder data of the second page after the release")
+        add("listener_hears_live", EVIDENCE, ok=False, stage="no_data", detail="no recorder data of the second page during the over")
+        add("listener_hears_echo", EVIDENCE, ok=False, stage="no_data", detail="no recorder data of the second page after the release")
+        add("listener_page_audio_element_hears_live", PRODUCT, ok=False, stage="no_data", detail="no recorder data of the second page during the over")
+        add("listener_page_audio_element_hears_echo", PRODUCT, ok=False, stage="no_data", detail="no recorder data of the second page after the release")
     else:
         air, rel = mark_t(rx, "on_air"), mark_t(rx, "release")
         s_start = page_ms(rx, (sut or {}).get("start_wall_s"))
@@ -712,7 +1024,8 @@ def analyse_run(dumps, engine, floor=RMS_FLOOR, sut=None):
         out["windows"]["listener_live"] = {"anchor": "state" if s_end is not None else "tester_hold",
                                            "from_ms": round(live_lo, 1), "to_ms": round(live_hi, 1)}
         # frequency of the live over is recorded, not asserted (the fake microphone of Firefox and WebKit is not 700 Hz anyway)
-        add("listener_hears_live", PRODUCT, judge_window(rows["listener"], live_lo, live_hi, expect_hz=None, floor=floor, min_loud=loud_needed))
+        add("listener_hears_live", EVIDENCE, judge_window(rows["listener"], live_lo, live_hi, expect_hz=None, floor=floor, min_loud=loud_needed))
+        add("listener_page_audio_element_hears_live", PRODUCT, judge_element(rows["listener"], rx, live_lo, live_hi, floor=floor, min_loud=loud_needed))
         anchor, kind = echo_anchor(rx, sut, rows["listener"], rx)
         if kind == "release":
             lo, hi, settle = anchor + ECHO_FROM_MS, anchor + tail_ms, ECHO_SETTLE_MS
@@ -721,8 +1034,9 @@ def analyse_run(dumps, engine, floor=RMS_FLOOR, sut=None):
         else:
             lo, hi, settle = anchor, anchor + dur * 1000.0 + ECHO_MARGIN_S * 1000.0, 0.0
         out["windows"]["listener_echo"] = {"anchor": kind, "from_ms": round(lo, 1), "to_ms": round(hi, 1)}
-        add("listener_hears_echo", PRODUCT, judge_window(rows["listener"], lo, hi, expect_hz=want, floor=floor, settle_ms=settle,
-                                                         min_loud=loud_needed))
+        add("listener_hears_echo", EVIDENCE, judge_window(rows["listener"], lo, hi, expect_hz=want, floor=floor, settle_ms=settle,
+                                                          min_loud=loud_needed))
+        add("listener_page_audio_element_hears_echo", PRODUCT, judge_element(rows["listener"], rx, lo, hi, floor=floor, min_loud=loud_needed))
     if sut_dur is not None and held is not None:
         short = held - sut_dur
         ok = short <= CUT_SHORT_TOL_S
@@ -747,6 +1061,11 @@ def diagnose(checks):
     if get("over_not_cut_short") == "over_cut_short":
         return ("the SUT ended the over much earlier than the release (%s); the echo windows follow the SUT's end, so a quiet page here is "
                 "a consequence, not a separate fault" % (checks["over_not_cut_short"]["detail"],))
+    for name in ("talker_page_audio_element_hears_echo", "listener_page_audio_element_hears_live", "listener_page_audio_element_hears_echo"):
+        c = checks.get(name) or {}
+        if c.get("stage") in ("element_on_closed_stream", "element_on_other_session", "element_stream_without_audio_track",
+                              "element_without_stream", "element_stream_foreign", "element_paused_or_muted"):
+            return "%s: %s" % (name, c["detail"].split(" | ")[0])
     if t.startswith("ok") and live.startswith("ok") and echo.startswith("ok"):
         return "audio reaches both pages (live and echo)"
     if t == live == echo == "no_inbound_bytes":
@@ -921,7 +1240,12 @@ def per_pc_inbound(dump, t_from, t_to):
     snapshot, so the pc created at Talk can be told from the Listen pc the page closed. Rows: {id, created_at, closed_at, samples,
     bytes, packets, energy, last_in, last_t}."""
     out = []
-    for p in (dump or {}).get("pcs") or []:
+    meta = {p["id"]: p for p in (dump or {}).get("pcs") or []}
+    for s in (dump or {}).get("samples") or []:                  # a pc the dump's list lacks is known from its samples
+        for q in s.get("pcs") or []:
+            if q.get("id") is not None and q["id"] not in meta:
+                meta[q["id"]] = {"id": q["id"], "created_at": None, "closed_at": float(s["t"]) if q.get("stale") else None}
+    for p in [meta[k] for k in sorted(meta)]:
         rows = []
         for s in (dump or {}).get("samples") or []:
             for q in s.get("pcs") or []:
