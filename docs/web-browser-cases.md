@@ -401,3 +401,102 @@ Everything below was derived from the page sources, never from a running page or
 7. The restart case sends the second over from the same USRP client 0.2 s .. one sample after the page showed step >= 1 and expects the router to accept it (a new stream on the same module); a refusal appears as "no sample shows the on-air look again".
 8. A hidden or paused page (`document.hidden`) freezes the map (`map-paused`); headless Playwright pages are visible, the sampler records `hidden`.
 9. Playwright WebKit and Firefox may not apply `emulate_media(reduced_motion=...)` the same way; `reduced` is read back from `matchMedia` in every sample and a mismatch fails the case with that reason.
+
+# TWIN1d Thai screenshot matrix and map-status
+
+`cases/test_web_map_twin1d.py` (2 test functions, 15 runs), `cases/map_matrix_support.py` (the in-page measurement, the recorder and the pure
+judges), unit tests `cases/unit/test_map_matrix_support.py` (24 cases, offline). **NOT RUN on a rig yet.** Selectors only in `cases/web_pages.py`
+("TWIN1d").
+
+Spec (product owner): decision section 3, the "Thai screenshot matrix": scenarios `map-busy`, `map-quiet`, `map26`, `map-hub-down` x language EN/TH x
+colour scheme light/dark x viewport width 360 / 1000 / 1440 px (4 x 2 x 2 x 3 = 48 combinations per engine). TWIN1d (next image, NOT in
+`dv-router:wip-efd9eca`): a polite status region `data-testid="map-status"` (`role=status`, `aria-live=polite`, `sr-only`) on `#/map` that announces
+over start / over end and desk open / close, at most once per 2 s, silent on first render, refetch, timers and the fade.
+
+| Case | What it does and asserts |
+|------|--------------------------|
+| `test_map_thai_screenshot_matrix[<scenario>-<engine>]` (4 scenarios x 3 engines) | one new browser context, the page visited once per language (the page's own switch `language-en` / `language-th`, which stores `dv-lang` and reloads; the storage key is the fallback when the hook is missing); colour scheme (`emulate_media(color_scheme=...)`) and viewport (`set_viewport_size`) changed in place; per combination: settle (the SVG viewBox and width stable), one measurement, one full-page screenshot, `judge_measure`. All failures are collected and asserted once, each prefixed `scenario/lang/scheme/width` |
+| `test_map_status_announces_over_start_and_end[<engine>]` | a `MutationObserver` injected with `context.add_init_script` (before the page scripts; it also waits for the region to appear) records every change of the region's `textContent`; one 6 s over from a USRP client in room I. `judge_status_log`: first sight empty and no change before the over; exactly one change within 3.5 s of the first voice packet; none during steady voice; exactly one within -0.3 .. +4 s of the unkey; none afterwards to the end of the fade (7.5 s after the unkey); consecutive changes >= 1.9 s apart. `judge_status_facts` (before, during, after): exactly one element, `role=status`, `aria-live=polite`, not `display:none` / `visibility:hidden` / `aria-hidden` (self or ancestor), class `sr-only`. SKIPS with the reason when the page has no `map-status` (probed once, after the Map is drawn); the matrix does not skip, it records a finding per scenario and engine |
+
+The three checks of the matrix (defined once, in `cases/map_matrix_support.py`, header and `judge_measure`):
+
+1. No horizontal overflow: `document.scrollingElement.scrollWidth <= clientWidth`.
+2. No clipped caption: (a) every visible HTML text element under `<main>` and the heading block that is not `display:inline` has `scrollWidth <=
+   clientWidth + 1` (nothing cut off, no ellipsis truncation, no spill into a neighbour), and no visible HTML element sticks out of the viewport;
+   (b) every visible SVG `<text>` of the building (room sign, count, callsign, desk label and count, service sign, roof sign, closed sign) lies inside
+   the shape it belongs to (the smallest of room / desk / service box / roof sign that contains its centre; the closed sign: its own rectangle) and
+   inside the drawing, 1 px of slack. "Visible": displayed, not `visibility:hidden`, opacity > 0, larger than 1.5 px (so `sr-only` is not measured).
+3. Closed desk sign: EN shows `Closed`, TH shows the Thai string of the key `Closed` of `shared/i18n/public-th.js` (`CLOSED_SIGN_TEXT` in
+   `web_pages.py`, written as `\u` escapes) and not the English one. Also: the colour scheme and `html lang` were applied, and the TH caption contains
+   Thai text and the EN one does not.
+
+Also asserted per scenario: `map-busy` at least 3 rooms `data-state=onair` (five USRP clients in rooms F G I O P keying a tone for the whole run),
+`map-quiet` none, `map-hub-down` the `map-hub-down` callout on the page. No page error (a finding for `map-hub-down`).
+
+How the scenarios are made (the product definition, `web/README.md` of the web assets, is not in the image, so these are by traffic seeding):
+
+| Scenario | Seeding |
+|----------|---------|
+| `map-busy` | five rooms on air at once from USRP dynamic clients (`N0MBF` F, `N0MBG` G, `N0MBI` I, `N0MBO` O, `N0MBP` P), one `OverLoop` thread each, until the scenario ends |
+| `map-quiet` | nothing; the case waits up to 25 s for no room on air and nothing fading |
+| `map26` | the template serves modules A-Z, so 26 rooms are drawn (`MODULE_LIMIT` 26 in `map-layout.js`); one talker in room V. A Map that draws another number of rooms is a finding, the scenario goes on with what the rig serves |
+| `map-hub-down` | the status hub is killed again and again (`kill-proc xlxd-sut dv-svc-status KILL` every 0.3 s, as `kill_hub_for` of `cases/test_web_k22.py`) per language, after the language was switched with the hub up; the case waits 25 s for the callout, else reloads once and waits 40 s; after each language the kills stop and the public state must answer 200 again (150 s) |
+
+A closed desk is forced in every scenario: a page route rewrites the answer of `GET /api/v1/public/state` and removes the last enabled edge that is up
+(not `usrp`, not `webrtc-*`) from `live.edges`, which is how `map-layout.js` decides a desk is `down`. This is a UI test input, not a server statement;
+the evidence names the protocol (`closed_protocol`). Without an enabled edge in `live.edges` the sign check is skipped with a note.
+
+Evidence: `out/<run>/web/map-matrix-<engine>-<scenario>.json` (per combination: layout, mode, counts, closed desks and sign texts, failures, notes),
+`out/<run>/web/map-matrix/<engine>/<scenario>-<lang>-<scheme>-<width>.png` (full-page screenshots, local only, NEVER committed; the engine directory keeps
+the three engines apart), `out/<run>/web/map-status-<engine>.json` (every change with its time since the first voice packet, the region facts three
+times, the clock offset) and `[RECORD]` lines. The notes of the status case (same text written again, end text equal to start text) are findings.
+
+Run (same profile as the TWIN2b fade case; `DVT_USRP_DYNAMIC=1` for the talkers; `DVT_RIG_CONTROL=1` is set by `scripts/run.sh` and the hub-down
+scenario skips without it; `--capture` is not needed):
+
+```sh
+DVT_USRP_DYNAMIC=1 XLXD_SUT_IMAGE=<next image with TWIN1d> DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-router DVT_SUT_LAUNCH=native DVT_SUT_GEN=compat1 \
+  DVT_SUT_CONFIG=<template path> DVT_TRANSCODER_FAKE=1 DVT_REQUIRE_IDENT=true \
+  DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/admin.toml:rig/config/dv-router/totp-required.toml \
+  scripts/run.sh -m rig --profile web,browser -- cases/test_web_map_twin1d.py
+```
+
+`-k map-busy` / `-k map-quiet` / `-k map26` / `-k hub-down` / `-k status` and `-k chromium` select parts; `-k "not hub-down"` leaves out the case that
+kills the hub (no K22 / guest side effects otherwise; do not run it beside `cases/test_web_k22.py`). On an older image (for example
+`dv-router:wip-efd9eca`) the matrix runs and records "no map-status" as a finding; the status case skips.
+
+Estimated duration (nothing was run): per engine matrix `map-quiet` about 1 minute (25 s quiet wait at most, 12 combinations of about 2 s, two page
+loads), `map-busy` and `map26` about 1.5 minutes, `map-hub-down` 3 to 6 minutes (notice 25 s or 25 + 40 s per language, recovery up to 150 s
+each), the status case about 40 s: about 7 to 10 minutes per engine, 20 to 30 minutes for the three engines. Cap: a seeded over stops after 100 s.
+
+## UNVERIFIED (TWIN1d)
+
+Everything below was derived from the page sources of `dv-router:wip-efd9eca` (read only: `docker create` + `docker cp`), never from a running page or a run.
+
+1. Scenario meanings: `web/README.md` is not in the image (the web assets hold `admin`, `shared`, `site` only), no URL query, hash or rig hook selecting
+   `map-busy`, `map-quiet`, `map26` or `map-hub-down` exists in `map.js`, `map-layout.js` or `public.js`. The four scenarios are the case's reading
+   of the names (see the table above); `map26` is taken as "26 modules drawn" (`MODULE_LIMIT`), with the one talker an addition of the case. Replace them
+   with the README definitions when the owner sends them.
+2. `map-status`: the testid, `role=status`, `aria-live=polite` and the `sr-only` class are the owner's TWIN1d spec; nothing of it is in `wip-efd9eca`
+   (`# UNVERIFIED selector` in `web_pages.py`). Where in the DOM it lives (inside the Map view or the page shell) is not assumed: the case probes after the
+   caption is drawn. The text of the announcements is not asserted (only that start and end are non-empty); a changed text is what counts. "At most once per
+   2 s" is judged as consecutive changes >= 1.9 s apart. Desk open / close announcements are NOT driven by any case here.
+3. The windows around the over (start within 3.5 s of the first voice packet, end -0.3 .. +4 s around the unkey, quiet afterwards) are the case's
+   reading of "once at start, once at end, silent in the fade"; the unkey time is the scheduled end of the paced frames (6.0 s after the first
+   frame), the browser clock is aligned to the tester clock by one `Date.now()` read (same host on the rig).
+4. `map-hub-down` through the control channel: it is not known whether killing `dv-svc-status` makes the web service answer `GET /api/v1/public/state` with
+   an error, or closes the event stream, so that the page sets `hubDown` (`err` or `mode === 'closed'` in `public.js`). The case waits for the callout and
+   fails with that reason if it never shows; a page reloaded under the dead hub draws the empty "current state unavailable" callout, not the stale
+   building ("Showing the state as of ..."), and the closed-desk sign is not judged there (`closed_required` is off for this scenario).
+5. The language switch testids `language-en` / `language-th` and the key `dv-lang` are read from `shared/i18n-ui.js` / `shared/i18n.js`; the switch is
+   expected to reload the page (it does when localStorage works). The default colour theme is `auto` (follows `prefers-color-scheme`), so
+   `emulate_media(color_scheme=...)` is enough; a stored `dv-theme` would override it (a fresh context stores none).
+6. The container of each SVG text is found by geometry (the smallest room / desk / service rectangle containing the text centre); a text whose centre
+   lies in no rectangle is judged against the drawing only. Classes without a hook (`twin-roof-sign`, `twin-sign-text`, `.content-header`) are marked
+   `# UNVERIFIED selector`. A scrollable wrapper with intended horizontal scrolling would be reported as a clipped caption.
+7. The rewrite of the public state (`close_one_edge`) assumes `info.edges_enabled` (names) and `live.edges` (names, optional `-<16 hex>` suffix) as in
+   `map-layout.js` `projectEdges`; an event on the stream that patches `live.edges` back would reopen the desk (the sign check then fails with "no closed
+   desk"). The route also answers every poll with `Cache-Control: no-store` and no ETag.
+8. Several USRP dynamic clients keying at once from one tester address (five in `map-busy`) is assumed to work like the single client of the fade case;
+   a hub that refuses it fails the scenario with "seeding failed: N rooms show data-state=onair".
+9. Timing is estimated, not measured; the 25 minute budget per engine has a wide margin only if the hub-down detection is quick.

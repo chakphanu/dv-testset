@@ -569,3 +569,61 @@ def map_sampler_selectors(room):
         "building": "[data-testid='%s']" % MAP_TESTIDS["building"],
     }
 
+
+# ---- #/map, TWIN1d: the Thai screenshot matrix and the polite status region (cases/test_web_map_twin1d.py)
+# Calibrated against the page sources of dv-router:wip-efd9eca (web/site/map.js, map-building.js, map-layout.js,
+# shared/i18n.js, shared/i18n-ui.js, shared/i18n/public-th.js, shared/dv.css; read only, extracted with docker create + cp),
+# never against a running page. Confirmed in those sources: the testids map-hub-down (callout, role=status), map-desk
+# (data-id = protocol, data-state up|down|tx|rx|cross|xc|rest), map-service, language-en / language-th, the storage key
+# dv-lang (shared/i18n.js), the Closed sign string (key "Closed"; TH value in public-th.js), the .sr-only class (dv.css).
+# NOT in wip-efd9eca: the polite status region `map-status` (TWIN1d, the product owner's spec for the next image).
+MAP_STATUS_TESTID = "map-status"             # UNVERIFIED selector: from the owner's TWIN1d spec, absent from wip-efd9eca
+MAP_STATUS_CLASS = "sr-only"                 # UNVERIFIED selector: the owner's spec says the region is visually hidden by this class
+MAP_HUB_DOWN_TESTID = "map-hub-down"         # <div class="callout callout-warning" role="status"> above the map card
+MAP_DESK_TESTID = "map-desk"
+MAP_SERVICE_TESTID = "map-service"
+LANGUAGE_TESTIDS = {"en": "language-en", "th": "language-th"}
+LANG_STORAGE_KEY = "dv-lang"                 # localStorage value en | th, read at page start (shared/i18n.js); the switch reloads
+MAP_ROOF_SIGN_CSS = ".map-building .twin-roof-sign"                 # UNVERIFIED selector: the rooftop name plate rect
+MAP_CLOSED_SIGN_TEXT_CSS = ".map-building text.twin-sign-text"      # UNVERIFIED selector: the text of the closed desk sign
+MAP_HEADING_SCOPE_CSS = ".content-header"                           # UNVERIFIED selector: the page heading block
+# shared/i18n/public-en.js and public-th.js, key "Closed": the label the desk sign shows (written as escapes: ASCII source)
+CLOSED_SIGN_TEXT = {"en": "Closed", "th": "\u0e1b\u0e34\u0e14"}
+
+
+def map_status(page):
+    """The polite live region of the Map (TWIN1d); count() is 0 on an image before TWIN1d."""
+    return page.get_by_test_id(MAP_STATUS_TESTID)
+
+
+def map_hub_down(page):
+    return page.get_by_test_id(MAP_HUB_DOWN_TESTID)
+
+
+def map_desks(page):
+    return page.get_by_test_id(MAP_DESK_TESTID)
+
+
+def language_toggle(page, code):
+    """The EN or TH button of the language switch by its test id (the group's accessible name is translated, so the role
+    lookup of language_button() cannot be used once the page is in Thai). Absent on images before the hook."""
+    return page.get_by_test_id(LANGUAGE_TESTIDS[code])
+
+
+def map_matrix_selectors():
+    """CSS selectors the in-page measurement of cases/map_matrix_support.py needs (it runs inside the page)."""
+    return {
+        "scopes": ["main", MAP_HEADING_SCOPE_CSS],
+        "building": "[data-testid='%s']" % MAP_TESTIDS["building"],
+        "caption": "[data-testid='%s']" % MAP_TESTIDS["caption"],
+        "page": "[data-testid='%s']" % MAP_TESTIDS["page"],
+        "room_any": "[data-testid='%s']" % MAP_TESTIDS["room"],
+        "desk_any": "[data-testid='%s']" % MAP_DESK_TESTID,
+        "desk_down": "[data-testid='%s'][data-state='down']" % MAP_DESK_TESTID,
+        "service_any": "[data-testid='%s']" % MAP_SERVICE_TESTID,
+        "roof_sign": MAP_ROOF_SIGN_CSS,
+        "closed_text": MAP_CLOSED_SIGN_TEXT_CSS,
+        "hub_down": "[data-testid='%s']" % MAP_HUB_DOWN_TESTID,
+        "status": "[data-testid='%s']" % MAP_STATUS_TESTID,
+    }
+
