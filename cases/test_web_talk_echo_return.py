@@ -11,10 +11,10 @@ whether the media stops at the edge or in the page. NOT RUN on a rig yet (docs/w
 What is asserted. EVIDENCE (the preconditions, judged from the page text as the Talk cases do): both pages reach "Listening on module E";
 the talk status becomes "On air" and, after the release, "Ended: Button released.". PRODUCT CHECK (the audio, in the page's own analyser):
 
-  talker_hears_echo     the TALKER page: analyser rms above the floor (0.01) within 14 s after the release, and on Chromium the dominant
+  talker_hears_echo     the TALKER page: analyser rms above the floor (0.01) in the echo window [SUT over end, + the SUT over duration + 3 s] (not the tester release: PTTRX1), and on Chromium the dominant
                         frequency is 700 Hz within 20 Hz (the judgement of dvtest.tools.prod_talk, deploy check g)
-  listener_hears_live   a SECOND page (the user without may_tx) listening on E: analyser rms above the floor while Talk is held
-  listener_hears_echo   the same page: the echo replay after the release (level, and on Chromium 700 Hz)
+  listener_hears_live   a SECOND page (the user without may_tx) listening on E: analyser rms above the floor during the over the SUT reports (public state rooms[E])
+  listener_hears_echo   the same page: the echo replay in the same window (level, and on Chromium 700 Hz)
 
 On Firefox the page's AudioContext stays suspended in the container (docs/web-browser-cases.md): the level is then judged from the decoder's
 totalAudioEnergy of getStats, or from the packet count when the engine has none; Firefox's and WebKit's fake sources are not 700 Hz, so
@@ -100,6 +100,7 @@ class Run:
         self.ctl = {}
         self.errors = []
         self._last = None
+        self.tracker = tes.OverTracker()      # the over of module E as the public state reports it
 
     def mark(self, name):
         self.phases[name] = time.time()
@@ -120,12 +121,16 @@ class Run:
             self.timeline.append((self.since_start(),) + row)
         if with_public:
             try:
-                got = tes.onair_summary(public_state(anon), tes.ROOM)
+                t0 = time.time()
+                state = public_state(anon)
+                wall = (t0 + time.time()) / 2.0                  # the middle of the request: the state's now_ms is somewhere inside it
+                self.tracker.observe(wall, state)
+                got = tes.onair_summary(state, tes.ROOM)
                 self.public.append((self.since_start(), got["onair"], got["callsign"]))
             except Exception as exc:                     # noqa: BLE001
                 self.public.append((self.since_start(), None, type(exc).__name__))
 
-    def wait(self, seconds, rtc_tx, rtc_rx, anon, every=POLL_S, public_every=1.0):
+    def wait(self, seconds, rtc_tx, rtc_rx, anon, every=POLL_S, public_every=0.5):
         """Look at both pages every `every` s for `seconds`; Playwright's own wait keeps the page events flowing (the request audit)."""
         end = time.monotonic() + seconds
         next_public = time.monotonic()
@@ -232,6 +237,7 @@ def run_talk_echo(engine, tx_page, rx_page, echo_on_e, web_client, request, phas
     failures = []
     analysis = {}
     ice1 = {}
+    sut = None
     try:
         rtc_tx.open()
         rtc_rx.open()
@@ -292,7 +298,8 @@ def run_talk_echo(engine, tx_page, rx_page, echo_on_e, web_client, request, phas
             if ice_after is None and ice_before is not None:
                 ice_after = read_ice_metrics(control)
             if "release" in run.phases:
-                analysis = tes.analyse_run(run.dumps, engine)
+                sut = run.tracker.summary(run.phases.get("press", 0.0), run.phases["release"])
+                analysis = tes.analyse_run(run.dumps, engine, sut=sut)
                 failures += tes.forced_lines(tes.failure_lines(analysis["checks"], analysis["diagnosis"]), phase)
             tables = {who: tes.requests_table(a.rows, run.phases) for who, a in run.audits.items()}
             delta = tes.metrics_delta(ice_before, ice_after)
@@ -311,7 +318,7 @@ def run_talk_echo(engine, tx_page, rx_page, echo_on_e, web_client, request, phas
                          "image": os.environ.get("XLXD_SUT_IMAGE", ""), "echo": echo_on_e, "forced_change_phase": phase,
                          "note": "checks of kind product are the audio assertions, kind evidence the rest; times of a recorder are ms on its "
                                  "own page clock, phases are the tester's wall clock (seconds)"},
-                "phases": run.phases, "texts": run.texts, "timeline": run.timeline, "public_state_room_E": run.public,
+                "phases": run.phases, "sut_over": sut, "sut_room_entries": run.tracker.entries, "windows": analysis.get("windows"), "texts": run.texts, "timeline": run.timeline, "public_state_room_E": run.public,
                 "checks": [{k: c[k] for k in ("name", "kind", "ok", "stage", "detail")} for c in analysis.get("checks", [])],
                 "verdicts": {c["name"]: c["verdict"] for c in analysis.get("checks", []) if c.get("verdict")},
                 "diagnosis": analysis.get("diagnosis", ""), "forced_change": forced or None,

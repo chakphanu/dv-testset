@@ -579,15 +579,92 @@ def _ctx(rows):
     return next((r["ctx"] for r in reversed(rows) if r.get("ctx")), "?")
 
 
-def analyse_run(dumps, engine, floor=RMS_FLOOR):
-    """Judge a whole run from the two recorder dumps {'talker': dump, 'listener': dump} (either may be None). Returns {'checks': [...],
-    'diagnosis': str, 'talker': {...}, 'listener': {...}} where each check is {name, kind (product | evidence), ok, stage, detail} and the
-    three AUDIO checks are the product check:
-      talker_hears_echo     the talker's own page: audio after the release, within TAIL_S
-      listener_hears_live   the second page: audio while Talk is held
-      listener_hears_echo   the second page: the echo replay after the release"""
+CUT_SHORT_TOL_S = 0.5           # the SUT may end the over this much earlier than the release (grant delay, the page's own timing)
+ECHO_MARGIN_S = 3.0             # the echo window is [anchor, anchor + the over's duration + this]
+ECHO_GUARD_MS = 600.0           # the listener's echo window starts this late after the over's end: the 0.5 s analyser window must not hold the live tail
+FIRST_PACKET_LEAD_MS = SAMPLE_MS     # a first echo packet seen in a sample arrived within the sampling interval before it
+
+
+def min_loud_for(duration_s):
+    """Loud 0.5 s samples asked for in an over of this length: MIN_LOUD (one second of sound), one for an over shorter than 1.5 s."""
+    return MIN_LOUD if duration_s is None or duration_s >= 1.5 else 1
+
+
+def first_echo_start(rows, after_ms, quiet_samples=1):
+    """Page-clock ms of the first sample in which the inbound bytes of a series() GREW again after a quiet stretch (at least `quiet_samples`
+    samples without growth) that followed the first burst of bytes after `after_ms` (the live over): the first echo packet, to within one
+    sampling interval. None when there is no such second burst."""
+    state, quiet, prev = "idle", 0, None
+    for r in rows:
+        if prev is not None and r["t"] > after_ms:
+            grew = r["bytes"] > prev["bytes"]
+            if state == "idle":
+                if grew:
+                    state = "burst"
+            elif state == "burst":
+                if grew:
+                    quiet = 0
+                else:
+                    quiet += 1
+                    if quiet >= quiet_samples:
+                        state = "gap"
+            elif grew:
+                return r["t"]
+        prev = r
+    return None
+
+
+def burst_seconds(rows, after_ms):
+    """Length in seconds of the first burst of inbound bytes after `after_ms` (the sample before the first growth to the last sample of that
+    growth), or None."""
+    start = end = None
+    prev = None
+    for r in rows:
+        if prev is not None and r["t"] > after_ms:
+            if r["bytes"] > prev["bytes"]:
+                if start is None:
+                    start = prev["t"]
+                end = r["t"]
+            elif start is not None and r["t"] - end >= SAMPLE_MS:
+                break
+        prev = r
+    return None if start is None else round((end - start) / 1000.0, 2)
+
+
+def page_ms(dump, wall_s):
+    """Seconds on the tester's wall clock -> page-clock ms of a recorder dump (its t0_wall), or None."""
+    t0 = (dump or {}).get("t0_wall")
+    return None if t0 is None or wall_s is None else wall_s * 1000.0 - float(t0)
+
+
+def echo_anchor(dump, sut, listener_rows=None, listener_dump=None):
+    """(anchor ms on the page clock of `dump`, kind) where the echo window of a page opens:
+       'state'         the over's end as the SUT reports it (public state, rooms[E].last.end_ms, converted by the wall clock);
+       'first_packet'  fallback: the first inbound packet after a quiet gap that followed the live over, in the second page's series
+                       (converted to this page's clock by the wall clock), less one sampling interval;
+       'release'       last resort: the tester's release mark."""
+    if sut and sut.get("end_wall_s") is not None and page_ms(dump, sut["end_wall_s"]) is not None:
+        return page_ms(dump, sut["end_wall_s"]), "state"
+    if listener_rows and listener_dump and dump and listener_dump.get("t0_wall") is not None and dump.get("t0_wall") is not None:
+        air = mark_t(listener_dump, "on_air")
+        first = first_echo_start(listener_rows, air if air is not None else 0.0)
+        if first is not None:
+            return page_ms(dump, (listener_dump["t0_wall"] + first) / 1000.0) - FIRST_PACKET_LEAD_MS, "first_packet"
+    return mark_t(dump, "release"), "release"
+
+
+def analyse_run(dumps, engine, floor=RMS_FLOOR, sut=None):
+    """Judge a whole run from the two recorder dumps {'talker': dump, 'listener': dump} (either may be None). `sut` is OverTracker.summary():
+    the over as the SUT reports it (end_wall_s, start_wall_s, duration_s, ...) or None. The echo windows are anchored to the SUT's over end, not
+    to the tester's release (PTTRX1: the SUT ended a 3 s hold's over after 1 s and replayed it BEFORE the tester released). Returns {'checks':
+    [...], 'diagnosis': str, 'windows': {...}, 'talker': {...}, 'listener': {...}}; each check is {name, kind (product | evidence), ok, stage,
+    detail}. The audio checks and over_not_cut_short are the product check:
+      talker_hears_echo     the talker's own page: audio in [anchor, anchor + the SUT over's duration + 3 s]
+      listener_hears_live   the second page: audio during the over the SUT reports (the tester's hold when the state is not available)
+      listener_hears_echo   the second page: the echo replay in the same window (from ECHO_GUARD_MS after the anchor)
+      over_not_cut_short    the SUT's over lasts within 0.5 s of the tester's hold (only when the state gave a duration)"""
     want = EXPECT_HZ.get(engine)
-    out = {"checks": [], "diagnosis": "", "talker": {}, "listener": {}, "expect_hz": want}
+    out = {"checks": [], "diagnosis": "", "talker": {}, "listener": {}, "expect_hz": want, "windows": {}}
     rows = {name: series(d) for name, d in (dumps or {}).items() if d}
     for name, d in (dumps or {}).items():
         if not d:
@@ -602,21 +679,62 @@ def analyse_run(dumps, engine, floor=RMS_FLOOR):
 
     tail_ms = TAIL_S * 1000.0
     tx, rx = dumps.get("talker") if dumps else None, dumps.get("listener") if dumps else None
+    sut_dur = (sut or {}).get("duration_s")
+    held = None
+    if tx is not None and mark_t(tx, "release") is not None and mark_t(tx, "on_air") is not None:
+        held = round((mark_t(tx, "release") - mark_t(tx, "on_air")) / 1000.0, 2)
+    # the length of the echo: the SUT's over; else the live burst the second page received; else the tester's hold
+    dur = sut_dur
+    if dur is None and rx is not None and mark_t(rx, "on_air") is not None:
+        dur = burst_seconds(rows["listener"], mark_t(rx, "on_air"))
+    dur_source = "state" if sut_dur is not None else ("live_burst" if dur is not None else "tester_hold")
+    if dur is None:
+        dur = held if held is not None else HOLD_S
+    out["windows"] = {"sut_over": sut, "tester_held_s": held, "echo_duration_s": dur, "echo_duration_source": dur_source}
+    loud_needed = min_loud_for(dur)
+
     if tx is None or mark_t(tx, "release") is None:
         add("talker_hears_echo", PRODUCT, ok=False, stage="no_data", detail="no recorder data of the talker page after the release")
     else:
-        rel = mark_t(tx, "release")
-        add("talker_hears_echo", PRODUCT, judge_window(rows["talker"], rel, rel + tail_ms, expect_hz=want, floor=floor))
+        anchor, kind = echo_anchor(tx, sut, rows.get("listener"), rx)
+        lo, hi = (anchor, anchor + tail_ms) if kind == "release" else (anchor, anchor + dur * 1000.0 + ECHO_MARGIN_S * 1000.0)
+        out["windows"]["talker_echo"] = {"anchor": kind, "from_ms": round(lo, 1), "to_ms": round(hi, 1)}
+        add("talker_hears_echo", PRODUCT, judge_window(rows["talker"], lo, hi, expect_hz=want, floor=floor, min_loud=loud_needed))
     if rx is None or mark_t(rx, "release") is None or mark_t(rx, "on_air") is None:
         add("listener_hears_live", PRODUCT, ok=False, stage="no_data", detail="no recorder data of the second page during the over")
         add("listener_hears_echo", PRODUCT, ok=False, stage="no_data", detail="no recorder data of the second page after the release")
     else:
         air, rel = mark_t(rx, "on_air"), mark_t(rx, "release")
+        s_start = page_ms(rx, (sut or {}).get("start_wall_s"))
+        s_end = page_ms(rx, (sut or {}).get("end_wall_s"))
+        live_lo = min(air, s_start) if s_start is not None else air
+        live_hi = (s_end if s_end is not None else rel) + LIVE_GRACE_MS
+        out["windows"]["listener_live"] = {"anchor": "state" if s_end is not None else "tester_hold",
+                                           "from_ms": round(live_lo, 1), "to_ms": round(live_hi, 1)}
         # frequency of the live over is recorded, not asserted (the fake microphone of Firefox and WebKit is not 700 Hz anyway)
-        live = judge_window(rows["listener"], air, rel + LIVE_GRACE_MS, expect_hz=None, floor=floor)
-        add("listener_hears_live", PRODUCT, live)
-        add("listener_hears_echo", PRODUCT, judge_window(rows["listener"], rel + ECHO_FROM_MS, rel + tail_ms, expect_hz=want, floor=floor,
-                                                         settle_ms=ECHO_SETTLE_MS))
+        add("listener_hears_live", PRODUCT, judge_window(rows["listener"], live_lo, live_hi, expect_hz=None, floor=floor, min_loud=loud_needed))
+        anchor, kind = echo_anchor(rx, sut, rows["listener"], rx)
+        if kind == "release":
+            lo, hi, settle = anchor + ECHO_FROM_MS, anchor + tail_ms, ECHO_SETTLE_MS
+        elif kind == "state":
+            lo, hi, settle = anchor + ECHO_GUARD_MS, anchor + dur * 1000.0 + ECHO_MARGIN_S * 1000.0, ECHO_SETTLE_MS
+        else:
+            lo, hi, settle = anchor, anchor + dur * 1000.0 + ECHO_MARGIN_S * 1000.0, 0.0
+        out["windows"]["listener_echo"] = {"anchor": kind, "from_ms": round(lo, 1), "to_ms": round(hi, 1)}
+        add("listener_hears_echo", PRODUCT, judge_window(rows["listener"], lo, hi, expect_hz=want, floor=floor, settle_ms=settle,
+                                                         min_loud=loud_needed))
+    if sut_dur is not None and held is not None:
+        short = held - sut_dur
+        ok = short <= CUT_SHORT_TOL_S
+        if ok:
+            detail = "the SUT's over lasted %.2f s for a Talk held %.2f s (tolerance %.1f s)" % (sut_dur, held, CUT_SHORT_TOL_S)
+        else:
+            detail = ("the SUT ended the over after %.2f s while Talk was held %.2f s (%.2f s early, tolerance %.1f s): the user's over "
+                      "was cut short (PTTRX1)" % (sut_dur, held, short, CUT_SHORT_TOL_S))
+        add("over_not_cut_short", PRODUCT, ok=ok, stage="ok" if ok else "over_cut_short", detail=detail)
+    else:
+        add("over_not_cut_short", EVIDENCE, ok=True, stage="not_observed",
+            detail="the public state gave no over duration (%s)" % ("no SUT over seen" if not sut else "no tester hold"))
     out["diagnosis"] = diagnose({c["name"]: c for c in out["checks"]})
     return out
 
@@ -626,6 +744,9 @@ def diagnose(checks):
     get = lambda n: (checks.get(n) or {}).get("stage", "")                       # noqa: E731
     t, live, echo = get("talker_hears_echo"), get("listener_hears_live"), get("listener_hears_echo")
     silent_page = ("decoder_silent", "analyser_silent_decoder_audible", "tap_dead_decoder_silent")
+    if get("over_not_cut_short") == "over_cut_short":
+        return ("the SUT ended the over much earlier than the release (%s); the echo windows follow the SUT's end, so a quiet page here is "
+                "a consequence, not a separate fault" % (checks["over_not_cut_short"]["detail"],))
     if t.startswith("ok") and live.startswith("ok") and echo.startswith("ok"):
         return "audio reaches both pages (live and echo)"
     if t == live == echo == "no_inbound_bytes":
@@ -673,6 +794,92 @@ def onair_summary(state, room):
     onair = entry.get("onair")
     call = onair.get("callsign") if isinstance(onair, dict) else None
     return {"onair": bool(onair), "callsign": call, "entry": entry}
+
+
+START_FIELDS = ("start_ms", "started_ms", "since_ms", "begin_ms")
+
+
+def _num(value):
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _start_field(*objs):
+    for obj in objs:
+        if isinstance(obj, dict):
+            for key in START_FIELDS:
+                if _num(obj.get(key)) is not None:
+                    return float(obj[key]), key
+    return None, None
+
+
+class OverTracker:
+    """Follows the public state of one module poll by poll (wall = the tester's time.time() at the middle of the request) and keeps every over
+    that ENDED after the first poll: rooms[E].last.end_ms changes value. The first poll is the baseline (an earlier over is ignored). The
+    server clock is tied to the tester's by skew = wall - state.now_ms at the poll that saw the end. The start of an over is read from a field
+    of onair / last (start_ms, started_ms, since_ms, begin_ms) when the state has one, else it is the first poll that showed the module on
+    air LESS one poll interval (an earlier bound, so a duration is never underestimated and a cut-short over is not invented)."""
+
+    def __init__(self, room=ROOM):
+        self.room, self.polls = room, 0
+        self.last_end = None
+        self.cur = None
+        self.overs = []
+        self.entries = []                  # distinct room entries seen, with the poll's wall time (evidence)
+        self._last_wall = None
+        self._last_json = None
+
+    def observe(self, wall_s, state):
+        entry = room_entry(state, self.room) or {}
+        now_ms = _num((state or {}).get("now_ms"))
+        skew = None if now_ms is None else wall_s * 1000.0 - now_ms
+        interval = None if self._last_wall is None else wall_s - self._last_wall
+        self._last_wall = wall_s
+        text = json.dumps(entry, sort_keys=True)
+        if text != self._last_json and len(self.entries) < 60:
+            self.entries.append({"wall_s": round(wall_s, 3), "skew_ms": None if skew is None else round(skew, 1), "entry": entry})
+        self._last_json = text
+        last = entry.get("last") if isinstance(entry.get("last"), dict) else {}
+        end = _num(last.get("end_ms"))
+        onair = entry.get("onair")
+        if self.polls == 0:
+            self.last_end = end
+        self.polls += 1
+        if onair and self.cur is None:
+            value, key = _start_field(onair if isinstance(onair, dict) else None)
+            self.cur = {"first_onair_wall": wall_s, "poll_interval_s": interval, "start_ms": value, "start_key": key}
+        if end is not None and end != self.last_end:
+            value, key = _start_field(last)
+            cur = self.cur or {}
+            if value is None:
+                value, key = cur.get("start_ms"), cur.get("start_key")
+            self.overs.append({"end_ms": end, "skew_ms": skew, "seen_wall_s": wall_s, "start_ms": value, "start_key": key,
+                               "first_onair_wall_s": cur.get("first_onair_wall"), "poll_interval_s": cur.get("poll_interval_s") or interval,
+                               "duration_ms_field": _num(last.get("duration_ms"))})
+            self.cur = None
+            self.last_end = end
+
+    def summary(self, press_wall_s, release_wall_s, early_s=0.5, late_s=1.5):
+        """The over of the Talk hold: the first over whose end (tester clock) lies between the press and the release + late_s (a later end is the
+        echo's own over, taken when the original end was not caught). {'end_wall_s', 'start_wall_s', 'duration_s', 'start_source', 'end_ms',
+        'all_ends_wall_s', 'polls'} or None."""
+        usable = [o for o in self.overs if o["skew_ms"] is not None]
+        ends = [round((o["end_ms"] - o["skew_ms"]) / 1000.0, 3) for o in usable]
+        for o, end_wall in zip(usable, ends):
+            if not press_wall_s - early_s <= end_wall <= release_wall_s + late_s:
+                continue
+            if o["start_ms"] is not None:
+                start_wall, source = (o["start_ms"] - o["skew_ms"]) / 1000.0, "state." + str(o["start_key"])
+            elif o["first_onair_wall_s"] is not None:
+                start_wall, source = o["first_onair_wall_s"] - (o["poll_interval_s"] or 0.5), "first poll on air less one interval"
+            else:
+                start_wall, source = None, "unknown"
+            if o["duration_ms_field"] is not None:
+                dur = o["duration_ms_field"] / 1000.0
+            else:
+                dur = None if start_wall is None else end_wall - start_wall
+            return {"end_wall_s": end_wall, "start_wall_s": start_wall, "start_source": source, "end_ms": o["end_ms"],
+                    "duration_s": None if dur is None else round(max(dur, 0.0), 2), "all_ends_wall_s": ends, "polls": self.polls}
+        return None
 
 
 # ------------------------------------------------------------------------- ICE1 evidence (restart counters, connection changes, the Talk pc)

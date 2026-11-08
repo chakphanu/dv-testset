@@ -84,7 +84,7 @@ def test_no_bytes_after_the_release_is_the_edge_stage():
 def test_no_bytes_anywhere_says_the_media_stops_at_the_edge():
     quiet = dump(healthy_rows(live=False, echo=False, bytes_=False))
     out = tes.analyse_run({"talker": quiet, "listener": quiet}, "chromium")
-    assert [c["stage"] for c in out["checks"]] == ["no_inbound_bytes"] * 3
+    assert [c["stage"] for c in out["checks"] if c["name"] != "over_not_cut_short"] == ["no_inbound_bytes"] * 3
     assert "stops at or before the edge" in out["diagnosis"]
 
 
@@ -162,9 +162,9 @@ def test_a_swapped_session_is_summed_and_detected():
 
 def test_missing_data_is_a_failed_check_not_an_exception():
     out = tes.analyse_run({"talker": None, "listener": None}, "chromium")
-    assert [c["stage"] for c in out["checks"]] == ["no_data"] * 3
+    assert [c["stage"] for c in out["checks"] if c["name"] != "over_not_cut_short"] == ["no_data"] * 3
     out = tes.analyse_run({"talker": dump([]), "listener": dump([sample(0, [])])}, "webkit")
-    assert not any(c["ok"] for c in out["checks"])
+    assert not any(c["ok"] for c in out["checks"] if c["name"] != "over_not_cut_short")
     assert tes.analyse_run({}, "chromium")["checks"][0]["stage"] == "no_data"
 
 
@@ -477,3 +477,138 @@ def test_evidence_path_numbers_the_pttrx1_repeats(tmp_path):
     assert tes.evidence_path(tmp_path, "chromium", "talk", 3).name == "talk-echo-chromium-conn-talk-3.json"
     assert tes.evidence_path(tmp_path, "chromium", "talk").name == "talk-echo-chromium-conn-talk.json"
     assert tes.evidence_path(tmp_path, "chromium").name == "talk-echo-chromium.json"
+
+
+# ------------------------------------------------------------------ the echo window follows the SUT's over (PTTRX1 artefact)
+
+T0_WALL = 1_000_000.0                                  # ms epoch of the recorder's zero in these dumps
+
+
+def tone_dump(tones, release=5500.0):
+    """A 500 ms series 0..20 s whose rows listed in `tones` carry a 700 Hz tone and inbound bytes; marks of a hold (press 2000, on_air 2500,
+    release 5500: 3.0 s)."""
+    rows, b, calls = [], 0, 0
+    for i in range(0, 41):
+        t = i * 500
+        calls += 12
+        tone = t in tones
+        if tone:
+            b += 4000
+        loud = dict(rms05=0.17, rms1=0.17, peak=700.0, frac=0.5) if tone else {}
+        rows.append(sample(t, [pc(0, b, b // 160, b / 8000.0 * 0.03, calls, **loud)]))
+    marks = [{"name": n, "t": t, "wall": 0} for n, t in (("listening", 0.0), ("press", 2000.0), ("on_air", 2500.0), ("release", release), ("ended", release + 100.0))]
+    d = dump(rows, marks=marks)
+    d["t0_wall"] = T0_WALL
+    return d
+
+
+# PTTRX1: the SUT ended a 3 s hold's over after 1 s (2.6 .. 3.6 s) and replayed it 1 s later (4.6 .. 5.6 s), BEFORE the tester released at 5.5 s
+CUT = {"live": {3000, 3500, 4000}, "echo": {5000, 5500, 6000}}
+CUT_SUT = {"end_wall_s": (T0_WALL + 3600.0) / 1000.0, "start_wall_s": (T0_WALL + 2600.0) / 1000.0, "duration_s": 1.0,
+           "start_source": "state.start_ms"}
+
+
+def test_a_cut_short_over_is_found_and_its_echo_is_judged_in_the_suts_window():
+    d = tone_dump(CUT["live"] | CUT["echo"], release=6600.0)                       # held 4.1 s; the echo came and went before the release
+    # anchored to the tester's release (the old window) the echo is missed: that was the timing artefact
+    assert tes.judge_window(tes.series(d), 6600.0, 6600.0 + 14000.0, expect_hz=700.0)["stage"] == "no_inbound_bytes"
+    out = tes.analyse_run({"talker": d, "listener": d}, "chromium", sut=CUT_SUT)
+    got = {c["name"]: c for c in out["checks"]}
+    assert got["talker_hears_echo"]["ok"] and got["listener_hears_live"]["ok"] and got["listener_hears_echo"]["ok"], \
+        [(c["name"], c["stage"], c["detail"]) for c in out["checks"]]
+    assert out["windows"]["talker_echo"] == {"anchor": "state", "from_ms": 3600.0, "to_ms": 7600.0}
+    assert out["windows"]["listener_echo"]["from_ms"] == 4200.0 and out["windows"]["listener_live"]["to_ms"] == 4000.0
+    assert out["windows"]["tester_held_s"] == 4.1 and out["windows"]["echo_duration_s"] == 1.0
+    assert out["windows"]["echo_duration_source"] == "state"
+    cut = got["over_not_cut_short"]
+    assert not cut["ok"] and cut["kind"] == tes.PRODUCT and cut["stage"] == "over_cut_short"
+    assert "after 1.00 s while Talk was held 4.10 s" in cut["detail"] and "PTTRX1" in cut["detail"]
+    lines = tes.failure_lines(out["checks"], out["diagnosis"])
+    assert lines[0].startswith("PRODUCT CHECK over_not_cut_short stopped at stage over_cut_short")
+    assert "ended the over much earlier than the release" in out["diagnosis"]
+
+
+def test_an_over_of_the_held_length_passes_over_not_cut_short():
+    d = tone_dump({3000, 3500, 4000, 4500, 5000, 5500, 7000, 7500, 8000, 8500, 9000, 9500})
+    sut = {"end_wall_s": (T0_WALL + 5600.0) / 1000.0, "start_wall_s": (T0_WALL + 2600.0) / 1000.0, "duration_s": 3.0, "start_source": "x"}
+    out = tes.analyse_run({"talker": d, "listener": d}, "chromium", sut=sut)
+    got = {c["name"]: c for c in out["checks"]}
+    assert got["over_not_cut_short"]["ok"] and got["over_not_cut_short"]["stage"] == "ok"
+    assert all(c["ok"] for c in out["checks"]), [(c["name"], c["stage"], c["detail"]) for c in out["checks"]]
+    assert out["windows"]["listener_echo"]["from_ms"] == 6200.0 and out["windows"]["listener_echo"]["to_ms"] == 11600.0
+
+
+def test_the_first_packet_fallback_anchors_the_window_to_the_echo():
+    d = tone_dump(CUT["live"] | CUT["echo"])
+    rows = tes.series(d)
+    assert tes.first_echo_start(rows, 2500.0) == 5000.0
+    assert tes.first_echo_start(rows[:10], 2500.0) is None                       # no second burst yet
+    assert tes.burst_seconds(rows, 2500.0) == 1.5                                # live burst: the sample before the first growth .. the last growth
+    out = tes.analyse_run({"talker": d, "listener": d}, "chromium")
+    assert out["windows"]["talker_echo"]["anchor"] == "first_packet" and out["windows"]["talker_echo"]["from_ms"] == 4500.0
+    assert out["windows"]["echo_duration_source"] == "live_burst"
+    got = {c["name"]: c for c in out["checks"]}
+    assert got["talker_hears_echo"]["ok"] and got["listener_hears_echo"]["ok"]
+    assert got["over_not_cut_short"]["stage"] == "not_observed" and got["over_not_cut_short"]["ok"]
+
+
+def test_a_real_missing_echo_still_fails_in_the_suts_window():
+    d = tone_dump(CUT["live"])
+    out = tes.analyse_run({"talker": tone_dump(set()), "listener": d}, "chromium", sut=CUT_SUT)
+    got = {c["name"]: c for c in out["checks"]}
+    assert got["listener_hears_live"]["ok"]
+    assert got["talker_hears_echo"]["stage"] == "no_inbound_bytes" and got["listener_hears_echo"]["stage"] == "no_inbound_bytes"
+
+
+def test_min_loud_and_page_clock_conversion():
+    assert tes.min_loud_for(1.0) == 1 and tes.min_loud_for(3.0) == tes.MIN_LOUD and tes.min_loud_for(None) == tes.MIN_LOUD
+    assert tes.page_ms({"t0_wall": 1000.0}, 2.5) == 1500.0 and tes.page_ms({}, 2.5) is None and tes.page_ms({"t0_wall": 1.0}, None) is None
+
+
+def polls(over_on, ends, start_key=None, until=8.0, base_end=100000):
+    """Public-state polls every 0.5 s from wall 1000 s: `over_on` = [(from, to)] wall seconds with the module on air, `ends` = [(wall s the
+    end becomes visible, end_ms)]; the server clock is the tester's (skew 0)."""
+    out, w = [], 1000.0
+    while w < 1000.0 + until:
+        on = next(((a, b) for a, b in over_on if a <= w < b), None)
+        end = base_end
+        for seen, ms in ends:
+            if w >= seen:
+                end = ms
+        onair = None
+        if on:
+            onair = {"callsign": "N0BRU"}
+            if start_key:
+                onair[start_key] = on[0] * 1000.0
+        out.append((w, {"now_ms": w * 1000.0, "rooms": [{"room": "D"}, {"room": "E", "onair": onair, "last": {"end_ms": end}}]}))
+        w += 0.5
+    return out
+
+
+def test_over_tracker_reads_the_end_and_a_lower_bound_of_the_start():
+    tr = tes.OverTracker()
+    for w, st in polls([(1002.5, 1003.6), (1004.6, 1005.6)], [(1003.6, 1003600.0), (1005.6, 1005600.0)]):
+        tr.observe(w, st)
+    assert [o["end_ms"] for o in tr.overs] == [1003600.0, 1005600.0]
+    s = tr.summary(1002.0, 1005.0)
+    assert s["end_wall_s"] == 1003.6 and s["start_source"] == "first poll on air less one interval"
+    assert s["start_wall_s"] == 1002.0 and s["duration_s"] == 1.6                    # an upper bound of the true 1.1 s: never invented as short
+    assert s["all_ends_wall_s"] == [1003.6, 1005.6] and tr.entries[0]["entry"] == {"room": "E", "onair": None, "last": {"end_ms": 100000}}
+
+
+def test_over_tracker_prefers_a_start_field_and_ignores_the_baseline_over():
+    tr = tes.OverTracker()
+    for w, st in polls([(1002.5, 1003.6)], [(1003.6, 1003600.0)], start_key="start_ms"):
+        tr.observe(w, st)
+    s = tr.summary(1002.0, 1005.0)
+    assert s["start_source"] == "state.start_ms" and s["start_wall_s"] == 1002.5 and s["duration_s"] == 1.1
+    assert tr.overs[0]["end_ms"] != 100000                                            # the first poll's end is the baseline, not an over
+
+
+def test_over_tracker_does_not_take_the_echo_as_the_over():
+    tr = tes.OverTracker()
+    for w, st in polls([(1004.6, 1005.6)], [(1005.6, 1005600.0)]):                   # the original end was never seen (polls missed it)
+        tr.observe(w, st)
+    assert len(tr.overs) == 1
+    assert tr.summary(1002.0, 1003.0) is None                                         # its end is 2.6 s after the release: that is the echo's
+    assert tes.OverTracker().summary(0.0, 1.0) is None
