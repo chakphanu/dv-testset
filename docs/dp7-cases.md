@@ -143,10 +143,10 @@ Config check (host side, throw-away container, `--network none`; all `valid` wit
 
 # DP7 second set (written for the next image, NOT RUN)
 
-For the image that carries MAP1, ETAG1, W8A1, XCOBS1, LSTOP1 and DPRS1 (tag not known when this was written; the snippets below were
+For the image that carries MAP1 (the DOM cases: MAP2, image `220e45b` = source commit `8ffab80`), ETAG1, W8A1, XCOBS1, LSTOP1 and DPRS1 (tag not known when this was written; the snippets below were
 checked with `dv-router:wip-ac750c7`, which parses all of them). Nothing here was run on a rig. Authority read (DV-Router tree, read
 only): `docs/design/data.md` 8.3 / 8.9 / 9.3 / 13.2 / 13.4, `docs/design/config.md` (`[data]`, `[[data.path]]`, `[edges.aprsis]`,
-`[[edges.ax25.port]]`), `docs/design/deployment.md` "Optional position basemap (MAP1)", `web/README.md`, `web/site/positions.js`,
+`[[edges.ax25.port]]`), `docs/design/deployment.md` "Optional position basemap (MAP1; MAP2b / MAP2c for the DOM case)", `web/README.md`, `web/site/positions.js`,
 `positions-map.js`, `public.js`, `scripts/basemap-build.py`, `docs/api/openapi-web.yaml` (Stream, LastEventId),
 `crates/data/worker/src/core_rf_tx.rs`, `core_rf_state.rs`, `rf_tx_tests.rs`, `crates/lib/pkt/src/aprs/igate.rs`, `object.rs`,
 `crates/lib/config/src/data_path.rs`, `crates/svc/status/src/hub/data.rs`.
@@ -172,8 +172,9 @@ snippets `rig/config/dv-router/dp7-courtesy-*.toml`, tester environment `DVT_BAS
 | DP7-g `replay` | web/README.md: SSE "streamed/replayed" rows are filtered with the hidden set; openapi Stream: hidden accounts omitted | live SSE sees marker `N0PGM`, control `N0PGK`, `N0PGH`; cursor = id of the marker's event; `N0PGH` hidden; NEW connection with `?last_event_id=<cursor>`; plain new connection; flag cleared | before the hide the replay holds both; after: state lacks `N0PGH`, replay holds `N0PGK` and NOT `N0PGH`, plain connection has no `N0PGH` row; cleared: the state row and a new replay hold `N0PGH` again (design-implied, UNVERIFIED) | frame ids, event names |
 | DP7-h `item m17` / `item rf` | data.md 8.3 objects/items; `object.rs` | `)DVT7ITM!1030.00N/02015.00E>` (3..9 char name, no timestamp), 34 s later the kill `)DVT7ITM_...` over M17 packet mode and over RF | live item public on the three surfaces (`item_type object`, name, state 1, source 5); kill event body `{name, state 0}`, no key starting `lat`/`lon` at any depth; item leaves the listing | rows, keys |
 | DP7-i `retention` | data.md 13.2 / `hub/data.rs`: 30 minutes, a CONSTANT | one M17 position; present at 2 and 25 min; gone by 33 min | as stated | skipped unless `DVT_DP7_RETENTION_LONG=1` (about 35 minutes, own run) |
-| DOM `without a basemap` (3 engines) | deployment.md MAP1: missing data leaves the list and a short note | `#/positions`, room C selected, `<state>/basemap/` absent | `Basemap not installed.` shown, map container has class `hidden` and is not visible, no attribution, table rows = the public rows of room C with coordinates printed at the sent precision, `/basemap/MANIFEST` 404, the browser requested ONLY the page's origin | requests, findings |
-| DOM `with a basemap` (3 engines) | web/README.md: no browser request leaves the site; markers over the basemap; OSM attribution | the provided basemap installed to `out/<run>/sut-state/basemap/`; same page | no note, map visible with a canvas, attribution link text + href, the table unchanged, MANIFEST 200 and the archive requested (200/206), requested origins == {page origin} (foreign ones are aborted and fail the case), one circle per station and per object counted in the map picture | statuses, counts, picture `out/<run>/web/browser/positions-map-<engine>.png` |
+| DOM `without a basemap` (3 engines) | web.md MAP2c: "Missing, incomplete or MANIFEST v1 installs report `installed: false` and retain the list fallback"; `crates/svc/web/src/basemap.rs` (tiles.json `{"installed":false}`, ETag `"not-installed"`, `no-cache`; every other `/basemap/` path 404 `no-store`); `positions-map.js` `mount` | `<state>/basemap/` absent; HTTP from the tester, then `#/positions`, room C selected | tiles.json 200 `{"installed":false}`, content-type JSON, ETag `"not-installed"`, `cache-control: no-cache`, 304 with that ETag; 404 `no-store` for `/basemap/MANIFEST`, `/basemap/`, `regions/INDEX`, `glyphs/FONT-FACES.json`, a glyph range, tiles of two well-formed generations; page: `Basemap not installed.` shown, map container has class `hidden` and is not visible, no attribution, table rows = the public rows of room C with coordinates printed at the sent precision, tiles.json is the ONLY request under `/basemap/` (200, or 304 on a revalidation), the browser requested ONLY the page's origin | requests, findings |
+| DOM `refuses a v1 basemap` (3 engines) | deployment.md MAP2b: "MANIFEST v1 (MAP1) is refused under COMPAT1"; web.md MAP2c: a v1 install reports `installed: false` | the MAP1 basemap of `DVT_BASEMAP_FILE` (old tarball, directory with MANIFEST, or bare archive) copied to `out/<run>/sut-state/basemap/` for the case, removed after | the same answers and page as `without a basemap`, and `/basemap/MANIFEST`, `/basemap/<v1 archive>` 404: "not installed" is the EXPECTED result and is recorded as such, not as a failure | `[RECORD]` line |
+| DOM `with a basemap` (3 engines) | deployment.md MAP2b / MAP2c; web.md (descriptor, tiles, glyphs, attribution); `positionDescriptor` / `positionFontFaces` of `positions-map.js`; `basemap.rs` | a tree written by `dv-svc-basemap install --profile hotspot` (below) installed to `out/<run>/sut-state/basemap/`; HTTP from the tester, then the same page | tiles.json has exactly the keys `installed gen tiles minzoom maxzoom overview_maxzoom coverage builds fetch_enabled attribution files` (`installed` true, 16 hex `gen`, `tiles` the one generation-qualified URL, `minzoom` 0, `fetch_enabled` false, attribution text, zooms and detail boxes equal to the MANIFEST), strong ETag + `no-cache` + 304; FONT-FACES.json is `{NotoSansRegular: [...]}` of listed font files; a glyph range 0-9 gives 206 with `Content-Range` and `Accept-Ranges`; the z0 tile is 200 `application/vnd.mapbox-vector-tile`, `content-encoding: gzip`, `public, max-age=31536000, immutable`; an absent detail tile is 204 with no body; an unknown generation, a malformed path and an out-of-range x are 404 `no-store`; MANIFEST, INDEX and the tier archives are 404. Page: no note, map visible with a canvas, attribution link text + href, the table unchanged, requests under `/basemap/` = tiles.json + tiles of the descriptor's generation only (200/204/304) + FONT-FACES.json (+ glyph ranges), no `.pmtiles` / MANIFEST / INDEX, requested origins == {page origin} (foreign ones are aborted and fail the case), one circle per station and per object counted in the map picture | statuses, counts, picture `out/<run>/web/browser/positions-map-<engine>.png` |
 | ETag `idle` / `after a real change` (state with a DExtra link, state with an M17 position, last heard with a D-STAR over) | web.md: weak ETag = hash of the body without `now_ms`; matching `If-None-Match` is 304 | settle to a quiet pair, 4 samples 4 s apart; then the protocol client acts | idle: the ETag is identical across the samples (whatever else moved in the body is only recorded), starts with `W/`, conditional GET and HEAD 304; after the change: ETag differs within 25 s, conditional GET with the OLD ETag is 200, with the CURRENT one 304, conditional HEAD with the OLD one 200 | moved leaves, latency |
 
 `test_public_conditional_and_head` of `cases/test_web_api.py` and the diagnostic `test_public_validator_on_an_idle_node` are unchanged.
@@ -220,26 +221,38 @@ DVT_TRANSCODER_FAKE=1 DVT_REQUIRE_IDENT=true`); `R` = `rig/config/dv-router`; `W
 | C3 transmit off (about 8 min) | `W:R/dp7-rf.toml:R/dp7-courtesy-filter.toml:R/dp7-position-optout.toml` | same | DP7-e tx off, DP7-f (no transit), DP7-g, DP7-h | as C1 |
 | C4 positions off, optional | as C1 with `R/dp7-positions-off.toml` instead of `R/dp7-position-optout.toml` | same | DP7-e optout (the `positions = false` correspondent) | as C1 |
 | ETag (about 4 min) | `R/web.toml:R/admin.toml:R/totp-required.toml:R/data-ident.toml` | `scripts/run.sh -m rig --capture --profile web -- cases/test_web_etag_diag.py` | the strict ETag case x3 and the diagnostic | the position trigger needs the data worker |
-| DOM without a basemap (about 10 min) | `R/web.toml:R/admin.toml:R/totp-required.toml:R/data-ident.toml` | `scripts/run.sh -m rig --capture --profile web,browser -- cases/test_dp7_positions_page.py` | `without a basemap` x3; `with a basemap` skips with the reason | `docker pull` of `BROWSER_BASE_IMAGE` once; M17 module C |
-| DOM with a basemap (about 15 min) | as above | `DVT_BASEMAP_FILE=.local/basemap-20261106-z8.pmtiles scripts/run.sh -m rig --capture --profile web,browser -- cases/test_dp7_positions_page.py` | both, 6 cases | a basemap file (below) |
+| DOM without a basemap (about 10 min) | `R/web.toml:R/admin.toml:R/totp-required.toml:R/data-ident.toml` | `DVT_USRP_DYNAMIC=1 DVT_REQUIRE_IDENT=true DVT_TRANSCODER_FAKE=1 scripts/run.sh -m rig --capture --profile web,browser -- cases/test_dp7_positions_page.py` | `without a basemap` x3; `refuses a v1 basemap` and `with a basemap` skip with the reason | `docker pull` of `BROWSER_BASE_IMAGE` once; M17 module C |
+| DOM v1 basemap refused (about 12 min) | as above | as above with `DVT_BASEMAP_FILE=.local/basemap-20261106.tar.gz` | `without a basemap` x3, `refuses a v1 basemap` x3 (expected: not installed) | the old MAP1 file |
+| DOM with a basemap (about 15 min) | as above | as above with `DVT_BASEMAP_FILE=.local/basemap-map2` | `without a basemap` x3, `with a basemap` x3 | a tree written by `dv-svc-basemap` (below) |
 | Retention (about 40 min, its own run) | as ETag | `DVT_DP7_RETENTION_LONG=1 scripts/run.sh -m rig --profile web -- cases/test_dp15_positions2.py -k retention` | DP7-i | the data worker |
 
-## The basemap file (what the lead supplies)
+## The basemap tree (what the lead supplies, MAP2)
 
-`scripts/basemap-build.py` needs the internet (go-pmtiles 1.31.2 from GitHub with a pinned hash, ranges of a Protomaps daily build, glyph files at
-a pinned commit), so it was NOT run here and no tile, package or glyph was fetched. On a machine with network access:
-`python3 scripts/basemap-build.py 20261106 --maxzoom 8 --output target/basemap-20261106` in the DV-Router tree (about 4.4 MB for Thailand at z8). Then
-`DVT_BASEMAP_FILE` may name (a path under this repository, the tester container mounts it at `/dvt`; relative paths are taken from the repository
-root; `.local/` is ignored by git):
+The case does NOT run `dv-svc-basemap` itself. No control action of `scripts/run.sh` / `dvtest/control.py` runs a program in the SUT container (the
+allow-list is `kill-proc`, `proc-stat`, `metrics`, `netem`, `mark`), and `install` cannot finish against a local fixture server anyway: `--source-index` and
+`--source-base` replace only the build index and the tile archive, while the 431 pinned glyph and font files (45.9 MB, `crates/svc/basemap/assets/glyphs.json`)
+come from `https://raw.githubusercontent.com/...` with no override (`--dry-run` is the only mode that works offline; it writes nothing). So the operator runs
+the product's own tool once on a machine with network access (the image ships the binary) and names the result. A small hotspot install around the seeds
+keeps it near 61 MB plus the detail (estimate from deployment.md: 15 MB overview z0-5 + 45.9 MB glyph set):
 
-* the output directory itself (`MANIFEST`, `basemap-20261106-z8.pmtiles`, `glyphs/`), or
-* a `.tar` / `.tar.gz` of it (one leading directory is stripped; absolute and `..` names are refused), or
-* a bare `basemap-*.pmtiles` archive (the case writes the `MANIFEST` and names the file `basemap-20260101-z<maxzoom>.pmtiles`, which is the form the page
-  accepts; there are no glyph files, so label text requests answer 404 on the page's own origin: UNVERIFIED that the map still reaches `ready`).
+```sh
+mkdir -p .local/basemap-map2
+docker run --rm -v "$PWD/.local/basemap-map2:/var/lib/dv" --entrypoint dv-svc-basemap <dv-router image> \
+    install --state /var/lib/dv --profile hotspot --detail dvt=99.9,13.0,101.1,14.1
+docker run --rm -v "$PWD/.local/basemap-map2:/var/lib/dv" --entrypoint dv-svc-basemap <dv-router image> verify --state /var/lib/dv
+```
 
-The case verifies every file against the MANIFEST hashes, stages the copy as `out/<run>/sut-state/basemap.dvt-staging/` and renames it to `basemap/` in one
-step (never over an existing `basemap/`), puts a marker file `.dvt-installed` inside, and at the end removes only a `basemap/` that carries the marker. The
-seeds (three stations and one object in room C) are placed inside the basemap's bounding box from the MANIFEST (default: Thailand `97.3,5.6,105.7,20.5`).
+`DVT_BASEMAP_FILE=.local/basemap-map2` (a path under this repository, the tester container mounts it at `/dvt`; `.local/` is ignored by git) may name the
+`--state` directory or its `basemap/` directory (the one that holds `base/MANIFEST` and `regions/INDEX`). The case reads `base/MANIFEST` (v2), checks the
+structure (version 2, schema major 4, one `world` overview, detail tiers on the shared zoom range, one build, `glyphs/OFL.txt` and a `.pbf` range) and the size and
+sha256 of every tier archive and glyph file, stages the copy as `out/<run>/sut-state/basemap.dvt-staging/` and renames it to `basemap/` in one step
+(never over an existing `basemap/`), puts a marker file `.dvt-installed` inside (not in the MANIFEST, never served) and at the end removes only a `basemap/`
+that carries the marker. dv-svc-web reads the published base on the next request (deployment.md: "The web service may keep running"), so the case waits up to
+30 s for tiles.json to say `installed: true` and does not restart anything. The seeds (three stations and one object in room C) are placed inside the first
+detail box of the MANIFEST (the default Thailand box `97.3,5.6,105.7,20.5` when the base is not at hand).
+
+Any other `DVT_BASEMAP_FILE` (a directory with a top-level `MANIFEST`, a `.tar` / `.tar.gz` of one, a bare `.pmtiles`) is a MAP1 basemap: only the
+`refuses a v1 basemap` case uses it. The old tarball `.local/basemap-20261106.tar.gz` is such a file; "not installed" is the expected answer for it.
 
 ## UNVERIFIED shapes of the second set
 
@@ -256,7 +269,7 @@ seeds (three stations and one object in room C) are placed inside the basemap's 
   orders by acceptance time, `hub/data.rs`).
 * DOM: the status texts and test ids are taken from `positions.js`; that `.hidden` hides the map container; that the default room selected by the page is the first
   room of the state (the case selects `C` with the room `<select>`); that module C exists and accepts an M17 client; that the tester sees `out/<run>/sut-state/`;
-  that dv-svc-web serves a `basemap/` that appears while it runs (else the case restarts `dv-svc-web` through the control channel, or fails with the reason);
+  that dv-svc-web notices a `basemap/` that appears while it runs, on the next request (MAP2c: the identity of `base/MANIFEST` is checked per request; the case fails with the reason after 30 s, it does not restart the service); the exact `gen` value is not recomputed (only its form); that the real hotspot base holds the z0 tile in the overview and no tile at `-179.9,80.0` of the detail maximum zoom;
   that Chromium delivers the requests of the MapLibre worker to the context-level `request` event (Firefox and WebKit: unknown; an unseen request cannot fail the origin
   audit, the aborting route is the guard); the marker colours (`#146cad`, `#b36b00`, tolerance 12 per channel) and that circles of the seeds do not touch; WebGL2 in
   the browser container (without it the case checks the list and skips the pixel part).

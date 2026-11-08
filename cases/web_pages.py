@@ -433,7 +433,7 @@ def recording_apply(page):
     return page.get_by_role("button", name="Apply filters")
 
 
-# ---- #/positions (DP7, MAP1; web/site/positions.js, positions-map.js, public.js): public position table and optional map
+# ---- #/positions (DP7, MAP2; web/site/positions.js, positions-map.js, public.js): public position table and optional map
 # Calibrated against the page SOURCES of the DV-Router lead's tree (not against a running image): UNVERIFIED until the first run.
 # The markers are drawn by MapLibre into a WebGL canvas (a GeoJSON circle layer), NOT as DOM elements: the table below the map is
 # the accessible list of the same rows and is the DOM evidence of "what is on the map"; markers are counted from the pixels.
@@ -447,14 +447,15 @@ POSITIONS_TESTIDS = {
     "map_note": "positions-map-note",       # status line, present unless the map is ready
     "attribution": "positions-attribution", # OpenStreetMap link, present when the map is shown
 }
-POSITIONS_NOTE_MISSING = "Basemap not installed."               # status `missing`: GET /basemap/MANIFEST was not 200 or not a manifest
+POSITIONS_NOTE_MISSING = "Basemap not installed."               # status `missing`: GET /basemap/tiles.json answered {"installed": false} (or 404)
 POSITIONS_NOTE_WEBGL = "The map needs WebGL2. Positions are listed below."
 POSITIONS_NOTE_UNAVAILABLE = "Basemap unavailable. Positions are listed below."
 POSITIONS_NOTE_LOADING = "Loading basemap..."
 POSITIONS_ATTRIBUTION_TEXT = "(c) OpenStreetMap contributors"
 POSITIONS_ATTRIBUTION_HREF = "https://www.openstreetmap.org/copyright"
 POSITIONS_EMPTY_TEXT = "No retained positions in this room."
-BASEMAP_MANIFEST = "/basemap/MANIFEST"
+BASEMAP_MANIFEST = "/basemap/MANIFEST"                          # MAP1 only: MAP2 does not serve it (404)
+BASEMAP_TILES_JSON = "/basemap/tiles.json"                      # MAP2c descriptor: 200 {"installed": false} without an install
 POSITIONS_COLUMNS = ["Callsign / object", "Latitude", "Longitude", "Precision", "Time (local)"]
 
 
