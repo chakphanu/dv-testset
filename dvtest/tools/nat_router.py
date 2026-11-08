@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: MIT
 """Control server of the NAT router container (rig service nat-router, profile nat).
 
-Runs as root with only CAP_NET_ADMIN (iptables, conntrack, ip). It finds its interfaces by address,
+Runs as root with CAP_NET_ADMIN (iptables, conntrack, ip) and CAP_NET_RAW (the AF_PACKET sniffer of the `firsts`
+evidence; without it everything but that evidence works). It finds its interfaces by address,
 installs the control forwards, starts as `port_restricted` and then answers the JSON-line protocol of
 dvtest/nat.py on --listen (the OUTSIDE address only; the browser on the inside network cannot reach it).
 Only the addresses given with --allow (the tester) may ask. Nothing secret passes through it.
@@ -11,11 +12,71 @@ Only the addresses given with --allow (the tester) may ask. Nothing secret passe
       --browser-ip 172.31.0.91 --sut-ip 172.30.0.11 --forward 3000 --forward 3001
 """
 import argparse
+import socket
 import socketserver
 import subprocess
 import sys
+import threading
+import time
 
 from dvtest import nat
+
+ETH_P_IP = 0x0800
+SNAP_BYTES = 128            # enough for the Ethernet, IPv4 (with options) and UDP headers and the 20 byte STUN header
+
+
+class PacketSniffer:
+    """A small AF_PACKET reader for the `firsts` evidence (ICE1c): every IPv4 frame of one interface, both directions (what
+    the router sends out after NAT and what arrives before it is undone), cut to SNAP_BYTES, handed to on_frame(bytes) on a
+    daemon thread for `duration_s` seconds or until stop(). Needs CAP_NET_RAW (rig/compose.yml gives it to nat-router only).
+    `open_socket(ifname)` is injectable for the unit tests."""
+
+    def __init__(self, ifname, on_frame, duration_s, open_socket=None):
+        self.ifname, self.on_frame, self.duration_s = ifname, on_frame, duration_s
+        self.open_socket = open_socket or self._open_packet_socket
+        self.sock = None
+        self.thread = None
+        self.stopping = threading.Event()
+
+    @staticmethod
+    def _open_packet_socket(ifname):
+        sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_IP))
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
+            sock.bind((ifname, ETH_P_IP))
+        except OSError:
+            sock.close()
+            raise
+        return sock
+
+    def start(self):
+        """Opens the socket now (a missing capability raises here, in the caller) and starts reading."""
+        self.sock = self.open_socket(self.ifname)
+        self.sock.settimeout(0.2)
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        end = time.monotonic() + self.duration_s
+        while not self.stopping.is_set() and time.monotonic() < end:
+            try:
+                frame = self.sock.recv(SNAP_BYTES)
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            try:
+                self.on_frame(frame)
+            except Exception:                           # noqa: BLE001 - a bad frame must not end the evidence
+                pass
+
+    def stop(self):
+        self.stopping.set()
+        if self.thread is not None:
+            self.thread.join(1.0)
+        if self.sock is not None:
+            self.sock.close()
+            self.sock = None
 
 
 def run(argv):
@@ -72,7 +133,7 @@ def main(argv=None):
     except (KeyError, nat.NatError) as exc:
         print("nat-router: cannot set up: %s (addresses seen: %s)" % (exc, sorted(names)), file=sys.stderr)
         return 2
-    router = nat.Router(topo, run)
+    router = nat.Router(topo, run, sniffer=PacketSniffer)
     try:
         router.start()
     except nat.NatError as exc:

@@ -687,7 +687,7 @@ XLXD_SUT_IMAGE=<dv-router image> DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-router
 
 | Service | Address | Role |
 |---------|---------|------|
-| `nat-router` | outside `<net>.92` (alias `<net>.93`), inside `<nat-net>.2` | iptables NAT between the two networks, forwarding on (`net.ipv4.ip_forward=1` is a sysctl of the service only), JSON-line control server on `<net>.92:9100` (tester only), TCP forwards `<net>.92:3000` and `:3001` to the browser. Only capability: `NET_ADMIN` |
+| `nat-router` | outside `<net>.92` (alias `<net>.93`), inside `<nat-net>.2` | iptables NAT between the two networks, forwarding on (`net.ipv4.ip_forward=1` is a sysctl of the service only), JSON-line control server on `<net>.92:9100` (tester only), TCP forwards `<net>.92:3000` and `:3001` to the browser, and a small AF_PACKET sniffer for the `firsts` evidence of the ICE1 cases. Capabilities: `NET_ADMIN`, and `NET_RAW` for the sniffer (this service only; without it only the `firsts` evidence is missing) |
 | `browser` | `<nat-net>.91` (`DVT_NAT_NET`, default `172.31.0`) | the stage 3a browser service moved to the internal network `nat-inside` by `rig/compose.nat.yml` (`networks: !override`, `extra_hosts` for `dvt-web` / `dvt-admin` since compose DNS does not cross networks). It cannot reach anything except through the router |
 | `nat-edge` | shares the namespace of `browser` | sets the browser's default route via `<nat-net>.2` (Docker gives an internal network none), then runs the probe server `:3001` as nobody; caps `NET_ADMIN SETUID SETGID` (the last two only to drop root) |
 | `nat-ref-a`, `nat-ref-b` | `<net>.95`, `<net>.96` | UDP reflectors for the classification self-test: they answer with the source address they saw, and send a datagram from a second port on request |
@@ -712,7 +712,8 @@ only: `conntrack -F` would also kill the Playwright websocket and the page's HTT
 between inside and outside, both directions, TCP untouched; `for` switches itself off and records the dropped datagrams),
 `drop_direct on|off` (drops UDP from inside to the SUT's media address:port, so only the TURN path can work), `readdress on|off` (ICE1: moves the browser's UDP
 to the other outside address, `<net>.92` <-> the alias `<net>.93`, TCP unchanged, and back; docs/web-nat-cases.md "ICE1 address change"), `mappings` (read only: the browser's UDP flows
-to the SUT's media port as conntrack holds them), `status`, `reset`.
+to the SUT's media port as conntrack holds them), `firsts` (read only: the first datagram per direction and kind and the SUT's stale sends per second since the last
+`readdress on`, from the sniffer), `status`, `reset`.
 The control server listens on the outside address only and answers the tester's address only; the browser cannot reconfigure it.
 
 **TURN secret.** `run.sh` makes `out/<utc>/web/turn.secret` (random, mode 0600, no trailing newline, never printed) and coturn's

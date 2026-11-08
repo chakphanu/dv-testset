@@ -19,7 +19,7 @@ def flat(cmds):
 # ---------------------------------------------------------------- protocol
 
 @pytest.mark.parametrize("text,op", [('{"op":"readdress","state":"on"}', "readdress"), ('{"op":"readdress","state":"off"}', "readdress"),
-                                     ('{"op":"mappings"}', "mappings")])
+                                     ('{"op":"mappings"}', "mappings"), ('{"op":"firsts"}', "firsts")])
 def test_parse_request_accepts_the_new_words(text, op):
     assert nat.parse_request(text)["op"] == op
     assert nat.parse_request(text.encode())["op"] == op
@@ -27,7 +27,8 @@ def test_parse_request_accepts_the_new_words(text, op):
 
 
 @pytest.mark.parametrize("bad", ['{"op":"readdress"}', '{"op":"readdress","state":"for"}', '{"op":"readdress","state":"on","seconds":3}',
-                                 '{"op":"readdress","state":true}', '{"op":"mappings","state":"on"}', '{"op":"mappings","all":1}'])
+                                 '{"op":"readdress","state":true}', '{"op":"mappings","state":"on"}', '{"op":"mappings","all":1}',
+                                 '{"op":"firsts","state":"on"}'])
 def test_parse_request_refuses_a_malformed_readdress(bad):
     with pytest.raises(nat.NatError):
         nat.parse_request(bad)
@@ -189,7 +190,9 @@ def test_readdress_on_installs_the_counter_then_moves_then_flushes():
     rec = Recorder()
     r = router(rec, "port_restricted")
     ans = r.handle({"op": "readdress", "state": "on"})
-    assert ans == {"ok": True, "readdressed": True, "from": "172.30.0.92", "to": "172.30.0.93"}
+    assert {k: v for k, v in ans.items() if k not in ("t0", "sniffer")} == {"ok": True, "readdressed": True, "from": "172.30.0.92",
+                                                                             "to": "172.30.0.93"}
+    assert ans["sniffer"] == "this router has no packet sniffer"             # the unit router has none; nat_router.py passes one
     assert r.readdressed and rec.present == {"dvt-unmapped-media"}
     counter = rec.index("iptables -t filter -A DVT_IN -i eth0 -p udp -s 172.30.0.11 --sport 50000 -m comment --comment dvt-unmapped-media -j DROP")
     move = rec.index("iptables -t nat -A DVT_MODE_POST -s 172.31.0.0/24 -o eth0 -p udp -j SNAT --to-source 172.30.0.93")
@@ -290,13 +293,14 @@ def test_client_sends_the_words_as_documented(monkeypatch):
 
     def fake_call(addr, request, timeout=10.0):
         sent.append(request)
-        return {"ok": True, "mappings": [{"browser_port": 1, "seen_ip": "172.30.0.93", "seen_port": 1}]}
+        return {"ok": True, "firsts": None, "mappings": [{"browser_port": 1, "seen_ip": "172.30.0.93", "seen_port": 1}]}
 
     monkeypatch.setattr(nat, "call", fake_call)
     client = nat.NatClient(("127.0.0.1", 9100), ("127.0.0.1", 3001), "127.0.0.3", "127.0.0.4")
     client.readdress(True)
     client.readdress(False)
     assert client.media_mappings()[0]["seen_ip"] == "172.30.0.93"
-    assert sent == [{"op": "readdress", "state": "on"}, {"op": "readdress", "state": "off"}, {"op": "mappings"}]
+    assert client.firsts() is None                                   # the fake answer carries no "firsts"
+    assert sent == [{"op": "readdress", "state": "on"}, {"op": "readdress", "state": "off"}, {"op": "mappings"}, {"op": "firsts"}]
     for request in sent:
         assert nat.parse_request(nat.encode(request))["op"] == request["op"]

@@ -118,6 +118,32 @@ def mapping_problems(before, after, old_ip, new_ip):
     return out
 
 
+def firsts_evidence(snap):
+    """The router sniffer's snapshot (nat.Firsts.snapshot(), the answer of the `firsts` word) reduced to the figures DV-Router
+    asked for after the first ICE1 run (ICE1c). All times are seconds after the router started the address change.
+
+      first_udp_new_s        first datagram of any kind browser -> SUT from the NEW mapping (None = none seen)
+      first_stun_new_s       first STUN binding request browser -> SUT from the new mapping
+      first_sut_to_new_s     first datagram SUT -> browser sent to the new mapping: the edge following the browser
+      stale_to_old_per_s     SUT -> browser datagrams still sent to the OLD mapping, per second, for 20 s
+    plus the kinds of the firsts, the first STUN response and RTP to the new mapping, the totals and the last stale send
+    (when the edge stopped sending to the old mapping). `error` is set when the router had no sniffer (the figures are None)."""
+    if not snap:
+        return {"error": "no snapshot", "first_udp_new_s": None, "first_stun_new_s": None, "first_sut_to_new_s": None,
+                "stale_to_old_per_s": None}
+    sides = snap.get("sides") or {}
+    new_in, new_out, old_out, old_in = (sides.get(k) or {} for k in ("from_new", "to_new", "to_old", "from_old"))
+    return {"error": snap.get("error"),
+            "first_udp_new_s": new_in.get("first_s"), "first_udp_new_kind": new_in.get("first_kind"),
+            "first_stun_new_s": (new_in.get("first_by_kind") or {}).get("stun-binding-request"),
+            "first_sut_to_new_s": new_out.get("first_s"), "first_sut_to_new_kind": new_out.get("first_kind"),
+            "first_sut_stun_response_new_s": (new_out.get("first_by_kind") or {}).get("stun-binding-response"),
+            "first_sut_rtp_new_s": (new_out.get("first_by_kind") or {}).get("rtp"),
+            "stale_to_old_per_s": old_out.get("per_s"), "stale_to_old_total": old_out.get("n"),
+            "stale_to_old_last_s": old_out.get("last_s"), "browser_from_old_total": old_in.get("n"),
+            "browser_to_sut_new_kinds": new_in.get("kinds"), "sut_to_new_kinds": new_out.get("kinds")}
+
+
 def stray_problems(first, second, window_s, maximum=STRAY_OLD_PAIR_MAX):
     """first / second: the router's count of datagrams from the SUT's media port to the old (unmapped) address, read at the
     start and the end of a window in which the audio is back and the talker is still on air."""

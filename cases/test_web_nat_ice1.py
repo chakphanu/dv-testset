@@ -60,6 +60,7 @@ OBSERVE_EXTRA_S = 8.0       # how long after the budget the case still looks for
 SEAMLESS_AFTER_S = 2.0      # a counter that never stalled counts as "never interrupted" only after this long
 STRAY_START_S = 1.0         # the old address is checked from this long after the audio is back ...
 STRAY_WINDOW_S = 3.0        # ... for this long
+FIRSTS_MARGIN_S = 1.0       # the router's sniffer horizon (nat.Firsts.HORIZON_S, 20 s) plus this after the change, then `firsts` is read
 SAMPLE_EVERY_S = 0.1
 UI_EVERY_S = 0.5
 AUDIO_PACKETS_PER_S = 50
@@ -177,6 +178,10 @@ def test_ice1_readdress_moves_the_mapping_and_back(nat_type, ice1_ctl):
         assert (got["mapping"], got["filtering"], got["type"]) == (want_mapping, want_filtering, nat_type), (name, res)
     assert {v[0] for v in back["mapped"].values()} == {ip_before}, "the original address did not come back: %s" % back["mapped"]
     assert ice1_ctl.status()["readdressed"] is False
+    # the packet sniffer behind the `firsts` evidence of the ICE1 case needs CAP_NET_RAW on nat-router (rig/compose.yml)
+    assert ans.get("sniffer") == "ok", "the router's packet sniffer did not start: %s (CAP_NET_RAW on nat-router?)" % ans.get("sniffer")
+    snap = ice1_ctl.firsts()
+    assert snap and snap["error"] is None and snap["old"] == ip_before and snap["new"] == ans["to"], snap
 
 
 # ---------------------------------------------------------------------------------------- b
@@ -374,6 +379,17 @@ def run_change(engine, nat_type, bp, rtc, ctl, target, operator, circuit, callsi
         m["analysis"], m["lost"], m["texts"] = ice1.resume_analysis(m["samples"], t_change), lost, texts
         m["unmapped"] = (c1, c2, round(t_c2 - t_c1, 2) if t_c1 and t_c2 else None)
 
+        # ---- the router's sniffer evidence (ICE1c): the stale sends are counted per second for the whole horizon, so wait for it
+        # (the talker is still on air: OVER_S is longer than the longest case plus this)
+        wait = t_change + nat.Firsts.HORIZON_S + FIRSTS_MARGIN_S - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        try:
+            m["firsts"] = ctl.firsts()
+        except Exception as exc:                        # noqa: BLE001 - evidence, not a verdict
+            m["firsts"] = None
+            m["firsts_error"] = "%s: %s" % (type(exc).__name__, str(exc)[:100])
+
         # ---- the state after
         m["flows_after"] = ctl.media_mappings()
         m["view_after"] = page_view(rtc)
@@ -429,6 +445,15 @@ def test_ice1_address_change_restarts_ice_on_the_same_circuit(engine, nat_type, 
 
     # ---- what was seen, recorded first
     note(engine, nat_type, "address change", {"from": old_ip, "to": new_ip, "router_answered_after_s": m["t_return_s"], "tcp": "unchanged"})
+    # router-side evidence for DV-Router (ICE1c): when the browser's first datagrams reach the SUT from the new mapping and when the edge
+    # follows; seconds after the router began the change; None = not seen in 20 s. Recorded, never asserted.
+    ev = ice1.firsts_evidence(m["firsts"])
+    for key in ("first_stun_new_s", "first_udp_new_s", "first_sut_to_new_s", "stale_to_old_per_s"):
+        note(engine, nat_type, key, ev[key])
+    note(engine, nat_type, "firsts: detail (kinds of the firsts, STUN response / RTP to the new mapping, stale totals)", ev)
+    if ev["error"] or m.get("firsts_error"):
+        web.finding("ICE1 %s / %s: no first-datagram evidence from the router: %s" % (
+            brlib.label(engine), nat_type, ev["error"] or m["firsts_error"]))
     note(engine, nat_type, "audio after the change", {"analysis": an, "budget_s": budget, "late_growth_3s": m.get("late_growth"),
                                                       "talker_still_on_air": m["still_talking"]})
     note(engine, nat_type, "page status and Listen card states (s after the change)", m["texts"][:8])

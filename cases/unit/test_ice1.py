@@ -159,3 +159,35 @@ def test_new_circuits():
     assert ice1.new_circuits(before, after) == ["c2"]
     assert ice1.new_circuits(after, before) == []
     assert ice1.new_circuits([{"x": 1}], [{"x": 2}]) == []
+
+
+def side(first_s=None, first_kind=None, by_kind=None, per_s=None, n=0, last_s=None, kinds=None):
+    return {"n": n, "first_s": first_s, "first_kind": first_kind, "last_s": last_s, "kinds": kinds or {},
+            "first_by_kind": by_kind or {}, "per_s": per_s or [0] * 20, "after_horizon": 0}
+
+
+def test_firsts_evidence_reads_the_four_figures_dv_router_asked_for():
+    stale = [50, 50, 12, 0, 0] + [0] * 15
+    snap = {"t0": 1.0, "old": "o", "new": "n", "horizon_s": 20, "error": None, "sides": {
+        "from_new": side(0.31, "stun-binding-request", {"stun-binding-request": 0.31, "rtp": 5.0}, n=9, kinds={"stun-binding-request": 3}),
+        "to_new": side(13.9, "stun-binding-response", {"stun-binding-response": 13.9, "rtp": 14.0}, n=500),
+        "to_old": side(0.0, "rtp", {"rtp": 0.0}, per_s=stale, n=112, last_s=2.4),
+        "from_old": side()}}
+    ev = ice1.firsts_evidence(snap)
+    assert ev["first_udp_new_s"] == 0.31 and ev["first_stun_new_s"] == 0.31 and ev["first_sut_to_new_s"] == 13.9
+    assert ev["first_udp_new_kind"] == "stun-binding-request" and ev["first_sut_to_new_kind"] == "stun-binding-response"
+    assert ev["first_sut_stun_response_new_s"] == 13.9 and ev["first_sut_rtp_new_s"] == 14.0
+    assert ev["stale_to_old_per_s"] == stale and ev["stale_to_old_total"] == 112 and ev["stale_to_old_last_s"] == 2.4
+    assert ev["browser_from_old_total"] == 0 and ev["error"] is None
+
+
+def test_firsts_evidence_with_nothing_seen_or_no_sniffer():
+    empty = {"error": None, "sides": {k: side() for k in ("from_new", "to_new", "to_old", "from_old")}}
+    ev = ice1.firsts_evidence(empty)
+    assert ev["first_udp_new_s"] is None and ev["first_stun_new_s"] is None and ev["first_sut_to_new_s"] is None
+    assert ev["stale_to_old_per_s"] == [0] * 20
+    broken = ice1.firsts_evidence({"error": "PermissionError: no", "sides": empty["sides"]})
+    assert broken["error"] == "PermissionError: no"
+    none = ice1.firsts_evidence(None)
+    assert none["error"] == "no snapshot" and none["stale_to_old_per_s"] is None
+    assert ice1.firsts_evidence({"error": "x"})["first_udp_new_s"] is None            # a snapshot without sides

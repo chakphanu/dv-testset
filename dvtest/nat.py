@@ -33,6 +33,9 @@ The control channel is one JSON object per line over TCP (one request per connec
   {"op": "mappings"}                                  read only: the UDP flows from the browser to the SUT's media
                                                       port as the router translates them (the source address and
                                                       port the SUT sees), from conntrack
+  {"op": "firsts"}                                    read only: what the router's packet sniffer saw of the SUT's media
+                                                      port since the last `readdress on` (first datagram per direction and
+                                                      kind, SUT datagrams still sent to the old address per second)
   {"op": "status"}
   {"op": "reset"}                                     port_restricted, no blackhole, no drop_direct, no readdress, flush
 
@@ -41,12 +44,13 @@ The answer is {"ok": true, ...} or {"ok": false, "error": "..."}.
 import json
 import re
 import socket
+import struct
 import threading
 import time
 from collections import namedtuple
 
 MODES = ("full_cone", "port_restricted", "symmetric", "none")
-OPS = ("nat_mode", "flush", "blackhole", "drop_direct", "readdress", "mappings", "status", "reset")
+OPS = ("nat_mode", "flush", "blackhole", "drop_direct", "readdress", "mappings", "firsts", "status", "reset")
 MAX_LINE = 4096
 MAX_BLACKHOLE_S = 300.0
 
@@ -107,7 +111,7 @@ def parse_request(line):
     if op not in OPS:
         raise NatError("unknown op %r (known: %s)" % (op, ", ".join(OPS)))
     allowed = {"nat_mode": {"op", "mode"}, "blackhole": {"op", "state", "seconds"},
-               "drop_direct": {"op", "state"}, "readdress": {"op", "state"}, "mappings": {"op"},
+               "drop_direct": {"op", "state"}, "readdress": {"op", "state"}, "mappings": {"op"}, "firsts": {"op"},
                "flush": {"op"}, "status": {"op"}, "reset": {"op"}}[op]
     extra = sorted(set(obj) - allowed)
     if extra:
@@ -310,16 +314,130 @@ def media_mappings(flows, t):
     return sorted(rows, key=lambda r: (r["seen_ip"], r["seen_port"], r["browser_port"]))
 
 
+# ------------------------------------------------------------------ sniffer side: first datagrams after a readdress
+
+STUN_COOKIE = 0x2112A442
+STUN_CLASSES = {0: "request", 1: "indication", 2: "response", 3: "error"}
+
+
+def classify_payload(payload):
+    """The kind of a UDP payload on the media port, from its first bytes:
+      stun-binding-request / -response / -indication / -error   magic cookie 0x2112A442 at bytes 4-7 and the two top bits 00
+      stun-other                                                 a STUN message of another method
+      rtp, rtcp                                                  version bits 10; RTCP when the payload type byte is 192-223 (RFC 5761)
+      dtls                                                       first byte 20-63 (RFC 7983)
+      other                                                      anything else"""
+    if len(payload) >= 20 and payload[0] & 0xC0 == 0 and struct.unpack("!I", payload[4:8])[0] == STUN_COOKIE:
+        mtype = struct.unpack("!H", payload[0:2])[0]
+        method = (mtype & 0x000F) | ((mtype >> 1) & 0x0070) | ((mtype >> 2) & 0x0F80)
+        klass = ((mtype >> 4) & 1) | ((mtype >> 7) & 2)
+        if method != 1:
+            return "stun-other"
+        return "stun-binding-" + STUN_CLASSES[klass]
+    if len(payload) >= 12 and payload[0] >> 6 == 2:
+        return "rtcp" if 192 <= payload[1] <= 223 else "rtp"
+    if payload and 20 <= payload[0] <= 63:
+        return "dtls"
+    return "other"
+
+
+def parse_frame(frame):
+    """An Ethernet II frame (a plain or one-tag VLAN header) with an IPv4 UDP datagram -> {'src', 'dst', 'sport', 'dport',
+    'size' (UDP payload bytes), 'kind' (classify_payload)}, or None for anything else (other protocols, non-first fragments,
+    truncated frames). The frame may be cut after the first 100 bytes or so: only the headers and the STUN header are read."""
+    if len(frame) < 14 + 20 + 8:
+        return None
+    ethertype, off = struct.unpack("!H", frame[12:14])[0], 14
+    if ethertype == 0x8100 and len(frame) >= 18 + 28:
+        ethertype, off = struct.unpack("!H", frame[16:18])[0], 18
+    if ethertype != 0x0800:
+        return None
+    ip = frame[off:]
+    if ip[0] >> 4 != 4 or ip[9] != 17:
+        return None
+    ihl = (ip[0] & 0x0F) * 4
+    if ihl < 20 or len(ip) < ihl + 8 or struct.unpack("!H", ip[6:8])[0] & 0x1FFF:
+        return None
+    sport, dport, ulen = struct.unpack("!HHH", ip[ihl:ihl + 6])
+    return {"src": ".".join(str(b) for b in ip[12:16]), "dst": ".".join(str(b) for b in ip[16:20]), "sport": sport, "dport": dport,
+            "size": max(0, ulen - 8), "kind": classify_payload(ip[ihl + 8:])}
+
+
+class Firsts:
+    """What the packet sniffer on the router's outside interface saw of the SUT's media port after a `readdress on` at time t0
+    (the router's clock): per direction the first datagram (time after t0, kind), the first of each kind, a count, and the
+    count per second for the first HORIZON_S seconds. The directions, from the SUT's point of view:
+
+      from_new   browser -> SUT, the datagram carries the NEW outside address as its source (the new mapping)
+      from_old   browser -> SUT, the OLD outside address (the old mapping; none expected after the flush)
+      to_new     SUT -> browser, sent to the NEW outside address (the edge following the browser)
+      to_old     SUT -> browser, sent to the OLD outside address (the edge's stale sends)
+
+    Thread safe: the sniffer thread feeds, the control thread reads."""
+
+    HORIZON_S = 20
+    SIDES = ("from_new", "from_old", "to_new", "to_old")
+
+    def __init__(self, t0, old_ip, new_ip, sut_ip, media_port):
+        self.t0, self.old_ip, self.new_ip, self.sut_ip, self.media_port = t0, old_ip, new_ip, sut_ip, int(media_port)
+        self.error = None
+        self.lock = threading.Lock()
+        self.sides = {name: {"n": 0, "first_s": None, "first_kind": None, "last_s": None, "kinds": {}, "first_by_kind": {},
+                             "per_s": [0] * self.HORIZON_S, "after_horizon": 0} for name in self.SIDES}
+
+    def side_of(self, dg):
+        if dg["dst"] == self.sut_ip and dg["dport"] == self.media_port:
+            return {self.new_ip: "from_new", self.old_ip: "from_old"}.get(dg["src"])
+        if dg["src"] == self.sut_ip and dg["sport"] == self.media_port:
+            return {self.new_ip: "to_new", self.old_ip: "to_old"}.get(dg["dst"])
+        return None
+
+    def feed(self, t, dg):
+        """One parsed datagram (parse_frame) seen at the router's clock time t."""
+        side = self.side_of(dg)
+        rel = round(t - self.t0, 3)
+        if side is None or rel < 0:
+            return
+        with self.lock:
+            s = self.sides[side]
+            s["n"] += 1
+            if s["first_s"] is None:
+                s["first_s"], s["first_kind"] = rel, dg["kind"]
+            s["last_s"] = rel
+            s["kinds"][dg["kind"]] = s["kinds"].get(dg["kind"], 0) + 1
+            s["first_by_kind"].setdefault(dg["kind"], rel)
+            if rel < self.HORIZON_S:
+                s["per_s"][int(rel)] += 1
+            else:
+                s["after_horizon"] += 1
+
+    def feed_frame(self, t, frame):
+        dg = parse_frame(frame)
+        if dg is not None:
+            self.feed(t, dg)
+
+    def snapshot(self):
+        with self.lock:
+            return {"t0": self.t0, "old": self.old_ip, "new": self.new_ip, "horizon_s": self.HORIZON_S, "error": self.error,
+                    "sides": {k: dict(v, kinds=dict(v["kinds"]), first_by_kind=dict(v["first_by_kind"]), per_s=list(v["per_s"]))
+                              for k, v in self.sides.items()}}
+
+
 # ------------------------------------------------------------------ the router
 
 class Router:
     """State and actions of the NAT router. `run(argv)` -> (returncode, output) is injected (subprocess in
     the container, a recorder in the unit tests)."""
 
-    def __init__(self, topology, run, clock=time.time):
+    def __init__(self, topology, run, clock=time.time, sniffer=None):
+        """`sniffer(ifname, on_frame, duration_s)` -> an object with start() and stop() that calls on_frame(bytes) for every
+        IPv4 frame of the interface (dvtest/tools/nat_router.PacketSniffer; None = no evidence, `firsts` says so)."""
         self.t = topology
         self.run = run
         self.clock = clock
+        self.sniffer = sniffer
+        self._sniff = None
+        self._firsts = None
         self.lock = threading.RLock()
         self.mode = "none"
         self.blackhole_on = False
@@ -381,6 +499,7 @@ class Router:
         total in last_readdress."""
         dropped = self._counters(CHAIN_IN).get(C_UNMAPPED, 0)
         self._rule(unmapped_rule(self.t), False, CHAIN_IN)
+        self._stop_sniffer()
         self.readdressed = False
         self.last_readdress = {"t_on": self._t_readdress, "t_off": self.clock(), "unmapped_media": dropped}
 
@@ -394,6 +513,9 @@ class Router:
                     old, new = readdress_addresses(self.t, self.mode)
                     return {"readdressed": True, "from": old, "to": new}
                 old, new = readdress_addresses(self.t, self.mode)       # NatError for mode none
+                t0 = self.clock()
+                self._firsts = Firsts(t0, old, new, self.t.sut_ip, self.t.media_port)
+                self._start_sniffer(self._firsts)                       # before the rules change: the first datagram counts
                 try:
                     self._rule(unmapped_rule(self.t), True, CHAIN_IN)
                     for argv in readdress_commands(self.t, self.mode):
@@ -402,9 +524,9 @@ class Router:
                     self._restore_quietly()
                     raise
                 self.readdressed = True
-                self._t_readdress = self.clock()
+                self._t_readdress = t0
                 self.flush()
-                return {"readdressed": True, "from": old, "to": new}
+                return {"readdressed": True, "from": old, "to": new, "sniffer": self._firsts.error or "ok", "t0": t0}
             if not self.readdressed:
                 return {"readdressed": False, "last": self.last_readdress}
             for argv in mode_commands(self.t, self.mode):
@@ -420,7 +542,32 @@ class Router:
                 self.run(argv)
             self.run(rule_argv("-D", unmapped_rule(self.t), CHAIN_IN))
         finally:
+            self._stop_sniffer()
             self.readdressed = False
+
+    def _start_sniffer(self, firsts):
+        if self.sniffer is None:
+            firsts.error = "this router has no packet sniffer"
+            return
+        try:
+            sniff = self.sniffer(self.t.out_if, lambda frame: firsts.feed_frame(self.clock(), frame), Firsts.HORIZON_S + 2.0)
+            sniff.start()
+            self._sniff = sniff
+        except Exception as exc:                        # noqa: BLE001 - no CAP_NET_RAW, no AF_PACKET: evidence is optional
+            firsts.error = "%s: %s" % (type(exc).__name__, str(exc)[:100])
+
+    def _stop_sniffer(self):
+        sniff, self._sniff = self._sniff, None
+        if sniff is not None:
+            try:
+                sniff.stop()
+            except Exception:                           # noqa: BLE001
+                pass
+
+    def firsts(self):
+        """Read only: the snapshot of the last `readdress on` (live while moved, final after `off`), None before the first."""
+        with self.lock:
+            return {"firsts": self._firsts.snapshot() if self._firsts is not None else None, "readdressed": self.readdressed}
 
     def set_blackhole(self, on, seconds=None):
         with self.lock:
@@ -496,6 +643,8 @@ class Router:
                 body = self.set_readdress(req["state"] == "on")
             elif op == "mappings":
                 body = self.mappings()
+            elif op == "firsts":
+                body = self.firsts()
             elif op == "reset":
                 self.set_blackhole(False)
                 self.set_drop_direct(False)
@@ -636,6 +785,10 @@ class NatClient:
     def readdress(self, on):
         """Move the browser's UDP to the other outside address (True) or back (False); returns the answer."""
         return self.ctl("readdress", state="on" if on else "off")
+
+    def firsts(self):
+        """The snapshot of the router's packet sniffer since the last `readdress on` (see Firsts), or None."""
+        return self.ctl("firsts")["firsts"]
 
     def media_mappings(self):
         """[{'browser_port', 'seen_ip', 'seen_port'}]: the browser's UDP flows to the SUT's media port as the SUT sees them."""

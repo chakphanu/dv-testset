@@ -1073,6 +1073,9 @@ services:
   # server (dvtest/tools/nat_router.py, outside address only, tester only). NET_ADMIN is its only capability.
   nat-router:
     <<: *nat
+    # NET_RAW (with NET_ADMIN) only for the AF_PACKET sniffer of the `firsts` evidence of the ICE1 cases (docs/web-nat-cases.md):
+    # it reads the SUT's media datagrams on the outside interface; this service alone, not the anchor
+    cap_add: [NET_ADMIN, NET_RAW]
     sysctls:
       net.ipv4.ip_forward: "1"
     command:
