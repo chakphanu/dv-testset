@@ -265,3 +265,18 @@ def test_csp2_problems_ignore_only_the_accepted_report():
     ch = brlib.PageLog(engine="chromium")
     ch.csp.append(_csp())
     assert any("style-src-attr" in p for p in ch.problems())              # a real inline style in Chromium still fails
+
+
+# ---- CSP3: Playwright WebKit's own screenshot report (style-src-elem, inline, no source, line 5 column 30)
+
+def test_csp3_accepts_only_the_webkit_screenshot_report():
+    from dvtest import browser as brlib
+    shot = {"directive": "style-src-elem", "effective": "style-src-elem", "blocked": "inline", "source": "", "line": 5,
+            "column": 30, "tag": "", "disposition": "enforce"}
+    wk = brlib.PageLog(engine="webkit")
+    assert wk.accepted_csp(shot) and wk.unexpected_csp() == []
+    for bad in (dict(shot, line=6), dict(shot, column=1), dict(shot, source="https://dvt-web/x.js"), dict(shot, tag="style"),
+                dict(shot, blocked="https://dvt-web/a.css"), dict(shot, directive="script-src-elem"), {k: v for k, v in shot.items() if k != "line"}):
+        assert not wk.accepted_csp(bad), bad
+    for engine in ("chromium", "firefox", ""):
+        assert not brlib.PageLog(engine=engine).accepted_csp(shot)

@@ -86,8 +86,19 @@ class PageLog:
         csp-select matrix); Chromium and Firefox report nothing. That ONE report is accepted: engine WebKit, directive style-src-attr,
         blocked inline, the violating element a <select>. Any other CSP report, in any engine, is a failure. Real Safari is not verified
         (owner check)."""
-        return (self.engine == "webkit" and str(v.get("directive", "")).startswith("style-src-attr")
-                and (v.get("blocked") or "") == "inline" and str(v.get("tag", "")).lower() == "select")
+        return ((self.engine == "webkit" and str(v.get("directive", "")).startswith("style-src-attr")
+                 and (v.get("blocked") or "") == "inline" and str(v.get("tag", "")).lower() == "select")
+                or self.screenshot_csp(v))
+
+    def screenshot_csp(self, v):
+        """CSP3 (2026-11-08, wip-220e45b): Playwright WebKit 27.2 raises ONE style-src-elem report (blocked inline, no sourceFile, no
+        target, line 5 column 30) for every page.screenshot() / locator.screenshot() under a policy without 'unsafe-inline', also on a
+        synthetic page with no product code (cases/test_web_csp_probe.py, csp-elem action matrix: screenshot 1, full-page 1, viewport,
+        emulate_media, reload and idle 0; Chromium and Firefox 0; not the trace, not the caret style). The harness's own screenshot,
+        not the page: accepted with exactly that signature (another line/column, a source file or a target is a failure)."""
+        return (self.engine == "webkit" and str(v.get("directive", "")).startswith("style-src-elem")
+                and (v.get("blocked") or "") == "inline" and not v.get("source") and not v.get("tag")
+                and v.get("line") == 5 and v.get("column") == 30)
 
     def unexpected_csp(self):
         """The CSP reports that are not the accepted WebKit <select> report."""
