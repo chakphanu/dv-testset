@@ -279,6 +279,11 @@ def split_tolerated_errors(errors, navs, engine, window_s=NAV_ERROR_WINDOW_S):
     return unexpected, tolerated
 
 
+def nearest_actions(t, actions, n=3):
+    """The `n` case actions `(time, label)` nearest to time `t` (either side), nearest first."""
+    return sorted(actions, key=lambda a: abs(a[0] - t))[:n]
+
+
 # ------------------------------------------------------------------ the stopped edge: is its desk drawn closed?
 
 def edge_lists(state):
@@ -289,7 +294,7 @@ def edge_lists(state):
             "live_edges": live.get("edges") if isinstance(live, dict) else None}
 
 
-def closed_desk_finding(protocol, ids_before, ids_after, lists_after):
+def closed_desk_finding(protocol, ids_before, ids_after, lists_after, waited_s=None):
     """None when the desk of `protocol` is drawn closed (a `<protocol>:down` entry in `ids_after`), else the text of the FINDING for the
     product owner. `ids_*` are the `data-id:data-state` entries of the drawn desks, `lists_after` is edge_lists() of the public state
     at the time of the check (enabled but not in live.edges is the spec, web.md Map)."""
@@ -301,8 +306,18 @@ def closed_desk_finding(protocol, ids_before, ids_after, lists_after):
         what = "the desk of the stopped edge %s is drawn but not closed (data-state %s)" % (protocol, state)
     else:
         what = "the desk of the stopped edge %s is not drawn (desks %d -> %d)" % (protocol, len(ids_before or []), len(ids_after or []))
-    return ("FINDING: %s, want it drawn with the Closed sign (web.md: enabled but not in live.edges); info.edges_enabled=%s live.edges=%s desks before=%s after=%s" % (
-        what, lists_after.get("edges_enabled"), lists_after.get("live_edges"), list(ids_before or []), list(ids_after or [])))
+    waited = "" if waited_s is None else " (waited %.1f s after live.edges dropped the edge)" % waited_s
+    return ("FINDING: %s%s, want it drawn with the Closed sign (web.md: enabled but not in live.edges); info.edges_enabled=%s live.edges=%s desks before=%s after=%s" % (
+        what, waited, lists_after.get("edges_enabled"), lists_after.get("live_edges"), list(ids_before or []), list(ids_after or [])))
+
+
+def desk_state(ids, protocol):
+    """The data-state of the desk `protocol` in a list of 'id:state' entries, or None when it is not drawn."""
+    for entry in ids or []:
+        name, _, state = entry.partition(":")
+        if name == protocol:
+            return state
+    return None
 
 
 # ------------------------------------------------------------------ SIGSTOP / SIGCONT of the edge and the hub (control channel)

@@ -311,6 +311,29 @@ def test_the_webkit_navigation_error_is_tolerated_only_near_a_navigation():
     assert len(bad) == 1                                                                             # exactly the auth/session message
 
 
+def test_error_near_any_main_frame_navigation_is_tolerated_and_far_ones_are_not():
+    case_navs, frame_navs = [10.0], [10.0, 31.2, 55.0]            # the page reloaded itself at 31.2 s, the case started nothing then
+    navs = case_navs + frame_navs
+    bad, ok = mms.split_tolerated_errors([(31.9, ERR), (40.0, ERR)], navs, "webkit")
+    assert [t for t, _ in bad] == [40.0] and [t for t, _, _ in ok] == [31.9]
+
+
+def test_nearest_actions_are_the_three_closest_on_either_side():
+    actions = [(1.0, "goto"), (5.0, "emulate_media dark"), (9.0, "set_viewport_size 360"), (9.5, "set_viewport_size 1000"), (30.0, "click")]
+    near = mms.nearest_actions(9.4, actions)
+    assert [label for _t, label in near] == ["set_viewport_size 1000", "set_viewport_size 360", "emulate_media dark"]
+    assert mms.nearest_actions(9.4, []) == []
+
+
+def test_desk_state_and_the_waited_time_in_the_finding():
+    ids = ["dcs:up", "xlx:down"]
+    assert mms.desk_state(ids, "xlx") == "down" and mms.desk_state(ids, "dcs") == "up" and mms.desk_state(ids, "ysf") is None
+    lists = {"edges_enabled": ["dcs", "xlx"], "live_edges": ["dcs"]}
+    text = mms.closed_desk_finding("xlx", ["dcs:up", "xlx:up"], ["dcs:up", "xlx:up"], lists, waited_s=15.4)
+    assert "drawn but not closed (data-state up) (waited 15.4 s after live.edges dropped the edge)" in text
+    assert mms.closed_desk_finding("xlx", [], ids, lists, waited_s=2.0) is None
+
+
 def test_closed_desk_finding_text():
     before = ["dcs:up", "xlx:up", "ysf:up"]
     lists = {"edges_enabled": ["dcs", "xlx", "ysf"], "live_edges": ["dcs", "ysf"]}

@@ -623,3 +623,16 @@ Evidence per repeat: `out/<run>/web/talk-echo-chromium-conn-talk-<n>.json`.
    xlx is not drawn (desks 12 -> 11), want it drawn with the Closed sign (web.md: enabled but not in live.edges)` plus the two lists, so DV-Router can tell whether
    the page or the state is wrong. The assertion stays (it is the spec); the 12 combinations still run for the overflow and Thai checks, the sign is not judged.
 16. Audio element: `[data-testid='listen-audio']` is the element the page plays the module audio with (`pages.MODULE_AUDIO_CSS`, a WEB2 hook); the page sets `srcObject` on it (a property assignment the wrapped setter sees; a stream set through an attribute or a `srcObject` of a different prototype would be noticed by the 250 ms poll only); the element's stream is the receiver stream of one RTCPeerConnection, so its track ids match a `track` event of that pc (a pc created before the init script is not seen); an `AnalyserNode` on a remote stream reads audio in Chromium because the page's own element plays it; `webrtc-max-tx-1.toml`: the key `[edges.webrtc] max_tx` and its meaning come from DV-Router's reviews (`assertion.rs`, `tx.rs`), no run here has used it.
+
+
+## After the second rig run (wip-220e45b)
+
+12 passed, 6 failed; two case-side corrections:
+
+1. Closed desk timing: the first combination was judged before the page had reacted to `live.edges` dropping `xlx` (its next state poll or stream event). The case
+   now polls the desk's `data-state` every 250 ms, up to 15 s, until it is drawn and not `up`, before it judges anything; the delay from the moment `live.edges`
+   no longer listed the edge is `timing.desk_left_up_after_s` (`desk_wait_s` when it never changed) in the JSON, and the FINDING text carries the waited time.
+2. WebKit `auth/session` page error: the tolerance window is now 1 s around ANY main-frame navigation, whoever started it: `NavWatch` records `framenavigated`
+   of the main frame, `load`, the navigations the case starts and the case actions (goto, click, reload, `set_viewport_size`, `emulate_media`) with times. The JSON
+   (`navigation_evidence`) lists those times and every page error with its distance to the nearest navigation and its three nearest case actions; an error
+   with no navigation near it still fails the case and the failure text prints that distance and the three actions.

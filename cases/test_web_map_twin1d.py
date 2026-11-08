@@ -70,7 +70,8 @@ OVER_CAP_S = 100.0              # a seeded matrix over never lasts longer (well 
 SEED_WAIT_S = 20.0              # the seeded rooms must show data-state=onair within this long
 HUB_NOTICE_S = 25.0             # the live page should notice the dead hub within this long ...
 HUB_RELOAD_S = 40.0             # ... else it is reloaded once and given this long
-EDGE_DROP_S = 90.0              # live.edges must stop listing the SIGSTOPped edge within this long (UNVERIFIED how long the hub needs)
+DESK_REACT_S = 15.0             # the page may need this long after live.edges dropped an edge to draw its desk closed (its next poll / event)
+EDGE_DROP_S = 90.0             # live.edges must stop listing the SIGSTOPped edge within this long (UNVERIFIED how long the hub needs)
 EDGE_BACK_S = 150.0             # ... and list it again within this long after SIGCONT
 HUB_BACK_S = 150.0              # the public state must answer 200 again within this long after SIGCONT of the hub
 AUTH_SESSION = "/api/v1/auth/session"
@@ -91,33 +92,77 @@ def out_web():
 # ---------------------------------------------------------------- page helpers
 
 class NavWatch:
-    """Times of the navigations and reloads the case itself starts, and every page error with its time, so that the one WebKit error
-    a navigation causes (a fetch still in flight when the page is reloaded; mms.split_tolerated_errors) is told from a real one."""
+    """Every main-frame navigation of the page, whoever started it (framenavigated and load), the navigations and actions the case
+    starts (goto, reload, click, viewport, emulate_media), and every page error, all with monotonic times. The one WebKit error
+    that a navigation causes (a fetch still in flight when the page navigates; mms.split_tolerated_errors) is told from a real one
+    by its distance to ANY of these navigations."""
 
     def __init__(self, bp):
         self.engine = bp.engine
-        self.navs, self.errors = [], []
-        bp.page.on("pageerror", self._error)
+        self.t0 = time.monotonic()
+        self.case_navs, self.frame_navs, self.loads, self.actions, self.errors = [], [], [], [], []
+        page = bp.page
+        page.on("pageerror", self._error)
+        page.on("framenavigated", lambda frame: self.frame_navs.append(time.monotonic()) if frame == page.main_frame else None)
+        page.on("load", lambda _page: self.loads.append(time.monotonic()))
 
     def _error(self, exc):
         self.errors.append((time.monotonic(), "%s: %s" % (getattr(exc, "name", "Error"), getattr(exc, "message", exc))))
 
-    def mark(self):
-        self.navs.append(time.monotonic())
+    def mark(self, label="navigation"):
+        self.case_navs.append(time.monotonic())
+        self.act(label)
+
+    def act(self, label):
+        self.actions.append((time.monotonic(), label))
+
+    def navs(self):
+        return self.case_navs + self.frame_navs + self.loads
 
     def split(self):
-        return mms.split_tolerated_errors(self.errors, self.navs, self.engine)
+        return mms.split_tolerated_errors(self.errors, self.navs(), self.engine)
+
+    def rel(self, t):
+        return round(t - self.t0, 2)
+
+    def evidence(self):
+        """The navigation times, the case actions and the page errors (seconds since the watch started) for the JSON."""
+        unexpected, _tolerated = self.split()
+        bad = {t for t, _text in unexpected}
+        navs = self.navs()
+        return {"case_navigations_s": [self.rel(t) for t in self.case_navs], "main_frame_navigations_s": [self.rel(t) for t in self.frame_navs],
+                "loads_s": [self.rel(t) for t in self.loads], "actions": [[self.rel(t), label] for t, label in self.actions],
+                "page_errors": [{"t_s": self.rel(t), "tolerated": t not in bad, "text": text[:200],
+                                 "nearest_navigation_s": round(min(abs(t - n) for n in navs), 2) if navs else None,
+                                 "nearest_actions": [[self.rel(at), label, round(at - t, 2)] for at, label in mms.nearest_actions(t, self.actions)]}
+                                for t, text in self.errors]}
+
+    def describe_unexpected(self, unexpected):
+        """Text for a failure: each remaining error with its nearest navigation and its 3 nearest case actions."""
+        navs = self.navs()
+        out = []
+        for t, text in unexpected[:3]:
+            near = round(min(abs(t - n) for n in navs), 2) if navs else None
+            acts = ["%s at %+.2f s" % (label, at - t) for at, label in mms.nearest_actions(t, self.actions)]
+            out.append("%s [t=%.2f s, nearest main-frame/case navigation %s s, 3 nearest case actions: %s]" % (text[:300], self.rel(t), near, "; ".join(acts) or "none"))
+        return " | ".join(out)
 
 
-def mark_nav(bp):
+def mark_nav(bp, label="navigation"):
     watch = getattr(bp, "watch", None)
     if watch is not None:
-        watch.mark()
+        watch.mark(label)
+
+
+def note_action(bp, label):
+    watch = getattr(bp, "watch", None)
+    if watch is not None:
+        watch.act(label)
 
 
 def open_map(bp):
     """Opens #/map and waits for the heading, the page wrapper and the building."""
-    mark_nav(bp)
+    mark_nav(bp, "goto #/map")
     bp.goto(pages.map_url())
     expect(pages.map_building(bp.page)).to_be_visible(timeout=int(LOAD_S * 1000))
     expect(pages.map_caption(bp.page)).to_be_visible(timeout=int(LOAD_S * 1000))
@@ -176,13 +221,13 @@ def set_language(bp, lang):
     via = "switch"
     if button.count():
         if button.get_attribute("aria-pressed") != "true":
-            mark_nav(bp)
+            mark_nav(bp, "click language-%s" % lang)
             with page.expect_navigation(timeout=20000):
                 button.click()
     else:
         via = "storage"
         page.evaluate("(a) => { try { localStorage.setItem(a[0], a[1]); } catch (e) { /* denied */ } }", [pages.LANG_STORAGE_KEY, lang])
-        mark_nav(bp)
+        mark_nav(bp, "reload for language-%s" % lang)
         page.reload()
     expect(pages.map_building(page)).to_be_visible(timeout=int(LOAD_S * 1000))
     page.wait_for_function("(l) => document.documentElement.lang === l", arg=lang, timeout=int(LOAD_S * 1000))
@@ -316,6 +361,13 @@ def drawn_desks(page):
                          pages.map_matrix_selectors()["desk_any"])
 
 
+def wait_desk_not_up(page, protocol, t_ref, timeout_s=DESK_REACT_S):
+    """Polls every 250 ms until the desk of `protocol` is drawn with a data-state other than 'up' (a desk that is not drawn yet
+    does not count). Returns (changed, seconds from the monotonic time t_ref to the end of the wait)."""
+    got = mms.poll_until(lambda: mms.desk_state(drawn_desks(page), protocol) not in (None, "up"), timeout_s, every_s=0.25)
+    return got is not None, round(time.monotonic() - t_ref, 2)
+
+
 def measure(page):
     return page.evaluate(mms.MEASURE_JS, pages.map_matrix_selectors())
 
@@ -323,6 +375,7 @@ def measure(page):
 def run_combo(bp, scenario, lang, scheme, width, closed_required, shots, record):
     """One combination: viewport and scheme in place, settle, measure, judge, screenshot. Returns the failures."""
     page = bp.page
+    note_action(bp, "set_viewport_size %d" % width)
     page.set_viewport_size({"width": width, "height": VIEW_HEIGHT})
     layout = settle(page)
     page.wait_for_timeout(150)
@@ -348,6 +401,7 @@ def run_combo(bp, scenario, lang, scheme, width, closed_required, shots, record)
 def all_scheme_width(bp, scenario, lang, closed_required, shots, record):
     failures = []
     for scheme in mms.SCHEMES:
+        note_action(bp, "emulate_media %s" % scheme)
         bp.page.emulate_media(color_scheme=scheme)
         for width in mms.WIDTHS:
             failures += run_combo(bp, scenario, lang, scheme, width, closed_required, shots, record)
@@ -364,7 +418,7 @@ def hub_down_enter(bp, rig):
         return "live", round(time.monotonic() - t0, 1)
     except Exception:                               # noqa: BLE001 - not noticed by the live page: reload once
         pass
-    mark_nav(bp)
+    mark_nav(bp, "reload (hub down)")
     page.reload()
     try:
         pages.map_hub_down(page).wait_for(state="visible", timeout=int(HUB_RELOAD_S * 1000))
@@ -405,7 +459,8 @@ def write_matrix(bp, scenario, record, failures, extra):
     path = out_web() / ("map-matrix-%s-%s.json" % (bp.engine, scenario))
     _unexpected, tolerated = bp.watch.split()
     doc = dict(extra, engine=bp.engine, label=brlib.label(bp.engine), scenario=scenario, combos=record, failures=failures,
-               tolerated_navigation_errors=[{"seconds_from_navigation": near, "text": text[:200]} for _t, text, near in tolerated])
+               tolerated_navigation_errors=[{"seconds_from_navigation": near, "text": text[:200]} for _t, text, near in tolerated],
+               navigation_evidence=bp.watch.evidence())
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(doc, indent=1, sort_keys=True), encoding="utf-8")
@@ -431,7 +486,8 @@ def final_assert(bp, scenario, failures, path, page_errors_are_findings=False):
         if unexpected:
             web.finding("%s: %s: page error while a process was stopped: %s" % (brlib.label(bp.engine), scenario, unexpected[0][1][:300]))
     else:
-        assert not unexpected, "%s: page error: %s (%d tolerated navigation errors)" % (brlib.label(bp.engine), unexpected[0][1][:300], len(tolerated))
+        assert not unexpected, "%s: page error: %s (%d error(s) tolerated within 1 s of a main-frame navigation)" % (
+            brlib.label(bp.engine), bp.watch.describe_unexpected(unexpected), len(tolerated))
     assert not failures, "%s: %s: %d failure(s) in %d combination(s) (evidence %s, screenshots %s):\n  %s" % (
         brlib.label(bp.engine), scenario, len(failures), len({f.split(":")[0] for f in failures}), path, shots, "\n  ".join(failures))
 
@@ -534,6 +590,7 @@ def test_map_closed_desk_sign_thai(browser_page, web_client, request):
                 pytest.skip("no %s process to stop in %s (%s)" % (mms.EDGE_PROCESS, mms.SERVICE, str(exc)[:80]))
             t_drop = mms.poll_until(lambda: not mms.edge_listed(public_state(anon), mms.EDGE_PROTOCOL), EDGE_DROP_S, every_s=2.0)
             timing["edge_dropped_s"] = t_drop
+            t_gone = time.monotonic()                               # live.edges no longer lists the edge: the page's reaction is timed from here
             if t_drop is None:
                 failures.append("%s: live.edges still lists %s %.0f s after SIGSTOP of %s: the hub did not drop the stopped edge" % (
                     scenario, mms.EDGE_PROTOCOL, EDGE_DROP_S, mms.EDGE_PROCESS))
@@ -541,10 +598,15 @@ def test_map_closed_desk_sign_thai(browser_page, web_client, request):
             open_map(bp)
             wait_quiet(bp.page)
             if rig is not None:
+                # the page needs a moment after live.edges drops the edge (its next state poll or stream event): wait for the desk to
+                # leave 'up' before anything is judged, and record how long it took
+                changed, waited = wait_desk_not_up(bp.page, mms.EDGE_PROTOCOL, t_gone)
+                timing["desk_left_up_after_s"] = waited if changed else None
+                timing["desk_wait_s"] = waited
                 # the moment of the check: the state the page was drawn from, and the desks it drew
                 desks["state_after"] = mms.edge_lists(public_state(anon))
                 desks["after"] = drawn_desks(bp.page)
-                text = mms.closed_desk_finding(mms.EDGE_PROTOCOL, desks["before"], desks["after"], desks["state_after"])
+                text = mms.closed_desk_finding(mms.EDGE_PROTOCOL, desks["before"], desks["after"], desks["state_after"], waited_s=waited)
                 if text is not None:
                     web.finding("%s: %s" % (brlib.label(bp.engine), text))
                     failures.append(text)
