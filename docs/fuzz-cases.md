@@ -192,6 +192,34 @@ DVT_FUZZ_REPLAY=out/<utc>/netns/fuzz-dextra/fuzz-replay-dextra.json  DVT_DVR_BIN
 order, the valid round still runs after every 200). A single datagram can be rebuilt without any file:
 `dvtest.fuzz.generate(protocol, seed, index).packets[sub]`.
 
+### Confirm a failure by replay only: `test_fuzz_replay_served`
+
+`DVT_FUZZ_REPLAY=<file>` plus `-k test_fuzz_replay_` starts the SUT as in the scenario of the file's protocol
+(the nxdn / p25 / g3 TOML merged as well), links the valid clients and checks they are served (the warm-up
+round, recorded as `served_before`), links the fuzz client on module B, sends exactly the recorded datagrams
+(each entry from the source it was recorded with: the linked fuzz client's socket or a stranger socket, 1 ms
+apart), then runs one valid over of 54 frames at the stream timeout + 1 s (2.6 s), at 10 s and at 30 s after the
+last replayed datagram. It writes to the run directory (`out/<utc>/netns/fuzz-replay-<protocol>/`):
+
+* `replay.json` and one `RECORD:` line (also a pytest warning and `fuzz-findings.txt`): the three checks
+  (heard of 54, link probe), the valid client (callsign, NXDN id 1001, TG 31672, module B), the replayed
+  datagrams decoded with `dvtest/proto/nxdn.py` (source ids and TGs of the datagrams and of their FACCH1
+  layer 3 blocks, poll callsigns and TGs, kinds, and `equals_valid_id` / `equals_valid_tg` /
+  `poll_callsign_equals_valid`; other protocols: sizes only), and every `dv_edge_*` series of the edge's `proc`
+  label before and after (`hub_before`, `hub_after`, `hub_changed`), plus `metrics-start.txt`, `metrics-end.txt`
+  and `metrics-replay-end.txt`.
+* The case fails only when the valid client is still not served at 30 s; it skips when it was not served
+  before the replay. Without `DVT_FUZZ_REPLAY` it skips.
+
+The last-50 file holds only 50 datagrams, so the state that led to the failure (1219 earlier datagrams) is not
+in it. Two ways to replay the whole history: `DVT_FUZZ_RING=100000` on the failing run keeps every datagram in
+the replay file, or, when the run had one phase on module B (nxdn, p25, usrp) and the failure text says how many
+datagrams were sent, regenerate it:
+`python3 -m dvtest.tools.fuzz_replay --regen nxdn --seed 1 --from 0 --count 1269 --write full.json`
+(checked: this equals the last 50 of the failing nxdn run byte for byte). With `-k test_fuzz_nxdn_` instead of
+`-k test_fuzz_replay_` the same file runs as a normal scenario with a valid round every 200 datagrams and the idle
+wait, which recreates the original timeline.
+
 ## UNVERIFIED (not confirmed when this was written; nothing here ran against a DV-Router build)
 
 1. **Which ports the converted config opens.** First run (wip-9a348ca): everything bound except NXDN

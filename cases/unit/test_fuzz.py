@@ -419,7 +419,7 @@ def test_case_file_has_one_scenario_per_port_group_and_four_cases_each():
     mod = load_cases()
     assert set(mod.SCENARIOS) == set(fuzz.PORT_GROUPS)
     names = [n for n in dir(mod) if n.startswith("test_fuzz_")]
-    assert len(names) == 4 * len(fuzz.PORT_GROUPS)
+    assert len(names) == 4 * len(fuzz.PORT_GROUPS) + 1 and "test_fuzz_replay_served" in names
     prefixes = [s["cases"] for s in mod.SCENARIOS.values()]
     for name, spec in mod.SCENARIOS.items():
         assert spec["group"] == list(fuzz.PORT_GROUPS[name]) and spec["profile"] == "dvrouter"
@@ -586,3 +586,96 @@ def test_nxdn_p25_g3_are_switched_on_by_a_toml_merged_after_the_conversion():
         assert tomllib.loads(text)["edges"][name]["enable"] is True
     assert tomllib.loads(mod.EXTRA_TOML["nxdn"])["edges"]["nxdn"]["tg_modules"] == "31672:F"
     assert tomllib.loads(mod.EXTRA_TOML["p25"])["edges"]["p25"]["server_tg"] == 31672
+
+
+# ---------------------------------------------------------------- the replay scenario
+
+def nxdn_entries(src_ids=(1003,), polls=(), tg=31672):
+    entries = []
+    for i, src in enumerate(src_ids):
+        for packet in (nxdn.stream_packets([bytes(7)] * 4, src, tg)):
+            entries.append(dict(protocol="nxdn", seed="1", index=i, sub=len(entries), port=41400, src="linked",
+                                hex=packet.hex()))
+    for callsign, ptg in polls:
+        entries.append(dict(protocol="nxdn", seed="1", index=99, sub=0, port=41400, src="stranger",
+                            hex=nxdn.poll_packet(callsign, ptg).hex()))
+    return entries
+
+
+def test_replayed_nxdn_datagrams_are_decoded_and_compared_with_the_valid_client():
+    out = fuzz_run.decode_entries(nxdn_entries((1003, 2002), [("N0FUZZ", 31673)]), "N0CALL", 1001, 31672)
+    assert out["datagram_src_ids"] == [1003, 2002] and out["layer3_src_ids"] == [1003, 2002]
+    assert out["datagram_dst_tgs"] == [31672] and out["layer3_dst_tgs"] == [31672]
+    assert out["poll_callsigns"] == ["N0FUZZ"] and out["poll_tgs"] == [31673]
+    assert out["kinds"]["header"] == 2 and out["kinds"]["trailer"] == 2 and out["kinds"]["poll"] == 1
+    assert out["equals_valid_id"] is False and out["equals_valid_tg"] is True
+    assert out["poll_callsign_equals_valid"] is False
+    assert out["valid_client"] == {"nxdn_id": 1001, "tg": 31672, "callsign": "N0CALL"}
+    same = fuzz_run.decode_entries(nxdn_entries((1001,), [("n0call", 31672)]), "N0CALL", 1001, 31672)
+    assert same["equals_valid_id"] and same["poll_callsign_equals_valid"]
+    junk = [dict(protocol="nxdn", seed="1", index=0, sub=0, port=41400, src="stranger", hex="0102")]
+    assert fuzz_run.decode_entries(junk, "N0CALL", 1001, 31672)["kinds"] == {"other(2 bytes)": 1}
+    other = fuzz_run.decode_entries([dict(junk[0], protocol="dextra")], "N0CALL", 1001, 31672)
+    assert other["decoder"].startswith("none") and other["sizes"] == {2: 1}
+
+
+def test_replay_helpers_ring_scenario_and_hub_series():
+    assert fuzz_run.ring_size_from_env({}) == 50 and fuzz_run.ring_size_from_env({"DVT_FUZZ_RING": "2000"}) == 2000
+    for bad in ("0", "x", "100001"):
+        with pytest.raises(ValueError, match="DVT_FUZZ_RING"):
+            fuzz_run.ring_size_from_env({"DVT_FUZZ_RING": bad})
+    ring = fuzz_run.Ring(3)
+    for i in range(5):
+        ring.add("nxdn", 1, i, 0, 41400, "linked", b"x")
+    assert [e["index"] for e in ring.entries()] == [2, 3, 4]
+    assert fuzz_run.scenario_of("m17v3") == "m17" and fuzz_run.scenario_of("nxdn") == "nxdn"
+    with pytest.raises(KeyError):
+        fuzz_run.scenario_of("nope")
+    text = ('dv_edge_drops_total{proc="nxdn",reason="rx_ignored"} 7\ndv_edge_drops_total{proc="ysf",reason="x"} 1\n'
+            'dv_edge_sessions{proc="nxdn"} 2\ndv_up 1\n')
+    assert fuzz_run.edge_series(text, "nxdn") == {"dv_edge_drops_total{proc=nxdn,reason=rx_ignored}": 7.0,
+                                                  "dv_edge_sessions{proc=nxdn}": 2.0}
+    assert fuzz_run.edge_series(None, "nxdn") == {}
+    assert [label for label, _ in fuzz_run.REPLAY_CHECKS] == ["quiet", "t10", "t30"]
+    assert fuzz_run.REPLAY_CHECKS[0][1] == fuzz_run.QUIET_S and fuzz_run.REPLAY_CHECKS[2][1] == 30.0
+
+
+def test_regenerated_history_is_what_the_fuzzer_sent(tmp_path):
+    out = tmp_path / "full.json"
+    assert fuzz_replay.main(["--regen", "nxdn", "--seed", "1", "--count", "300", "--write", str(out)]) == 0
+    _doc, entries = fuzz_run.read_replay(out.read_text())
+    assert len(entries) == 300 and entries[0]["index"] == 0
+    linked, stranger = FakeSource(), FakeSource()
+    fz = fuzz_run.Fuzzer("nxdn", ("nxdn",), "127.0.0.1", "1", linked, stranger, gap=0, ring=fuzz_run.Ring(5000))
+    fz.batch(300)
+    sent = fz.ring.entries()
+    assert [(e["index"], e["sub"], e["hex"], e["src"]) for e in sent[:300]] == \
+        [(e["index"], e["sub"], e["hex"], e["src"]) for e in entries]
+    with pytest.raises(SystemExit):
+        fuzz_replay.main(["--file", str(out), "--write", str(tmp_path / "x.json")])
+
+
+def replay_run(tmp_path, checks, served=True):
+    rows = [dict(label=l, planned_s=p, started_s=p, heard=h, expected=54, ok=h >= 27, probe=True)
+            for (l, p), h in zip(fuzz_run.REPLAY_CHECKS, checks)]
+    rp = dict(datagrams=50, record="RECORD: replay of 50 datagrams", checks=rows,
+              served_before=dict(ok=served, reason="" if served else "the listener link was not acknowledged"))
+    return {"replay-nxdn": dict(run_dir=str(tmp_path), pinged=True, scenario="nxdn", replay=rp, last50=[], seed="1")}
+
+
+def test_replay_case_fails_only_when_the_valid_client_is_not_served_at_30_s(tmp_path):
+    mod = load_cases()
+    with pytest.raises(pytest.skip.Exception, match="DVT_FUZZ_REPLAY"):
+        mod.test_fuzz_replay_served({})
+    with pytest.warns(UserWarning, match="RECORD"):
+        mod.test_fuzz_replay_served(replay_run(tmp_path, (0, 0, 54)))             # served late: still a pass
+    assert "RECORD" in (tmp_path / "fuzz-findings.txt").read_text()
+    with pytest.warns(UserWarning, match="RECORD"):
+        with pytest.raises(pytest.fail.Exception, match="still not served 30.0 s after"):
+            mod.test_fuzz_replay_served(replay_run(tmp_path, (54, 54, 0)))
+    with pytest.warns(UserWarning, match="RECORD"):
+        with pytest.raises(pytest.skip.Exception, match="not served before the replay"):
+            mod.test_fuzz_replay_served(replay_run(tmp_path, (0, 0, 0), served=False))
+    assert mod.REPLAY_CASES == "test_fuzz_replay_"
+    from dvtest import netns_runs
+    assert netns_runs.scenarios_for(mod.SCENARIOS, {"test_fuzz_replay_served"}) == []   # not a normal scenario

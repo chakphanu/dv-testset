@@ -4,6 +4,7 @@
   python3 -m dvtest.tools.fuzz_replay --file fuzz-replay-dextra.json --host 127.0.0.1 [--gap-ms 1]
   python3 -m dvtest.tools.fuzz_replay --file FILE --list            (only print the entries)
   python3 -m dvtest.tools.fuzz_replay --regen dextra --seed 1 --from 1180 --count 50 --host 127.0.0.1
+  python3 -m dvtest.tools.fuzz_replay --regen nxdn --seed 1 --from 0 --count 1269 --write full.json
 
 --file reads the replay file a failed case wrote to its run directory (the last 50 datagrams, in
 order, with protocol, seed, index, sub index, port, source kind and hex). --regen builds the same
@@ -71,6 +72,9 @@ def main(argv=None):
     ap.add_argument("--link", action="store_true", help="send the linked entries from a live client session")
     ap.add_argument("--module", default="B")
     ap.add_argument("--list", action="store_true", help="print the entries and send nothing")
+    ap.add_argument("--write", metavar="FILE", help="with --regen: write the entries as a replay file (for "
+                    "DVT_FUZZ_REPLAY) and send nothing; the whole history of a run from index 0 when the run's "
+                    "phases were a single phase on module B (nxdn, p25, usrp)")
     ap.add_argument("--i-have-owner-approval", action="store_true",
                     help="allow a destination that is not loopback / private / documentation")
     args = ap.parse_args(argv)
@@ -85,6 +89,17 @@ def main(argv=None):
         if args.regen not in fuzz.PROTOCOLS:
             ap.error("unknown protocol %s (known: %s)" % (args.regen, ", ".join(fuzz.PROTOCOLS)))
         entries = regenerate(args.regen, args.seed, args.start, args.count)
+    if args.write:
+        if not args.regen:
+            ap.error("--write needs --regen")
+        import json
+        doc = fuzz_run.replay_document(args.regen, args.seed, entries, host=None,
+                                       reason="regenerated from (protocol, seed, index) %d..%d" % (
+                                           args.start, entries[-1]["index"] if entries else args.start))
+        with open(args.write, "w") as handle:
+            json.dump(doc, handle, indent=1)
+        print("wrote %d entries to %s" % (len(entries), args.write))
+        return 0
     if args.list:
         print("\n".join(describe(entries)))
         return 0

@@ -84,6 +84,7 @@ EDGES = {"dextra": ("dv-edge-dextra",), "dplus": ("dv-edge-dplus",), "dcs": ("dv
          "xlx": ("dv-edge-xlx",), "imrs": ("dv-edge-imrs",), "g3": ("dv-edge-g3",)}
 PROTOCOL_NAMES = tuple(EDGES)
 TIMEOUT_FLOOR = 240
+REPLAY_CASES = "test_fuzz_replay_"      # the replay case (DVT_FUZZ_REPLAY=<file>)
 
 
 def _scenarios():
@@ -270,10 +271,60 @@ def _inside(spec, run_dir):
 
             replay = spec.get("replay")
             total = len(replay) if replay else spec["n"]
-            phases = fuzz_run.plan_phases(total, None if replay else fuzz.OTHER_MODULE.get(valid_protocol))
-            ring = fuzz_run.Ring()
+            phases = [] if spec.get("mode") == "replay" else \
+                fuzz_run.plan_phases(total, None if replay else fuzz.OTHER_MODULE.get(valid_protocol))
+            ring = fuzz_run.Ring(spec.get("ring", fuzz_run.LAST))
             result["phases"] = []
             sent = errors = case_start = 0
+
+            def replay_flow():
+                """REPLAY mode: the valid client was served (warm-up round) before; now exactly the recorded
+                datagrams, then one valid over at the stream timeout + 1 s, at 10 s and at 30 s after the last
+                one. Everything is written to replay.json and one RECORD line."""
+                who = fuzz_run.IDENT["talker"]
+                proc = fuzz_run.edge_label(result["edge"] or "")
+                out = {"protocol": sorted({e["protocol"] for e in replay}), "datagrams": len(replay),
+                       "valid_client": {"callsign": who["call"], "dmr_id": who["dmrid"], "nxdn_id": who["nxdn"],
+                                        "nxdn_tg": spec["nxdn_tg"], "p25_tg": spec["p25_tg"], "module": "B"},
+                       "replayed": fuzz_run.decode_entries(replay, who["call"], who["nxdn"], spec["nxdn_tg"]),
+                       "served_before": dict(result["warmup"]), "edge_proc": proc,
+                       "hub_before": fuzz_run.edge_series(text0, proc)}
+                linked, how, owned = open_linked("B")
+                sources.append(linked)
+                player = fuzz_run.Replayer(replay, XLXD_IP, linked, stranger, gap=spec["gap"], ring=ring)
+                player.batch(len(replay))
+                last = time.monotonic()
+                out.update(fuzz_source=how, sent=player.sent, send_errors=player.errors, checks=[])
+                for label, delay in fuzz_run.REPLAY_CHECKS:
+                    wait = last + delay - time.monotonic()
+                    if wait > 0:
+                        time.sleep(wait)
+                    at = time.monotonic() - last
+                    row = valid_round("replay-" + label, kind)
+                    row.update(label=label, planned_s=round(delay, 1), started_s=round(at, 1))
+                    out["checks"].append(row)
+                text_after, err_after = scrape()
+                if text_after:
+                    (run_dir / "metrics-replay-end.txt").write_text(text_after)
+                out["hub_after"] = fuzz_run.edge_series(text_after, proc)
+                out["hub_changed"] = {k: [out["hub_before"].get(k, 0.0), v] for k, v in sorted(out["hub_after"].items())
+                                      if out["hub_before"].get(k, 0.0) != v}
+                out["hub_error"] = err_after
+                rep_ = out["replayed"]
+                out["record"] = ("RECORD: replay of %d datagrams (%s) on module B: served before %s; valid over heard %s at +%s s; "
+                                 "valid client id %s tg %s; replayed ids %s tgs %s layer3 ids %s; equals the valid client's "
+                                 "id: %s; edge %s series changed: %s" % (
+                                     len(replay), "/".join(out["protocol"]), out["served_before"].get("ok"),
+                                     ", ".join("%s of %s" % (c["heard"], c["expected"]) for c in out["checks"]),
+                                     ", ".join(str(c["started_s"]) for c in out["checks"]), who["nxdn"], spec["nxdn_tg"],
+                                     rep_.get("datagram_src_ids"), rep_.get("datagram_dst_tgs"), rep_.get("layer3_src_ids"),
+                                     rep_.get("equals_valid_id"), proc,
+                                     {k: v[1] - v[0] for k, v in out["hub_changed"].items()}))
+                (run_dir / "replay.json").write_text(json.dumps(out, indent=1))
+                return out
+
+            if spec.get("mode") == "replay":
+                result["replay"] = replay_flow()
             stop = False
             for ph in phases:
                 linked, how, owned = open_linked(ph["module"])
@@ -383,7 +434,7 @@ def _inside(spec, run_dir):
 def _launch(binary, name, spec, out_root):
     run_dir = out_root / "netns" / ("fuzz-" + name)
     run_dir.mkdir(parents=True, exist_ok=True)
-    spec = dict(spec, bin=str(Path(binary).resolve()), name=name)
+    spec = dict({"name": name}, **spec, bin=str(Path(binary).resolve()))
     cmd = ["unshare", "-rn", sys.executable, "-I", str(Path(__file__).resolve()),
            "--inside", json.dumps(spec), str(run_dir)]
     stderr = open(run_dir / "harness.err", "wb")
@@ -426,9 +477,10 @@ def runs(request, dvrouter_only, xlxd_bin, out_root, target):
     if replay is not None:
         wanted = {e["protocol"] for e in replay}
         names = [name for name in names if wanted & set(SCENARIOS[name]["group"])]
+    ring = fuzz_run.ring_size_from_env()
 
     def spec_of(name):
-        spec = dict(SCENARIOS[name], n=n, seed=seed, gap=gap,
+        spec = dict(SCENARIOS[name], n=n, seed=seed, gap=gap, ring=ring,
                     nxdn_tg=int(os.environ.get("DVT_FUZZ_NXDN_TG", "31672")),
                     p25_tg=int(os.environ.get("DVT_FUZZ_P25_TG", "31672")))
         if name in EXTRA_TOML and os.environ.get("DVT_FUZZ_ENABLE_EDGES", "1") != "0":
@@ -437,10 +489,16 @@ def runs(request, dvrouter_only, xlxd_bin, out_root, target):
             spec["replay"] = [e for e in replay if e["protocol"] in spec["group"]]
         return spec
 
+    specs = {name: spec_of(name) for name in names}
+    # the replay scenario (test_fuzz_replay_*): only with DVT_FUZZ_REPLAY, the protocol comes from the file
+    if replay and any(case.startswith(REPLAY_CASES) for case in selected):
+        base = fuzz_run.scenario_of(replay[0]["protocol"])
+        specs["replay-" + base] = dict(spec_of(base), mode="replay", name=base)
     total = len(replay) if replay is not None else n
     return netns_runs.run_in_waves(
-        names, lambda name: _launch(xlxd_bin, name, spec_of(name), out_root),
-        lambda launched: _collect(launched, max(TIMEOUT_FLOOR, fuzz_run.timeout_s(total))), netns_runs.parallel())
+        list(specs), lambda key: _launch(xlxd_bin, key, specs[key], out_root),
+        lambda launched: _collect(launched, max(TIMEOUT_FLOOR, fuzz_run.timeout_s(total) + (90 if replay else 0))),
+        netns_runs.parallel())
 
 
 def environment_check(run):
@@ -595,6 +653,31 @@ def check_counters(runs, name):
 
 CHECKS = {"edge_survives": check_survives, "valid_client_served": check_served, "memory_bounded": check_memory,
           "counters_move": check_counters}
+
+
+def test_fuzz_replay_served(runs):
+    """REPLAY: with DVT_FUZZ_REPLAY=<file> the recorded datagrams are sent to a started DV-Router (the same
+    SUT and merged TOML as the scenario of the file's protocol), the valid client having been served before;
+    a valid over of 54 frames is then tried at the stream timeout + 1 s, at 10 s and at 30 s after the last
+    datagram. replay.json holds the edge's dv_edge_* series before and after, the valid client's id and TG,
+    and the ids / TGs carried by the datagrams (decoded for NXDN); a RECORD line is printed. Fails only when
+    the valid client is still not served at 30 s."""
+    keys = [k for k in runs if k.startswith("replay-")]
+    if not keys:
+        pytest.skip("DVT_FUZZ_REPLAY=<file> is not set (a fuzz-replay-<protocol>.json of a failed case)")
+    run = get(runs, keys[0])
+    rp = run["replay"]
+    warnings.warn(rp["record"], UserWarning)
+    with open(Path(run["run_dir"]) / "fuzz-findings.txt", "a", encoding="utf-8") as handle:
+        handle.write("[%s] %s\n" % (keys[0], rp["record"]))
+    if not rp["served_before"].get("ok"):
+        pytest.skip("the valid client was not served before the replay (%s): nothing to confirm" %
+                    (rp["served_before"].get("reason") or "warm-up round not ok"))
+    last = rp["checks"][-1]
+    if not last["ok"]:
+        fail(run, run["scenario"], "valid client still not served %.1f s after the last of %d replayed datagrams "
+                                   "(checks: %s)" % (last["started_s"], rp["datagrams"],
+                                                    [(c["label"], c["heard"], c["ok"]) for c in rp["checks"]]))
 
 
 def _define(name, check, fn):

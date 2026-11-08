@@ -120,7 +120,7 @@ def source_for(index):
 
 
 class Ring:
-    """The last `size` datagrams sent, as replay entries."""
+    """The last `size` datagrams sent, as replay entries (DVT_FUZZ_RING raises the size: ring_size_from_env)."""
 
     def __init__(self, size=LAST):
         self.items = collections.deque(maxlen=size)
@@ -524,3 +524,85 @@ def settings_from_env(environ=None):
 def timeout_s(n, every=200):
     """Seconds one scenario may take: start-up, N datagrams, one valid round (about 3 s) per `every`."""
     return int(120 + n * 0.005 + (n // every + 2) * 3.5)
+
+
+# ---------------------------------------------------------------- replay scenario (one recorded datagram list, then the valid client)
+
+REPLAY_CHECKS = (("quiet", QUIET_S), ("t10", 10.0), ("t30", 30.0))   # valid over this many s after the last replayed datagram
+
+
+def ring_size_from_env(environ=None):
+    """Datagrams kept for the replay file: DVT_FUZZ_RING, default LAST (50), at most 100000."""
+    text = (os.environ if environ is None else environ).get("DVT_FUZZ_RING", "").strip()
+    if not text:
+        return LAST
+    try:
+        size = int(text)
+    except ValueError:
+        size = 0
+    if not 1 <= size <= 100000:
+        raise ValueError("DVT_FUZZ_RING must be a number from 1 to 100000, got %r" % text)
+    return size
+
+
+def scenario_of(protocol):
+    """The scenario (port group) that sends a protocol: m17v3 goes with m17."""
+    for name, group in fuzz.PORT_GROUPS.items():
+        if protocol in group:
+            return name
+    raise KeyError("no scenario for protocol %r" % protocol)
+
+
+def edge_series(text, proc):
+    """{"name{label=value,...}": value} of every dv_edge_* series with proc=<proc> in a hub scrape (None: no scrape)."""
+    if not text:
+        return {}
+    return {"%s{%s}" % (name, ",".join("%s=%s" % kv for kv in labels)): value
+            for (name, labels), value in sample_map(text).items()
+            if name.startswith("dv_edge_") and dict(labels).get("proc") == proc}
+
+
+def decode_nxdn(entries, call, nxdn_id, tg):
+    """What the datagrams of a replay list carry, decoded with dvtest/proto/nxdn.py: the source ids and TGs of
+    the NXDND datagrams and of their layer 3 blocks (FACCH1, CRC checked), the callsigns and TGs of polls and
+    unlinks, kinds and sizes, and whether any of them equals the valid client (id, TG, callsign)."""
+    from .proto import nxdn
+    kinds = collections.Counter()
+    src_ids, dst_tgs, l3_src, l3_dst, poll_calls, poll_tgs = set(), set(), set(), set(), set(), set()
+    for e in entries:
+        data = bytes.fromhex(e["hex"])
+        poll = nxdn.parse_poll(data)
+        if poll:
+            kinds[poll["kind"]] += 1
+            poll_calls.add(poll["callsign"])
+            poll_tgs.add(poll["tg"])
+            continue
+        info = nxdn.parse(data)
+        if not info:
+            kinds["other(%d bytes)" % len(data)] += 1
+            continue
+        kinds[info["kind"]] += 1
+        src_ids.add(info["src"])
+        dst_tgs.add(info["dst"])
+        for lo in (5, 19):
+            block = info["payload"][lo:lo + 12]
+            l3 = nxdn.parse_facch1(block)
+            if l3["crc_ok"] and info["kind"] in ("header", "trailer"):
+                l3_src.add(l3["src"])
+                l3_dst.add(l3["dst"])
+    out = {"kinds": dict(kinds), "datagram_src_ids": sorted(src_ids), "datagram_dst_tgs": sorted(dst_tgs),
+           "layer3_src_ids": sorted(l3_src), "layer3_dst_tgs": sorted(l3_dst), "poll_callsigns": sorted(poll_calls),
+           "poll_tgs": sorted(poll_tgs), "valid_client": {"nxdn_id": nxdn_id, "tg": tg, "callsign": call}}
+    out["equals_valid_id"] = nxdn_id in src_ids or nxdn_id in l3_src
+    out["equals_valid_tg"] = tg in dst_tgs or tg in poll_tgs or tg in l3_dst
+    out["poll_callsign_equals_valid"] = call.upper() in {c.upper() for c in poll_calls}
+    return out
+
+
+def decode_entries(entries, call, nxdn_id, tg):
+    """decode_nxdn for NXDN lists; for any other protocol only the sizes and the protocols (no decoder)."""
+    protocols = sorted({e["protocol"] for e in entries})
+    if protocols == ["nxdn"]:
+        return dict(decode_nxdn(entries, call, nxdn_id, tg), protocol="nxdn")
+    return {"protocol": protocols, "decoder": "none (NXDN only)",
+            "sizes": dict(collections.Counter(len(e["hex"]) // 2 for e in entries))}
