@@ -43,7 +43,7 @@ import talk_echo_support as tes  # noqa: E402
 import web_pages as pages  # noqa: E402
 from browser_fixtures import BrowserPage, _rtc_end  # noqa: E402
 from dvtest import browser as brlib  # noqa: E402
-from dvtest import echo  # noqa: E402
+from dvtest import echo, metrics  # noqa: E402
 from echo_support import EchoCfg  # noqa: E402
 from test_web_webrtc import _digest  # noqa: E402
 from webrtc_support import MIC_UNAVAILABLE, Rtc, on_air_or_end, press, public_state, release, wait_talk_text  # noqa: E402
@@ -154,14 +154,31 @@ class Run:
             self.errors.append("ctl frames: %s" % type(exc).__name__)
 
 
+def read_ice_metrics(control):
+    """The dv_edge_webrtc_* samples with 'restart' or 'ice' in the family name from the hub metrics (`metrics xlxd-sut` through the control
+    channel; the edge publishes every 10 s), or None when there is no control channel or the read fails."""
+    if control is None:
+        return None
+    try:
+        samples = metrics.parse(control.metrics("xlxd-sut"))
+    except Exception:                                    # noqa: BLE001 - evidence only
+        return None
+    return tes.ice_metrics([{"name": m.name, "labels": dict(m.labels), "value": m.value} for m in samples])
+
+
 def start_recorders(*bps):
     for bp in bps:
         got = bp.page.evaluate("(ms) => window.__dvtEcho ? window.__dvtEcho.start(ms) : null", tes.SAMPLE_MS)
         assert got is not None, "the recorder is not installed in the page"
 
 
-def test_talk_echo_returns_to_the_page(engine, rtc_tx_page, echo_rx_page, echo_on_e, web_client):
+def test_talk_echo_returns_to_the_page(engine, rtc_tx_page, echo_rx_page, echo_on_e, web_client, request):
     tx, rx = rtc_tx_page, echo_rx_page
+    try:
+        control = request.getfixturevalue("rig_control")      # optional: DVT_RIG_CONTROL=1 (run.sh sets it)
+    except pytest.skip.Exception:
+        control = None
+    ice_before = ice_after = None
     for bp in (tx, rx):
         bp.context.add_init_script(tes.ECHO_RECORDER_JS)         # after the shared probe, before the first dashboard navigation
     run = Run(engine, tx, rx)
@@ -169,6 +186,7 @@ def test_talk_echo_returns_to_the_page(engine, rtc_tx_page, echo_rx_page, echo_o
     anon = web_client()
     failures = []
     analysis = {}
+    ice1 = {}
     try:
         rtc_tx.open()
         rtc_rx.open()
@@ -183,6 +201,7 @@ def test_talk_echo_returns_to_the_page(engine, rtc_tx_page, echo_rx_page, echo_o
         run.wait(tes.PRE_S, rtc_tx, rtc_rx, anon)
 
         # -- the hold
+        ice_before = read_ice_metrics(control)
         run.mark("press")
         run.probe_press_ms = rtc_tx.clock()
         press(rtc_tx)
@@ -207,13 +226,26 @@ def test_talk_echo_returns_to_the_page(engine, rtc_tx_page, echo_rx_page, echo_o
             elapsed = time.time() - run.phases["release"]
             run.wait(max(0.0, tes.TAIL_S - elapsed), rtc_tx, rtc_rx, anon)
             run.mark("tail_end")
+            ice_after = read_ice_metrics(control)
     finally:
         try:
             run.collect()
+            if ice_after is None and ice_before is not None:
+                ice_after = read_ice_metrics(control)
             if "release" in run.phases:
                 analysis = tes.analyse_run(run.dumps, engine)
                 failures += tes.failure_lines(analysis["checks"], analysis["diagnosis"])
             tables = {who: tes.requests_table(a.rows, run.phases) for who, a in run.audits.items()}
+            delta = tes.metrics_delta(ice_before, ice_after)
+            restarts = tes.restarts_delta(delta)
+            ice1 = {}
+            for who in ("talker", "listener"):
+                d = run.dumps[who]
+                rel = tes.mark_t(d, "release") if d else None
+                ice1[who] = {"diagnosis": tes.ice1_diagnosis(d, tes.offers_summary(tables[who]), restarts),
+                             "offers": tes.offers_summary(tables[who]),
+                             "connection": (d or {}).get("connection"), "ui": (d or {}).get("ui"),
+                             "pcs_inbound_in_echo_window": tes.per_pc_inbound(d, rel, rel + tes.TAIL_S * 1000.0) if rel is not None else []}
             doc = {
                 "meta": {"engine": brlib.label(engine), "room": tes.ROOM, "hold_s": tes.HOLD_S, "pre_s": tes.PRE_S, "tail_s": tes.TAIL_S,
                          "sample_ms": tes.SAMPLE_MS, "rms_floor": tes.RMS_FLOOR, "expect_hz": tes.EXPECT_HZ.get(engine),
@@ -223,7 +255,11 @@ def test_talk_echo_returns_to_the_page(engine, rtc_tx_page, echo_rx_page, echo_o
                 "phases": run.phases, "texts": run.texts, "timeline": run.timeline, "public_state_room_E": run.public,
                 "checks": [{k: c[k] for k in ("name", "kind", "ok", "stage", "detail")} for c in analysis.get("checks", [])],
                 "verdicts": {c["name"]: c["verdict"] for c in analysis.get("checks", []) if c.get("verdict")},
-                "diagnosis": analysis.get("diagnosis", ""), "failures": list(failures), "errors": run.errors,
+                "diagnosis": analysis.get("diagnosis", ""),
+                "ice1": {"edge_metrics_before_talk": ice_before, "edge_metrics_after_echo": ice_after, "edge_metrics_delta": delta,
+                         "restarts_delta": restarts, "control_channel": control is not None,
+                         "note": "dv_edge_webrtc_* families with 'restart' or 'ice' in the name; the edge publishes every 10 s", **ice1},
+                "failures": list(failures), "errors": run.errors,
                 "talker": {"analysis": analysis.get("talker"), "requests": tables["talker"], "requests_summary": tes.requests_summary(tables["talker"]),
                            "recorder": run.dumps["talker"], "ctl": run.ctl,
                            "series": tes.series(run.dumps["talker"]) if run.dumps["talker"] else []},
@@ -234,6 +270,9 @@ def test_talk_echo_returns_to_the_page(engine, rtc_tx_page, echo_rx_page, echo_o
         except Exception as exc:                         # noqa: BLE001 - the evidence must never mask the case's own outcome
             print("talk-echo: evidence not written: %s: %s" % (type(exc).__name__, exc))
 
+    for who in ("talker", "listener"):
+        if ice1.get(who):
+            print("[RECORD] talk-echo %s %s page ICE1: %s" % (brlib.label(engine), who, ice1[who]["diagnosis"]))
     if analysis.get("diagnosis"):
         print("[RECORD] talk-echo %s: %s" % (brlib.label(engine), analysis["diagnosis"]))
     if failures:

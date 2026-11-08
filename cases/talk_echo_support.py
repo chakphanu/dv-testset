@@ -52,6 +52,44 @@ ECHO_RECORDER_JS = r"""
   const now = () => performance.now() - t0;
   const rd = (v, n) => { const k = Math.pow(10, n); return Math.round(v * k) / k; };
   const err = (where, e) => { if (rec.errors.length < 20) rec.errors.push(where + ': ' + String((e && e.message) || e).slice(0, 120)); };
+  // navigator.connection 'change' events (the page's ICE1 path listens to them): the initial values and every change, page clock
+  rec.connection = { supported: false, initial: null, events: [] };
+  try {
+    const nc = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    if (nc) {
+      const snap = () => ({ effectiveType: nc.effectiveType === undefined ? null : nc.effectiveType, rtt: nc.rtt === undefined ? null : nc.rtt,
+                            downlink: nc.downlink === undefined ? null : nc.downlink, saveData: nc.saveData === undefined ? null : nc.saveData,
+                            type: nc.type === undefined ? null : nc.type });
+      rec.connection.supported = true;
+      rec.connection.initial = snap();
+      nc.addEventListener('change', () => {
+        const s = snap();
+        s.t = rd(now(), 1); s.wall = Date.now();
+        if (rec.connection.events.length < 100) rec.connection.events.push(s);
+      });
+    }
+  } catch (e) { err('connection', e); }
+  // the status lines of the Listen / Talk card with their page-clock time, kept when one of them (or the card's data-state) changes:
+  // "Ended: Button released." appearing BEFORE the user released is the page's interrupted() path
+  rec.ui = [];
+  const uiNote = () => {
+    try {
+      const talk = document.querySelector('#talk-status');
+      const card = document.querySelector("[data-testid='listen-connection']");
+      const line = card ? card.querySelector('p[role=status]') : null;
+      const r = { talk: talk ? String(talk.textContent).trim() : null, listen: line ? String(line.textContent).trim() : null,
+                  state: card ? card.getAttribute('data-state') : null };
+      const last = rec.ui[rec.ui.length - 1];
+      if (!last || last.talk !== r.talk || last.listen !== r.listen || last.state !== r.state) {
+        r.t = rd(now(), 1); r.wall = Date.now();
+        if (rec.ui.length < 300) rec.ui.push(r);
+      }
+    } catch (e) { err('ui', e); }
+  };
+  try {
+    new MutationObserver(uiNote).observe(document.documentElement,
+      { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['data-state'] });
+  } catch (e) { err('observer', e); }
   if (!Prev) { rec.missing = true; return; }
 
   const rmsOf = (x) => { let e = 0; for (let i = 0; i < x.length; i++) e += x[i] * x[i]; return x.length ? Math.sqrt(e / x.length) : 0; };
@@ -248,12 +286,53 @@ ECHO_RECORDER_JS = r"""
       tapped: r.tapped, tap_at: r.tap_at === undefined ? null : rd(r.tap_at, 1), calls: r.calls,
       tap_error: r.tap_error || null, play_error: r.play_error || null,
       final: { conn: r.pc.connectionState, ice: r.pc.iceConnectionState, sig: r.pc.signalingState } })),
-    samples: rec.samples, marks: rec.marks, resources: rec.resources() }));
+    connection: rec.connection, ui: rec.ui, samples: rec.samples, marks: rec.marks, resources: rec.resources() }));
 })();
 """
 
 
 # ------------------------------------------------------------------------- request audit (Playwright side)
+
+SECRET_KEY = re.compile(r"cookie|csrf|passw|token|secret|authoriz|credential|totp", re.I)
+
+
+def sanitize_body(text, limit=20000):
+    """The JSON body of an offer request as a dict, with every key that looks like a secret (cookie, csrf, password, token, secret,
+    authorization, credential, totp) replaced by '<removed>' at any depth and long strings (the SDP) cut at `limit` characters. A body that is
+    not a JSON object gives {'raw_length': n}."""
+    if text is None:
+        return {"raw_length": 0}
+
+    def clean(value):
+        if isinstance(value, dict):
+            return {k: ("<removed>" if SECRET_KEY.search(str(k)) else clean(v)) for k, v in value.items()}
+        if isinstance(value, list):
+            return [clean(v) for v in value[:50]]
+        if isinstance(value, str) and len(value) > limit:
+            return value[:limit] + "...<cut>"
+        return value
+
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError):
+        return {"raw_length": len(text) if hasattr(text, "__len__") else None}
+    return clean(data) if isinstance(data, dict) else {"raw_length": len(text)}
+
+
+def offers_summary(table):
+    """One entry per POST /rtc/offer of an audit table (requests_table rows): index, phase, time, status, whether the body carried a sess_id
+    (an offer for an EXISTING circuit = an ICE restart or a renegotiation, not a new circuit), the body's keys and the SDP's media lines."""
+    out = []
+    for r in table:
+        if r["method"] != "POST" or not r["path"].endswith("/rtc/offer"):
+            continue
+        body = r.get("body") or {}
+        sdp = body.get("sdp") if isinstance(body.get("sdp"), str) else (body.get("offer", {}).get("sdp") if isinstance(body.get("offer"), dict) else "")
+        out.append({"index": len(out) + 1, "phase": r["phase"], "t_s": r["t_s"], "response_s": r["response_s"], "status": r["status"],
+                    "sess_id_in_body": bool(body.get("sess_id")), "keys": sorted(body.keys()),
+                    "m_lines": re.findall(r"^m=\S+", sdp or "", re.M), "ice_ufrag_lines": len(re.findall(r"^a=ice-ufrag", sdp or "", re.M))})
+    return out
+
 
 def rtc_path(url):
     """The path of a /rtc/* request (no origin, no query), or None for any other URL."""
@@ -293,6 +372,11 @@ class RtcAudit:
         row = self._row(req)
         if row is not None and row["wall_request"] is None:
             row["wall_request"] = self._clock()
+            if req.method == "POST" and row["path"].endswith("/rtc/offer"):
+                try:
+                    row["body"] = sanitize_body(req.post_data)
+                except Exception as exc:                    # noqa: BLE001 - evidence only
+                    row["body"] = {"unreadable": type(exc).__name__}
 
     def on_response(self, resp):
         row = self._row(resp.request)
@@ -326,10 +410,13 @@ def requests_table(rows, phases):
     out = []
     for r in sorted(rows, key=lambda x: x.get("wall_request") or 0.0):
         w = r.get("wall_request")
-        out.append({"method": r["method"], "path": r["path"], "status": r["status"], "failure": r["failure"],
-                    "phase": phase_of(w, phases) if w is not None else "before",
-                    "t_s": round(w - base, 2) if w is not None else None,
-                    "response_s": round(r["wall_response"] - base, 2) if r.get("wall_response") is not None else None})
+        row = {"method": r["method"], "path": r["path"], "status": r["status"], "failure": r["failure"],
+               "phase": phase_of(w, phases) if w is not None else "before",
+               "t_s": round(w - base, 2) if w is not None else None,
+               "response_s": round(r["wall_response"] - base, 2) if r.get("wall_response") is not None else None}
+        if "body" in r:
+            row["body"] = r["body"]
+        out.append(row)
     return out
 
 
@@ -586,6 +673,98 @@ def onair_summary(state, room):
     onair = entry.get("onair")
     call = onair.get("callsign") if isinstance(onair, dict) else None
     return {"onair": bool(onair), "callsign": call, "entry": entry}
+
+
+# ------------------------------------------------------------------------- ICE1 evidence (restart counters, connection changes, the Talk pc)
+
+def ice_metrics(samples):
+    """The edge metric samples ({name, labels, value} dicts) of every dv_edge_webrtc_* family with 'restart' or 'ice' in its name."""
+    return [s for s in samples or () if str(s.get("name", "")).startswith("dv_edge_webrtc") and
+            ("restart" in s["name"] or "ice" in s["name"].split("_"))]
+
+
+def metric_key(sample):
+    return sample["name"] + json.dumps(sample.get("labels") or {}, sort_keys=True)
+
+
+def metrics_delta(before, after):
+    """{key: {name, labels, before, after, delta}} for every sample of either list (absent = 0); None for a side that was not read."""
+    if before is None or after is None:
+        return None
+    b = {metric_key(s): s for s in before}
+    a = {metric_key(s): s for s in after}
+    out = {}
+    for key in sorted(set(a) | set(b)):
+        src = a.get(key) or b.get(key)
+        v0, v1 = (b.get(key) or {}).get("value", 0.0), (a.get(key) or {}).get("value", 0.0)
+        out[key] = {"name": src["name"], "labels": src.get("labels") or {}, "before": v0, "after": v1, "delta": v1 - v0}
+    return out
+
+
+def restarts_delta(delta):
+    """Sum of the deltas of the families with 'restart' in the name (None when the metrics were not read, 'absent' when no such family)."""
+    if delta is None:
+        return None
+    rows = [v["delta"] for v in delta.values() if "restart" in v["name"]]
+    return sum(rows) if rows else "absent"
+
+
+def per_pc_inbound(dump, t_from, t_to):
+    """For each RTCPeerConnection of a dump: its inbound-rtp gain between t_from and t_to (page clock ms) and its last inbound-rtp
+    snapshot, so the pc created at Talk can be told from the Listen pc the page closed. Rows: {id, created_at, closed_at, samples,
+    bytes, packets, energy, last_in, last_t}."""
+    out = []
+    for p in (dump or {}).get("pcs") or []:
+        rows = []
+        for s in (dump or {}).get("samples") or []:
+            for q in s.get("pcs") or []:
+                if q.get("id") == p["id"]:
+                    rows.append((float(s["t"]), q.get("in"), q.get("stale")))
+        inside = [r for r in rows if t_from <= r[0] <= t_to]
+        prior = [r for r in rows if r[0] < t_from]
+        base = (prior[-1][1] if prior else None) or {}
+        last = (inside[-1][1] if inside else None) or base
+        live_after = [r for r in inside if not r[2]]
+        out.append({"id": p["id"], "created_at": p.get("created_at"), "closed_at": p.get("closed_at"), "samples": len(rows),
+                    "live_samples_in_window": len([r for r in inside if not r[2]]), "sampled_live_until_ms": live_after[-1][0] if live_after else None,
+                    "bytes": (last.get("bytes") or 0) - (base.get("bytes") or 0), "packets": (last.get("packets") or 0) - (base.get("packets") or 0),
+                    "energy": (None if last.get("energy") is None else round(last["energy"] - (base.get("energy") or 0.0), 6)),
+                    "last_in": next((r[1] for r in reversed(rows) if r[1]), None), "last_t": rows[-1][0] if rows else None})
+    return out
+
+
+def ice1_diagnosis(dump, offers, restarts, ended_text="Ended: Button released.", echo_from_ms=ECHO_FROM_MS):
+    """The ICE1 line of one page: navigator.connection 'change' events before the echo window (release + echo_from_ms; the first one with its
+    effectiveType / rtt / downlink), the offer count and how many carried a sess_id, the restart counter delta (from restarts_delta), and
+    when "Ended: Button released." appeared relative to the release (before it = the page's interrupted() path, not the user)."""
+    dump = dump or {}
+    release = mark_t(dump, "release")
+    conn = dump.get("connection") or {}
+    events = conn.get("events") or []
+    until = (release + echo_from_ms) if release is not None else float("inf")
+    early = [e for e in events if e.get("t", 0.0) < until]
+    parts = []
+    if not conn.get("supported"):
+        parts.append("navigator.connection: not supported by this engine")
+    elif early:
+        e = early[0]
+        rel = "" if release is None else " (%+.0f ms from the release)" % (e["t"] - release)
+        parts.append("connection-change fired before the echo window: %d, first at %.1f s%s effectiveType %s rtt %s downlink %s"
+                     % (len(early), e["t"] / 1000.0, rel, e.get("effectiveType"), e.get("rtt"), e.get("downlink")))
+    else:
+        parts.append("no connection-change before the echo window (%d in all)" % len(events))
+    offers = offers or []
+    parts.append("offers: %d (%d with sess_id = restart or renegotiation)" % (len(offers), sum(1 for o in offers if o.get("sess_id_in_body"))))
+    parts.append("ice restarts counter delta: %s" % ("not read" if restarts is None else restarts))
+    ended = next((u for u in dump.get("ui") or [] if u.get("talk") == ended_text), None)
+    if ended is None:
+        parts.append("'%s' never shown" % ended_text)
+    elif release is None:
+        parts.append("'%s' shown at %.1f s" % (ended_text, ended["t"] / 1000.0))
+    else:
+        d = ended["t"] - release
+        parts.append("'%s' shown %+.0f ms from the release%s" % (ended_text, d, " (BEFORE the release: the page's interrupted() path)" if d < -100.0 else ""))
+    return "; ".join(parts)
 
 
 # ------------------------------------------------------------------------- the evidence file

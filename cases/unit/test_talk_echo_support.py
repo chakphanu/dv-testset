@@ -179,6 +179,7 @@ def test_sampling_facts_and_series_of_an_empty_dump():
 class FakeReq:
     def __init__(self, url, method="POST", failure=None):
         self.url, self.method, self.failure = url, method, failure
+        self.post_data = None
 
 
 class FakeResp:
@@ -252,7 +253,13 @@ let T = 0;
 globalThis.performance = { now: () => T, getEntriesByType: () => [
   {name: 'https://h/api/v1/rtc/offer', startTime: 10, duration: 5, responseStatus: 200},
   {name: 'https://h/api/v1/public/state', startTime: 11, duration: 5, responseStatus: 200}] };
-globalThis.document = { hidden: false, createElement: () => ({ muted: false, play: () => Promise.resolve() }) };
+const UI = { talk: 'Ready' };
+globalThis.document = { hidden: false, documentElement: {}, createElement: () => ({ muted: false, play: () => Promise.resolve() }),
+  querySelector: (s) => (s === '#talk-status' ? { textContent: UI.talk } : null) };
+globalThis.MutationObserver = class { constructor(f) { globalThis.__mo = f; } observe() {} };
+const connHandlers = [];
+Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { connection: { effectiveType: '4g', rtt: 50, downlink: 10,
+  saveData: false, addEventListener: (n, f) => connHandlers.push(f) } } });
 globalThis.MediaStream = class { constructor(t) { this.tracks = t; } };
 const procs = [];
 globalThis.AudioContext = class {
@@ -300,7 +307,11 @@ const feed = (proc, amp, seconds) => {
       if (P.swap) { cur.close(); cur = new RTCPeerConnection(); cur.emit('track', {track: {kind: 'audio'}}); proc = procs[procs.length - 1]; }
     }
     if (T === 2500) rec.mark('on_air');
+    if (P.conn_change && T === 4500) { navigator.connection.effectiveType = '3g'; navigator.connection.rtt = 300; connHandlers.forEach((f) => f()); }
+    if (T === 2500) { UI.talk = 'On air'; __mo(); }
+    if (P.early_end && T === 4500) { UI.talk = 'Ended: Button released.'; __mo(); }
     if (T === 5500) rec.mark('release');
+    if (!P.early_end && T === 5500) { UI.talk = 'Ended: Button released.'; __mo(); }
     if (T === 5600) rec.mark('ended');
     const live = P.live && T >= 3500 && T <= 6000;
     const echo = P.echo && T >= 7000 && T <= 9500;
@@ -384,3 +395,66 @@ def test_recorder_in_node_dead_tap_is_told_from_a_silent_page():
     d = run_recorder(tap=False)
     v = tes.judge_window(tes.series(d), 5500.0, 19500.0)
     assert v["ok"] and v["stage"] == "ok_decoder_only" and v["tap_callbacks"] == 0
+
+
+@needs_node
+def test_recorder_in_node_keeps_connection_changes_ui_and_the_talk_pc():
+    d = run_recorder(conn_change=True, early_end=True)
+    assert d["errors"] == []
+    assert d["connection"]["supported"] and d["connection"]["initial"]["effectiveType"] == "4g"
+    assert [(e["t"], e["effectiveType"], e["rtt"]) for e in d["connection"]["events"]] == [(4500.0, "3g", 300)]
+    ended = [u for u in d["ui"] if u["talk"] == "Ended: Button released."]
+    assert ended and ended[0]["t"] == 4500.0
+    line = tes.ice1_diagnosis(d, [], None)
+    assert "connection-change fired before the echo window: 1" in line and "effectiveType 3g" in line
+    assert "-1000 ms from the release (BEFORE the release" in line and "offers: 0" in line
+    # the pc created at Talk keeps being sampled and carries the echo; the closed Listen pc does not
+    per = {p["id"]: p for p in tes.per_pc_inbound(d, 5500.0, 19500.0)}
+    assert per[1]["bytes"] > 0 and per[1]["packets"] > 0 and per[1]["last_in"]["bytes"] > 0 and per[1]["sampled_live_until_ms"] == 19500.0
+    assert per[0]["bytes"] == 0 and per[0]["closed_at"] == 2000.0 and per[0]["live_samples_in_window"] == 0
+
+
+@needs_node
+def test_recorder_in_node_without_a_connection_change_or_early_end():
+    d = run_recorder()
+    line = tes.ice1_diagnosis(d, [{"sess_id_in_body": False}, {"sess_id_in_body": True}], 2.0)
+    assert line.startswith("no connection-change before the echo window (0 in all)")
+    assert "offers: 2 (1 with sess_id" in line and "restarts counter delta: 2.0" in line
+    assert "'Ended: Button released.' shown +0 ms from the release;" in line + ";"
+
+
+def test_offer_bodies_are_sanitised_and_summarised():
+    body = json.dumps({"sdp": "v=0\nm=audio 9 UDP/TLS/RTP/SAVPF 0\na=ice-ufrag:abc\n", "type": "offer", "sess_id": "S1", "room": "E",
+                       "csrf": "tok", "extra": {"Cookie": "c", "password": "p", "ok": 1}})
+    got = tes.sanitize_body(body)
+    assert got["csrf"] == "<removed>" and got["extra"] == {"Cookie": "<removed>", "password": "<removed>", "ok": 1}
+    assert got["sess_id"] == "S1" and got["room"] == "E"
+    assert tes.sanitize_body(None) == {"raw_length": 0} and tes.sanitize_body("not json") == {"raw_length": 8}
+    assert tes.sanitize_body("[1]") == {"raw_length": 3}
+    assert len(tes.sanitize_body(json.dumps({"sdp": "x" * 30000}))["sdp"]) < 20100
+    audit = tes.RtcAudit(clock=lambda: 5.0)
+    first, second = FakeReq("https://h/api/v1/rtc/offer"), FakeReq("https://h/api/v1/rtc/offer")
+    first.post_data, second.post_data = body, json.dumps({"sess_id": "S1", "sdp": "m=audio 9 x"})
+    for r, st in ((first, 200), (second, 200)):
+        audit.on_request(r)
+        audit.on_response(FakeResp(r, st))
+    table = tes.requests_table(audit.rows, {"listening": 0.0})
+    assert "csrf" not in json.dumps(table) or "<removed>" in json.dumps(table)
+    offers = tes.offers_summary(table)
+    assert [o["index"] for o in offers] == [1, 2] and all(o["sess_id_in_body"] for o in offers)
+    assert offers[0]["m_lines"] == ["m=audio"] and offers[0]["ice_ufrag_lines"] == 1 and offers[0]["status"] == 200
+
+
+def test_ice_metrics_filter_and_delta():
+    samples = [{"name": "dv_edge_webrtc_ice_restarts_total", "labels": {"proc": "webrtc"}, "value": 1.0},
+               {"name": "dv_edge_webrtc_listeners", "labels": {}, "value": 1.0},
+               {"name": "dv_edge_webrtc_service_total", "labels": {}, "value": 4.0},
+               {"name": "dv_edge_webrtc_ice_failed_total", "labels": {}, "value": 0.0},
+               {"name": "dv_other_ice_total", "labels": {}, "value": 9.0}]
+    kept = tes.ice_metrics(samples)
+    assert [s["name"] for s in kept] == ["dv_edge_webrtc_ice_restarts_total", "dv_edge_webrtc_ice_failed_total"]
+    after = [dict(kept[0], value=3.0), dict(kept[1])]
+    delta = tes.metrics_delta(kept, after)
+    assert tes.restarts_delta(delta) == 2.0
+    assert tes.metrics_delta(None, after) is None and tes.restarts_delta(None) is None
+    assert tes.restarts_delta(tes.metrics_delta([kept[1]], [kept[1]])) == "absent"
