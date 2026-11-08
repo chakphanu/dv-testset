@@ -27,8 +27,14 @@ The control channel is one JSON object per line over TCP (one request per connec
   {"op": "blackhole", "state": "for", "seconds": 3}   same, switched off by the router after the time
   {"op": "drop_direct", "state": "on|off"}            drop UDP from inside to the SUT's media address:port
                                                       (only a TURN relay path can then work)
+  {"op": "readdress", "state": "on|off"}              move the UDP translation of the browser to the OTHER outside
+                                                      address (ICE1: the SUT sees a new source address and port) and
+                                                      back; TCP keeps its address; flushes the UDP conntrack entries
+  {"op": "mappings"}                                  read only: the UDP flows from the browser to the SUT's media
+                                                      port as the router translates them (the source address and
+                                                      port the SUT sees), from conntrack
   {"op": "status"}
-  {"op": "reset"}                                     port_restricted, no blackhole, no drop_direct, flush
+  {"op": "reset"}                                     port_restricted, no blackhole, no drop_direct, no readdress, flush
 
 The answer is {"ok": true, ...} or {"ok": false, "error": "..."}.
 """
@@ -40,7 +46,7 @@ import time
 from collections import namedtuple
 
 MODES = ("full_cone", "port_restricted", "symmetric", "none")
-OPS = ("nat_mode", "flush", "blackhole", "drop_direct", "status", "reset")
+OPS = ("nat_mode", "flush", "blackhole", "drop_direct", "readdress", "mappings", "status", "reset")
 MAX_LINE = 4096
 MAX_BLACKHOLE_S = 300.0
 
@@ -48,7 +54,9 @@ CHAIN_PRE = "DVT_PRE"          # nat PREROUTING: the control forwards (always)
 CHAIN_MODE_PRE = "DVT_MODE_PRE"    # nat PREROUTING: the NAT type's inbound rules
 CHAIN_MODE_POST = "DVT_MODE_POST"  # nat POSTROUTING: the NAT type's outbound rules
 CHAIN_FWD = "DVT_FWD"          # filter FORWARD: blackhole and drop_direct
+CHAIN_IN = "DVT_IN"            # filter INPUT: the unmapped-media counter of readdress
 C_BLACKHOLE_OUT, C_BLACKHOLE_IN, C_DROP_DIRECT = "dvt-blackhole-out", "dvt-blackhole-in", "dvt-drop-direct"
+C_UNMAPPED = "dvt-unmapped-media"
 
 Topology = namedtuple("Topology", "inside_net out_ip in_ip alias_ip browser_ip sut_ip media_port forwards out_if in_if out_prefix")
 
@@ -99,14 +107,15 @@ def parse_request(line):
     if op not in OPS:
         raise NatError("unknown op %r (known: %s)" % (op, ", ".join(OPS)))
     allowed = {"nat_mode": {"op", "mode"}, "blackhole": {"op", "state", "seconds"},
-               "drop_direct": {"op", "state"}, "flush": {"op"}, "status": {"op"}, "reset": {"op"}}[op]
+               "drop_direct": {"op", "state"}, "readdress": {"op", "state"}, "mappings": {"op"},
+               "flush": {"op"}, "status": {"op"}, "reset": {"op"}}[op]
     extra = sorted(set(obj) - allowed)
     if extra:
         raise NatError("unknown key %s for op %s" % (", ".join(extra), op))
     if op == "nat_mode":
         if obj.get("mode") not in MODES:
             raise NatError("mode must be one of %s" % ", ".join(MODES))
-    elif op == "drop_direct":
+    elif op in ("drop_direct", "readdress"):
         if obj.get("state") not in ("on", "off"):
             raise NatError("state must be on or off")
     elif op == "blackhole":
@@ -157,13 +166,15 @@ def setup_commands(t):
     (outside address:port -> the browser's port, TCP only: the Playwright websocket and the probe server)."""
     cmds = [["ip", "addr", "add", "%s/%d" % (t.alias_ip, t.out_prefix), "dev", t.out_if],
             ["iptables", "-P", "FORWARD", "ACCEPT"]]
-    for table, chain in (("nat", CHAIN_PRE), ("nat", CHAIN_MODE_PRE), ("nat", CHAIN_MODE_POST), ("filter", CHAIN_FWD)):
+    for table, chain in (("nat", CHAIN_PRE), ("nat", CHAIN_MODE_PRE), ("nat", CHAIN_MODE_POST), ("filter", CHAIN_FWD),
+                         ("filter", CHAIN_IN)):
         cmds.append(["iptables", "-t", table, "-N", chain])
     cmds += [
         ["iptables", "-t", "nat", "-A", "PREROUTING", "-j", CHAIN_PRE],
         ["iptables", "-t", "nat", "-A", "PREROUTING", "-j", CHAIN_MODE_PRE],
         ["iptables", "-t", "nat", "-A", "POSTROUTING", "-j", CHAIN_MODE_POST],
         ["iptables", "-t", "filter", "-I", "FORWARD", "1", "-j", CHAIN_FWD],
+        ["iptables", "-t", "filter", "-I", "INPUT", "1", "-j", CHAIN_IN],
     ]
     for port in t.forwards:
         cmds.append(["iptables", "-t", "nat", "-A", CHAIN_PRE, "-i", t.out_if, "-d", t.out_ip, "-p", "tcp", "--dport", str(port),
@@ -189,6 +200,49 @@ def mode_commands(t, mode):
     return cmds
 
 
+def readdress_addresses(t, mode):
+    """(old, new): the outside address the browser's UDP is translated to in `mode`, and the other one it is moved to by
+    `readdress` (ICE1). The full cone NAT lives on the alias address, the other two on the router's own outside address;
+    these are the only two outside addresses the router has. NatError for a mode with no translation."""
+    if mode == "full_cone":
+        return t.alias_ip, t.out_ip
+    if mode in ("port_restricted", "symmetric"):
+        return t.out_ip, t.alias_ip
+    raise NatError("mode %r has no translation to move" % mode)
+
+
+def readdress_commands(t, mode):
+    """argv lists that move the browser's UDP to the other outside address while the NAT type (mapping and filtering)
+    stays what `mode` says; both mode chains are emptied, then filled. Only UDP moves: the page's HTTPS flows and the
+    control forwards keep their address (the web service ties a circuit to the client address of its HTTP requests, so
+    a case that moved TCP too would test that ownership rule, not the ICE restart).
+
+      full_cone         UDP: SNAT to the router's own address, and UDP sent there is DNATed to the browser; the alias
+                        address keeps SNAT and DNAT for everything but UDP (a RETURN rule ahead of its DNAT), so no UDP
+                        reaches the browser through the old address any more
+      port_restricted   UDP: SNAT to the alias address (the source port is kept, as MASQUERADE keeps it), rest: MASQUERADE
+      symmetric         UDP: SNAT to the alias address with a random port per destination, rest: MASQUERADE
+
+    `mode_commands(t, mode)` is the way back."""
+    old, new = readdress_addresses(t, mode)
+    cmds = [["iptables", "-t", "nat", "-F", CHAIN_MODE_PRE], ["iptables", "-t", "nat", "-F", CHAIN_MODE_POST]]
+    post = ["iptables", "-t", "nat", "-A", CHAIN_MODE_POST]
+    pre = ["iptables", "-t", "nat", "-A", CHAIN_MODE_PRE]
+    if mode == "full_cone":
+        cmds.append(post + ["-s", t.browser_ip, "-o", t.out_if, "-p", "udp", "-j", "SNAT", "--to-source", new])
+        cmds.append(post + ["-s", t.browser_ip, "-o", t.out_if, "-j", "SNAT", "--to-source", old])
+        cmds.append(pre + ["-i", t.out_if, "-d", old, "-p", "udp", "-j", "RETURN"])
+        cmds.append(pre + ["-i", t.out_if, "-d", old, "-j", "DNAT", "--to-destination", t.browser_ip])
+        cmds.append(pre + ["-i", t.out_if, "-d", new, "-p", "udp", "-j", "DNAT", "--to-destination", t.browser_ip])
+    elif mode == "port_restricted":
+        cmds.append(post + ["-s", t.inside_net, "-o", t.out_if, "-p", "udp", "-j", "SNAT", "--to-source", new])
+        cmds.append(post + ["-s", t.inside_net, "-o", t.out_if, "-j", "MASQUERADE"])
+    else:
+        cmds.append(post + ["-s", t.inside_net, "-o", t.out_if, "-p", "udp", "-j", "SNAT", "--to-source", new, "--random"])
+        cmds.append(post + ["-s", t.inside_net, "-o", t.out_if, "-j", "MASQUERADE"])
+    return cmds
+
+
 def blackhole_rules(t):
     """[(comment, rule words)] for the chain DVT_FWD: UDP both ways between inside and outside."""
     return [(C_BLACKHOLE_OUT, ["-i", t.in_if, "-o", t.out_if, "-p", "udp"]),
@@ -201,9 +255,17 @@ def drop_direct_rule(t):
     return (C_DROP_DIRECT, ["-i", t.in_if, "-o", t.out_if, "-p", "udp", "-d", t.sut_ip, "--dport", str(t.media_port)])
 
 
-def rule_argv(action, rule):
+def unmapped_rule(t):
+    """The SUT's media port sending UDP to an outside address of the router that no translation maps any more: after a
+    `readdress` that is a datagram for the OLD address (filter INPUT: the router itself is the destination). Dropped and
+    counted; a datagram of a live flow never gets here (conntrack translates it and it is forwarded). What is still
+    counted after the settling time is the SUT still sending to the old candidate pair."""
+    return (C_UNMAPPED, ["-i", t.out_if, "-p", "udp", "-s", t.sut_ip, "--sport", str(t.media_port)])
+
+
+def rule_argv(action, rule, chain=CHAIN_FWD):
     comment, words = rule
-    return ["iptables", "-t", "filter", action, CHAIN_FWD] + words + ["-m", "comment", "--comment", comment, "-j", "DROP"]
+    return ["iptables", "-t", "filter", action, chain] + words + ["-m", "comment", "--comment", comment, "-j", "DROP"]
 
 
 def parse_counters(text):
@@ -214,6 +276,38 @@ def parse_counters(text):
         if m:
             out[m.group(2)] = int(m.group(1))
     return out
+
+
+_CT_KV = re.compile(r"\b(src|dst|sport|dport)=(\S+)")
+
+
+def parse_conntrack(text):
+    """`conntrack -L -p udp` -> [{'orig_src', 'orig_dst', 'orig_sport', 'orig_dport', 'reply_src', 'reply_dst',
+    'reply_sport', 'reply_dport', 'unreplied', 'assured'}]. A flow line carries the original tuple first and the reply
+    tuple second (src= dst= sport= dport= twice); other lines (the summary on stderr) are skipped. The reply tuple's
+    destination is the address and port the far end of the flow sees the browser at."""
+    out = []
+    for line in (text or "").splitlines():
+        pairs = _CT_KV.findall(line)
+        if len(pairs) < 8 or not line.lstrip().startswith("udp"):
+            continue
+        orig, reply = dict(pairs[:4]), dict(pairs[4:8])
+        try:
+            out.append({"orig_src": orig["src"], "orig_dst": orig["dst"], "orig_sport": int(orig["sport"]),
+                        "orig_dport": int(orig["dport"]), "reply_src": reply["src"], "reply_dst": reply["dst"],
+                        "reply_sport": int(reply["sport"]), "reply_dport": int(reply["dport"]),
+                        "unreplied": "[UNREPLIED]" in line, "assured": "[ASSURED]" in line})
+        except (KeyError, ValueError):
+            continue
+    return out
+
+
+def media_mappings(flows, t):
+    """The flows of `parse_conntrack` that go from the browser to the SUT's media port, as the SUT sees them:
+    [{'browser_port', 'seen_ip', 'seen_port'}], sorted. `seen_ip:seen_port` is the source the SUT receives from."""
+    rows = [{"browser_port": f["orig_sport"], "seen_ip": f["reply_dst"], "seen_port": f["reply_dport"]}
+            for f in flows if f["orig_src"] == t.browser_ip and f["orig_dst"] == t.sut_ip and f["orig_dport"] == t.media_port]
+    return sorted(rows, key=lambda r: (r["seen_ip"], r["seen_port"], r["browser_port"]))
 
 
 # ------------------------------------------------------------------ the router
@@ -232,6 +326,9 @@ class Router:
         self.blackhole_until = None
         self.drop_direct_on = False
         self.last_blackhole = None
+        self.readdressed = False
+        self.last_readdress = None
+        self._t_readdress = None
         self._timer = None
         self._t_on = None
 
@@ -254,6 +351,8 @@ class Router:
             for argv in mode_commands(self.t, mode):
                 self._must(argv)
             self.mode = mode
+            if self.readdressed:                    # the mode's own rules replaced the moved ones above
+                self._end_readdress()
             self.flush()
             return {"mode": mode}
 
@@ -266,16 +365,62 @@ class Router:
             m = re.search(r"(\d+) flow entries have been deleted", out or "")
             return {"deleted": int(m.group(1)) if m else 0}
 
-    def _rule(self, rule, want):
-        have = self.run(rule_argv("-C", rule))[0] == 0
+    def _rule(self, rule, want, chain=CHAIN_FWD):
+        have = self.run(rule_argv("-C", rule, chain))[0] == 0
         if want and not have:
-            self._must(rule_argv("-A", rule))
+            self._must(rule_argv("-A", rule, chain))
         elif have and not want:
-            self._must(rule_argv("-D", rule))
+            self._must(rule_argv("-D", rule, chain))
 
-    def _counters(self):
-        rc, out = self.run(["iptables", "-t", "filter", "-L", CHAIN_FWD, "-n", "-v", "-x"])
+    def _counters(self, chain=CHAIN_FWD):
+        rc, out = self.run(["iptables", "-t", "filter", "-L", chain, "-n", "-v", "-x"])
         return parse_counters(out or "") if rc == 0 else {}
+
+    def _end_readdress(self):
+        """The mode chains are already back to the NAT type's own rules: remove the unmapped-media counter and keep its
+        total in last_readdress."""
+        dropped = self._counters(CHAIN_IN).get(C_UNMAPPED, 0)
+        self._rule(unmapped_rule(self.t), False, CHAIN_IN)
+        self.readdressed = False
+        self.last_readdress = {"t_on": self._t_readdress, "t_off": self.clock(), "unmapped_media": dropped}
+
+    def set_readdress(self, on):
+        """ICE1: move the browser's UDP to the other outside address (on) or back (off). The counter rule goes in first, the
+        translation changes, then the UDP conntrack entries are deleted so that the browser's next datagram is translated
+        again with the new rules. Off with nothing moved is a no-op (a finalizer may call it at any time)."""
+        with self.lock:
+            if on:
+                if self.readdressed:
+                    old, new = readdress_addresses(self.t, self.mode)
+                    return {"readdressed": True, "from": old, "to": new}
+                old, new = readdress_addresses(self.t, self.mode)       # NatError for mode none
+                try:
+                    self._rule(unmapped_rule(self.t), True, CHAIN_IN)
+                    for argv in readdress_commands(self.t, self.mode):
+                        self._must(argv)
+                except NatError:
+                    self._restore_quietly()
+                    raise
+                self.readdressed = True
+                self._t_readdress = self.clock()
+                self.flush()
+                return {"readdressed": True, "from": old, "to": new}
+            if not self.readdressed:
+                return {"readdressed": False, "last": self.last_readdress}
+            for argv in mode_commands(self.t, self.mode):
+                self._must(argv)
+            self._end_readdress()
+            self.flush()
+            return {"readdressed": False, "last": self.last_readdress}
+
+    def _restore_quietly(self):
+        """After a failed `readdress on`: best effort back to the NAT type's rules without the counter rule."""
+        try:
+            for argv in mode_commands(self.t, self.mode):
+                self.run(argv)
+            self.run(rule_argv("-D", unmapped_rule(self.t), CHAIN_IN))
+        finally:
+            self.readdressed = False
 
     def set_blackhole(self, on, seconds=None):
         with self.lock:
@@ -311,15 +456,28 @@ class Router:
             self.drop_direct_on = on
             return {"drop_direct": on}
 
+    def mappings(self):
+        """Read only: the UDP flows from the browser to the SUT's media port as conntrack holds them, i.e. the source
+        address and port the SUT sees (ICE1)."""
+        with self.lock:
+            rc, out = self.run(["conntrack", "-L", "-p", "udp"])
+            if rc not in (0, 1):
+                raise NatError("conntrack failed (%d): %s" % (rc, (out or "").strip()[:200]))
+            return {"mappings": media_mappings(parse_conntrack(out), self.t), "readdressed": self.readdressed,
+                    "mode": self.mode, "time": self.clock()}
+
     def status(self):
         with self.lock:
             counters = self._counters()
+            unmapped = self._counters(CHAIN_IN).get(C_UNMAPPED, 0) if self.readdressed else \
+                (self.last_readdress or {}).get("unmapped_media", 0)
             rc, out = self.run(["cat", "/proc/sys/net/netfilter/nf_conntrack_count"])
             n = int(out.strip()) if rc == 0 and (out or "").strip().isdigit() else None
             return {"mode": self.mode, "blackhole": self.blackhole_on, "blackhole_until": self.blackhole_until,
                     "drop_direct": self.drop_direct_on, "last_blackhole": self.last_blackhole,
+                    "readdressed": self.readdressed, "last_readdress": self.last_readdress,
                     "dropped": {"blackhole_out": counters.get(C_BLACKHOLE_OUT, 0), "blackhole_in": counters.get(C_BLACKHOLE_IN, 0),
-                                "drop_direct": counters.get(C_DROP_DIRECT, 0)},
+                                "drop_direct": counters.get(C_DROP_DIRECT, 0), "unmapped_media": unmapped},
                     "conntrack_entries": n, "time": self.clock()}
 
     def handle(self, req):
@@ -334,9 +492,14 @@ class Router:
                 body = self.set_blackhole(req["state"] != "off", req.get("seconds") if req["state"] == "for" else None)
             elif op == "drop_direct":
                 body = self.set_drop_direct(req["state"] == "on")
+            elif op == "readdress":
+                body = self.set_readdress(req["state"] == "on")
+            elif op == "mappings":
+                body = self.mappings()
             elif op == "reset":
                 self.set_blackhole(False)
                 self.set_drop_direct(False)
+                self.set_readdress(False)
                 body = self.set_mode("port_restricted")
             else:
                 body = self.status()
@@ -469,6 +632,14 @@ class NatClient:
 
     def status(self):
         return self.ctl("status")
+
+    def readdress(self, on):
+        """Move the browser's UDP to the other outside address (True) or back (False); returns the answer."""
+        return self.ctl("readdress", state="on" if on else "off")
+
+    def media_mappings(self):
+        """[{'browser_port', 'seen_ip', 'seen_port'}]: the browser's UDP flows to the SUT's media port as the SUT sees them."""
+        return self.ctl("mappings")["mappings"]
 
     def poke(self, reflector, to, from_port=None, timeout=2.0):
         """Ask a reflector to send a datagram from its poke socket (another port than the one the browser

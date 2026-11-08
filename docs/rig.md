@@ -710,7 +710,9 @@ coturn `x-limits-medium`).
 Control ops (one JSON line per TCP connection, `dvtest/nat.py` docstring): `nat_mode`, `flush` (deletes the UDP conntrack entries
 only: `conntrack -F` would also kill the Playwright websocket and the page's HTTPS flows), `blackhole on|off|for N` (drops all UDP
 between inside and outside, both directions, TCP untouched; `for` switches itself off and records the dropped datagrams),
-`drop_direct on|off` (drops UDP from inside to the SUT's media address:port, so only the TURN path can work), `status`, `reset`.
+`drop_direct on|off` (drops UDP from inside to the SUT's media address:port, so only the TURN path can work), `readdress on|off` (ICE1: moves the browser's UDP
+to the other outside address, `<net>.92` <-> the alias `<net>.93`, TCP unchanged, and back; docs/web-nat-cases.md "ICE1 address change"), `mappings` (read only: the browser's UDP flows
+to the SUT's media port as conntrack holds them), `status`, `reset`.
 The control server listens on the outside address only and answers the tester's address only; the browser cannot reconfigure it.
 
 **TURN secret.** `run.sh` makes `out/<utc>/web/turn.secret` (random, mode 0600, no trailing newline, never printed) and coturn's
@@ -722,7 +724,7 @@ come from the snippet. After the run `dvtest.turn scan` looks for the secret in 
 
 **Tester side.** `DVT_NAT=on`, `DVT_NAT_CTL`, `DVT_NAT_PROBE`, `DVT_NAT_REFLECTORS`, `DVT_NAT_ALIAS`, `DVT_NAT_INSIDE`, `DVT_TURN`,
 `DVT_TURN_SECRET_FILE`, `DVT_TURN_TTL`, `DVT_NAT_EXPIRY_S`, `DVT_NAT_SHORT` (the short profile, docs/web-nat-cases.md); `DVT_BROWSER_WS` points at `ws://<net>.92:3000/` (the router's forward).
-`cases/nat_support.py` has the client and the page helpers. Unit tests: `cases/unit/test_nat.py`, `cases/unit/test_turn.py`.
+`cases/nat_support.py` has the client and the page helpers. Unit tests: `cases/unit/test_nat.py`, `cases/unit/test_nat_readdress.py`, `cases/unit/test_ice1.py`, `cases/unit/test_turn.py`.
 
 ## Private APRS-IS server (profile aprs)
 

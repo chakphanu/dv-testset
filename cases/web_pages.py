@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 """The ONE module that knows how DV-Router's web pages are built, for the browser cases
-(cases/test_web_browser.py, test_web_webrtc.py, test_web_recorder.py, test_web_nat.py). Nothing else of
+(cases/test_web_browser.py, test_web_webrtc.py, test_web_recorder.py, test_web_nat.py, test_web_nat_ice1.py). Nothing else of
 the cases touches a CSS class, an element id or a text of the UI.
 
 Selectors (calibrated against dv-router:wip-13e7e70): DV-Router's stable rig hooks (WEB2, web/README.md
@@ -343,6 +343,19 @@ def listen_status(page):
     """fallback (read-only status line, no test id): the first status line of the panel: 'Idle', 'Connecting to
     module X', 'Listening on module X', 'Switching to module X' or the error text."""
     return listen_panel(page).locator("p[role=status]").first
+
+
+# ICE1 (cases/test_web_nat_ice1.py). UNVERIFIED: none of the following was confirmed from DV-Router's page sources (web/site/public.js
+# was not read for ICE1); the case records what they match and judges the verified parts (data-state, the status line) first.
+LISTEN_LISTENING_PREFIX = "Listening on module"         # verified: webrtc_support.Rtc.connect waits for "Listening on module <X>"
+LISTEN_ERROR_WORDS = ("error", "failed", "lost", "denied", "unable", "refused", "timed out", "closed")   # UNVERIFIED: words of an error status line
+
+
+def listen_alerts(page):
+    """UNVERIFIED: an error banner inside the Listen card (role=alert or the dashboard's danger alert class, the one
+    dashboard_alerts uses for the page). The card is known to report an error through its status line (LISTEN_LOST_TEXT), so the
+    case judges the status line and data-state first and records this count."""
+    return listen_panel(page).locator("[role=alert], .alert-danger")
 
 
 def talk_button(page):

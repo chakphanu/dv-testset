@@ -269,6 +269,93 @@ resume) is asserted by the case and now holds on all three engines; none of the 
 
 Other FINDING lines (arrival statistics, pairs, connection times) are measurements, not differences.
 
+## ICE1 address change
+
+`cases/test_web_nat_ice1.py` (2 case functions, 12 runs, table below), `dvtest/ice1.py` (pure helpers), the router words
+`readdress` and `mappings` (`dvtest/nat.py`). Written against the DV-Router spec for ICE1 (image **`dv-router:wip-97c669d`**, commit e439f62;
+ICE1b had not landed). **Not run yet**: no result below is a measurement; the first run on the image fills in the "Results" part and settles the
+UNVERIFIED list.
+
+The spec: a signed-in browser is Listening on a module, then the CLIENT ADDRESS CHANGES (a new source address and port as the SUT sees them). The page
+performs an ICE restart on the SAME circuit.
+
+| Case | Runs | What it does |
+|------|------|--------------|
+| `test_ice1_readdress_moves_the_mapping_and_back` | 3 (NAT types) | no browser: classifies the NAT, moves the browser's UDP to the other outside address, classifies again (the reflectors must all see the new address, the type must be unchanged), moves back and classifies a third time (the original address, the same type). It proves the router words before the browser case relies on them |
+| `test_ice1_address_change_restarts_ice_on_the_same_circuit` (slow) | 9 (engine x NAT type), signed in as the browser user `br_user` | the case below |
+
+**How the address changes.** The router control word `{"op":"readdress","state":"on"}` moves the translation of the browser's UDP to the OTHER outside
+address (the router has two: `<net>.92` and the alias `<net>.93`) and flushes the UDP conntrack entries so the browser's next datagram gets a new
+mapping; `off` puts the NAT type's own rules back (`mode_commands`). The NAT type does not change; only the address does. TCP keeps its address on
+purpose: the web service ties a circuit to the client address of its HTTP requests, so moving TCP too would test that rule, not the ICE restart.
+
+| NAT type | Address before -> after | Rules while moved (UDP only) |
+|----------|-------------------------|------------------------------|
+| full cone | alias -> router address | `SNAT -s <browser> -p udp --to-source <net>.92`; UDP to `<net>.92` DNAT to the browser; a `RETURN` rule ahead of the old DNAT closes the alias address for UDP |
+| port restricted | router address -> alias | `SNAT -p udp --to-source <net>.93` (source port kept), `MASQUERADE` for the rest |
+| symmetric | router address -> alias | `SNAT -p udp --to-source <net>.93 --random`, `MASQUERADE` for the rest |
+| address-restricted cone | - | not built in the router (see Gaps), so not run |
+
+Control words (unit tested in `cases/unit/test_nat_readdress.py`): `readdress on|off` (idempotent; `off` with nothing moved is a no-op, so finalizers may call it
+at any time; a new `nat_mode` and `reset` also end a move), `mappings` (read only: the UDP flows from the browser to the SUT's media port as conntrack
+holds them, i.e. the source address and port the SUT sees), and `status` now has `readdressed`, `last_readdress` and `dropped.unmapped_media`. The router image
+(`dvt-nat:local`) copies `dvtest/`, so `run.sh` rebuilds it with the next run; nothing else of the rig changes.
+
+**What `test_ice1_address_change_restarts_ice_on_the_same_circuit` does and asserts.** Connect to module I (the page holds one `sess_id`), key one 55 s USRP
+over from a protocol talker (DVT_USRP_DYNAMIC=1) and let it run, check 4 s of steady audio, then `readdress on` and watch the inbound packet counter of the page
+(`RTC_PROBE_JS`, a sample every 0.1 s, `ice1.resume_analysis`) until the audio is back and 4 more seconds have passed.
+
+| # | Asserted |
+|---|----------|
+| 1 same circuit | the set of `sess_id`s of `POST /rtc/offer` is still the one id; the page still has one `RTCPeerConnection`; the session cookie is unchanged and no `POST /auth/session` was sent; the operator client list shows no new WebRTC circuit. A repeated `POST /rtc/offer` that is answered with the same circuit is a FINDING, not a failure (the spec says no new offer session) |
+| 1b restart | the `a=ice-ufrag` of the local or the remote description differs after the change (an ICE restart, RFC 8445); the passwords are never read |
+| 2 audio | stalled, then resumed: voice frames reach the listener again within `RESUME_BUDGET_S` of the change: **Chromium 8 s, Firefox 12 s, Playwright WebKit 12 s** (the two 12 s values are the spec's figures until ICE1b lands; named constants in `dvtest/ice1.py`, lower them then). Measured from just before the control call. A counter that never stalls counts as resumed at 0 s; the audio must also still flow in the last 3 s (at least 70 % of 150 packets) and the talker's over must not have ended early |
+| 3 old pair gone | the router's conntrack shows the SUT the browser at the old address before and ONLY at the new address after (`ice1.mapping_problems`); after the audio is back (+1 s) the router counts every datagram the SUT's media port still sends to the OLD address (no mapping left, so it reaches the router itself and is dropped and counted) for 3 s: it must be **0** (`STRAY_OLD_PAIR_MAX`) |
+| 4 page | no error banner and connected: Listen card `data-state` connected, the status line is exactly `Listening on module I` and holds no error word, peer `connected`, no dashboard error banner (`.alert-danger`), no page error; the card never showed the lost text or `failed` during the window |
+| restore | the finally of the case sends `readdress off` (after leaving the session, so the SUT does not see a second change of a page that is ending), the fixture of the case and the module and session fixtures check that the router is at its default and not moved (an error at teardown otherwise) |
+
+**TURN on or off.** The documented run is the NAT row (`turn.toml`, TURN on): the page gathers a server-reflexive candidate from coturn, the direct pair is
+used, and the restart may fetch a credential again (`GET /rtc/ice`; the case waits for two credentials of the login before it starts and records the statuses).
+Without `turn.toml` the case runs unchanged (the route answers 404). The relay path is not exercised (the relay is on the other side of the address change).
+
+**What is observable for "the old candidate pair is removed on the SUT side", and what is not.**
+
+| Observable | How | Status |
+|------------|-----|--------|
+| the address the SUT sees the browser at, before and after | conntrack of the NAT router (`mappings`); the reply tuple of the browser's flow to `<SUT>:50000` | asserted (the router's own view of what the SUT receives) |
+| the SUT still sending to the old address | the router's `dvt-unmapped-media` counter in filter INPUT: the SUT's media port sending UDP to an outside address no translation maps any more; counted over a settled 3 s window with the talker on air | asserted (0 datagrams). This is the black-box evidence that the old pair is no longer the SUT's destination; it does not show the SUT's internal state |
+| the browser's own view of the new address | local candidates in `getStats` before and after (a `prflx` candidate with the new address, where the engine reports it) | recorded, not asserted |
+| the edge's remote address of the circuit | the operator client list (`GET /api/v1/operator/clients?protocol=webrtc`): the row of the circuit, its field names and every address-like field before and after | recorded; UNVERIFIED which field (if any) is the edge's UDP remote address. A row that still shows the old address is a FINDING (it may be the HTTP client address), not a failure |
+| hub metrics | the family names and label KEYS of every `webrtc` metric and `dv_edge_sessions` | recorded once; UNVERIFIED that any carries a per-circuit remote address. `dv_edge_webrtc_listeners` counts peers (published every 10 s, cached by the hub), not addresses, and is not used |
+| the edge's candidate-pair table, its STUN state | - | NOT observable from outside; marked UNVERIFIED |
+
+**Run.** Same as the NAT row of the SKILL table with the talker hub on (about 4 to 6 minutes per engine with TURN on: 9 runs of 30 to 60 s plus the credential pacer of
+one login; the first run measures it):
+
+```sh
+export XLXD_SUT_IMAGE=dv-router:wip-97c669d DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-router DVT_SUT_LAUNCH=native \
+  DVT_USRP_DYNAMIC=1 DVT_SUT_CONFIG=<template path>
+DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/turn.toml \
+  scripts/run.sh -m rig --profile web,browser,nat -- cases/test_web_nat_ice1.py
+```
+
+`-k readdress` runs the rig self-test only (about 30 s); `-k chromium` one engine. The measurements go to `out/<run>/web/ice1-results.jsonl` and, once each, to
+`out/<run>/web-findings.txt` as `FINDING: ICE1 ...` lines (rig addresses stay there).
+
+**UNVERIFIED** (nothing here was run or read from the page sources; each is recorded by the first run and then fixed or confirmed):
+
+1. The router rules: `SNAT --random`, the `RETURN` ahead of the DNAT, the INPUT counter chain and the parsing of `conntrack -L` output were checked by unit tests against a recording runner
+   only, never against iptables 1.8 / conntrack-tools of the image. The rig self-test (`test_ice1_readdress_moves_the_mapping_and_back`) is the first check and runs first.
+2. What triggers the restart. The browser cannot see the change (its own interface is the same), so the trigger is in the product; the case asserts the result (a new ufrag on the
+   same peer) and records the signalling it sees (`requests the page sent after the change`, the ICE and signalling events), without assuming a route.
+3. The field names of the operator client list: whether `circuit` equals the id the page holds (the case falls back to the callsign, then to the newest WebRTC row and records
+   which it used), and which field, if any, is an address and of which kind.
+4. The Listen card alert selector (`pages.listen_alerts`) and the error word list (`pages.LISTEN_ERROR_WORDS`): not confirmed from `public.js`. The data-state and the exact status line are the verified part.
+5. The 8 s and 12 s budgets are the spec's figures for wip-97c669d; ICE1b is expected to change the Firefox and WebKit figure.
+6. A real client address change moves TCP too; this case moves UDP only (see above), so the HTTP ownership rule under an address change is not tested.
+7. Whether Firefox and Playwright WebKit report the address of a `prflx` local candidate in `getStats` (Chromium does).
+8. Whether an ICMP port-unreachable (none is sent: the counter rule drops silently) would change the SUT's behaviour; a real NAT usually drops silently too.
+
 ## Gaps
 
 | What | Why |
@@ -276,13 +363,13 @@ Other FINDING lines (arrival statistics, pairs, connection times) are measuremen
 | real Safari, iOS | Playwright WebKit is not Safari; the Safari audio route is a W8 release test |
 | carrier-grade NAT, double NAT, hairpin | one NAT level, the SUT on the outside |
 | IPv6, NAT64 | rig is IPv4 only (the edge needs `public_ips` in the socket's family) |
-| address-restricted cone | not built (the self-test would classify it as "restricted_cone" if it were) |
+| address-restricted cone | not built (the self-test would classify it as "restricted_cone" if it were); so the ICE1 address change runs on full cone, port restricted and symmetric only |
 | `turns:`, TURN over TCP, UDP-blocked networks | coturn without TLS and UDP only; TCP relay denied (`no-tcp-relay`) |
 | the engines' own ICE `failed` interval beyond a break of 20 s | measured through the page: Chromium and WebKit fail 10.0 s after `disconnected`; Firefox never fails inside the page's 12 s grace, so its own interval is not seen |
 | Talk (uplink) through the NAT and through the relay | Listen everywhere; Talk only in the blackhole case (port restricted NAT, direct) |
 | NAT mapping timeouts (UDP idle), port-exhaustion, `none` mode in a browser case | not exercised |
 | many listeners behind one NAT address (edge per-IP limits) | one listener at a time |
-| ICE restart, automatic reconnect | not built (DV-Router ICE1); nothing here asserts them. ICE1a (grace window, no restart) is covered by the blackhole case |
+| ICE restart after an address change | `cases/test_web_nat_ice1.py` (section "ICE1 address change"; written, not run yet). Automatic reconnect after a loss is not built in DV-Router and nothing asserts it; ICE1a (grace window) is covered by the blackhole case |
 | ice 503 | not reachable (see above) |
 | ICE failure under packet loss or latency (netem) instead of a blackhole | netem sidecars exist but are not combined with the NAT profile |
 
