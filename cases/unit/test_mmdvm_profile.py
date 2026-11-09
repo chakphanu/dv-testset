@@ -69,7 +69,7 @@ def test_run_sh_knows_the_profile():
     assert "--profile mmdvm" in re.search(r"compose_all=\((.*?)\)\n", RUN_SH, re.S).group(1)
     assert ".cache/mmdvmstack/MMDVMHost/MMDVM-Host.cpp" in RUN_SH
     assert re.search(r"asl-e\|mmdvm-stack\) ;;", RUN_SH)       # stop / start / restart / kill through the control channel
-    assert "webload, mmdvm, nat, aprs, dw or a comma list" in RUN_SH
+    assert "webload, mmdvm, mapsrc, nat, aprs, dw or a comma list" in RUN_SH
 
 
 def test_header_lists_the_profile_and_the_address():

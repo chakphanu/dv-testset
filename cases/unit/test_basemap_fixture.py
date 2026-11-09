@@ -117,7 +117,7 @@ def test_every_byte_is_deterministic():
 def test_golden_digests_pin_the_generated_bytes():
     """A change of the archive or catalog bytes must be deliberate: update these when the fixture design changes."""
     archive = fx.build_pmtiles()
-    assert (len(archive), fx.sha256_hex(archive)) == (2298, "98be9d1f30356827b23e5e2d3b9521c842c0b2bafc67d64262c838d5072c3c2f")
+    assert (len(archive), fx.sha256_hex(archive)) == (4268, "44be3893547c7a74a6cbcc73719ed4c5f29e6a17743e145207e30a73b4131c80")
     catalog = fx.catalog_bytes()
     assert (len(catalog), fx.sha256_hex(catalog)) == (78981, "abc0953c1a4e3175c5b1e58bed7a07f762c08ae6d4abdb7df253627335d439bc")
 
@@ -263,6 +263,9 @@ def test_pyramid_covers_the_fixture_point_at_every_zoom_and_leaves_gaps(entries)
         assert (z,) + fx.lonlat_tile(fx.FIXTURE_LON, fx.FIXTURE_LAT, z) in have
     assert {(1, x, y) for x in (0, 1) for y in (0, 1)} <= have
     assert (0, 0, 0) in have
+    for lon, lat in fx.REGION_POINTS.values():
+        for z in range(fx.MAX_ZOOM + 1):
+            assert (z,) + fx.lonlat_tile(lon, lat, z) in have
     assert (5, 0, 0) not in have and (12,) + fx.lonlat_tile(-179.9, 80.0, 12) not in have     # absent tiles answer 204
 
 
@@ -282,6 +285,33 @@ def test_every_selected_tier_of_a_profile_finds_tiles(entries, profile, overview
     for box in ([float(v) for v in fx.DEFAULT_DETAIL[1].split(",")], [97.3, 5.6, 105.7, 20.5]):
         found = [(z, x, y) for z, x, y in have if overview < z <= detail and inside(box, z, x, y)]
         assert {z for z, _, _ in found} == set(range(overview + 1, detail + 1)), (profile, box)
+
+
+def test_cells_are_z10_tiles_that_hold_their_point_and_lie_outside_the_base_detail_box():
+    base = [float(v) for v in fx.DEFAULT_DETAIL[1].split(",")]
+    for lon, lat in [(fx.FIXTURE_LON, fx.FIXTURE_LAT)] + list(fx.REGION_POINTS.values()):
+        cell = fx.cell_of(lat, lon)
+        z, x, y = (int(v) for v in cell.split("/"))
+        assert z == 10 and 0 <= x < 1024 and 0 <= y < 1024
+        west, south, east, north = fx.cell_bbox(cell)
+        assert west <= lon < east and south <= lat < north
+        assert abs((east - west) - 360.0 / 1024) < 1e-9
+        inside_base = not (east < base[0] or west > base[2] or north < base[1] or south > base[3])
+        assert inside_base == ((lon, lat) == (fx.FIXTURE_LON, fx.FIXTURE_LAT)), cell
+    assert fx.cell_of(18.79, 98.98) == "10/793/457" and fx.cell_of(7.88, 98.39) == "10/791/489"
+
+
+@pytest.mark.parametrize("profile,first,last", [("hotspot", 6, 12), ("router", 7, 14)])
+def test_a_lazy_cell_extract_finds_tiles_at_every_installed_detail_zoom(entries, profile, first, last):
+    """MAP2d plans the cell's box at overview_maxzoom+1 .. detail_maxzoom and fails a cell with `no source tiles` when none exist:
+    every region point must have a tile in its cell box at each of those zooms (inclusive tile coordinates, as the planner)."""
+    have = {fx.tile_coords(e[0]) for e in entries}
+    for lon, lat in fx.REGION_POINTS.values():
+        west, south, east, north = fx.cell_bbox(fx.cell_of(lat, lon))
+        for z in range(first, last + 1):
+            x0, y1 = fx.lonlat_tile(west, south, z)
+            x1, y0 = fx.lonlat_tile(east, north, z)
+            assert any(x0 <= x <= x1 and y0 <= y <= y1 for zz, x, y in have if zz == z), (profile, lon, lat, z)
 
 
 def test_builds_json_has_the_fields_the_installer_reads(archive):
@@ -407,6 +437,44 @@ def test_request_log_records_method_range_and_if_match(server):
     row = server.requests[before]
     assert (row["method"], row["path"], row["range"], row["status"]) == ("GET", "/archives/" + fx.ARCHIVE_KEY, "bytes=0-3", 206)
     assert row["if_match"] == fx.strong_etag(server.archive)
+
+
+def test_summarize_counts_a_lazy_job_and_flags_bad_ranges():
+    rows = [
+        {"method": "GET", "path": "/builds.json", "range": None, "if_match": None, "status": 200},
+        {"method": "HEAD", "path": "/archives/" + fx.ARCHIVE_KEY, "range": None, "if_match": None, "status": 200},
+        {"method": "GET", "path": "/archives/" + fx.ARCHIVE_KEY, "range": "bytes=0-126", "if_match": '"t"', "status": 206},
+        {"method": "GET", "path": "/archives/" + fx.ARCHIVE_KEY, "range": "bytes=0-9", "if_match": None, "status": 206},
+        {"method": "GET", "path": "/archives/" + fx.ARCHIVE_KEY, "range": None, "if_match": None, "status": 200},
+        {"method": "GET", "path": "/mirror/glyphs/OFL.txt", "range": None, "if_match": None, "status": 200},
+        {"method": "GET", "path": "/x", "range": None, "if_match": None, "status": 404},
+    ]
+    got = fx.summarize(rows)
+    assert (got["total"], got["builds"], got["head"], got["range_get"], got["full_get"], got["mirror"], got["other"]) == (7, 1, 1, 2, 1, 1, 1)
+    assert got["bad_ranges"] == 1 and got["statuses"] == {"200": 4, "206": 2, "404": 1}
+    assert fx.summarize([])["total"] == 0 and fx.summarize([])["head"] == 0
+
+
+def test_stats_listener_serves_only_the_request_log_and_the_access_log_gets_a_line_per_request():
+    import io
+    log = io.StringIO()
+    with fx.BasemapFixture(stats_bind=("127.0.0.1", 0), access_log=log) as fixture:
+        stats_port = fixture._stats.server_address[1]
+        status, _, _ = call(fixture, "GET", "/builds.json")
+        assert status == 200
+        conn = http.client.HTTPConnection("127.0.0.1", stats_port, timeout=10)
+        conn.request("GET", "/requests")
+        resp = conn.getresponse()
+        doc = json.loads(resp.read())
+        assert resp.status == 200 and doc["summary"]["builds"] == 1 and doc["requests"][0]["path"] == "/builds.json"
+        conn.close()
+        for path, want in (("/health", 200), ("/builds.json", 404), ("/mirror/glyphs/OFL.txt", 404)):
+            conn = http.client.HTTPConnection("127.0.0.1", stats_port, timeout=10)
+            conn.request("GET", path)
+            assert conn.getresponse().status == want, path
+            conn.close()
+        assert len(fixture.requests) == 1                      # the stats listener does not log itself
+    assert log.getvalue().splitlines() == ["1 GET /builds.json range=- if-match=- -> 200"]
 
 
 def test_install_args_carry_the_four_map2g_overrides(server, tmp_path):

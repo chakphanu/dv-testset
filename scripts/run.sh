@@ -84,6 +84,12 @@
 #                      Use with web (--profile web,dw: the cases post room text through the web service). The tester
 #                      gets DVT_DW=on, DVT_DW_A, DVT_DW_B. RF transmit stays off unless DVT_DP15_TX_ENABLE=true (then
 #                      also name rig/config/dv-router/dp15-rf-out.toml in DVT_SUT_CONFIG_EXTRA)
+#   --profile mapsrc   the loopback source of the lazy basemap region worker (MAP2d, docs/map2d-cases.md): the service basemap-src
+#                      (tester image, repository read-only, network_mode service:xlxd-sut) runs dvtest.basemap_fixture on the SUT's
+#                      own 127.0.0.1:18700 (dv-svc-basemap takes http sources only at a literal loopback address) with a request log
+#                      for the tester on ${DVT_NET}.11:18701. Needs --profile web (the state dir) and native launch; adds
+#                      rig/config/dv-router/map2d-source.toml ([basemap] source_index / source_base / daily_regions = 1) unless listed;
+#                      the tester gets DVT_MAPSRC=on. Cases skip without it
 #   --profile mmdvm    the REAL client stack of a hotspot (docs/mmdvm-stack-cases.md): the service mmdvm-stack (.100, image
 #                      dvt-mmdvmstack:local, built from .cache/mmdvmstack, run scripts/pre-fetch-mmdvmstack.sh once) runs MMDVMHost
 #                      with DMRGateway, YSFGateway, P25Gateway, NXDNGateway and DStarGateway against xlxd-sut; its modem is the
@@ -394,6 +400,18 @@ if [ "$has_web" = 1 ]; then
     *:rig/config/dv-router/recorder.toml:*) has_recorder=1 ;;
   esac
 fi
+# --profile mapsrc: the loopback source of the lazy basemap worker (MAP2d); the state dir is the web profile's
+has_mapsrc=0
+case ",$profile," in *,mapsrc,*) has_mapsrc=1 ;; esac
+if [ "$has_mapsrc" = 1 ]; then
+  [ "$has_web" = 1 ] \
+    || { echo "run.sh: --profile mapsrc needs --profile web (the persistent state dir the worker reads)" >&2; exit 2; }
+  case ":${DVT_SUT_CONFIG_EXTRA:-}:" in
+    *:rig/config/dv-router/map2d-source.toml:*) ;;
+    *) DVT_SUT_CONFIG_EXTRA="${DVT_SUT_CONFIG_EXTRA:+$DVT_SUT_CONFIG_EXTRA:}rig/config/dv-router/map2d-source.toml" ;;
+  esac
+  export DVT_SUT_CONFIG_EXTRA
+fi
 # --profile aprs: the private aprsc; the APRS-IS client of DV-Router is part of the native config
 has_aprs=0
 case ",$profile," in *,aprs,*) has_aprs=1 ;; esac
@@ -545,7 +563,7 @@ fi
 compose_all=(docker compose -p "${COMPOSE_PROJECT_NAME:-dvt}" "${compose_files[@]}" "${DVT_ENV_FILES[@]}"
   --profile core --profile twonode --profile allstar --profile nxdn --profile capture --profile capture-allstar
   --profile capture-nxdn --profile p25 --profile capture-p25 --profile interlink
-  --profile capture-interlink --profile load --profile netem --profile g3 --profile mmdvm
+  --profile capture-interlink --profile load --profile netem --profile g3 --profile mmdvm --profile mapsrc
   --profile urfd --profile capture-urfd --profile mrefd --profile capture-mrefd --profile web --profile browser
   --profile webload --profile nat --profile aprs --profile dw --profile asl-lab --profile asl-ext --profile asl-nat)
 
@@ -671,6 +689,11 @@ for p in "${wanted[@]}"; do
       profiles+=(--profile dw)
       export DVT_DW=on
       ;;
+    mapsrc)
+      # checked above (needs web; the snippet is added)
+      profiles+=(--profile mapsrc)
+      export DVT_MAPSRC=on
+      ;;
     mmdvm)
       # checked above (the sources)
       profiles+=(--profile mmdvm)
@@ -693,7 +716,7 @@ for p in "${wanted[@]}"; do
     mrefd)
       has_mrefd=1
       ;;
-    *) echo "run.sh: --profile takes core, allstar, asl-lab, asl-edge, asl-ext, nxdn, p25, interlink, twonode, load, g3, urfd, mrefd, web, browser, webload, mmdvm, nat, aprs, dw or a comma list" >&2; exit 2 ;;
+    *) echo "run.sh: --profile takes core, allstar, asl-lab, asl-edge, asl-ext, nxdn, p25, interlink, twonode, load, g3, urfd, mrefd, web, browser, webload, mmdvm, mapsrc, nat, aprs, dw or a comma list" >&2; exit 2 ;;
   esac
 done
 # native launch reads no xlxd.* file: these settings only change the reference side

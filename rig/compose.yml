@@ -409,6 +409,10 @@ services:
       DVT_TWONODE: ${DVT_TWONODE:-off}
       DVT_DVR_PEER: ${DVT_NET:-172.30.0}.16
       DVT_DVR_PEER_TRANSCODER: ${DVT_NET:-172.30.0}.17
+      # profile mapsrc (cases/test_map2d_regions.py): on when the loopback basemap source runs in the SUT's namespace; the tester
+      # reads its request log (GET /requests) on the SUT's rig address
+      DVT_MAPSRC: ${DVT_MAPSRC:-off}
+      DVT_MAPSRC_STATS: http://${DVT_NET:-172.30.0}.11:18701
       # profile mmdvm (cases/test_mmdvm_stack.py): on when the real client stack runs; the tester listens as its virtual modem
       DVT_MMDVM: ${DVT_MMDVM:-off}
       DVT_MMDVM_STACK: ${DVT_NET:-172.30.0}.100
@@ -966,6 +970,45 @@ services:
       - ./config/aprsc/aprsc.conf:/etc/aprsc/aprsc.conf:ro
     networks:
       rig: {ipv4_address: "${DVT_NET:-172.30.0}.47"}
+
+  # ---- profile mapsrc: the source of the lazy basemap region worker (MAP2d; cases/test_map2d_regions.py, docs/map2d-cases.md).
+  # dv-svc-basemap accepts an http source only at the literal address 127.0.0.1 / [::1], so the fixture server
+  # (dvtest/basemap_fixture.py: builds.json, a PMTiles archive with HEAD / Range / If-Match / strong ETag) shares the network
+  # namespace of xlxd-sut and listens on ITS loopback, port 18700 (rig/config/dv-router/map2d-source.toml names it). The stats
+  # listener on 0.0.0.0:18701 serves only the request log (GET /requests) to the tester at ${DVT_NET}.11:18701. The SUT image has
+  # no shell or python, so the sidecar uses the tester image with the repository mounted read-only. A restart of xlxd-sut leaves
+  # this sidecar in the old namespace (the capture sidecars are recreated, this one is not): the case never restarts the SUT.
+  basemap-src:
+    <<: *limits-small
+    profiles: [mapsrc]
+    init: true
+    restart: "no"
+    image: dvt-tester:local
+    user: "${DVT_UID:-1000}:${DVT_GID:-1000}"
+    network_mode: "service:xlxd-sut"
+    depends_on:
+      xlxd-sut: {condition: service_started, restart: false}
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      HOME: /tmp
+    volumes:
+      - ..:/dvt:ro
+    command:
+      - python3
+      - -m
+      - dvtest.basemap_fixture
+      - serve
+      - --host
+      - 127.0.0.1
+      - --port
+      - "18700"
+      - --stats-bind
+      - 0.0.0.0:18701
+      - --access-log
 
   # ---- profile dw: two real Dire Wolf TNCs on a modem loop for the DP15 RF cases of tier B (docs/dp15-cases.md,
   # cases/test_dp15_rf_dw.py). Image dvt-direwolf:local (rig/Dockerfile.direwolf, source .cache/direwolf from

@@ -261,8 +261,9 @@ Any other `DVT_BASEMAP_FILE` (a directory with a top-level `MANIFEST`, a `.tar` 
 `dvtest/basemap_fixture.py` is a loopback server plus encoders (Python standard library, deterministic bytes) for the four MAP2g overrides of
 `dv-svc-basemap install`: `--source-index` (`/builds.json`: one build `20261107.pmtiles`, schema `4.15.2`), `--source-base` (`/archives/`: HEAD with size and a
 strong ETag, ranged GET answered 206 with an exact `Content-Range`, `If-Match` mismatch 412, unsatisfiable range 416), `--glyph-base` (`/mirror/<catalog path>`,
-plain 200) and `--glyph-catalog` (260 entries: the 256 BMP ranges, the two `OFL.txt`, `FONT-FACES.json`, `Fixture.ttf`). The archive is a PMTiles v3 file of 18
-gzip MVT tiles (one per zoom 0 to 14 containing 100.5 E, 13.75 N, plus the other three tiles of z1), enough for both profiles; every tile is one `earth` square.
+plain 200) and `--glyph-catalog` (260 entries: the 256 BMP ranges, the two `OFL.txt`, `FONT-FACES.json`, `Fixture.ttf`). The archive is a PMTiles v3 file of 37
+gzip MVT tiles (one per zoom 0 to 14 for each of three points: 100.5 E 13.75 N inside the dvt box, and Chiang Mai and Phuket outside it for the
+MAP2d region case, `docs/map2d-cases.md`; plus the other three tiles of z1), enough for both profiles; every tile is one `earth` square.
 It is a structural fixture, not a map: the glyph ranges are empty, the font is a 32-byte sfnt envelope, no visual result is implied.
 
 ```sh
@@ -272,10 +273,10 @@ scripts/basemap-install-fixture.sh --bin <path to dv-svc-basemap> --out .local/b
 DVT_BASEMAP_FILE=.local/basemap-map2 scripts/run.sh ...      # as the DOM with a basemap row above
 ```
 
-Defaults are `--profile hotspot --detail dvt=99.9,13.0,101.1,14.1` (the world overview z0-5 holds 9 tiles, the detail z6-12 holds 7); `--profile router` and any
+Defaults are `--profile hotspot --detail dvt=99.9,13.0,101.1,14.1` (the world overview z0-5 holds 10 tiles, the detail z6-12 holds 7); `--profile router` and any
 `--detail NAME=W,S,E,N` inside Thailand also work. The script runs `install --dry-run` first (its plan is saved as `<out>/install-plan.json`, beside `basemap/`), then `install` and `verify`, and refuses an `--out` that already holds a `basemap/`. The binary is any executable file of a MAP2g build (copy it out of the image with `docker create` and `docker cp`; the image keeps it at `/usr/local/bin/dv-svc-basemap`; its entrypoint is `dv-router`, so either `docker cp` that path or run with `--entrypoint dv-svc-basemap`).
 `python3 -m dvtest.basemap_fixture serve --catalog-out FILE` keeps the server up for a manual run, `info` prints the
-sizes and digests (archive 2298 bytes, catalog 78981 bytes). Unit tests: `python3 -m pytest -m unit cases/unit/test_basemap_fixture.py` (31 tests; the last one installs and verifies for real
+sizes and digests (archive 4268 bytes, catalog 78981 bytes). Unit tests: `python3 -m pytest -m unit cases/unit/test_basemap_fixture.py` (31 tests; the last one installs and verifies for real
 when `DVT_BASEMAP_BIN=<binary>` is set and skips otherwise).
 
 ## UNVERIFIED shapes of the second set

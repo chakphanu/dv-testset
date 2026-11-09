@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch; --profile mapsrc adds it by itself): the [basemap] table of the lazy region
+# worker of DV-Router MAP2d (docs/design/config.md "[basemap]", deployment.md "Automatic detail regions"). The source is the
+# fixture server of the compose service basemap-src (dvtest/basemap_fixture.py), which shares the network namespace of the SUT
+# and listens on ITS 127.0.0.1:18700: http sources are accepted only at a literal 127.0.0.1 / [::1]. The paths are the fixture's
+# (/builds.json, /archives/<build>.pmtiles). daily_regions = 1 makes the daily cap observable with two cells: the first
+# admitted cell takes the day's only slot, the next one has to be held back. fetch is spelled out although true is the default.
+[basemap]
+fetch = true
+source_index = "http://127.0.0.1:18700/builds.json"
+source_base = "http://127.0.0.1:18700/archives"
+daily_regions = 1

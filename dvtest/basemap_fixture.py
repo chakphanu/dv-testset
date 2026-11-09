@@ -23,7 +23,7 @@ The encoders are written from the specifications (PMTiles v3, Mapbox vector tile
 xy2d); they do not import or copy any DV-Router code. Python standard library only.
 
     python3 -m dvtest.basemap_fixture install --bin PATH/dv-svc-basemap --out DIR     (scripts/basemap-install-fixture.sh)
-    python3 -m dvtest.basemap_fixture serve [--port N] [--catalog-out FILE]
+    python3 -m dvtest.basemap_fixture serve [--port N] [--catalog-out FILE] [--stats-bind HOST:PORT] [--access-log]
     python3 -m dvtest.basemap_fixture info
 """
 import argparse
@@ -48,7 +48,11 @@ ROOT = Path(__file__).resolve().parents[1]
 BUILD_DATE = "20261107"                     # the dated build the index lists and `--build` selects
 ARCHIVE_KEY = BUILD_DATE + ".pmtiles"
 SCHEMA_VERSION = "4.15.2"                   # source schema; the installer accepts major 4 only
-FIXTURE_LON, FIXTURE_LAT = 100.5, 13.75     # every tile of the pyramid contains this point (inside Thailand)
+FIXTURE_LON, FIXTURE_LAT = 100.5, 13.75     # the base point: inside DEFAULT_DETAIL, so the installed detail tier holds its tiles
+# Further points whose chain of tiles (zoom 0..MAX_ZOOM) is in the archive, outside DEFAULT_DETAIL: a lazy region worker
+# (MAP2d) asked for the z10 cell of one of them finds tiles to extract. name -> (lon, lat). Used by cases/test_map2d_regions.py.
+REGION_POINTS = {"cnx": (98.98, 18.79), "hkt": (98.39, 7.88)}
+CELL_ZOOM = 10                              # the lazy worker's cell grid ("10/<x>/<y>")
 MAX_ZOOM = 14                               # covers the router profile (detail z7-14); hotspot needs 12
 DEFAULT_PROFILE = "hotspot"
 DEFAULT_DETAIL = ("dvt", "99.9,13.0,101.1,14.1")   # the box docs/dp7-cases.md has always used; holds FIXTURE_LON/LAT
@@ -202,10 +206,29 @@ def lonlat_tile(lon, lat, z):
     return max(0, min(n - 1, x)), max(0, min(n - 1, y))
 
 
+def cell_of(lat, lon, zoom=CELL_ZOOM):
+    """The lazy-worker cell name `<zoom>/<x>/<y>` of a coordinate (the slippy tile of the z10 grid that contains it)."""
+    x, y = lonlat_tile(lon, lat, zoom)
+    return "%d/%d/%d" % (zoom, x, y)
+
+
+def cell_bbox(cell):
+    """[west, south, east, north] of a cell name: the whole tile, edges included (how the worker plans its extract)."""
+    z, x, y = (int(v) for v in cell.split("/"))
+    n = 1 << z
+
+    def lat(row):
+        return math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * row / n))))
+
+    return [x / n * 360.0 - 180.0, lat(y + 1), (x + 1) / n * 360.0 - 180.0, lat(y)]
+
+
 def tile_list():
-    """The (z, x, y) of every tile in the archive, sorted by tile id: one tile per zoom 0..MAX_ZOOM containing
-    (FIXTURE_LON, FIXTURE_LAT), plus the other three tiles of zoom 1 (so the world overview is not a single square)."""
-    tiles = {(z,) + lonlat_tile(FIXTURE_LON, FIXTURE_LAT, z) for z in range(MAX_ZOOM + 1)}
+    """The (z, x, y) of every tile in the archive, sorted by tile id: one tile per zoom 0..MAX_ZOOM containing the base point
+    (FIXTURE_LON, FIXTURE_LAT) and each of REGION_POINTS, plus the other three tiles of zoom 1 (so the world overview is not a
+    single square)."""
+    points = [(FIXTURE_LON, FIXTURE_LAT)] + list(REGION_POINTS.values())
+    tiles = {(z,) + lonlat_tile(lon, lat, z) for lon, lat in points for z in range(MAX_ZOOM + 1)}
     tiles |= {(1, x, y) for x in (0, 1) for y in (0, 1)}
     return sorted(tiles, key=lambda t: tile_id(*t))
 
@@ -398,11 +421,66 @@ class _Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
     allow_reuse_address = True
 
 
+def summarize(rows):
+    """Counts of what a source client did, from request rows (the `requests` of BasemapFixture): one lazy-region job is one
+    builds.json GET plus one archive HEAD, then ranged GETs; a client that never asked for a job leaves all of them at zero.
+    `bad_ranges` counts archive GETs that are not a 206 answer to a Range request carrying If-Match."""
+    archive = ARCHIVE_PREFIX + ARCHIVE_KEY
+    out = {"total": len(rows), "builds": 0, "head": 0, "range_get": 0, "full_get": 0, "mirror": 0, "other": 0,
+           "bad_ranges": 0, "statuses": {}}
+    for row in rows:
+        path, method = row["path"], row["method"]
+        out["statuses"][str(row["status"])] = out["statuses"].get(str(row["status"]), 0) + 1
+        if path == INDEX_PATH and method == "GET":
+            out["builds"] += 1
+        elif path == archive and method == "HEAD":
+            out["head"] += 1
+        elif path == archive and method == "GET" and row["range"]:
+            out["range_get"] += 1
+            if row["status"] != 206 or not row["if_match"]:
+                out["bad_ranges"] += 1
+        elif path == archive and method == "GET":
+            out["full_get"] += 1
+        elif path.startswith(MIRROR_PREFIX):
+            out["mirror"] += 1
+        else:
+            out["other"] += 1
+    return out
+
+
+class _StatsHandler(http.server.BaseHTTPRequestHandler):
+    """GET /requests -> {"requests": [...], "summary": {...}}; GET /health -> ok. Read only; nothing else is served."""
+    protocol_version = "HTTP/1.1"
+    server_version = "dvt-basemap-fixture-stats"
+
+    def log_message(self, format, *args):       # noqa: A002
+        return
+
+    def do_GET(self):
+        route = self.path.split("?", 1)[0]
+        if route == "/requests":
+            rows, summary = self.server.fixture.snapshot()
+            body, status = json.dumps({"requests": rows, "summary": summary}, separators=(",", ":")).encode("ascii"), 200
+        elif route == "/health":
+            body, status = b"ok\n", 200
+        else:
+            body, status = b"", 404
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json" if route == "/requests" else "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+        self.close_connection = True
+
+
 class BasemapFixture:
     """The fixture bytes plus a started-on-demand loopback server. `with BasemapFixture() as fx:` then fx.url (no trailing
     slash) and fx.index_url / fx.source_base / fx.glyph_base for the four overrides."""
 
-    def __init__(self, host="127.0.0.1", port=0):
+    def __init__(self, host="127.0.0.1", port=0, stats_bind=None, access_log=None):
+        """`stats_bind` = (host, port) opens a second listener that serves only the request log (GET /requests): for a tester
+        that cannot reach the loopback-only source listener. `access_log` is a text stream that gets one line per request."""
         self.assets = dict(glyph_assets())
         self.archive = build_pmtiles()
         self.etag = strong_etag(self.archive)
@@ -410,22 +488,47 @@ class BasemapFixture:
         self.requests = []
         self._lock = threading.Lock()
         self._host, self._port = host, port
+        self._stats_bind = stats_bind
+        self.access_log = access_log
         self._server = None
         self._thread = None
+        self._stats = None
+        self._stats_thread = None
 
     def _record(self, method, path, range_header, if_match, status):
+        row = {"method": method, "path": path.split("?", 1)[0], "range": range_header, "if_match": if_match, "status": status}
         with self._lock:
-            self.requests.append({"method": method, "path": path.split("?", 1)[0], "range": range_header,
-                                  "if_match": if_match, "status": status})
+            row["n"] = len(self.requests) + 1
+            self.requests.append(row)
+        if self.access_log is not None:
+            self.access_log.write("%d %s %s range=%s if-match=%s -> %d\n" % (
+                row["n"], method, row["path"], range_header or "-", if_match or "-", status))
+            self.access_log.flush()
+
+    def snapshot(self):
+        """(request rows so far, summary) under the lock: the document the stats listener serves."""
+        with self._lock:
+            rows = list(self.requests)
+        return rows, summarize(rows)
 
     def start(self):
         self._server = _Server((self._host, self._port), _Handler)
         self._server.fixture = self
         self._thread = threading.Thread(target=self._server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
         self._thread.start()
+        if self._stats_bind is not None:
+            self._stats = _Server(tuple(self._stats_bind), _StatsHandler)
+            self._stats.fixture = self
+            self._stats_thread = threading.Thread(target=self._stats.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+            self._stats_thread.start()
         return self
 
     def stop(self):
+        if self._stats is not None:
+            self._stats.shutdown()
+            self._stats.server_close()
+            self._stats_thread.join(5.0)
+            self._stats = None
         if self._server is not None:
             self._server.shutdown()
             self._server.server_close()
@@ -540,13 +643,23 @@ def _cmd_install(args):
     return 0
 
 
+def _hostport(text):
+    host, _, port = text.rpartition(":")
+    if not host or not port.isdigit():
+        raise argparse.ArgumentTypeError("%r is not HOST:PORT" % text)
+    return host, int(port)
+
+
 def _cmd_serve(args):
-    with BasemapFixture(port=args.port) as fixture:
+    log = sys.stdout if args.access_log else None
+    with BasemapFixture(host=args.host, port=args.port, stats_bind=args.stats_bind, access_log=log) as fixture:
         if args.catalog_out:
             Path(args.catalog_out).write_bytes(catalog_bytes())
         print("source-index %s\nsource-base  %s\nglyph-base   %s" % (fixture.index_url, fixture.source_base, fixture.glyph_base))
         if args.catalog_out:
             print("glyph-catalog %s" % args.catalog_out)
+        if args.stats_bind:
+            print("stats        http://%s:%d/requests" % args.stats_bind)
         sys.stdout.flush()
         try:
             threading.Event().wait()
@@ -578,7 +691,11 @@ def main(argv=None):
     inst.add_argument("--timeout", type=float, default=600.0)
     inst.set_defaults(func=_cmd_install)
     srv = sub.add_parser("serve", help="serve the fixture until interrupted (prints the three URLs)")
+    srv.add_argument("--host", default="127.0.0.1", help="source listener address; dv-svc-basemap accepts http only for literal 127.0.0.1 / [::1]")
     srv.add_argument("--port", type=int, default=0)
+    srv.add_argument("--stats-bind", type=_hostport, metavar="HOST:PORT",
+                     help="second listener that serves only the request log (GET /requests), for a tester outside this network namespace")
+    srv.add_argument("--access-log", action="store_true", help="print one line per request on stdout")
     srv.add_argument("--catalog-out", help="also write the glyph catalog to this file")
     srv.set_defaults(func=_cmd_serve)
     info = sub.add_parser("info", help="print sizes and digests of the generated bytes")
