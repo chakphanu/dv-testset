@@ -42,8 +42,8 @@ unit test `cases/unit/test_coverage_matrix.py` runs it).
 | Built-in echo (ECHO1) | 27 | 19 | 2 | 6 | 0 |
 | Echo return integrity E9 (D-STAR kinds) | 14 | 13 | 1 | 0 | 0 |
 | Real-transcoder cross-mode audio into YSF (related to ECHO1) | 3 | 3 | 0 | 0 | 0 |
-| DP15 (APRS / AX.25 / KISS data path) | 58 | 41 | 3 | 14 | 0 |
-| **Total** | **1198** | **750** | **272** | **168** | **8** |
+| DP15 (APRS / AX.25 / KISS data path) | 59 | 42 | 3 | 14 | 0 |
+| **Total** | **1199** | **751** | **272** | **168** | **8** |
 <!-- summary:end -->
 
 ## Top 15 gaps (ranked by how much real-world traffic they touch)
@@ -1432,6 +1432,7 @@ Sources: dp15-cases.md.
 | DP15-8t RF-heard telemetry `T#` is gated the same way | dp15-cases.md "RF to APRS-IS igate" | `test_dp15_igate::test_dp15_8t_rf_telemetry_is_gated_with_qar` | rig | b:aprsc | OK |
 | DP15-8q RF-heard general query `?APRS?` is never gated (bounded window from the run's latency, control frame) | dp15-cases.md "RF to APRS-IS igate" | `test_dp15_igate::test_dp15_8q_rf_general_query_is_not_gated` | rig | b:aprsc | OK |
 | DP15-8n, 8r NOGATE / RFONLY in the path is never gated (aprsc drops them too: evidence is the path counter) | dp15-cases.md "RF to APRS-IS igate" | `test_dp15_igate::test_dp15_8n_nogate_path_is_not_gated`, `test_dp15_8r_rfonly_path_is_not_gated` | rig | b:aprsc | OK |
+| DP15-6g startup guard is reported as a fence (`startup_guard`, guard_ms) in the first 13 s after a start; late reads skip | dp15-cases.md "DP15-6g" | `test_dp15_rf::test_dp15_6g_the_startup_guard_is_a_fence_in_the_first_13_seconds` | rig | a | OK |
 | DP15-6s KISS parameters (TXDELAY, P, SlotTime, TXtail, FullDuplex) written at connect and reconnect, no other command | dp15-cases.md:192 | `test_dp15_rf::test_dp15_6s_kiss_parameters_are_written_after_every_connect` | rig | a | OK |
 | DP15-6s' the same against a real Dire Wolf TNC (tier B) | dp15-cases.md:381 | - | - | - | GAP |
 | DP15-6a RF message to the room name reaches the room once (M17, D-STAR, SSE, history), no RF ack | dp15-cases.md:193 | `test_dp15_rf::test_dp15_6a_message_to_the_room_name_on_rf_reaches_the_room`, `test_dp15_rf_dw::test_dp15_6a_message_to_the_room_name_on_rf_reaches_the_room` | rig | c | OK |

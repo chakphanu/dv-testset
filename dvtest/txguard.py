@@ -205,3 +205,72 @@ def describe(result, kind, port):
     via = "" if not result.via else "; matched by %s" % result.via
     return "tx guard wait on %s port %s: %s%s; waited %d ms in %d reads; last fence %r, last guard_ms %r; keys met: %s" % (
         kind, port, note, via, result.waited_ms, result.polls, result.fence, result.guard_ms, " | ".join(result.keys))
+
+
+# ---------------------------------------------------------------- the fenced shape right after a start (RFSAFE1 rule 3 and 4)
+
+def uptime_reader(admin):
+    """read() -> node uptime in seconds (float) or None, from the admin route GET /api/v1/admin/status `live.node_uptime_s`
+    (admin.md about line 307; `uptime_s` of the hub when the node value is absent). Never raises: None when unknown."""
+    def read():
+        try:
+            resp = admin.get(admin.path("/status"), expect=None)
+            if resp.status != 200:
+                return None
+            live = (resp.json() or {}).get("live") or {}
+            for key in ("node_uptime_s", "uptime_s"):
+                if isinstance(live.get(key), (int, float)) and not isinstance(live.get(key), bool):
+                    return float(live[key])
+        except Exception:                                       # noqa: BLE001  a status read must never fail the case
+            return None
+        return None
+    return read
+
+
+StartupShape = namedtuple("StartupShape", "outcome detail lateness_s obs")
+# outcome: fenced (the expected shape was seen inside the window) | late (the window had ended or could not be shown to be open: the
+# case skips and says how late) | violation (inside the window and the shape is wrong: the case fails)
+
+
+def startup_fenced_shape(read, uptime=None, *, kind, window_s=STARTUP_GUARD_S, early_margin_s=1.0, clock=time.monotonic,
+                         sleep=time.sleep, gap_s=1.0):
+    """One read (AX.25) or two reads `gap_s` apart (radio) right after a start; the window is the startup guard, 13 s after the
+    start of the node. Expected shape: AX.25: tx_fence == "startup_guard" and tx_guard_ms present (an int >= 0); radio: tx_state
+    "fenced", fence "startup_guard", guard_ms present and strictly smaller in the second read. `uptime()` is the node uptime in
+    seconds (None when unknown): at or above window_s - early_margin_s the window is treated as over (late), and an unfenced first
+    read with unknown uptime is also late, since it cannot be told from a violation. Lateness is never a failure."""
+    up = uptime() if uptime is not None else None
+    if up is not None and up >= window_s - early_margin_s:
+        return StartupShape("late", "node uptime %.1f s at the first read: the %.0f s window was over (or within %.1f s of its end)" % (
+            up, window_s, early_margin_s), max(0.0, up - window_s), None)
+    first = read()
+    if first.scope:
+        return StartupShape("violation", "CREDENTIAL/SCOPE PROBLEM: kind \"modem\" rows carry no `modem` object (operator or admin needed); keys: %s" % (
+            " | ".join(first.keys)), None, first)
+    if not first.found:
+        return StartupShape("late", "no row for the port yet (%s): the edge had not published its session inside the window; keys: %s" % (
+            "node uptime %.1f s" % up if up is not None else "node uptime unknown", " | ".join(first.keys)), None, first)
+    if not first.fenced:
+        if up is None:
+            return StartupShape("late", "first read already unfenced, node uptime unknown: too late to tell from a violation", None, first)
+        return StartupShape("violation", "node uptime %.1f s (inside the window) but the port is not fenced: expected a startup_guard fence (keys: %s)" % (
+            up, " | ".join(first.keys)), None, first)
+    problems = []
+    if first.fence != "startup_guard":
+        problems.append("fence %r, expected 'startup_guard'" % (first.fence,))
+    if first.guard_ms is None or not isinstance(first.guard_ms, int) or first.guard_ms < 0:
+        problems.append("guard_ms %r is not an int >= 0 (present only once the end of the fence is known)" % (first.guard_ms,))
+    last = first
+    if kind == "radio" and not problems:
+        sleep(gap_s)
+        second = read()
+        last = second
+        if not second.fenced:
+            return StartupShape("late", "the fence ended between two reads %.1f s apart (first guard_ms %r)" % (gap_s, first.guard_ms), None, second)
+        if second.guard_ms is None or not second.guard_ms < first.guard_ms:
+            problems.append("guard_ms did not decrease over two reads: %r then %r" % (first.guard_ms, second.guard_ms))
+    if problems:
+        return StartupShape("violation", "; ".join(problems) + " (keys: %s)" % " | ".join(first.keys), None, last)
+    return StartupShape("fenced", "fence %r, guard_ms %r%s, node uptime %s" % (
+        first.fence, first.guard_ms, "" if last is first else " then %r" % (last.guard_ms,), "%.1f s" % up if up is not None else "unknown"),
+        None, last)

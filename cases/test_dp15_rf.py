@@ -14,6 +14,8 @@ transmit off and on): docs/dp15-cases.md. Tier B (a real Dire Wolf loop) is case
            rolling minute, the gap of the budget, and an airtime (DV-Router's upper bound) within the configured budget
   DP15-6e  a frame heard on two ports is one item (`heard_ports` and `duplicates` counted); a different message on the
            second port is a second item
+  DP15-6g  right after a start the port with effective TX is a fence startup_guard with tx_guard_ms (AX.25) or tx_state fenced with a
+           shrinking guard_ms (radio ports); read inside the first 13 s, a late read skips and records how late (RFSAFE1, RIF4b)
   DP15-6s  the five KISS parameter frames are written after every connect (also after a reconnect)
 
 Run shapes (docs/dp15-cases.md): the snippet rig/config/dv-router/dp15-rf.toml with DVT_DP15_TX_ENABLE=false (6a, 6b off,
@@ -36,7 +38,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "proto"))
 
-from dvtest import airtime, ax25, kiss_tnc, metrics, slowdata, web  # noqa: E402
+from dvtest import airtime, ax25, kiss_tnc, metrics, slowdata, txguard, web  # noqa: E402
 
 import data_support as ds  # noqa: E402
 import txguard_support  # noqa: E402
@@ -216,6 +218,59 @@ def need_tx(rf, case=""):
 def need_rx_only(rf):
     if rf.tx_on or rf.has_out_path:
         pytest.skip("this case needs tx_enable false and no rf-out path: run with DVT_DP15_TX_ENABLE=false and dp15-rf.toml alone")
+
+
+# ================================================================ 6g: the startup guard is reported as a fence
+
+def read_rendered_doc(target):
+    """The RENDERED dv-router.toml of this run as a dict ({} when unreadable)."""
+    try:
+        return tomllib.loads((Path(target.out) / "xlxd-config" / "xlxd-sut" / "dv-router.toml").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def radio_tx_ports(doc):
+    """Names of the [[edges.radio.port]] rows with tx = true when [edges.radio] is enabled, else []."""
+    radio = (doc.get("edges") or {}).get("radio")
+    if not isinstance(radio, dict) or radio.get("enable") is not True or not radio.get("tx_enable"):
+        return []
+    return [p["name"] for p in radio.get("port") or [] if p.get("tx") is True and p.get("name")]
+
+
+def test_dp15_6g_the_startup_guard_is_a_fence_in_the_first_13_seconds(rig, target, admin_session, web_client):
+    """RFSAFE1 + RIF4b (radio.md 10.4, status.md): right after a start an AX.25 or radio port with effective TX is fenced for about 13 s.
+    The FIRST test of this module, with no hub, TNC or web fixtures: the admin status read shows the node uptime, and the case reads
+    the port inside the window. AX.25 port rf-a: GET /api/v1/admin/clients, kind modem, tx_fence == "startup_guard" and tx_guard_ms
+    present. Radio ports with tx (none in the rig snippets today): tx_state fenced, fence startup_guard, guard_ms present and
+    smaller in a second read 1 s later. Lateness is never a failure: past the window the case skips and records how late it was.
+    Shape: fenced, or skip. Needs the shape RF-ON (DVT_DP15_TX_ENABLE=true) for the AX.25 half."""
+    case = "DP15-6g"
+    doc = read_rendered_doc(target)
+    got = read_rf_config(target)
+    ax_port = None
+    if got is not None:
+        row = port_row(got[0], "rf-a")
+        if row and bool(got[0].get("tx_enable")) and bool(row.get("tx")) and not dw_config(got[0]):
+            ax_port = "rf-a"
+    radio_ports = radio_tx_ports(doc)
+    if ax_port is None and not radio_ports:
+        pytest.skip("no AX.25 port rf-a with effective TX (DVT_DP15_TX_ENABLE=true) and no radio port with tx in the rendered config: no startup fence to read")
+    admin = admin_session("operator")
+    uptime = txguard.uptime_reader(admin)
+    results = []
+    if ax_port is not None:
+        results.append(("ax25", ax_port, txguard.startup_fenced_shape(txguard.ax25_reader(admin, ax_port), uptime, kind="ax25")))
+    for name in radio_ports:
+        results.append(("radio", name, txguard.startup_fenced_shape(txguard.radio_reader(web_client, name), uptime, kind="radio")))
+    for kind, name, res in results:
+        tag = "FINDING" if res.outcome == "violation" else "RECORD"
+        note(target, case, tag, "startup fence on %s port %s: %s: %s; keys met: %s" % (
+            kind, name, res.outcome, res.detail, " | ".join(res.obs.keys) if res.obs else "none"))
+    bad = [(k, n, r) for k, n, r in results if r.outcome == "violation"]
+    assert not bad, "; ".join("%s port %s: %s" % (k, n, r.detail) for k, n, r in bad)
+    if all(r.outcome == "late" for _k, _n, r in results):
+        pytest.skip("too late to see the startup fence: " + "; ".join("%s port %s: %s" % (k, n, r.detail) for k, n, r in results))
 
 
 # ================================================================ 6s: the KISS parameter frames

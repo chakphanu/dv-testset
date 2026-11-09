@@ -173,3 +173,42 @@ def _edge(port):
     sock = socket.create_connection(("127.0.0.1", port), timeout=5)
     sock.sendall(ax25.dvrouter_startup_params(0))
     return sock
+
+
+def test_radio_tx_ports_reads_only_enabled_radio_rows_with_tx():
+    doc = {"edges": {"radio": {"enable": True, "tx_enable": True, "port": [{"name": "p1", "tx": True}, {"name": "p2", "tx": False}, {"name": "p3"}]}}}
+    assert tr.radio_tx_ports(doc) == ["p1"]
+    assert tr.radio_tx_ports({"edges": {"radio": {"enable": True, "tx_enable": False, "port": [{"name": "p1", "tx": True}]}}}) == []
+    assert tr.radio_tx_ports({"edges": {"radio": {"enable": False, "port": [{"name": "p1", "tx": True}]}}}) == []
+    assert tr.radio_tx_ports({}) == []
+
+
+def test_6g_is_the_first_test_of_the_module_and_skips_without_an_effective_tx_port(tmp_path):
+    import inspect
+    names = [n for n, f in vars(tr).items() if n.startswith("test_") and inspect.isfunction(f)]
+    assert names[0] == "test_dp15_6g_the_startup_guard_is_a_fence_in_the_first_13_seconds"
+    with pytest.raises(pytest.skip.Exception, match="no startup fence to read"):
+        tr.test_dp15_6g_the_startup_guard_is_a_fence_in_the_first_13_seconds(None, rendered(tmp_path, "false", False), None, None)
+
+
+def fake_admin(uptime, fence):
+    def get(path, expect=None):
+        if path.endswith("/status"):
+            return SimpleNamespace(status=200, json=lambda: {"live": {"node_uptime_s": uptime}})
+        modem = {"name": "rf-a", "adapter": "kiss-tcp", "connected": True}
+        if fence:
+            modem.update({"tx_fence": "startup_guard", "tx_guard_ms": 11000})
+        return SimpleNamespace(status=200, json=lambda: {"items": [{"kind": "modem", "modem": modem}]})
+    return SimpleNamespace(path=lambda s: s, get=get)
+
+
+def test_6g_flow_fenced_late_and_violation(tmp_path, monkeypatch):
+    notes = []
+    monkeypatch.setattr(tr, "note", lambda *a: notes.append(a))
+    target = rendered(tmp_path, "true", True)
+    tr.test_dp15_6g_the_startup_guard_is_a_fence_in_the_first_13_seconds(None, target, lambda role: fake_admin(3.0, True), None)
+    assert any("fenced" in a[3] and "startup_guard" in a[3] for a in notes if a[2] == "RECORD")
+    with pytest.raises(pytest.skip.Exception, match="too late"):
+        tr.test_dp15_6g_the_startup_guard_is_a_fence_in_the_first_13_seconds(None, target, lambda role: fake_admin(40.0, False), None)
+    with pytest.raises(AssertionError, match="expected a startup_guard fence"):
+        tr.test_dp15_6g_the_startup_guard_is_a_fence_in_the_first_13_seconds(None, target, lambda role: fake_admin(3.0, False), None)

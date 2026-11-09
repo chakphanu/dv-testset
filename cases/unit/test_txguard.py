@@ -220,3 +220,70 @@ def test_no_modem_row_at_all_returns_at_once_and_says_which_case_it_was():
     # and the other quiet return: the modem object is present without a fence
     res = run([body()], "ax25", lambda b: txguard.ax25_observation(b, "rf-a"))
     assert res.state == "absent" and "present without tx_fence" in txguard.describe(res, "ax25", "rf-a")
+
+
+# ---------------------------------------------------------------- the fenced shape right after a start
+
+def ax_obs(fence="startup_guard", guard=12000, found=True, scope=None):
+    present = fence is not None
+    return txguard.Observation(found, present, present, fence, guard, ["k"], "kind=modem items[].modem", scope)
+
+
+def seq_reader(*obs):
+    it = iter(obs)
+    return lambda: next(it)
+
+
+def test_startup_shape_ax25_fenced_inside_the_window():
+    res = txguard.startup_fenced_shape(seq_reader(ax_obs()), lambda: 3.2, kind="ax25")
+    assert res.outcome == "fenced" and "startup_guard" in res.detail and "12000" in res.detail and "3.2" in res.detail
+
+
+def test_startup_shape_late_is_never_a_failure_and_says_how_late():
+    res = txguard.startup_fenced_shape(seq_reader(), lambda: 41.5, kind="ax25")             # the reader must not even be called
+    assert res.outcome == "late" and abs(res.lateness_s - 28.5) < 1e-6 and "41.5" in res.detail
+    res = txguard.startup_fenced_shape(seq_reader(ax_obs(None)), None, kind="ax25")          # unknown uptime, already unfenced
+    assert res.outcome == "late" and "uptime unknown" in res.detail
+    res = txguard.startup_fenced_shape(seq_reader(ax_obs(found=False)), lambda: 2.0, kind="ax25")
+    assert res.outcome == "late" and "no row" in res.detail
+
+
+def test_startup_shape_violations_inside_the_window():
+    res = txguard.startup_fenced_shape(seq_reader(ax_obs(None)), lambda: 4.0, kind="ax25")   # inside the window but not fenced
+    assert res.outcome == "violation" and "expected a startup_guard fence" in res.detail
+    res = txguard.startup_fenced_shape(seq_reader(ax_obs("session_loss")), lambda: 4.0, kind="ax25")
+    assert res.outcome == "violation" and "'session_loss'" in res.detail
+    res = txguard.startup_fenced_shape(seq_reader(ax_obs(guard=None)), lambda: 4.0, kind="ax25")
+    assert res.outcome == "violation" and "guard_ms" in res.detail
+    res = txguard.startup_fenced_shape(seq_reader(ax_obs(found=False, scope="no_modem_object")), lambda: 4.0, kind="ax25")
+    assert res.outcome == "violation" and "CREDENTIAL/SCOPE" in res.detail
+
+
+def radio_obs(state="fenced", fence="startup_guard", guard=9000):
+    return txguard.Observation(True, True, state == "fenced", fence, guard, ["k"])
+
+
+def test_startup_shape_radio_needs_a_decreasing_guard_over_two_reads():
+    slept = []
+    res = txguard.startup_fenced_shape(seq_reader(radio_obs(guard=9000), radio_obs(guard=8000)), lambda: 3.0, kind="radio", sleep=slept.append)
+    assert res.outcome == "fenced" and slept == [1.0] and "9000 then 8000" in res.detail
+    res = txguard.startup_fenced_shape(seq_reader(radio_obs(guard=9000), radio_obs(guard=9000)), lambda: 3.0, kind="radio", sleep=lambda s: None)
+    assert res.outcome == "violation" and "did not decrease" in res.detail
+    res = txguard.startup_fenced_shape(seq_reader(radio_obs(guard=9000), radio_obs("idle", None, None)), lambda: 3.0, kind="radio", sleep=lambda s: None)
+    assert res.outcome == "late" and "ended between two reads" in res.detail
+    res = txguard.startup_fenced_shape(seq_reader(radio_obs(guard=None)), lambda: 3.0, kind="radio", sleep=lambda s: None)
+    assert res.outcome == "violation" and "guard_ms" in res.detail
+
+
+def test_uptime_reader_reads_the_node_uptime_and_never_raises():
+    def admin(status, payload, boom=False):
+        def get(path, expect=None):
+            if boom:
+                raise RuntimeError("down")
+            return SimpleNamespace(status=status, json=lambda: payload)
+        return SimpleNamespace(path=lambda s: s, get=get)
+    assert txguard.uptime_reader(admin(200, {"live": {"node_uptime_s": 5, "uptime_s": 99}}))() == 5.0
+    assert txguard.uptime_reader(admin(200, {"live": {"uptime_s": 7.5}}))() == 7.5
+    assert txguard.uptime_reader(admin(200, {"live": {}}))() is None
+    assert txguard.uptime_reader(admin(403, {}))() is None
+    assert txguard.uptime_reader(admin(200, {}, boom=True))() is None
