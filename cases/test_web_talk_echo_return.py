@@ -16,6 +16,17 @@ the talk status becomes "On air" and, after the release, "Ended: Button released
   listener_hears_live   a SECOND page (the user without may_tx) listening on E: analyser rms above the floor during the over the SUT reports (public state rooms[E])
   listener_hears_echo   the same page: the echo replay in the same window (level, and on Chromium 700 Hz)
 
+Page checks (ICE1d, DV-Router fd32a71; PTTRX1 asks for them next to the element checks), from the recorder's own timelines:
+
+  talker_status_while_held    the TALKER's #talk-status never shows "Ready" between the press and the release marks (Requesting -> On air, also
+                        across the forced connection change); "Pending - queued / waiting for the floor" is a failure unless the run's WebRTC
+                        max_tx is 1 (rendered dv-router.toml [edges.webrtc], else DVT_SUT_CONFIG_EXTRA naming webrtc-max-tx-1.toml), and with
+                        max_tx 1 outside the hold; a Pending inside the hold is RECORDED (one talker: nothing queues it)
+  talker_srcobject_once / listener_srcobject_once    each page's audio element is bound to its MediaStream once per generation (no stream
+                        assigned twice, no more streams than RTCPeerConnections)
+  The existing *_page_audio_element_hears_* checks are the element checks. The edge's peer fail/remove reason is a log line, not
+  observable from the page: not asserted here.
+
 On Firefox the page's AudioContext stays suspended in the container (docs/web-browser-cases.md): the level is then judged from the decoder's
 totalAudioEnergy of getStats, or from the packet count when the engine has none; Firefox's and WebKit's fake sources are not 700 Hz, so
 their frequency is recorded and not asserted. The failure message names the stage that stopped (judge_window): no inbound-rtp bytes at all
@@ -177,6 +188,19 @@ def status_timelines(dump):
             "listen_status_timeline": tes.status_timeline(dump, "listen_status_timeline")}
 
 
+def read_max_tx(request):
+    """The run's [edges.webrtc] max_tx (tes.max_tx_setting): from the run's rendered dv-router.toml when it is there, else from the names in
+    DVT_SUT_CONFIG_EXTRA. The file is read, never edited."""
+    text = None
+    try:
+        path = Path(request.getfixturevalue("target").out) / "xlxd-config" / "xlxd-sut" / "dv-router.toml"
+        if path.is_file():
+            text = path.read_text(encoding="utf-8")
+    except Exception:                                    # noqa: BLE001 - evidence only
+        text = None
+    return tes.max_tx_setting(text, os.environ.get("DVT_SUT_CONFIG_EXTRA", ""))
+
+
 def start_recorders(*bps):
     for bp in bps:
         got = bp.page.evaluate("([ms, sel, sels]) => window.__dvtEcho ? window.__dvtEcho.start(ms, sel, sels) : null",
@@ -247,6 +271,7 @@ def run_talk_echo(engine, tx_page, rx_page, echo_on_e, web_client, request, phas
     analysis = {}
     ice1 = {}
     sut = None
+    max_tx = read_max_tx(request)
     try:
         rtc_tx.open()
         rtc_rx.open()
@@ -310,7 +335,7 @@ def run_talk_echo(engine, tx_page, rx_page, echo_on_e, web_client, request, phas
                 sut = run.tracker.summary(run.phases.get("press", 0.0), run.phases["release"])
                 walls = {who: [r["wall_response"] for r in a.rows if r["method"] == "POST" and r["path"].endswith("/rtc/offer")
                                 and r["wall_response"] is not None] for who, a in run.audits.items()}
-                analysis = tes.analyse_run(run.dumps, engine, sut=sut, offers_wall=walls)
+                analysis = tes.analyse_run(run.dumps, engine, sut=sut, offers_wall=walls, max_tx=max_tx)
                 failures += tes.forced_lines(tes.failure_lines(analysis["checks"], analysis["diagnosis"]), phase)
             tables = {who: tes.requests_table(a.rows, run.phases) for who, a in run.audits.items()}
             delta = tes.metrics_delta(ice_before, ice_after)
@@ -326,7 +351,7 @@ def run_talk_echo(engine, tx_page, rx_page, echo_on_e, web_client, request, phas
             doc = {
                 "meta": {"engine": brlib.label(engine), "room": tes.ROOM, "hold_s": tes.HOLD_S, "pre_s": tes.PRE_S, "tail_s": tes.TAIL_S,
                          "sample_ms": tes.SAMPLE_MS, "rms_floor": tes.RMS_FLOOR, "expect_hz": tes.EXPECT_HZ.get(engine),
-                         "image": os.environ.get("XLXD_SUT_IMAGE", ""), "echo": echo_on_e, "forced_change_phase": phase,
+                         "image": os.environ.get("XLXD_SUT_IMAGE", ""), "echo": echo_on_e, "forced_change_phase": phase, "webrtc_max_tx": max_tx,
                          "note": "checks of kind product are the audio assertions, kind evidence the rest; times of a recorder are ms on its "
                                  "own page clock, phases are the tester's wall clock (seconds)"},
                 "phases": run.phases, "sut_over": sut, "sut_room_entries": run.tracker.entries, "windows": analysis.get("windows"), "texts": run.texts, "timeline": run.timeline, "public_state_room_E": run.public,

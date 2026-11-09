@@ -922,6 +922,120 @@ def status_timeline_line(rows):
         for r in rows) or "no change recorded"
 
 
+# ------------------------------------------------------------------------- Talk status and audio element rules (ICE1d, PTTRX1)
+
+# The exact strings of talkStatus() in web/site/public.js (DV-Router fd32a71, English catalog public-en.js); the element is #talk-status.
+TALK_READY, TALK_REQUESTING, TALK_ON_AIR = "Ready", "Requesting", "On air"
+TALK_PENDING = "Pending - queued / waiting for the floor"           # ONLY the core's real floor queue (frame.state pending + code ok)
+MAX_TX_SNIPPET = "webrtc-max-tx-1.toml"                              # rig/config/dv-router/, names [edges.webrtc] max_tx = 1
+
+
+def webrtc_max_tx(config_text):
+    """[edges.webrtc] max_tx of a rendered dv-router.toml text: the integer, or None when the table or the key is absent (the edge's own
+    default then applies, 20 in the snippet's comment) or the text does not parse."""
+    try:
+        import tomllib
+        value = ((tomllib.loads(config_text).get("edges") or {}).get("webrtc") or {}).get("max_tx")
+    except Exception:                                    # noqa: BLE001 - evidence only
+        return None
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def max_tx_setting(config_text, extra_env):
+    """What the run's WebRTC edge was configured with, for the Pending rule: {max_tx, queueing, source}. `queueing` is True when max_tx is 1
+    (a talker can be queued), False when it is known not to be, None when unknown. Sources, in order: `rendered` (the run's own rendered
+    dv-router.toml text, definitive), `env` (DVT_SUT_CONFIG_EXTRA names webrtc-max-tx-1.toml: max_tx 1; names a list without it: not 1, but
+    the template itself could still set it), `unknown` (neither the file nor the variable)."""
+    if config_text:
+        value = webrtc_max_tx(config_text)
+        return {"max_tx": value, "queueing": value == 1, "source": "rendered"}
+    if extra_env:
+        names = [Path(x).name for x in str(extra_env).split(":") if x]
+        one = MAX_TX_SNIPPET in names
+        return {"max_tx": 1 if one else None, "queueing": one, "source": "env"}
+    return {"max_tx": None, "queueing": None, "source": "unknown"}
+
+
+def talk_status_held_check(rows, setting=None):
+    """Judge the TALKER page's Talk status line over the hold from status_timeline() rows. The hold is the rows from the press mark up to the
+    release mark (rel_press_ms >= 0 and rel_release_ms < 0; the recorder keeps one row per change, so the status that was in force at the
+    press is the row before).
+      ready_while_held      "Ready" shown while PTT is held (the ICE1d flash through the listen-to-talk swap): FAILS
+      pending_without_max_tx_1   "Pending" shown although the edge's max_tx is not 1 (the core queue is not reachable): FAILS
+      pending_outside_hold  "Pending" shown before the press or after the release, with max_tx 1: FAILS (a queue claim without a held PTT)
+    With max_tx 1 a Pending inside the hold is only RECORDED: the case has one talker, so nothing queues it; no assertion is invented for it.
+    Returns {ok, stage, detail, requesting_seen, sequence, pending}; `setting` is max_tx_setting() (None = unknown)."""
+    setting = setting or {"max_tx": None, "queueing": None, "source": "unknown"}
+    held = [r for r in rows if r.get("rel_press_ms") is not None and r.get("rel_release_ms") is not None
+            and r["rel_press_ms"] >= 0 and r["rel_release_ms"] < 0]
+    sequence = []
+    for r in held:                                       # consecutive repeats (a re-rendered node) are one step
+        if not sequence or sequence[-1] != r["text"]:
+            sequence.append(r["text"])
+    pend_rows = [r for r in rows if r.get("text") == TALK_PENDING]
+    pend_held = [r for r in held if r.get("text") == TALK_PENDING]
+    out = {"ok": True, "stage": "ok", "requesting_seen": TALK_REQUESTING in sequence, "sequence": sequence,
+           "pending": {"count": len(pend_rows), "in_hold": len(pend_held), "max_tx": setting.get("max_tx"), "max_tx_source": setting.get("source"),
+                       "queueing": setting.get("queueing")}}
+    if not held:
+        out.update(stage="not_observed", detail="no talk status change between the press and the release marks (no marks or no recorder rows)")
+        return out
+    ready = [r for r in held if r.get("text") == TALK_READY]
+    if ready:
+        r = ready[0]
+        out.update(ok=False, stage="ready_while_held", detail="the talk status showed %r %.0f ms after the press while PTT was held (%.0f ms before the "
+                   "release); sequence while held: %s" % (TALK_READY, r["rel_press_ms"], -r["rel_release_ms"], " -> ".join(map(repr, sequence))))
+        return out
+    if pend_rows and setting.get("queueing") is False:
+        r = pend_rows[0]
+        out.update(ok=False, stage="pending_without_max_tx_1", detail="the talk status showed 'Pending' %s ms from the press with max_tx %s (%s): only a "
+                   "room whose max_tx is 1 can queue the talker" % ("?" if r.get("rel_press_ms") is None else "%.0f" % r["rel_press_ms"],
+                                                                     setting.get("max_tx") if setting.get("max_tx") is not None else "not 1", setting.get("source")))
+        return out
+    if setting.get("queueing") and len(pend_rows) > len(pend_held):
+        r = next(x for x in pend_rows if x not in pend_held)
+        out.update(ok=False, stage="pending_outside_hold", detail="the talk status showed 'Pending' %s ms from the press, outside the hold (max_tx 1)"
+                   % ("?" if r.get("rel_press_ms") is None else "%.0f" % r["rel_press_ms"]))
+        return out
+    note = ""
+    if pend_rows:
+        note = "; 'Pending' seen %d time(s) in the hold, max_tx %s (%s): recorded, one talker, not asserted" % (
+            len(pend_held), setting.get("max_tx"), setting.get("source"))
+    out["detail"] = "no %r while held; sequence while held: %s; max_tx %s (%s)%s" % (
+        TALK_READY, " -> ".join(map(repr, sequence)), setting.get("max_tx") if setting.get("max_tx") is not None else "not set",
+        setting.get("source"), note)
+    return out
+
+
+def srcobject_once_check(dump):
+    """The page's audio element gets its stream ONCE per generation (ICE1d: one RTCPeerConnection = one generation = one MediaStream, bound
+    to the element at connect; the teardown's `srcObject = null` is not an assignment). From the recorder's element assignments (the setter is
+    wrapped, so each assignment is seen; the poll notes one it missed):
+      srcobject_reassigned     the same stream was assigned to the element more than once
+      srcobject_more_than_generations   more distinct streams were assigned than RTCPeerConnections the page created
+    Returns {ok, stage, detail, streams, generations, assignments}; stage not_observed (ok) when the dump has no element block."""
+    element = (dump or {}).get("element")
+    if not element or not element.get("selector"):
+        return {"ok": True, "stage": "not_observed", "detail": "the recorder has no element block (the element watch was not started)",
+                "streams": [], "generations": None, "assignments": 0}
+    given = [a for a in element.get("assignments") or [] if a.get("stream")]
+    count = {}
+    for a in given:
+        count[a["stream"]] = count.get(a["stream"], 0) + 1
+    gens = len((dump or {}).get("pcs") or [])
+    out = {"ok": True, "stage": "ok", "streams": [{"stream": k, "assigned": v} for k, v in count.items()], "generations": gens, "assignments": len(given)}
+    twice = [k for k, v in count.items() if v > 1]
+    if twice:
+        out.update(ok=False, stage="srcobject_reassigned", detail="the audio element's srcObject was assigned stream %s %d times (once per generation expected)"
+                   % (twice[0], count[twice[0]]))
+    elif len(count) > gens:
+        out.update(ok=False, stage="srcobject_more_than_generations", detail="%d distinct streams were assigned to the audio element but the page created %d "
+                   "RTCPeerConnection(s) (once per generation expected)" % (len(count), gens))
+    else:
+        out["detail"] = "%d stream(s) assigned to the audio element, %d RTCPeerConnection generation(s), none assigned twice" % (len(count), gens)
+    return out
+
+
 def talk_offer_answer_ms(dump, offer_walls):
     """Page-clock ms of the answer of the first rtc/offer that came back at or after the press (offer_walls: the tester's wall seconds of
     the POST /rtc/offer responses of this page), or None."""
@@ -1029,7 +1143,7 @@ def echo_anchor(dump, sut, listener_rows=None, listener_dump=None):
     return mark_t(dump, "release"), "release"
 
 
-def analyse_run(dumps, engine, floor=RMS_FLOOR, sut=None, offers_wall=None):
+def analyse_run(dumps, engine, floor=RMS_FLOOR, sut=None, offers_wall=None, max_tx=None):
     """Judge a whole run from the two recorder dumps {'talker': dump, 'listener': dump} (either may be None). `sut` is OverTracker.summary():
     the over as the SUT reports it (end_wall_s, start_wall_s, duration_s, ...) or None. The echo windows are anchored to the SUT's over end, not
     to the tester's release (PTTRX1: the SUT ended a 3 s hold's over after 1 s and replayed it BEFORE the tester released). Returns {'checks':
@@ -1038,7 +1152,10 @@ def analyse_run(dumps, engine, floor=RMS_FLOOR, sut=None, offers_wall=None):
       talker_hears_echo     the talker's own page: audio in [anchor, anchor + the SUT over's duration + 3 s]
       listener_hears_live   the second page: audio during the over the SUT reports (the tester's hold when the state is not available)
       listener_hears_echo   the second page: the echo replay in the same window (from ECHO_GUARD_MS after the anchor)
-      over_not_cut_short    the SUT's over lasts within 0.5 s of the tester's hold (only when the state gave a duration)"""
+      over_not_cut_short    the SUT's over lasts within 0.5 s of the tester's hold (only when the state gave a duration)
+      talker_status_while_held   the talker's Talk status: no "Ready" between the press and the release, "Pending" only with max_tx 1
+                            (`max_tx` is max_tx_setting() of the run; talk_status_held_check)
+      <page>_srcobject_once      the page's audio element is bound to its stream once per generation (srcobject_once_check), talker and listener"""
     want = EXPECT_HZ.get(engine)
     out = {"checks": [], "diagnosis": "", "talker": {}, "listener": {}, "expect_hz": want, "windows": {}}
     rows = {name: series(d) for name, d in (dumps or {}).items() if d}
@@ -1122,6 +1239,15 @@ def analyse_run(dumps, engine, floor=RMS_FLOOR, sut=None, offers_wall=None):
     else:
         add("over_not_cut_short", EVIDENCE, ok=True, stage="not_observed",
             detail="the public state gave no over duration (%s)" % ("no SUT over seen" if not sut else "no tester hold"))
+    if tx is not None and tx.get("talk_status_timeline") is not None:
+        v = talk_status_held_check(out["talker"]["talk_status_timeline"], max_tx)
+        out["talker"]["talk_status_check"] = v
+        add("talker_status_while_held", PRODUCT if v["stage"] != "not_observed" else EVIDENCE, ok=v["ok"], stage=v["stage"], detail=v["detail"])
+    for who, d in (("talker", tx), ("listener", rx)):
+        if d is not None:
+            v = srcobject_once_check(d)
+            out[who]["srcobject_check"] = v
+            add("%s_srcobject_once" % who, PRODUCT if v["stage"] != "not_observed" else EVIDENCE, ok=v["ok"], stage=v["stage"], detail=v["detail"])
     out["diagnosis"] = diagnose({c["name"]: c for c in out["checks"]})
     return out
 

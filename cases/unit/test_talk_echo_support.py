@@ -184,7 +184,7 @@ def test_missing_data_is_a_failed_check_not_an_exception():
     out = tes.analyse_run({"talker": None, "listener": None}, "chromium")
     assert stages(out) == ["no_data"] * 3
     out = tes.analyse_run({"talker": dump([]), "listener": dump([sample(0, [])])}, "webkit")
-    assert not any(c["ok"] for c in out["checks"] if c["name"] != "over_not_cut_short")
+    assert not any(c["ok"] for c in out["checks"] if c["name"] != "over_not_cut_short" and not c["name"].endswith("_srcobject_once"))
     assert tes.analyse_run({}, "chromium")["checks"][0]["stage"] == "no_data"
 
 
@@ -874,3 +874,139 @@ def test_recorder_observes_the_document_even_when_the_root_element_does_not_exis
     assert [r["text"] for r in tes.status_timeline(d, "talk_status_timeline")][:3] == ["Ready", "Pending - queued / waiting for the floor", "On air"]
     assert ".observe(document," in tes.ECHO_RECORDER_JS and "document.documentElement" not in tes.ECHO_RECORDER_JS.split("rec.observer = ")[1].split("rec.fastTimer")[0]
     assert "rec.fast(30000)" in tes.ECHO_RECORDER_JS and "rec.fast(15000)" in tes.ECHO_RECORDER_JS
+
+
+# ------------------------------------------------------------------ ICE1d / PTTRX1: talk status while held, max_tx, srcObject once
+
+T_PENDING = "Pending - queued / waiting for the floor"
+MAX1 = {"max_tx": 1, "queueing": True, "source": "rendered"}
+MAXN = {"max_tx": None, "queueing": False, "source": "rendered"}
+
+
+def status_rows(*pairs, press=2000.0, release=5500.0):
+    """status_timeline() rows of a talker dump with a press at 2000 ms and a release at 5500 ms; pairs are (t_ms, text)."""
+    d = {"marks": [{"name": "press", "t": press}, {"name": "release", "t": release}],
+         "talk_status_timeline": [{"t": t, "text": x} for t, x in pairs]}
+    return tes.status_timeline(d, "talk_status_timeline")
+
+
+HEALTHY = ((0.5, "Ready"), (2003.0, "Requesting"), (2044.0, "On air"), (5502.0, "Ended: Button released."))
+
+
+def test_requesting_to_on_air_without_ready_passes():
+    got = tes.talk_status_held_check(status_rows(*HEALTHY), MAXN)
+    assert got["ok"] and got["stage"] == "ok" and got["requesting_seen"]
+    assert got["sequence"] == ["Requesting", "On air"] and got["pending"]["count"] == 0
+    assert "no 'Ready' while held" in got["detail"]
+
+
+def test_a_node_replaced_repeat_of_the_same_text_is_one_step():
+    got = tes.talk_status_held_check(status_rows((0.5, "Ready"), (2003.0, "Requesting"), (2044.0, "On air"), (3000.0, "On air"),
+                                                 (5502.0, "Ended: Button released.")), MAXN)
+    assert got["ok"] and got["sequence"] == ["Requesting", "On air"]
+
+
+def test_ready_while_held_fails_also_across_the_listen_to_talk_swap():
+    # the ICE1d flash: Requesting, then Ready for a moment when the swap closes the listen circuit, then On air
+    got = tes.talk_status_held_check(status_rows((0.5, "Ready"), (2003.0, "Requesting"), (2300.0, "Ready"), (2310.0, "Requesting"),
+                                                 (2400.0, "On air"), (5502.0, "Ended: Button released.")), MAXN)
+    assert not got["ok"] and got["stage"] == "ready_while_held"
+    assert "showed 'Ready' 300 ms after the press" in got["detail"] and "'Requesting' -> 'Ready' -> 'Requesting' -> 'On air'" in got["detail"]
+
+
+def test_the_ready_before_the_press_and_after_the_release_is_not_held():
+    got = tes.talk_status_held_check(status_rows((0.5, "Ready"), (2003.0, "Requesting"), (2044.0, "On air"), (5502.0, "Ended: Button released."),
+                                                 (9000.0, "Ready")), MAXN)
+    assert got["ok"]
+    # a Ready exactly at the release mark is the release, not the hold
+    assert tes.talk_status_held_check(status_rows((0.5, "Ready"), (2003.0, "Requesting"), (5500.0, "Ready")), MAXN)["ok"]
+
+
+def test_pending_without_max_tx_1_fails():
+    rows = status_rows((0.5, "Ready"), (2003.0, "Requesting"), (2010.0, T_PENDING), (2044.0, "On air"), (5502.0, "Ended: Button released."))
+    got = tes.talk_status_held_check(rows, MAXN)
+    assert not got["ok"] and got["stage"] == "pending_without_max_tx_1" and "max_tx not 1 (rendered)" in got["detail"]
+    env = tes.max_tx_setting(None, "rig/config/dv-router/web.toml:rig/config/dv-router/echo.toml")
+    assert env == {"max_tx": None, "queueing": False, "source": "env"}
+    assert tes.talk_status_held_check(rows, env)["stage"] == "pending_without_max_tx_1"
+
+
+def test_pending_with_max_tx_1_inside_the_hold_is_recorded_not_asserted():
+    rows = status_rows((0.5, "Ready"), (2003.0, "Requesting"), (2010.0, T_PENDING), (2044.0, "On air"), (5502.0, "Ended: Button released."))
+    got = tes.talk_status_held_check(rows, MAX1)
+    assert got["ok"] and got["pending"] == {"count": 1, "in_hold": 1, "max_tx": 1, "max_tx_source": "rendered", "queueing": True}
+    assert "'Pending' seen 1 time(s) in the hold, max_tx 1 (rendered): recorded, one talker, not asserted" in got["detail"]
+
+
+def test_pending_with_max_tx_1_outside_the_hold_fails():
+    after = status_rows((0.5, "Ready"), (2003.0, "Requesting"), (2044.0, "On air"), (5502.0, T_PENDING))
+    got = tes.talk_status_held_check(after, MAX1)
+    assert not got["ok"] and got["stage"] == "pending_outside_hold"
+    before = status_rows((0.5, "Ready"), (900.0, T_PENDING), (2003.0, "Requesting"), (2044.0, "On air"))
+    assert tes.talk_status_held_check(before, MAX1)["stage"] == "pending_outside_hold"
+
+
+def test_unknown_max_tx_records_pending_and_does_not_fail():
+    rows = status_rows((0.5, "Ready"), (2003.0, "Requesting"), (2010.0, T_PENDING), (2044.0, "On air"))
+    unknown = tes.max_tx_setting(None, "")
+    assert unknown == {"max_tx": None, "queueing": None, "source": "unknown"}
+    got = tes.talk_status_held_check(rows, unknown)
+    assert got["ok"] and got["pending"]["in_hold"] == 1
+    assert tes.talk_status_held_check(rows)["ok"]                                            # no setting at all = unknown
+
+
+def test_no_rows_in_the_hold_is_not_observed_and_does_not_fail():
+    got = tes.talk_status_held_check(status_rows((0.5, "Ready")), MAXN)
+    assert got["ok"] and got["stage"] == "not_observed"
+    assert tes.talk_status_held_check([], MAXN)["stage"] == "not_observed"
+    # no marks at all: offsets are None, nothing is judged
+    assert tes.talk_status_held_check(tes.status_timeline({"talk_status_timeline": [{"t": 1.0, "text": "Ready"}]}, "talk_status_timeline"), MAXN)["stage"] == "not_observed"
+
+
+def test_max_tx_is_read_from_the_rendered_config_then_from_the_extra_names():
+    assert tes.webrtc_max_tx("[edges.webrtc]\nenable = true\nmax_tx = 1\n") == 1
+    assert tes.webrtc_max_tx("[edges.webrtc]\nenable = true\nmax_tx = 20\n") == 20
+    assert tes.webrtc_max_tx("[edges.webrtc]\nenable = true\n") is None
+    assert tes.webrtc_max_tx("[echo]\nx = 1\n") is None and tes.webrtc_max_tx("not toml [[[") is None
+    assert tes.max_tx_setting("[edges.webrtc]\nmax_tx = 1\n", "") == {"max_tx": 1, "queueing": True, "source": "rendered"}
+    assert tes.max_tx_setting("[edges.webrtc]\nmax_tx = 4\n", "x/webrtc-max-tx-1.toml") == {"max_tx": 4, "queueing": False, "source": "rendered"}
+    assert tes.max_tx_setting(None, "rig/config/dv-router/web.toml:rig/config/dv-router/webrtc-max-tx-1.toml") == {"max_tx": 1, "queueing": True, "source": "env"}
+
+
+def el_dump(assignments, pcs=2):
+    return {"element": {"selector": "audio", "assignments": assignments}, "pcs": [{"id": i} for i in range(pcs)]}
+
+
+def test_srcobject_once_per_generation_passes_with_the_teardown_null():
+    d = el_dump([{"stream": "s1", "via": "setter", "t": 100.0}, {"stream": None, "via": "setter", "t": 2000.0}, {"stream": "s2", "via": "setter", "t": 2001.0}])
+    got = tes.srcobject_once_check(d)
+    assert got["ok"] and got["stage"] == "ok" and got["generations"] == 2 and got["assignments"] == 2
+    assert "2 stream(s) assigned to the audio element, 2 RTCPeerConnection generation(s)" in got["detail"]
+
+
+def test_srcobject_assigned_twice_fails_and_so_do_more_streams_than_generations():
+    twice = tes.srcobject_once_check(el_dump([{"stream": "s1", "via": "setter", "t": 100.0}, {"stream": "s1", "via": "setter", "t": 300.0}], pcs=1))
+    assert not twice["ok"] and twice["stage"] == "srcobject_reassigned" and "stream s1 " in twice["detail"] and "2 times" in twice["detail"]
+    more = tes.srcobject_once_check(el_dump([{"stream": "s1", "via": "setter", "t": 100.0}, {"stream": "s2", "via": "setter", "t": 2000.0}], pcs=1))
+    assert not more["ok"] and more["stage"] == "srcobject_more_than_generations" and "2 distinct streams" in more["detail"] and "1 RTCPeerConnection" in more["detail"]
+
+
+def test_srcobject_without_an_element_block_is_not_observed():
+    assert tes.srcobject_once_check({})["stage"] == "not_observed" and tes.srcobject_once_check(None)["ok"]
+    assert tes.srcobject_once_check({"element": {"selector": None, "assignments": []}})["stage"] == "not_observed"
+
+
+def test_analyse_run_carries_the_page_checks_and_hand_built_dumps_without_them_are_unchanged():
+    plain = tes.analyse_run({"talker": dump(healthy_rows()), "listener": dump(healthy_rows())}, "chromium")
+    names = [c["name"] for c in plain["checks"]]
+    assert "talker_status_while_held" not in names                               # no talk_status_timeline in a hand-built dump
+    assert {c["name"]: c["stage"] for c in plain["checks"]}["talker_srcobject_once"] == "not_observed"
+    d = dump(healthy_rows())
+    d["talk_status_timeline"] = [{"t": 0.5, "text": "Ready"}, {"t": 2003.0, "text": "Requesting"}, {"t": 2300.0, "text": "Ready"},
+                                {"t": 2400.0, "text": "On air"}]
+    out = tes.analyse_run({"talker": d, "listener": dump(healthy_rows())}, "chromium", max_tx=MAXN)
+    got = {c["name"]: c for c in out["checks"]}
+    assert not got["talker_status_while_held"]["ok"] and got["talker_status_while_held"]["kind"] == tes.PRODUCT
+    assert got["talker_status_while_held"]["stage"] == "ready_while_held"
+    assert out["talker"]["talk_status_check"]["sequence"] == ["Requesting", "Ready", "On air"]
+    assert any(l.startswith("PRODUCT CHECK talker_status_while_held stopped at stage ready_while_held") for l in tes.failure_lines(out["checks"], out["diagnosis"]))
