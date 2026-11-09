@@ -21,7 +21,9 @@ the aprsc for `max(ABSENT_MIN_S, ABSENT_FACTOR x the control's latency, ...)` af
 the gate of THIS run and the control proves the path was alive (a case without a control would pass on a broken rig). aprsc itself
 drops a packet with NOGATE or RFONLY in its path (incoming.c, INERR_NOGATE), so for 8n and 8r the absence at the aprsc is not evidence
 about DV-Router; the evidence is the path counter `dv_pkt_path_total{route=<dp15-igate>,result=no_gate}` (filtered for the query),
-which is asserted when the family has a series for the route.
+which is asserted (a route without a series fails the case: dv-router publishes one per configured path since DP16). The route label is
+`p` + 16 hex digits of FNV-1a64 over the path name, never the name itself. The counter moves only for a non-duplicate frame, so every
+frame of this module has its own source (the receive dedupe key is source + destination + information).
 
 Positive cases and "exactly once": aprsc drops an identical packet (source, destination, information) within 30 s, so a second send
 by DV-Router would not be visible at the aprsc; the counter `dv_pkt_path_total{result=forwarded}` +1 per frame (asserted) and the
@@ -224,8 +226,11 @@ def lines_from(tester, src, mark):
 
 
 def finish_counters(target, hub, ctx, case, before, expect, ledger):
-    """Assert the path counters `expect` ({result: delta}) after the publish landed; a route without any series is a FINDING
-    (the family is documented in data.md 13.1; its labels were read from the sources, not from a rig)."""
+    """Assert the path counters `expect` ({result: delta}) after the publish landed. The series is
+    dv_pkt_path_total{route=<p + 16 hex of FNV-1a64 over the path name>,dir="out",result}; dv-router confirmed that it exists per
+    configured path on an image with DP16, so a route without any series FAILS the case (never match on the path name; the
+    name-to-label map pkt/<id>/routes is a fabric key the control channel does not expose, so the label is computed, not
+    cross-checked). Every result that moved besides the expected ones is recorded (not_heard, seen, rate, unreachable, ...)."""
     for result, want in expect.items():
         _delta, known = counter_delta(hub, ctx, before, result, want)    # wait for the publish of the worker
         if not known:
@@ -233,15 +238,17 @@ def finish_counters(target, hub, ctx, case, before, expect, ledger):
     time.sleep(COUNTER_QUIET_S)                         # a surplus count (a second send, a wrong verdict) lands in the next publish
     after, known = read_counts(hub, ctx)
     deltas = {r: after.get(r, 0) - before.get(r, 0) for r in set(after) | set(before) | set(expect)}
-    ledger["counters"][case] = {r: d for r, d in deltas.items() if d}
-    note(target, case, "RECORD", "dv_pkt_path_total{route=%s} deltas: %s" % (ctx.shape.path, {r: d for r, d in deltas.items() if d}))
-    if not known:
-        note(target, case, "FINDING", "dv_pkt_path_total has no series for the route %s (%s): the counter checks are skipped" % (
-            ctx.shape.path, ctx.label))
-        return
+    moved = {r: d for r, d in deltas.items() if d}
+    ledger["counters"][case] = moved
+    note(target, case, "RECORD", "dv_pkt_path_total{route=%s (%s)} deltas: %s" % (ctx.label, ctx.shape.path, moved))
+    other = {r: d for r, d in moved.items() if r not in expect}
+    if other:
+        note(target, case, "RECORD", "results that moved besides the expected %s: %s" % (sorted(expect), other))
+    assert known, "%s: dv_pkt_path_total has no series for the route %s (label of the path %s): an image with DP16 publishes one per configured path" % (
+        case, ctx.label, ctx.shape.path)
     for result, want in expect.items():
         assert deltas.get(result, 0) == want, "dv_pkt_path_total{route=%s,result=%s} moved by %d, expected %d (all deltas %s)" % (
-            ctx.shape.path, result, deltas.get(result, 0), want, {r: d for r, d in deltas.items() if d})
+            ctx.label, result, deltas.get(result, 0), want, moved)
 
 
 def positive_case(target, hub, ctx, ledger, case, src, info):

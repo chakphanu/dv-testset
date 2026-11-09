@@ -32,6 +32,7 @@ FILES = ["dp15-rf.toml", "dp15-aprsis.toml", "dp15-rf-igate.toml"]
 def test_route_label_is_fnv1a64_of_the_name():
     assert ti.route_label("") == "pcbf29ce484222325"                       # the FNV-1a 64 offset basis
     assert ti.route_label("a") == "paf63dc4c8601ec8c"                      # published FNV-1a 64 test vector
+    assert ti.route_label("dp15-igate") == "p970fcce26eaa4a12"              # hand-computed with an independent loop
     assert len(ti.route_label("dp15-igate")) == 17 and ti.route_label("dp15-igate") != ti.route_label("dp7-igate")
 
 
@@ -228,7 +229,28 @@ def test_flow_negative_case_fails_when_the_bad_frame_is_gated_or_the_control_is_
         run_case(fast, edge, flow_ctx(edge), "negative")
 
 
-def test_flow_a_counter_family_without_the_route_is_a_finding_not_a_failure(fast):
+def test_flow_a_counter_series_without_the_route_fails_the_case(fast):
     edge = FakeEdge("p0000000000000000")                                           # the series carries another route label
-    ledger = run_case(fast, edge, flow_ctx(edge), "positive")
-    assert "T" in ledger["latency_s"]
+    with pytest.raises(AssertionError, match="no series for the route"):
+        run_case(fast, edge, flow_ctx(edge), "positive")
+
+
+def test_flow_other_results_that_move_are_recorded(fast):
+    notes = []
+    edge = FakeEdge(ti.route_label("dp15-igate"), drop_src=[ti.SRC_NOGATE])
+    inject = edge.inject
+    edge.inject = lambda frame: (edge.counts.__setitem__("rate", edge.counts.get("rate", 0) + 1), inject(frame))[1]
+    fast.setattr(ti, "note", lambda target, case, tag, text: notes.append((tag, text)))
+    run_case(fast, edge, flow_ctx(edge), "negative")
+    assert any("besides the expected" in text and "rate" in text for _tag, text in notes)
+
+
+def test_every_injected_frame_has_its_own_dedupe_key():
+    infos = {"w": aprs.weather_info(11, 10, 1, 0, 220, 4, 5, 77, rain_1h=0, rain_24h=0, rain_midnight=0, humidity=50, pressure=9900, software="d", unit="vt1"),
+             "t": aprs.telemetry_info(7, (199, 0, 255, 73, 123), "01101001", comment="dvt"), "q": aprs.query_info("APRS"),
+             "n": aprs.weather_info(11, 10, 1, 1, 100, 1, 2, 60, humidity=70, pressure=10050, software="d", unit="vtn"),
+             "r": aprs.weather_info(11, 10, 1, 3, 110, 2, 3, 61, humidity=71, pressure=10060, software="d", unit="vtr"),
+             "c": aprs.weather_info(11, 10, 1, 2, 90, 3, 4, 50, humidity=61, pressure=10100, software="d", unit="vtc")}
+    sources = [ti.SRC_WEATHER, ti.SRC_TELEMETRY, ti.SRC_QUERY, ti.SRC_NOGATE, ti.SRC_RFONLY] + list(ti.SRC_CONTROL.values())
+    keys = {(src, ti.TOCALL, info) for src, info in zip(sources, [infos["w"], infos["t"], infos["q"], infos["n"], infos["r"]] + [infos["c"]] * 3)}
+    assert len(keys) == 8
