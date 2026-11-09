@@ -306,7 +306,19 @@ def judge_final(bp, rtc, view):
     return bad, {"dashboard_alerts": n_dash, "listen_alerts": texts[:3]}
 
 
-def run_change(engine, nat_type, bp, rtc, ctl, target, operator, circuit, callsign):
+def read_edge(rig_control):
+    """One read of the edge counters (ice1.EDGE_COUNTER_FAMILIES) through the control channel: {wall, counters, error}. Evidence
+    only: it never raises; a failed read is recorded and the cell goes on."""
+    wall = time.time()
+    if rig_control is None:
+        return {"wall": wall, "counters": None, "error": "no control channel (DVT_RIG_CONTROL is not set)"}
+    try:
+        return {"wall": wall, "counters": ice1.edge_counters(metrics.parse(rig_control.metrics("xlxd-sut", timeout=10.0))), "error": None}
+    except Exception as exc:                            # noqa: BLE001 - evidence, not a verdict
+        return {"wall": wall, "counters": None, "error": "%s: %s" % (type(exc).__name__, str(exc)[:100])}
+
+
+def run_change(engine, nat_type, bp, rtc, ctl, target, operator, circuit, callsign, rig_control=None):
     """The measured part: audio, change, observation. Returns the measurements; the restore is the caller's finally."""
     m = {"samples": [], "ui": []}
     total = ice1.InboundTotal()
@@ -338,11 +350,18 @@ def run_change(engine, nat_type, bp, rtc, ctl, target, operator, circuit, callsi
         m["operator_before"] = operator_rows(operator)
         m["router_before"] = ctl.status()
         t_page0 = rtc.clock()
+        m["edge_before"] = read_edge(rig_control)
 
         # ---- the change
+        wall_call = time.time()
         t_change = time.monotonic()
         ans = ctl.readdress(True)
         m["t_return_s"] = round(time.monotonic() - t_change, 3)
+        # t0: the router's own clock at the start of the change when it reports one (the `firsts` offsets and the SUT's log lines
+        # are read against it; same host clock as the capture), else the tester's clock just before the call
+        router_t0 = ans.get("t0")
+        m["t0_wall"], m["t0_source"] = (float(router_t0), "router") if isinstance(router_t0, (int, float)) else (wall_call, "tester")
+        m["t0_tester_wall"] = wall_call
         m["from_to"] = (ans["from"], ans["to"])
         assert ans["from"] == seen_before[0], "the router moves the browser away from %s but the SUT saw it at %s" % (ans["from"], seen_before[0])
 
@@ -390,6 +409,13 @@ def run_change(engine, nat_type, bp, rtc, ctl, target, operator, circuit, callsi
             m["firsts"] = None
             m["firsts_error"] = "%s: %s" % (type(exc).__name__, str(exc)[:100])
 
+        # ---- the edge counters after: the edge publishes every 10 s, so the read comes at least EDGE_SETTLE_S after the change
+        # (the wait for the sniffer above already covers it)
+        settle = t_change + ice1.EDGE_SETTLE_S - time.monotonic()
+        if settle > 0:
+            time.sleep(settle)
+        m["edge_after"] = read_edge(rig_control)
+
         # ---- the state after
         m["flows_after"] = ctl.media_mappings()
         m["view_after"] = page_view(rtc)
@@ -429,7 +455,7 @@ def test_ice1_address_change_restarts_ice_on_the_same_circuit(engine, nat_type, 
         _SEEN.add(("hub", "families"))
     m = None
     try:
-        m = run_change(engine, nat_type, bp, rtc, ice1_ctl, target, web_operator, circuit, br_user.callsign)
+        m = run_change(engine, nat_type, bp, rtc, ice1_ctl, target, web_operator, circuit, br_user.callsign, rig_control)
     finally:
         leave(rtc)
         try:
@@ -444,7 +470,11 @@ def test_ice1_address_change_restarts_ice_on_the_same_circuit(engine, nat_type, 
     an, budget = m["analysis"], ice1.resume_budget_s(engine)
 
     # ---- what was seen, recorded first
-    note(engine, nat_type, "address change", {"from": old_ip, "to": new_ip, "router_answered_after_s": m["t_return_s"], "tcp": "unchanged"})
+    note(engine, nat_type, "address change", {"from": old_ip, "to": new_ip, "router_answered_after_s": m["t_return_s"], "tcp": "unchanged",
+                                              "t0_utc": ice1.iso_ms(m["t0_wall"]), "t0_source": m["t0_source"],
+                                              "t0_tester_utc": ice1.iso_ms(m["t0_tester_wall"])})
+    # what the edge counted around the change (ICE1e): path switches by reason, drops, unrouted datagrams. Evidence only.
+    note(engine, nat_type, ice1.EDGE_KEY, ice1.edge_report(m["edge_before"], m["edge_after"]))
     # router-side evidence for DV-Router (ICE1c): when the browser's first datagrams reach the SUT from the new mapping and when the edge
     # follows; seconds after the router began the change; None = not seen in 20 s. Recorded, never asserted.
     ev = ice1.firsts_evidence(m["firsts"])

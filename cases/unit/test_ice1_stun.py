@@ -222,3 +222,46 @@ def test_missing_capture_is_reported(tmp_path, capsys):
     (run / "capture" / "xlxd-sut.pcapng").unlink()
     assert tool.main([str(run)]) == 2
     assert "--capture" in capsys.readouterr().err
+
+
+def test_recorded_t0_is_used_and_compared_with_the_derived_one(tmp_path):
+    path = tmp_path / "c.pcapng"
+    pcap.write(str(path), firefox_capture(SRFLX))
+    requests, responses = tool.read_checks(str(path), {OLD, NEW})
+    got = tool.analyse_checks(requests, responses, OLD, NEW, first_stun_new_s=4.5, t0=BASE + 10.0)
+    assert got["t0"] == BASE + 10.0 and got["t0_source"].startswith("recorded") and got["problems"] == []
+    assert got["t0_derived"] == pytest.approx(BASE + 10.0, abs=1e-3)
+    far = tool.analyse_checks(requests, responses, OLD, NEW, first_stun_new_s=4.5, t0=BASE + 10.6)
+    assert far["t0"] == BASE + 10.6 and any("differs" in p for p in far["problems"])
+    no_first = tool.analyse_checks(requests, responses, OLD, NEW, first_stun_new_s=None, t0=BASE + 10.6)
+    assert no_first["problems"] == []                                   # nothing to compare with
+
+
+def test_priority_in_seen_set_follows_the_ice1e_rule(tmp_path):
+    path = tmp_path / "c.pcapng"
+    pcap.write(str(path), firefox_capture(SRFLX))                       # srflx consent was seen on the old mapping
+    requests, responses = tool.read_checks(str(path), {OLD, NEW})
+    got = tool.analyse_checks(requests, responses, OLD, NEW, first_stun_new_s=4.5)
+    assert got["priority_match"] is False and got["priority_in_seen_set"] is True
+    pcap.write(str(path), firefox_capture(12345))                       # a PRIORITY never seen before
+    requests, responses = tool.read_checks(str(path), {OLD, NEW})
+    got = tool.analyse_checks(requests, responses, OLD, NEW, first_stun_new_s=4.5)
+    assert got["priority_match"] is False and got["priority_in_seen_set"] is False
+
+
+def test_report_uses_the_recorded_t0_and_the_liveness_reason(tmp_path, capsys):
+    run = make_run(tmp_path, PRFLX, with_rebinding=False)
+    rows = result_rows(True)
+    for row in rows:
+        if row["key"] == "address change":
+            row["value"]["t0_utc"] = tool.ice1.iso_ms(BASE + 10.0)
+    rows.append({"engine": "Playwright Firefox", "nat": "full_cone", "key": tool.ice1.EDGE_KEY,
+                 "value": {"delta": {"dv_edge_webrtc_rebinding_switches_total": {"liveness": 1}}}})
+    (run / "web" / "ice1-results.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    log = run / "logs" / "xlxd-sut.log"
+    log.write_text(log.read_text() + log_line(BASE + 25.0, "webrtc: rebinding reason=liveness old=ipv4 new=ipv4"))
+    assert tool.main([str(run)]) == 0
+    cell = json.loads((run / "web" / "ice1-stun.json").read_text())["cells"][0]
+    assert cell["t0_source"].startswith("recorded") and cell["t0"] == BASE + 10.0
+    assert cell["window_s"] == 20.0 and cell["rebinding"] == "liveness" and cell["rebinding_at_s"] == 15.0
+    assert cell["edge_counters"]["delta"] == {"dv_edge_webrtc_rebinding_switches_total": {"liveness": 1}}

@@ -409,6 +409,13 @@ DV-Router's consent rule (b) switches only when a consent check from the new map
 Firefox full cone and port restricted have a prflx pair, nominate and consent both 1853817087 and rebind by consent after 3.46 s and 3.63 s; `20261108T211920Z` (2fcc727) the same two cells have an srflx pair,
 nominate 1853817087 (type preference 110) but consent 1686052863 (100), all four checks from the new mapping answered, no rebinding line, audio not resumed; Firefox symmetric (prflx pair) matches in both runs.
 
+Evidence the case records for this (ICE1e, evidence only, never asserted): the `address change` row of `ice1-results.jsonl` carries `t0_utc` (the router's own clock at the start of the change, UTC with milliseconds; `t0_source` says
+`router` or, when the router reports none, `tester`; `t0_tester_utc` is the tester's clock just before the call), and the row `edge counters over the change (before / after by reason, nonzero deltas; the edge publishes every 10 s)` holds two reads of the hub
+through the control channel (`metrics xlxd-sut`, needs `DVT_RIG_CONTROL=1`, which `run.sh` sets): one just before the change and one at least 12 s after it (in practice about 21 s: the case waits for the router's sniffer horizon first). The row has both counter
+sets and the nonzero deltas of `dv_edge_webrtc_rebinding_switches_total` by reason (nomination, consent, liveness), `dv_edge_drops_total{proc="webrtc"}` by reason and `dv_edge_webrtc_unrouted_total` by reason, the gap between the reads, and `error` when a read failed
+(the cell then goes on; a counter can lag by up to one 10 s publish at each read). `ice1_stun.py` uses `t0_utc` when present and compares it with the value derived from `first_stun_new_s`; older runs use the derived one. The `in set` column is the
+ICE1e rule (a consent PRIORITY already seen on an authenticated check from the selected source), `match` the older rule (the nominating check's PRIORITY).
+
 ## Gaps
 
 | What | Why |

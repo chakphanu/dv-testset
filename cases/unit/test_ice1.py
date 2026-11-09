@@ -2,7 +2,7 @@
 """dvtest/ice1.py: the pure helpers of the ICE1 case (address change, ICE restart on the same circuit)."""
 import pytest
 
-from dvtest import ice1
+from dvtest import ice1, metrics
 
 pytestmark = pytest.mark.unit
 
@@ -191,3 +191,62 @@ def test_firsts_evidence_with_nothing_seen_or_no_sniffer():
     none = ice1.firsts_evidence(None)
     assert none["error"] == "no snapshot" and none["stale_to_old_per_s"] is None
     assert ice1.firsts_evidence({"error": "x"})["first_udp_new_s"] is None            # a snapshot without sides
+
+
+def sample(name, value, **labels):
+    return metrics.Sample(name, labels, value)
+
+
+def edge_samples(switches, drops, unrouted=None, proc="webrtc"):
+    out = [sample("dv_edge_webrtc_rebinding_switches_total", v, proc=proc, reason=r) for r, v in switches.items()]
+    out += [sample("dv_edge_drops_total", v, proc=proc, reason=r) for r, v in drops.items()]
+    out += [sample("dv_edge_webrtc_unrouted_total", v, proc=proc, reason=r) for r, v in (unrouted or {}).items()]
+    return out
+
+
+def test_iso_ms_round_trip():
+    assert ice1.iso_ms(1794173086.659) == "2026-11-08T21:24:46.659Z"
+    assert ice1.iso_ms(0) == "1970-01-01T00:00:00.000Z" and ice1.iso_ms(None) is None
+    assert ice1.parse_iso_ms("2026-11-08T21:24:46.659Z") == pytest.approx(1794173086.659, abs=1e-6)
+    assert ice1.parse_iso_ms("2026-11-08T21:24:46Z") == 1794173086.0
+    assert ice1.parse_iso_ms("2026-11-08T21:24:46.659123456Z") == pytest.approx(1794173086.659123, abs=1e-5)
+    assert ice1.parse_iso_ms("yesterday") is None and ice1.parse_iso_ms(None) is None
+
+
+def test_edge_counters_keep_the_webrtc_families_by_reason():
+    samples = edge_samples({"nomination": 1, "consent": 0, "liveness": 0}, {"echo_drop": 2}, {"wrong_peer": 2})
+    samples += edge_samples({"consent": 9}, {"echo_drop": 9}, proc="dcs")                  # another proc is ignored
+    samples.append(sample("dv_edge_sessions", 3, proc="webrtc", kind="x"))                 # another family is ignored
+    got = ice1.edge_counters(samples)
+    assert got == {"dv_edge_webrtc_rebinding_switches_total": {"nomination": 1, "consent": 0, "liveness": 0},
+                   "dv_edge_drops_total": {"echo_drop": 2}, "dv_edge_webrtc_unrouted_total": {"wrong_peer": 2}}
+    assert ice1.edge_counters(None) == {}
+
+
+def test_edge_report_gives_the_nonzero_deltas_including_a_liveness_switch():
+    before = {"wall": 100.0, "counters": ice1.edge_counters(edge_samples(
+        {"nomination": 1, "consent": 0}, {"echo_drop": 2, "guard_blocked": 0}, {"wrong_peer": 2}))}
+    after = {"wall": 121.4, "counters": ice1.edge_counters(edge_samples(
+        {"nomination": 1, "consent": 0, "liveness": 1}, {"echo_drop": 2, "guard_blocked": 5}, {"wrong_peer": 2, "no_source": 3}))}
+    rep = ice1.edge_report(before, after)
+    assert rep["delta"] == {"dv_edge_webrtc_rebinding_switches_total": {"liveness": 1}, "dv_edge_drops_total": {"guard_blocked": 5},
+                            "dv_edge_webrtc_unrouted_total": {"no_source": 3}}
+    assert rep["gap_s"] == 21.4 and rep["error"] is None and rep["missing"] == []
+    assert rep["before_utc"] == "1970-01-01T00:01:40.000Z" and rep["before"] == before["counters"]
+
+
+def test_edge_report_with_no_change_missing_families_and_failed_reads():
+    same = {"wall": 5.0, "counters": ice1.edge_counters(edge_samples({"consent": 0}, {"echo_drop": 1}))}
+    rep = ice1.edge_report(same, dict(same, wall=30.0))
+    assert rep["delta"] == {} and rep["missing"] == ["dv_edge_webrtc_unrouted_total"]
+    failed = ice1.edge_report(same, {"wall": 30.0, "counters": None, "error": "TimeoutError: no answer"})
+    assert failed["delta"] is None and failed["error"] == "TimeoutError: no answer" and failed["after"] is None
+    assert failed["gap_s"] == 25.0
+    none = ice1.edge_report(None, None)
+    assert none["delta"] is None and none["gap_s"] is None and none["before_utc"] is None
+    both = ice1.edge_report({"wall": 1.0, "counters": None, "error": "a"}, {"wall": 2.0, "counters": None, "error": "b"})
+    assert both["error"] == "a; b"
+
+
+def test_the_edge_wait_covers_the_hub_publish_interval():
+    assert ice1.EDGE_SETTLE_S >= 10.0

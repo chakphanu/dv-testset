@@ -16,8 +16,10 @@ needs its own evidence.
 How a cell is placed in the capture (nothing is hardcoded): the results file records the NAT address before and after
 ("address change": from, to) and the port the SUT saw before and after ("router view"). STUN requests from the old
 (ip, port) give the session (its USERNAME), the nominating check (USE-CANDIDATE) and the consent checks before; requests
-of the same USERNAME from the new (ip, port) are the checks after. The instant of the change is the first request from the
-new mapping minus the recorded "first_stun_new_s" (the router sniffer's clock-free offset); it only places the SUT log lines.
+of the same USERNAME from the new (ip, port) are the checks after. The instant of the change is the "t0_utc" the case records in
+the "address change" row (the router's clock); runs made before that was recorded fall back to the first request from the new
+mapping minus the recorded "first_stun_new_s" (the router sniffer's offset). It places the SUT log lines. The case's before/after
+read of the edge counters (rebinding switches by reason: nomination, consent, liveness; drops; unrouted) is copied into the JSON.
 Stdlib only.
 """
 
@@ -33,13 +35,14 @@ from collections import Counter
 if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from dvtest import pcap  # noqa: E402
+from dvtest import ice1, pcap  # noqa: E402
 
 COOKIE = 0x2112A442
 ATTR_USERNAME, ATTR_PRIORITY, ATTR_USE_CANDIDATE = 0x0006, 0x0024, 0x0025
 TYPE_PREF = {126: "host", 110: "prflx", 100: "srflx"}   # RFC 8445 recommended values; others (TURN relay checks use 5) print as tp<N>
 DEFAULT_WINDOW_S = 20.0
 LOG_SLACK_S = 0.5
+T0_TOLERANCE_S = 0.25
 
 
 def stun_message(payload):
@@ -146,13 +149,19 @@ def read_checks(pcap_path, wanted):
     return requests, responses
 
 
-def analyse_checks(requests, responses, old, new, first_stun_new_s=None):
-    """The STUN evidence of one cell from the requests of read_checks. Returns a dict (see keys below); 'problems' lists what
-    could not be determined. Times are seconds relative to the instant of the change ('t0'), which is the first request from
-    the new mapping minus first_stun_new_s (or that first request itself when the results do not record it)."""
+def analyse_checks(requests, responses, old, new, first_stun_new_s=None, t0=None):
+    """The STUN evidence of one cell from the requests of read_checks. Returns a dict; 'problems' lists what could not be
+    determined. Times are seconds relative to the instant of the change ('t0', epoch seconds): the recorded one when given (the
+    case writes it from the router's clock), else the first request from the new mapping minus first_stun_new_s, else that first
+    request itself. When both the recorded and the derived value exist they are compared (a gap over 0.25 s is a problem).
+
+      priority_match         every consent check from the new mapping carries a PRIORITY of the NOMINATING check (the rule of
+                             DV-Router before ICE1e); None without consent checks after or without a nominating check
+      priority_in_seen_set   every such PRIORITY was already seen on an authenticated check from the old mapping (the bounded
+                             set of ICE1e, wip-caebc57)"""
     out = {"session": None, "t0": None, "t0_source": None, "nominate_priorities": [], "consent_before": [], "consent_after": [],
            "after_requests": 0, "after_answered": 0, "after_use_candidate": 0, "first_after_s": None,
-           "priority_match": None, "problems": []}
+           "priority_match": None, "priority_in_seen_set": None, "t0_derived": None, "problems": []}
     from_old = [r for r in requests if (r["src"], r["sport"]) == old]
     if not from_old:
         out["problems"].append("no STUN request from the old mapping %s:%s" % old)
@@ -174,9 +183,15 @@ def analyse_checks(requests, responses, old, new, first_stun_new_s=None):
         return out
     after.sort(key=lambda r: r["ts"])
     if first_stun_new_s is not None:
-        out["t0"], out["t0_source"] = after[0]["ts"] - first_stun_new_s, "first request after - first_stun_new_s"
+        out["t0_derived"], derived_source = after[0]["ts"] - first_stun_new_s, "first request after - first_stun_new_s"
     else:
-        out["t0"], out["t0_source"] = after[0]["ts"], "first request after (results have no first_stun_new_s)"
+        out["t0_derived"], derived_source = after[0]["ts"], "first request after (results have no first_stun_new_s)"
+    if t0 is not None:
+        out["t0"], out["t0_source"] = t0, "recorded by the case (address change t0_utc)"
+        if first_stun_new_s is not None and abs(t0 - out["t0_derived"]) > T0_TOLERANCE_S:
+            out["problems"].append("recorded t0 differs from the derived one by %.3f s" % (t0 - out["t0_derived"]))
+    else:
+        out["t0"], out["t0_source"] = out["t0_derived"], derived_source
     out["after_requests"] = len(after)
     out["after_answered"] = sum(1 for r in after if responses.get((r["src"], r["sport"], r["txid"]), (0, ""))[1] == "response")
     out["after_use_candidate"] = sum(1 for r in after if r["use_candidate"])
@@ -184,6 +199,9 @@ def analyse_checks(requests, responses, old, new, first_stun_new_s=None):
     out["consent_after"] = [r["priority"] for r in after if not r["use_candidate"]]
     if out["consent_after"] and out["nominate_priorities"]:
         out["priority_match"] = all(p in out["nominate_priorities"] for p in out["consent_after"])
+    seen = {r["priority"] for r in from_old if r["priority"] is not None}
+    if out["consent_after"] and seen:
+        out["priority_in_seen_set"] = all(p in seen for p in out["consent_after"])
     return out
 
 
@@ -233,10 +251,12 @@ def cell_report(key, cell, requests, responses, log_events):
            "local_before": local[0], "local_after": local[1], "resumed": audio.get("resumed"),
            "resume_s": audio.get("resume_s"), "problems": list(problems)}
     if old and new:
-        out.update(analyse_checks(requests, responses, old, new, detail.get("first_stun_new_s")))
+        recorded = ice1.parse_iso_ms((cell.get("address change") or {}).get("t0_utc"))
+        out.update(analyse_checks(requests, responses, old, new, detail.get("first_stun_new_s"), recorded))
         out["problems"] = problems + out["problems"]
     window = float(len(per_s)) if per_s else DEFAULT_WINDOW_S
     out["window_s"] = window
+    out["edge_counters"] = cell.get(ice1.EDGE_KEY)       # the case's before / after read of the edge counters (ICE1e), None in older runs
     out["rebinding"] = None
     out["log"] = []
     if out.get("t0") is not None and log_events is not None:
@@ -248,6 +268,8 @@ def cell_report(key, cell, requests, responses, log_events):
     # the ICE1e signature: the SUT answered consent checks from the new mapping, but their PRIORITY differs from the nominating
     # check's and no rebinding followed
     out["blocked_by_priority"] = bool(out.get("after_answered") and out.get("priority_match") is False and out["rebinding"] == "none")
+    # the same with the bounded set of ICE1e (wip-caebc57): the consent PRIORITY was never seen on the selected source
+    out["blocked_by_seen_set"] = bool(out.get("after_answered") and out.get("priority_in_seen_set") is False and out["rebinding"] == "none")
     return out
 
 
@@ -280,7 +302,7 @@ def _prios(values, limit=2):
 
 
 def table(report):
-    rows = [("engine", "nat", "local b/a", "nominate", "consent before", "consent after", "after n/ans/uc", "match", "rebinding", "resumed")]
+    rows = [("engine", "nat", "local b/a", "nominate", "consent before", "consent after", "after n/ans/uc", "match", "in set", "rebinding", "resumed")]
     for c in report["cells"]:
         match = {None: "-", True: "yes", False: "NO"}[c.get("priority_match")]
         rebinding = c["rebinding"] if c.get("rebinding") is None else (
@@ -288,13 +310,16 @@ def table(report):
         resumed = {None: "-", True: "yes", False: "NO"}[c["resumed"]]
         rows.append((short_engine(c["engine"]), str(c["nat"]), "%s/%s" % (c["local_before"], c["local_after"]),
                      _prios(c.get("nominate_priorities")), _prios(c.get("consent_before")), _prios(c.get("consent_after")),
-                     "%d/%d/%d" % (c.get("after_requests", 0), c.get("after_answered", 0), c.get("after_use_candidate", 0)), match, "-" if rebinding is None else rebinding, resumed))
+                     "%d/%d/%d" % (c.get("after_requests", 0), c.get("after_answered", 0), c.get("after_use_candidate", 0)), match,
+                     {None: "-", True: "yes", False: "NO"}[c.get("priority_in_seen_set")], "-" if rebinding is None else rebinding, resumed))
     widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
     lines = ["  ".join(v.ljust(w) for v, w in zip(r, widths)).rstrip() for r in rows]
     lines.insert(1, "  ".join("-" * w for w in widths))
     notes = ["%s/%s: %s" % (short_engine(c["engine"]), c["nat"], p) for c in report["cells"] for p in c["problems"]]
     notes += ["%s/%s: consent checks answered but their PRIORITY differs from the nominating check and no rebinding followed "
               "(rule (b) blocked)" % (short_engine(c["engine"]), c["nat"]) for c in report["cells"] if c.get("blocked_by_priority")]
+    notes += ["%s/%s: consent checks answered, their PRIORITY was never seen on the selected source and no rebinding followed "
+              "(ICE1e bounded set)" % (short_engine(c["engine"]), c["nat"]) for c in report["cells"] if c.get("blocked_by_seen_set")]
     return "\n".join(lines + ([""] + notes if notes else []))
 
 

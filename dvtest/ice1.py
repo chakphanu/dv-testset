@@ -3,6 +3,7 @@
 of the audio to come back after the client address changed, the analysis of the inbound packet counter of the page, the
 restart seen in the SDP, the checks on what the NAT router saw, and readers of the operator client list. No I/O;
 unit-tested in cases/unit/test_ice1.py."""
+import datetime
 import re
 
 # ICE1 (DV-Router wip-97c669d, e439f62) and ICE1c (the edge fix, open): after a pure NAT rebinding (the page cannot see it) the EDGE
@@ -207,3 +208,68 @@ def new_circuits(before_rows, after_rows):
     """Circuit ids in the after list that were not in the before list (rows with no 'circuit' field are ignored)."""
     seen = {r.get("circuit") for r in before_rows if r.get("circuit") is not None}
     return sorted(str(r["circuit"]) for r in after_rows if r.get("circuit") is not None and r["circuit"] not in seen)
+
+
+# ---------------------------------------------------------------------------------------------- change time and edge counters (ICE1e)
+
+# The edge counters that say what the SUT did with the browser's datagrams around the address change (evidence only, never
+# asserted): the path switches by reason (DV-Router ICE1e: nomination, consent, liveness), the edge drops, the datagrams that
+# found no peer. All carry proc="webrtc" and a `reason` label. The hub publishes them every 10 s.
+EDGE_COUNTER_FAMILIES = ("dv_edge_webrtc_rebinding_switches_total", "dv_edge_drops_total", "dv_edge_webrtc_unrouted_total")
+EDGE_PROC = "webrtc"
+EDGE_SETTLE_S = 12.0      # the second read comes at least this long after the change (the edge publishes every 10 s)
+EDGE_KEY = "edge counters over the change (before / after by reason, nonzero deltas; the edge publishes every 10 s)"
+
+
+def iso_ms(epoch):
+    """UTC ISO text with milliseconds, e.g. 2026-11-08T21:24:46.659Z, of an epoch time in seconds; None for None."""
+    if epoch is None:
+        return None
+    return datetime.datetime.fromtimestamp(round(float(epoch), 3), datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def parse_iso_ms(text):
+    """Epoch seconds of an iso_ms text (also with 0 to 9 fraction digits); None when it is not one."""
+    m = re.fullmatch(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d+))?Z", text or "")
+    if not m:
+        return None
+    base = datetime.datetime.fromisoformat(m.group(1)).replace(tzinfo=datetime.timezone.utc).timestamp()
+    return base + (float("0." + m.group(2)) if m.group(2) else 0.0)
+
+
+def edge_counters(samples):
+    """{family: {reason: value}} of EDGE_COUNTER_FAMILIES from parsed hub samples (dvtest.metrics.parse: name, labels, value),
+    for proc="webrtc" only; a sample without a reason label counts under "". A family that is absent is absent from the result."""
+    out = {}
+    for s in samples or ():
+        if s.name in EDGE_COUNTER_FAMILIES and s.labels.get("proc") == EDGE_PROC:
+            out.setdefault(s.name, {})[s.labels.get("reason", "")] = s.value
+    return out
+
+
+def edge_report(before, after):
+    """The record of two edge reads {wall, counters, error} (None counters = not read): both counter sets, the nonzero deltas by
+    family and reason (an absent reason counts 0), the families missing from either read, the gap between the reads in seconds
+    and the errors. Never raises: a failed read gives error text and no delta."""
+    before, after = before or {}, after or {}
+    out = {"before_utc": iso_ms(before.get("wall")), "after_utc": iso_ms(after.get("wall")),
+           "gap_s": None, "before": before.get("counters"), "after": after.get("counters"), "delta": None,
+           "missing": None, "error": "; ".join(e for e in (before.get("error"), after.get("error")) if e) or None}
+    if before.get("wall") is not None and after.get("wall") is not None:
+        out["gap_s"] = round(after["wall"] - before["wall"], 1)
+    if before.get("counters") is None or after.get("counters") is None:
+        return out
+    delta, missing = {}, []
+    for family in EDGE_COUNTER_FAMILIES:
+        b, a = before["counters"].get(family), after["counters"].get(family)
+        if b is None or a is None:
+            missing.append(family)
+        rows = {}
+        for reason in sorted(set(b or ()) | set(a or ())):
+            d = (a or {}).get(reason, 0) - (b or {}).get(reason, 0)
+            if d:
+                rows[reason] = d
+        if rows:
+            delta[family] = rows
+    out["delta"], out["missing"] = delta, missing
+    return out
