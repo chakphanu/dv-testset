@@ -42,6 +42,38 @@ def test_compact_descriptor_has_no_problems():
     assert m2.descriptor_problems(compact_descriptor(), 5850) == []
 
 
+@pytest.mark.parametrize("value", [[], ["10/793/457"], True, 0, {"cells": []}, None])
+def test_preparing_is_optional_and_its_shape_is_not_asserted(value):
+    # MAP2d (wip-f9aaebc) sends `preparing`; caebc57 and c12db8b do not. Either is a valid descriptor, whatever the value is.
+    with_key = compact_descriptor()
+    with_key["preparing"] = value
+    assert m2.descriptor_problems(with_key) == []
+    assert m2.descriptor_problems(good_descriptor() | {"preparing": value}) == []
+    assert m2.descriptor_problems(compact_descriptor()) == []                      # absent stays valid
+    assert "preparing=" in m2.optional_notes(with_key)
+
+
+def test_optional_notes_record_type_and_value_or_absence():
+    desc = compact_descriptor()
+    assert m2.optional_notes(desc) == "preparing absent"
+    desc["preparing"] = ["10/793/457"]
+    assert m2.optional_notes(desc) == 'preparing=list ["10/793/457"]'
+    desc["preparing"] = {"a": 1}
+    assert m2.optional_notes(desc) == 'preparing=dict {"a": 1}'
+    assert m2.optional_notes(None) == "descriptor is not an object"
+    assert len(m2.optional_notes({"preparing": "x" * 500})) < 160
+
+
+def test_unknown_keys_next_to_preparing_still_fail():
+    desc = compact_descriptor()
+    desc.update(preparing=[], callsign="N0PGA")
+    assert any("keys" in p for p in m2.descriptor_problems(desc))
+    desc = compact_descriptor()
+    desc["preparing"] = []
+    desc.pop("attribution")
+    assert any("keys" in p for p in m2.descriptor_problems(desc))
+
+
 def test_compact_descriptor_is_bounded():
     problems = m2.descriptor_problems(compact_descriptor(), m2.MAX_DESCRIPTOR_BYTES + 1)
     assert any("bytes" in p for p in problems), problems

@@ -31,6 +31,10 @@ COMPACT_KEYS = {"installed", "gen", "tiles", "minzoom", "maxzoom", "overview_max
 # images before MAP2f (DV-Router 9d6776f) also carried the per-file glyph inventory under `files`; the shape is chosen by the
 # PRESENCE of that key, never by an image name
 DESCRIPTOR_KEYS = COMPACT_KEYS | {"files"}
+# keys an image MAY send on top of the exact set (older images do not): MAP2d (DV-Router 15b07b8, image wip-f9aaebc) adds `preparing`
+# while its region worker is alive. Their presence is allowed, their value is recorded (optional_notes) and not asserted: the shape
+# is not specified yet.
+OPTIONAL_KEYS = {"preparing"}
 MAX_DESCRIPTOR_BYTES = 32 * 1024                    # MAP2f: basemap_core.rs MAX_DESCRIPTOR_BYTES, deployment.md "The descriptor includes"
 FONT_URL_RE = re.compile(r"^glyphs/fonts/[A-Za-z0-9_-]+\.(?:ttf|otf)$")
 DATE_RE = re.compile(r"^[0-9]{8}$")
@@ -51,6 +55,20 @@ def _box_ok(box):
             and -180 <= box[0] <= 180 and -180 <= box[2] <= 180 and -90 <= box[1] and box[3] <= 90 and box[0] != box[2] and box[1] < box[3])
 
 
+def optional_notes(desc):
+    """One text for the case output: each OPTIONAL_KEYS key the descriptor carries with its JSON type and value, or `absent`. Never a
+    problem: the shape of these keys is not asserted."""
+    if not isinstance(desc, dict):
+        return "descriptor is not an object"
+    parts = []
+    for key in sorted(OPTIONAL_KEYS):
+        if key in desc:
+            parts.append("%s=%s %s" % (key, type(desc[key]).__name__, json.dumps(desc[key], sort_keys=True)[:120]))
+        else:
+            parts.append("%s absent" % key)
+    return ", ".join(parts)
+
+
 def descriptor_problems(desc, raw_len=None):
     """What is wrong with an INSTALLED descriptor, as a list of strings (empty = it has every field web.md names and the shape the
     page's positionDescriptor() accepts). The key set is exact: web.md says it carries no callsign or position timestamp.
@@ -61,8 +79,8 @@ def descriptor_problems(desc, raw_len=None):
     out = []
     legacy = "files" in desc
     want = DESCRIPTOR_KEYS if legacy else COMPACT_KEYS
-    if set(desc) != want:
-        out.append("keys %s, want %s" % (sorted(desc), sorted(want)))
+    if set(desc) - OPTIONAL_KEYS != want:
+        out.append("keys %s, want %s (optional: %s)" % (sorted(desc), sorted(want), sorted(OPTIONAL_KEYS)))
     if not legacy and raw_len is not None and raw_len > MAX_DESCRIPTOR_BYTES:
         out.append("the descriptor is %d bytes, want at most %d (MAP2f)" % (raw_len, MAX_DESCRIPTOR_BYTES))
     if desc.get("installed") is not True:

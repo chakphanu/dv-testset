@@ -374,6 +374,7 @@ def test_positions_page_refuses_a_v1_basemap(browser_page, web_client, seeds, ba
 def assert_base_surface(anon, manifest, desc):
     """The HTTP surface of an installed base (web.md MAP2c, deployment.md MAP2c), from the tester. Returns the tile path used."""
     resp = get(anon, pages.BASEMAP_TILES_JSON)
+    print("[RECORD] tiles.json optional keys: %s" % m2.optional_notes(desc))
     problems = m2.descriptor_problems(desc, len(resp.body))
     assert not problems, "tiles.json descriptor: %s" % "; ".join(problems[:4])
     gen = desc["gen"]
