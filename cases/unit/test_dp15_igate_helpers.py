@@ -80,15 +80,15 @@ def test_a_colon_in_the_information_field_stays_inside_it():
     assert ti.check_gated_line(good_line(info, src="N0IGT-3"), "N0IGT-3", info, ti.DIGIS, "qAR", "N0TEST-1") == []
 
 
-def test_path_counts_filter_by_route_and_direction():
+def test_path_counts_are_keyed_by_dir_and_result_and_filtered_by_route():
     text = "\n".join([
-        'dv_pkt_path_total{route="%s",dir="out",result="forwarded"} 3' % ti.route_label("dp15-igate"),
-        'dv_pkt_path_total{route="%s",dir="out",result="no_gate"} 2' % ti.route_label("dp15-igate"),
-        'dv_pkt_path_total{route="%s",dir="in",result="forwarded"} 9' % ti.route_label("dp15-igate"),
-        'dv_pkt_path_total{route="%s",dir="out",result="forwarded"} 5' % ti.route_label("rf-in"),
+        'dv_pkt_path_total{route="%s",dir="in",result="forwarded"} 3' % ti.route_label("dp15-igate"),
+        'dv_pkt_path_total{route="%s",dir="in",result="no_gate"} 2' % ti.route_label("dp15-igate"),
+        'dv_pkt_path_total{route="%s",dir="out",result="forwarded"} 9' % ti.route_label("dp15-igate"),
+        'dv_pkt_path_total{route="%s",dir="in",result="forwarded"} 5' % ti.route_label("rf-in"),
         'dv_pkt_ack_total{result="ack"} 1'])
     counts, known = ti.path_counts(metrics.parse(text), ti.route_label("dp15-igate"))
-    assert counts == {"forwarded": 3, "no_gate": 2} and known
+    assert counts == {("in", "forwarded"): 3, ("in", "no_gate"): 2, ("out", "forwarded"): 9} and known
     counts, known = ti.path_counts(metrics.parse(text), ti.route_label("other"))
     assert counts == {} and not known
 
@@ -144,8 +144,8 @@ class FakeAprsc:
 class FakeEdge:
     """What DV-Router does with a heard frame: gates it (or not), counts the verdict on the route."""
 
-    def __init__(self, label, q="qAR", gateway="N0TEST-1", drop_src=(), double=False):
-        self.label, self.q, self.gateway, self.drop_src, self.double = label, q, gateway, set(drop_src), double
+    def __init__(self, label, q="qAR", gateway="N0TEST-1", drop_src=(), double=False, dirs=("in",)):
+        self.label, self.q, self.gateway, self.drop_src, self.double, self.dirs = label, q, gateway, set(drop_src), double, dirs
         self.lines, self.counts = [], {}
         self.a = self
 
@@ -165,7 +165,8 @@ class FakeEdge:
         return True
 
     def text(self):
-        return "\n".join('dv_pkt_path_total{route="%s",dir="out",result="%s"} %d' % (self.label, r, n) for r, n in self.counts.items())
+        return "\n".join('dv_pkt_path_total{route="%s",dir="%s",result="%s"} %d' % (self.label, d, r, n)
+                         for d in self.dirs for r, n in self.counts.items())
 
 
 @pytest.fixture
@@ -202,7 +203,7 @@ def run_case(fast, edge, ctx, which, **kw):
 def test_flow_positive_case_passes_and_records_the_latency(fast):
     edge = FakeEdge(ti.route_label("dp15-igate"))
     ledger = run_case(fast, edge, flow_ctx(edge), "positive")
-    assert "T" in ledger["latency_s"] and ledger["counters"]["T"] == {"forwarded": 1}
+    assert "T" in ledger["latency_s"] and ledger["counters"]["T"]["in"] == {"forwarded": 1}
 
 
 def test_flow_positive_case_fails_on_a_wrong_q_construct_and_on_a_double_count(fast):
@@ -217,7 +218,7 @@ def test_flow_positive_case_fails_on_a_wrong_q_construct_and_on_a_double_count(f
 def test_flow_negative_case_passes_when_the_bad_frame_is_dropped(fast):
     edge = FakeEdge(ti.route_label("dp15-igate"), drop_src=[ti.SRC_NOGATE])
     ledger = run_case(fast, edge, flow_ctx(edge), "negative")
-    assert ledger["window_s"]["N"] >= ti.ABSENT_MIN_S and ledger["counters"]["N"] == {"forwarded": 1, "no_gate": 1}
+    assert ledger["window_s"]["N"] >= ti.ABSENT_MIN_S and ledger["counters"]["N"]["in"] == {"forwarded": 1, "no_gate": 1}
 
 
 def test_flow_negative_case_fails_when_the_bad_frame_is_gated_or_the_control_is_lost(fast):
@@ -254,3 +255,18 @@ def test_every_injected_frame_has_its_own_dedupe_key():
     sources = [ti.SRC_WEATHER, ti.SRC_TELEMETRY, ti.SRC_QUERY, ti.SRC_NOGATE, ti.SRC_RFONLY] + list(ti.SRC_CONTROL.values())
     keys = {(src, ti.TOCALL, info) for src, info in zip(sources, [infos["w"], infos["t"], infos["q"], infos["n"], infos["r"]] + [infos["c"]] * 3)}
     assert len(keys) == 8
+
+
+def test_flow_only_dir_in_is_asserted_and_other_dirs_are_recorded(fast):
+    notes = []
+    fast.setattr(ti, "note", lambda target, case, tag, text: notes.append((tag, text)))
+    edge = FakeEdge(ti.route_label("dp15-igate"), dirs=("in", "out"))              # the same deltas under both dirs
+    ledger = run_case(fast, edge, flow_ctx(edge), "positive")
+    assert ledger["counters"]["T"]["in"] == {"forwarded": 1} and ledger["counters"]["T"]["other_dirs"] == {"out/forwarded": 1}
+    assert any("other dirs (not asserted)" in text and "out/forwarded" in text for _tag, text in notes)
+
+
+def test_flow_a_wrong_direction_regression_is_not_hidden_by_summing(fast):
+    edge = FakeEdge(ti.route_label("dp15-igate"), dirs=("out",))                   # series exist, but only under dir=out
+    with pytest.raises(AssertionError, match=r"none with dir='in' \(dirs seen: \['out'\]\)"):
+        run_case(fast, edge, flow_ctx(edge), "positive")

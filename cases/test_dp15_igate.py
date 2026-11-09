@@ -21,7 +21,9 @@ the aprsc for `max(ABSENT_MIN_S, ABSENT_FACTOR x the control's latency, ...)` af
 the gate of THIS run and the control proves the path was alive (a case without a control would pass on a broken rig). aprsc itself
 drops a packet with NOGATE or RFONLY in its path (incoming.c, INERR_NOGATE), so for 8n and 8r the absence at the aprsc is not evidence
 about DV-Router; the evidence is the path counter `dv_pkt_path_total{route=<dp15-igate>,result=no_gate}` (filtered for the query),
-which is asserted (a route without a series fails the case: dv-router publishes one per configured path since DP16). The route label is
+which is asserted under dir="in" (a RouteEv::Transit counts as "in", everything else as "out": dv-router core_routes.rs 5-10, PKTDIR1; status.md and
+data.md 13.1 still say dir=out, a doc defect pending on their side; the other dirs are recorded, not asserted). A route without a series, or
+with series but none under dir="in", fails the case (dv-router publishes one per configured path since DP16). The route label is
 `p` + 16 hex digits of FNV-1a64 over the path name, never the name itself. The counter moves only for a non-duplicate frame, so every
 frame of this module has its own source (the receive dedupe key is source + destination + information).
 
@@ -70,6 +72,7 @@ COUNTER_QUIET_S = 12.0              # the worker publishes its counters every 10
 COUNTER_LIMIT_S = 90.0
 COUNTER_WAIT_S = 30.0               # a counter the worker already bumped shows up within one publish (10 s) plus the control read
 ROUTE_NAME = "dp15-igate"
+DIR_ASSERTED = "in"                 # an RF-to-APRS-IS transit is a RouteEv::Transit: counted under dir="in" (the other dirs are recorded)
 
 # one source per frame (the receive dedupe key is source + destination + information for 30 s)
 SRC_WEATHER, SRC_TELEMETRY = "N0IGW-3", "N0IGT-3"
@@ -136,12 +139,14 @@ def check_gated_line(parsed, src, info, digis, q, gateway):
 
 
 def path_counts(samples, label):
-    """{result: total} of dv_pkt_path_total{route=label, dir=out} and whether the route has any series."""
+    """({(dir, result): total}, whether the route has any series) of dv_pkt_path_total{route=label}. The key keeps the `dir`
+    label: the worker counts a RouteEv::Transit (RF to APRS-IS) under dir="in" and everything else under dir="out" (dv-router,
+    core_routes.rs 5-10; PKTDIR1: status.md and data.md 13.1 still say dir=out only, a doc defect on their side)."""
     seen = [s for s in samples if s.name == "dv_pkt_path_total" and s.labels.get("route") == label]
     counts = {}
     for s in seen:
-        if s.labels.get("dir", "out") == "out":
-            counts[s.labels.get("result", "")] = counts.get(s.labels.get("result", ""), 0) + int(s.value)
+        key = (s.labels.get("dir", ""), s.labels.get("result", ""))
+        counts[key] = counts.get(key, 0) + int(s.value)
     return counts, bool(seen)
 
 
@@ -207,7 +212,7 @@ def counter_delta(hub, ctx, before, result, want, timeout=None):
     end = time.monotonic() + (COUNTER_WAIT_S if timeout is None else timeout)
     while True:
         counts, known = read_counts(hub, ctx)
-        delta = counts.get(result, 0) - before.get(result, 0)
+        delta = counts.get((DIR_ASSERTED, result), 0) - before.get((DIR_ASSERTED, result), 0)
         if (known and delta >= want) or time.monotonic() >= end:
             return delta, known
         time.sleep(2.0)
@@ -226,29 +231,37 @@ def lines_from(tester, src, mark):
 
 
 def finish_counters(target, hub, ctx, case, before, expect, ledger):
-    """Assert the path counters `expect` ({result: delta}) after the publish landed. The series is
-    dv_pkt_path_total{route=<p + 16 hex of FNV-1a64 over the path name>,dir="out",result}; dv-router confirmed that it exists per
-    configured path on an image with DP16, so a route without any series FAILS the case (never match on the path name; the
-    name-to-label map pkt/<id>/routes is a fabric key the control channel does not expose, so the label is computed, not
-    cross-checked). Every result that moved besides the expected ones is recorded (not_heard, seen, rate, unreachable, ...)."""
+    """Assert the path counters `expect` ({result: delta}) of dir="in" after the publish landed. The series is
+    dv_pkt_path_total{route=<p + 16 hex of FNV-1a64 over the path name>,dir,result}: an RF-to-APRS-IS transit is counted under
+    dir="in" (dv-router, core_routes.rs 5-10; status.md and data.md 13.1 say dir=out only: doc defect PKTDIR1, pending on their side).
+    The deltas of every other dir are recorded, not asserted, so a later change of the label shows. A route without any series
+    FAILS the case, and so does a route with series but none under dir="in" (the message names the dirs seen). The label is
+    computed, not cross-checked: the name-to-label map pkt/<id>/routes is a fabric key the control channel does not expose. Every
+    dir="in" result that moved besides the expected ones is recorded (not_heard, seen, rate, unreachable, ...)."""
     for result, want in expect.items():
         _delta, known = counter_delta(hub, ctx, before, result, want)    # wait for the publish of the worker
         if not known:
             break                                                          # no series for the route: do not wait again
     time.sleep(COUNTER_QUIET_S)                         # a surplus count (a second send, a wrong verdict) lands in the next publish
     after, known = read_counts(hub, ctx)
-    deltas = {r: after.get(r, 0) - before.get(r, 0) for r in set(after) | set(before) | set(expect)}
+    all_deltas = {k: after.get(k, 0) - before.get(k, 0) for k in set(after) | set(before)}
+    deltas = {r: d for (dr, r), d in all_deltas.items() if dr == DIR_ASSERTED}
     moved = {r: d for r, d in deltas.items() if d}
-    ledger["counters"][case] = moved
-    note(target, case, "RECORD", "dv_pkt_path_total{route=%s (%s)} deltas: %s" % (ctx.label, ctx.shape.path, moved))
+    others = {"%s/%s" % k: d for k, d in sorted(all_deltas.items()) if k[0] != DIR_ASSERTED}
+    ledger["counters"][case] = {"in": moved, "other_dirs": {k: d for k, d in others.items() if d}}
+    note(target, case, "RECORD", "dv_pkt_path_total{route=%s (%s),dir=%s} deltas: %s; other dirs (not asserted): %s" % (
+        ctx.label, ctx.shape.path, DIR_ASSERTED, moved, others or "none"))
     other = {r: d for r, d in moved.items() if r not in expect}
     if other:
         note(target, case, "RECORD", "results that moved besides the expected %s: %s" % (sorted(expect), other))
     assert known, "%s: dv_pkt_path_total has no series for the route %s (label of the path %s): an image with DP16 publishes one per configured path" % (
         case, ctx.label, ctx.shape.path)
+    dirs = sorted({dr for dr, _r in set(after) | set(before)})
+    assert DIR_ASSERTED in dirs, "%s: the route %s has series but none with dir=%r (dirs seen: %s): an RF-to-APRS-IS transit is counted under dir=in" % (
+        case, ctx.label, DIR_ASSERTED, dirs)
     for result, want in expect.items():
-        assert deltas.get(result, 0) == want, "dv_pkt_path_total{route=%s,result=%s} moved by %d, expected %d (all deltas %s)" % (
-            ctx.label, result, deltas.get(result, 0), want, moved)
+        assert deltas.get(result, 0) == want, "dv_pkt_path_total{route=%s,dir=%s,result=%s} moved by %d, expected %d (dir=in deltas %s, other dirs %s)" % (
+            ctx.label, DIR_ASSERTED, result, deltas.get(result, 0), want, moved, others or "none")
 
 
 def positive_case(target, hub, ctx, ledger, case, src, info):
