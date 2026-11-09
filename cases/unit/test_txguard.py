@@ -287,3 +287,65 @@ def test_uptime_reader_reads_the_node_uptime_and_never_raises():
     assert txguard.uptime_reader(admin(200, {"live": {}}))() is None
     assert txguard.uptime_reader(admin(403, {}))() is None
     assert txguard.uptime_reader(admin(200, {}, boom=True))() is None
+
+
+# ---------------------------------------------------------------- re-arming the fence
+
+def test_ax25_child_names_finds_the_single_key_and_lists_all():
+    body = {"launcher": {"children": [{"name": "dv-edge-ax25"}, {"name": "dv-room[A]"}, {"name": "dv-edge-xlx"}]}}
+    assert txguard.ax25_child_names(body) == (["dv-edge-ax25"], ["dv-edge-ax25", "dv-room[A]", "dv-edge-xlx"])
+    assert txguard.ax25_child_names({"launcher": None}) == ([], [])
+    assert txguard.ax25_child_names({}) == ([], [])
+
+
+def rearm(seq, **kw):
+    """Run rearm_fence with a fake clock; `seq` is the list of observations one read each, the last one repeats."""
+    clock = Clock()
+    it = iter(seq)
+    last = [None]
+
+    def read():
+        try:
+            last[0] = next(it)
+        except StopIteration:
+            pass
+        return last[0]
+    fired = []
+    res = txguard.rearm_fence(read, lambda: fired.append(clock.now()), clock=clock.now, sleep=clock.sleep, **kw)
+    return res, fired
+
+
+def fenced(fence="startup_guard", guard=12000):
+    return ax_obs(fence, guard)
+
+
+def test_rearm_fenced_then_unfenced_with_a_decreasing_guard():
+    seq = [ax_obs(None), ax_obs(found=False), fenced(guard=12000)] + [fenced(guard=12000 - 400 * i) for i in range(1, 12)] + [ax_obs(None)]
+    res, fired = rearm(seq)
+    assert fired == [100.0] and res.outcome == "ok" and res.cause == "startup_guard" and res.row_gone is True
+    assert res.guard_first == 12000 and res.guard_second is not None and res.guard_second < res.guard_first and res.decreased is True
+    assert res.seen_after_ms == 400 and res.fence_ms >= res.seen_after_ms
+    assert "guard_ms 12000 then" in res.detail
+
+
+def test_rearm_a_stale_unfenced_row_is_ignored_and_any_cause_is_the_shape():
+    res, _ = rearm([ax_obs(None), ax_obs(None), fenced("recovery_probe", 8000), fenced("recovery_probe", 7000)] + [fenced("recovery_probe", 5000)] * 6 + [ax_obs(None)])
+    assert res.outcome == "ok" and res.cause == "recovery_probe" and res.row_gone is False
+
+
+def test_rearm_violations_and_overlong_fences():
+    res, _ = rearm([ax_obs(None)], appear_timeout_s=3.0)
+    assert res.outcome == "violation" and "no fence by any cause" in res.detail and "never disappeared" in res.detail
+    res, _ = rearm([ax_obs(found=False, scope="no_modem_object")])
+    assert res.outcome == "violation" and "CREDENTIAL/SCOPE" in res.detail
+    res, _ = rearm([fenced(guard=9000)] * 40 + [ax_obs(None)])                       # a guard that does not move
+    assert res.outcome == "violation" and "did not decrease" in res.detail
+    res, _ = rearm([fenced(guard=None)] * 3 + [ax_obs(None)])                         # fenced, but tx_guard_ms never present
+    assert res.outcome == "violation" and "never present" in res.detail
+    res, _ = rearm([fenced(guard=5000)], max_fence_s=20.0)                           # never unfenced
+    assert res.outcome == "still_fenced" and "still fenced 20 s" in res.detail
+
+
+def test_rearm_the_fence_ending_before_a_second_read_is_not_a_failure():
+    res, _ = rearm([fenced(guard=300), ax_obs(None)])
+    assert res.outcome == "ok" and res.decreased is None and "ended before a second read" in res.detail

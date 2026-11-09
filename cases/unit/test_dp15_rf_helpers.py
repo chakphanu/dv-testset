@@ -188,13 +188,14 @@ def test_6g_is_the_first_test_of_the_module_and_skips_without_an_effective_tx_po
     names = [n for n, f in vars(tr).items() if n.startswith("test_") and inspect.isfunction(f)]
     assert names[0] == "test_dp15_6g_the_startup_guard_is_a_fence_in_the_first_13_seconds"
     with pytest.raises(pytest.skip.Exception, match="no startup fence to read"):
-        tr.test_dp15_6g_the_startup_guard_is_a_fence_in_the_first_13_seconds(None, rendered(tmp_path, "false", False), None, None)
+        tr.test_dp15_6g_the_startup_guard_is_a_fence_in_the_first_13_seconds(None, None, rendered(tmp_path, "false", False), None, None)
 
 
 def fake_admin(uptime, fence):
     def get(path, expect=None):
         if path.endswith("/status"):
-            return SimpleNamespace(status=200, json=lambda: {"live": {"node_uptime_s": uptime}})
+            return SimpleNamespace(status=200, json=lambda: {"live": {"node_uptime_s": uptime}, "launcher": {"children": [
+                {"name": "dv-edge-ax25", "state": "up", "restarts": 0}, {"name": "dv-room[B]", "state": "up", "restarts": 0}]}})
         modem = {"name": "rf-a", "adapter": "kiss-tcp", "connected": True}
         if fence:
             modem.update({"tx_fence": "startup_guard", "tx_guard_ms": 11000})
@@ -202,13 +203,106 @@ def fake_admin(uptime, fence):
     return SimpleNamespace(path=lambda s: s, get=get)
 
 
-def test_6g_flow_fenced_late_and_violation(tmp_path, monkeypatch):
+def test_6g_flow_fenced_at_startup_and_violation(tmp_path, monkeypatch):
     notes = []
     monkeypatch.setattr(tr, "note", lambda *a: notes.append(a))
     target = rendered(tmp_path, "true", True)
-    tr.test_dp15_6g_the_startup_guard_is_a_fence_in_the_first_13_seconds(None, target, lambda role: fake_admin(3.0, True), None)
+    tr.test_dp15_6g_the_startup_guard_is_a_fence_in_the_first_13_seconds(None, None, target, lambda role: fake_admin(3.0, True), None)
     assert any("fenced" in a[3] and "startup_guard" in a[3] for a in notes if a[2] == "RECORD")
-    with pytest.raises(pytest.skip.Exception, match="too late"):
-        tr.test_dp15_6g_the_startup_guard_is_a_fence_in_the_first_13_seconds(None, target, lambda role: fake_admin(40.0, False), None)
     with pytest.raises(AssertionError, match="expected a startup_guard fence"):
-        tr.test_dp15_6g_the_startup_guard_is_a_fence_in_the_first_13_seconds(None, target, lambda role: fake_admin(3.0, False), None)
+        tr.test_dp15_6g_the_startup_guard_is_a_fence_in_the_first_13_seconds(None, None, target, lambda role: fake_admin(3.0, False), None)
+
+
+class RearmAdmin:
+    """Admin client double for the re-arm: the clients route reports a fence for `fenced_reads` reads after the restart, then none."""
+
+    def __init__(self, fenced_reads=6, children=None, restart_status=200):
+        self.fenced_reads, self.reads, self.restarted, self.posts, self.step_ups = fenced_reads, 0, False, [], 0
+        self.children = [{"name": "dv-edge-ax25", "restarts": 0}, {"name": "dv-room[B]", "restarts": 0}] if children is None else children
+        self.restart_status = restart_status
+
+    def path(self, suffix):
+        return "/api/v1/admin" + suffix
+
+    def step_up(self):
+        self.step_ups += 1
+
+    def post(self, path, body, expect=None):
+        self.posts.append(path)
+        self.restarted = True
+        return SimpleNamespace(status=self.restart_status, json=lambda: {"ok": True})
+
+    def get(self, path, expect=None):
+        if path.endswith("/status"):
+            restarts = 1 if self.restarted else 0
+            return SimpleNamespace(status=200, json=lambda: {"launcher": {"children": [dict(c, restarts=restarts) for c in self.children]}, "live": {"node_uptime_s": 50}})
+        self.reads += 1
+        modem = {"name": "rf-a", "adapter": "kiss-tcp"}
+        if self.restarted and self.reads <= self.fenced_reads:
+            modem.update({"tx_fence": "recovery_probe", "tx_guard_ms": 13000 - 1500 * self.reads})
+        return SimpleNamespace(status=200, json=lambda: {"items": [{"kind": "modem", "modem": modem}]})
+
+
+class FakeTnc:
+    def __init__(self):
+        self.connections = 1
+        self.a = self
+        self.b = SimpleNamespace(connections=1)
+
+    def startup_params(self, conn=None):
+        return [(0, c, 1) for c in range(1, 6)]
+
+    def wait(self, pred, timeout):
+        self.connections += 1
+        return pred(self)
+
+
+def fast_timing():
+    state = {"t": 0.0}
+    return {"clock": lambda: state["t"], "sleep": lambda s: state.__setitem__("t", state["t"] + s)}
+
+
+def run_rearm(monkeypatch, tmp_path, admin_adm, admin_op=None):
+    notes = []
+    monkeypatch.setattr(tr, "note", lambda *a: notes.append(a))
+    request = SimpleNamespace(getfixturevalue=lambda name: FakeTnc())
+    sessions = {"operator": admin_op or admin_adm, "admin": admin_adm}
+    tr.rearm_ax25(request, SimpleNamespace(out=str(tmp_path)), "DP15-6g", lambda role: sessions[role], "rf-a", timing=fast_timing())
+    return notes
+
+
+def test_6g_rearm_restarts_the_ax25_child_reads_the_fence_and_waits_until_unfenced(tmp_path, monkeypatch):
+    admin = RearmAdmin()
+    notes = run_rearm(monkeypatch, tmp_path, admin)
+    assert admin.posts == ["/api/v1/admin/children/dv-edge-ax25/restart"] and admin.step_ups == 1
+    text = " ".join(a[3] for a in notes)
+    assert "restarting the launcher child 'dv-edge-ax25'" in text and "recovery_probe" in text and "reconnected" in text
+    assert "restarts counter after: [1]" in text
+
+
+def test_6g_rearm_skips_when_the_child_key_is_not_unique(tmp_path, monkeypatch):
+    for children in ([], [{"name": "dv-edge-ax25"}, {"name": "dv-edge-ax25[b]"}]):
+        admin = RearmAdmin(children=children)
+        with pytest.raises(pytest.skip.Exception, match=r"launcher children contain 'ax25'"):
+            run_rearm(monkeypatch, tmp_path, admin)
+        assert admin.posts == []
+
+
+def test_6g_rearm_fails_when_no_fence_appears_or_the_restart_is_refused(tmp_path, monkeypatch):
+    with pytest.raises(AssertionError, match="no fence by any cause"):
+        run_rearm(monkeypatch, tmp_path, RearmAdmin(fenced_reads=0))
+    with pytest.raises(AssertionError, match="answered HTTP 403"):
+        run_rearm(monkeypatch, tmp_path, RearmAdmin(restart_status=403))
+    with pytest.raises(AssertionError, match="still fenced"):
+        run_rearm(monkeypatch, tmp_path, RearmAdmin(fenced_reads=10 ** 6))
+
+
+def test_6g_runs_the_rearm_only_after_a_late_startup_attempt(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(tr, "note", lambda *a: None)
+    monkeypatch.setattr(tr, "rearm_ax25", lambda *a, **k: calls.append(a[3]))
+    target = rendered(tmp_path, "true", True)
+    tr.test_dp15_6g_the_startup_guard_is_a_fence_in_the_first_13_seconds(None, None, target, lambda role: fake_admin(3.0, True), None)
+    assert calls == []                                                   # fenced inside the window: no re-arm
+    tr.test_dp15_6g_the_startup_guard_is_a_fence_in_the_first_13_seconds(None, None, target, lambda role: fake_admin(40.0, False), None)
+    assert calls == ["DP15-6g"] or len(calls) == 1                       # late: the re-arm path
