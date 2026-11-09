@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/dp15-cases.md "RF to APRS-IS igate"): the whole-packet RF-to-APRS-IS
+# TRANSIT path from the port rf-a of the AX.25 edge to the APRS-IS edge (data.md 8.2 and 9.3: a `transit` path joins two
+# edges, no room item and no controller is involved), for the DP15 igate cases (cases/test_dp15_igate.py): RF-heard weather and
+# telemetry go up to the private aprsc with `,qAR,<[edges.ax25] callsign>` (`,qAO,` while the port has no effective TX), a general
+# query and a path with NOGATE or RFONLY never do.
+# ONLY with dp15-rf.toml AND dp15-aprsis.toml (the launcher refuses a path whose endpoint is not enabled). The qAR shape needs
+# DVT_DP15_TX_ENABLE=true (add dp15-rf-out.toml as in RF-ON); with false the same cases expect qAO. per_min is the default of an
+# RF-to-IS transit path written out.
+[[data.path]]
+name = "dp15-igate"
+from = "edge:ax25/rf-a"
+to = "edge:aprsis"
+types = ["transit"]
+per_min = 20

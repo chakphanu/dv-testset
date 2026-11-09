@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: MIT -->
-# DP15 cases: stream metadata (groups 1, 2, 4), the worker lifecycle (3), RF tiers A and B (6) and the XLX peer wire (7a) and the remote floor, recording and cross-mode effects on a second node (7b-7d)
+# DP15 cases: stream metadata (groups 1, 2, 4), the worker lifecycle (3), RF tiers A and B (6), the RF-to-APRS-IS igate (8) and the XLX peer wire (7a) and the remote floor, recording and cross-mode effects on a second node (7b-7d)
 
 Status: the first rig run (image `dv-router:wip-0348b98`, native, `DVT_SUT_GEN=compat1`; streams 8 passed / 6 failed, worker
 0 / 2, RF tier A with `DVT_DP15_TX_ENABLE=false` 4 passed / 2 failed / 3 skipped) found no DV-Router defect: every failure
@@ -328,6 +328,60 @@ Honest limits: the line DV-Router writes is not visible to the case (aprsc adds 
 (path before the q is exactly `TCPIP*`, one q construct); the pcapng above shows the raw line. The check of `dv_edge_aprsis_verified` is skipped (a fixed 10 s wait) on an image without that family.
 Nothing here has run on a rig; what was run is the aprsc image (login verified with the computed passcode, a message forwarded with `qAC`, the ack with `qAS`, an identical ack inside 30 s dropped, a wrong passcode
 `unverified`) in a throw-away container with `--network none`, and the unit tests (`cases/unit/test_aprs_passcode.py`, `test_aprsis_client.py` against a fake server, `test_dp15_aprsis_config.py`).
+
+### RF to APRS-IS igate: weather, telemetry, queries, NOGATE and RFONLY (group 8, DP16): `cases/test_dp15_igate.py`
+
+15.5 text (DV-Router `docs/design/data.md`, "APRS-IS (DP15, private aprsc)"): "DP16: inject handwritten `_` weather, `T#` telemetry, `PARM`/`UNIT`/`EQNS`/`BITS`
+definitions and `<IGATE` on an `edge:ax25 -> edge:aprsis` path, require unchanged information with `qAR`, and require no room items for standalone
+weather/telemetry/capabilities; generic `?APRS?`, `NOGATE`, `RFONLY` and Internet-origin third-party frames stay refused". Rules: `data.md` 9.3 "RF to APRS-IS"
+rules 2, 3 and 5 (`crates/lib/pkt/src/aprs/igate.rs` `uplink_packet`, `crates/lib/pkt/src/router/transit.rs`; read from DV-Router-wip 84cfcb14, not run).
+Written now: weather, telemetry, the general query, NOGATE and RFONLY (5 cases). Not written: the `PARM`/`UNIT`/`EQNS`/`BITS`/`<IGATE` frames, the third-party
+frames, the "no room item" half (the existing RF cases read the room side), a `qAO` run of its own (the same cases expect `qAO` in the receive-only shape, below).
+
+Path: the tester plays the KISS TNC `rf-a` (`dvtest/kiss_tnc.py`, the edge connects to it as for tier A); the frame is `edge:ax25/rf-a -> edge:aprsis` over the transit
+path `dp15-igate` of the new snippet `rig/config/dv-router/dp15-rf-igate.toml` (`types = ["transit"]`, `per_min` 20); the reader is the tester's verified login on the private
+aprsc (`p1.aprsc_login`, filter `p/N0/STR`). Reused fixtures: `rf` (the two fake TNCs, `cases/test_dp15_rf.py`), `aprsc` and `shape` (`cases/test_dp15_positions.py`), the hub of
+`cases/data_support.py`. New builders: `dvtest/proto/aprs.py` (`weather_info`, `telemetry_info`, `query_info` and their parsers; round trips and the APRS101 chapter 12 / 13 examples in
+`cases/unit/test_proto_aprs.py`); pure helpers and the case flow against fakes: `cases/unit/test_dp15_igate_helpers.py`.
+
+Run shapes (the cases read the RENDERED config and skip with the reason when the edge, port `rf-a`, the APRS-IS edge or a transit path is missing):
+
+| Shape | Env / snippets | Expected q construct |
+|-------|----------------|----------------------|
+| RF-ON (the qAR run) | `DVT_DP15_TX_ENABLE=true`, `dp15-rf.toml`, `dp15-rf-out.toml`, `dp15-aprsis.toml`, `dp15-rf-igate.toml` | `qAR` (port with effective TX, `data.md` 9.3 rule 5) |
+| RF-OFF | `DVT_DP15_TX_ENABLE=false`, the same without `dp15-rf-out.toml` | `qAO` (receive-only port) |
+
+Run command (the qAR run; profile `web` because `data-ident.toml` and the hub need the usual web enrolment, `aprs` for the private aprsc; about 6 to 8 minutes, ESTIMATE: five cases, each with
+a 12 s counter settle before and after plus the 8 to 60 s windows):
+
+```
+XLXD_SUT_IMAGE=<dv-router image with DP16> DVT_SUT_PROFILE=dvrouter DVT_SUT_LAUNCH=native DVT_SUT_GEN=compat1 \
+DVT_SUT_CONFIG=<template> DVT_TRANSCODER_FAKE=1 DVT_REQUIRE_IDENT=true DVT_DP15_TX_ENABLE=true \
+DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/admin.toml:rig/config/dv-router/totp-required.toml:\
+rig/config/dv-router/data-ident.toml:rig/config/dv-router/dp15-aprsis.toml:rig/config/dv-router/dp15-rf.toml:\
+rig/config/dv-router/dp15-rf-out.toml:rig/config/dv-router/dp15-rf-igate.toml \
+scripts/run.sh -m rig --capture --profile web,aprs -- cases/test_dp15_igate.py
+```
+
+Config check of the snippets (host side, throw-away container): `DVT_DP15_TX_ENABLE=true python3 -m dvtest.tools.config_check --image <image> --template <template> --gen compat1 --extra rig/config/dv-router/data-ident.toml --extra rig/config/dv-router/dp15-aprsis.toml --extra rig/config/dv-router/dp15-rf.toml --extra rig/config/dv-router/dp15-rf-out.toml --extra rig/config/dv-router/dp15-rf-igate.toml`
+(NOT run: the image with DP16 is not known to this repo yet; `dp15-rf-igate.toml` is valid TOML and parses with `dvtest.sut_config` in the unit test, the launcher's own check is the open point).
+Notes: stdout and `out/<run>/dp15-igate.txt`; latencies and windows in `out/<run>/dp15-igate.json`; with `--capture` the line DV-Router itself WROTE (before the server) is in `capture/xlxd-sut.pcapng`.
+
+| Case | Steps | Assert | Record | Status |
+|------|-------|--------|--------|--------|
+| DP15-8w | rf-a hears `N0IGW-3>APDVT1,WIDE1-1*:_11100100c220s004g005t077r000p000P000h50b09900dvt1` (positionless weather, chapter 12 shape); the tester reads the aprsc | within 45 s ONE line from `N0IGW-3` (8 s watched for a second one) with destination `APDVT1`, the path before the q construct exactly `WIDE1-1*`, exactly one q construct that STARTS with `qAR` (`qAO` in the RF-OFF shape) and `N0TEST-1` (the `[edges.ax25]` callsign, not the login `N0TEST-5`), the information field byte for byte; `dv_pkt_path_total{route=dp15-igate,result=forwarded}` +1 and nothing else moved (asserted when the route has a series; otherwise a FINDING) | latency rf-a -> line, the whole line, what the server put after the igate call | written, not run on a rig |
+| DP15-8t | the same with `N0IGT-3>APDVT1,WIDE1-1*:T#007,199,000,255,073,123,01101001dvt` (telemetry, chapter 13 shape) | as 8w | as 8w | written, not run on a rig |
+| DP15-8q | rf-a hears `N0IGQ-3>APDVT1,WIDE1-1:?APRS?` and, right after it, a weather control from `N0IGC-1` | the control arrives (else the case fails: it would prove nothing); NO line from `N0IGQ-3` in the window after the control; `forwarded` +1 (the control) and `filtered` +1 | control latency, window length, counters | written, not run on a rig |
+| DP15-8n | a weather frame from `N0IGN-3` with the path `WIDE1-1*,NOGATE`, then a control from `N0IGC-2` | as 8q with `no_gate` +1. aprsc drops a packet with NOGATE or RFONLY in its path itself (`incoming.c` `INERR_NOGATE`), so the absence at the aprsc says nothing about DV-Router: the counter is the evidence, and without a series for the route the case proves only the control | as 8q | written, not run on a rig |
+| DP15-8r | the same with the path `RFONLY` and the control `N0IGC-3` | as 8n | as 8q | written, not run on a rig |
+
+Window of the negative cases: `max(10 s, 4 x the slowest latency of the run (the positive cases and the case's own control), capped at 60 s)`, watched AFTER the control arrived, and the frame that must
+not be gated was injected BEFORE the control, so it had at least the control's latency plus the window. The latencies come from the same run (the cases share one ledger, written to `dp15-igate.json`).
+
+Limits, stated: (1) "exactly once" at the aprsc is limited by the server's own 30 s duplicate window (source + destination + information); the `forwarded` counter and the pcapng cover a second send by DV-Router.
+(2) The counter labels `route` (`p` + 16 hex digits of the FNV-1a 64 hash of the path name), `dir`, `result` come from `data.md` 13.1 and `router/types.rs`; a missing series is recorded, an existing one asserted.
+(3) aprsc keeps the client's q construct only because the port is `igate`, not `clientonly` (`parse_qc.c`: a `clientonly` port turns `qAR` into `qAo`); the rig's `rig/aprsc/aprsc.conf` listener is `igate`.
+(4) Weather and telemetry need a `rf-a` that DV-Router believes is heard: the fake TNC delivers a plain UI frame, as for 6a. (5) Nothing was run: the frame shapes, the unit tests and the flow against fakes are verified, the rig is not.
 
 ### Two DV-Router nodes: the XLX peer cases 7b, 7c, 7d: `cases/test_dp15_peer.py`
 

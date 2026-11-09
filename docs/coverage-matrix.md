@@ -42,8 +42,8 @@ unit test `cases/unit/test_coverage_matrix.py` runs it).
 | Built-in echo (ECHO1) | 27 | 19 | 2 | 6 | 0 |
 | Echo return integrity E9 (D-STAR kinds) | 14 | 13 | 1 | 0 | 0 |
 | Real-transcoder cross-mode audio into YSF (related to ECHO1) | 3 | 3 | 0 | 0 | 0 |
-| DP15 (APRS / AX.25 / KISS data path) | 54 | 37 | 3 | 14 | 0 |
-| **Total** | **1194** | **746** | **272** | **168** | **8** |
+| DP15 (APRS / AX.25 / KISS data path) | 58 | 41 | 3 | 14 | 0 |
+| **Total** | **1198** | **750** | **272** | **168** | **8** |
 <!-- summary:end -->
 
 ## Top 15 gaps (ranked by how much real-world traffic they touch)
@@ -1428,6 +1428,10 @@ Sources: dp15-cases.md.
 | DP15-5b repeated APRS-IS message is acked again byte for byte and delivered once | dp15-cases.md:320 | `test_dp15_aprsis::test_dp15_5b_a_repeated_aprsis_message_is_acked_again_and_delivered_once` | rig | b:aprsc | OK |
 | DP15-5c to 5e unverified login, qAC on an uplink path, NOGATE | dp15-cases.md:324 | - | - | - | GAP |
 | DP15-5f 2 s repeat of the plan (server dupecheck only) | dp15-cases.md:324 | - | - | - | GAP |
+| DP15-8w RF-heard positionless weather is gated to the private aprsc once, `qAR` + igate call, path as heard, information byte-identical (`qAO` receive-only) | dp15-cases.md "RF to APRS-IS igate" | `test_dp15_igate::test_dp15_8w_rf_weather_is_gated_with_qar` | rig | b:aprsc | OK |
+| DP15-8t RF-heard telemetry `T#` is gated the same way | dp15-cases.md "RF to APRS-IS igate" | `test_dp15_igate::test_dp15_8t_rf_telemetry_is_gated_with_qar` | rig | b:aprsc | OK |
+| DP15-8q RF-heard general query `?APRS?` is never gated (bounded window from the run's latency, control frame) | dp15-cases.md "RF to APRS-IS igate" | `test_dp15_igate::test_dp15_8q_rf_general_query_is_not_gated` | rig | b:aprsc | OK |
+| DP15-8n, 8r NOGATE / RFONLY in the path is never gated (aprsc drops them too: evidence is the path counter) | dp15-cases.md "RF to APRS-IS igate" | `test_dp15_igate::test_dp15_8n_nogate_path_is_not_gated`, `test_dp15_8r_rfonly_path_is_not_gated` | rig | b:aprsc | OK |
 | DP15-6s KISS parameters (TXDELAY, P, SlotTime, TXtail, FullDuplex) written at connect and reconnect, no other command | dp15-cases.md:192 | `test_dp15_rf::test_dp15_6s_kiss_parameters_are_written_after_every_connect` | rig | a | OK |
 | DP15-6s' the same against a real Dire Wolf TNC (tier B) | dp15-cases.md:381 | - | - | - | GAP |
 | DP15-6a RF message to the room name reaches the room once (M17, D-STAR, SSE, history), no RF ack | dp15-cases.md:193 | `test_dp15_rf::test_dp15_6a_message_to_the_room_name_on_rf_reaches_the_room`, `test_dp15_rf_dw::test_dp15_6a_message_to_the_room_name_on_rf_reaches_the_room` | rig | c | OK |

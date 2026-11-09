@@ -1,0 +1,144 @@
+# SPDX-License-Identifier: MIT
+"""APRS information fields that are not positions or messages: positionless weather, telemetry and general queries
+(APRS Protocol Reference 1.0.1 chapters 12, 13 and 15). Used by the DP15 igate case (cases/test_dp15_igate.py) to inject
+RF-heard frames that DV-Router must pass on to APRS-IS with the information field unchanged (data.md 9.3 rule 3).
+
+  weather_info(10, 9, 5, 56, 220, 4, 5, 77, rain_1h=0, rain_24h=0, rain_midnight=0, humidity=50, pressure=9900,
+               software="w", unit="RSW")
+      -> "_10090556c220s004g005t077r000p000P000h50b09900wRSW"      (the chapter 12 example)
+  telemetry_info(5, (199, 0, 255, 73, 123), "01101001")
+      -> "T#005,199,000,255,073,123,01101001"                      (the chapter 13 example)
+  query_info("APRS") -> "?APRS?"                                   (a general query, chapter 15; never gated)
+
+Every builder returns str (ASCII); the parsers return the same fields and raise ValueError on any other shape, so a
+builder and its parser are tested as a round trip (cases/unit/test_proto_aprs.py). The AX.25 frame around the field is
+built with dvtest/kiss_tnc.py `ui_frame`. A missing numeric field is None (printed as dots, as the chapter allows).
+"""
+import re
+
+WEATHER_FIELDS = ("wind_dir", "wind_speed", "gust", "temp_f", "rain_1h", "rain_24h", "rain_midnight", "humidity", "pressure")
+QUERY_NAMES = ("APRS", "IGATE", "WX", "PING")
+
+
+def _num(value, width, label, low=0, high=None):
+    """`value` as a zero padded integer of `width` characters, or dots for None."""
+    if value is None:
+        return "." * width
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError("%s must be an integer or None: %r" % (label, value))
+    if value < low or (high is not None and value > high):
+        raise ValueError("%s %d is outside %d..%s" % (label, value, low, high))
+    text = "%0*d" % (width, value)
+    if len(text) != width:
+        raise ValueError("%s %d does not fit %d characters" % (label, value, width))
+    return text
+
+
+def _temp(value):
+    """The three character Fahrenheit field: `077`, `-05`, `-99`, or dots."""
+    if value is None:
+        return "..."
+    if not isinstance(value, int) or isinstance(value, bool) or not -99 <= value <= 999:
+        raise ValueError("temp_f must be an integer in -99..999 or None: %r" % (value,))
+    return ("%03d" % value) if value >= 0 else ("-%02d" % -value)
+
+
+def weather_info(month, day, hour, minute, wind_dir, wind_speed, gust, temp_f, *, rain_1h=None, rain_24h=None,
+                 rain_midnight=None, humidity=None, pressure=None, software="d", unit="vt"):
+    """A positionless weather report `_MMDDHHMMcDDDsSSSgGGGtTTT[rRRR][pPPP][PPPP][hHH][bBBBBB]<software><unit>`.
+    Speeds in mph, temperature in degrees Fahrenheit, rain in hundredths of an inch, humidity 1..100 percent (100 is
+    printed `00`), pressure in tenths of a millibar. `software` is one character and `unit` 2 to 4 characters
+    (APRS101 p.78); both are printed as given. An absent optional block is left out; the present ones keep the order of
+    the chapter (r, p, P, h, b), which is the order the parser reads them in."""
+    stamp = _num(month, 2, "month", 1, 12) + _num(day, 2, "day", 1, 31) + _num(hour, 2, "hour", 0, 23) + _num(minute, 2, "minute", 0, 59)
+    out = "_" + stamp + "c" + _num(wind_dir, 3, "wind_dir", 0, 360) + "s" + _num(wind_speed, 3, "wind_speed", 0, 999) \
+        + "g" + _num(gust, 3, "gust", 0, 999) + "t" + _temp(temp_f)
+    optional = (("r", _num(rain_1h, 3, "rain_1h", 0, 999), rain_1h), ("p", _num(rain_24h, 3, "rain_24h", 0, 999), rain_24h),
+                ("P", _num(rain_midnight, 3, "rain_midnight", 0, 999), rain_midnight),
+                ("h", "00" if humidity == 100 else _num(humidity, 2, "humidity", 1, 99), humidity),
+                ("b", _num(pressure, 5, "pressure", 0, 99999), pressure))
+    for letter, text, value in optional:
+        if value is not None:
+            out += letter + text
+    if not re.fullmatch(r"[A-Za-z0-9]", software):
+        raise ValueError("software is one letter or digit: %r" % (software,))
+    if not re.fullmatch(r"[A-Za-z0-9]{2,4}", unit):
+        raise ValueError("unit is 2 to 4 letters or digits: %r" % (unit,))
+    return out + software + unit
+
+
+_WX_RE = re.compile(r"^_(\d{2})(\d{2})(\d{2})(\d{2})c([\d.]{3})s([\d.]{3})g([\d.]{3})t(-\d{2}|[\d.]{3})"
+                    r"(?:r(\d{3}))?(?:p(\d{3}))?(?:P(\d{3}))?(?:h(\d{2}))?(?:b(\d{5}))?([A-Za-z0-9])([A-Za-z0-9]{2,4})$")
+
+
+def parse_weather(info):
+    """The fields of a positionless weather report built like `weather_info`, as a dict (month, day, hour, minute and the
+    WEATHER_FIELDS, None for dots or an absent block; humidity 100 for `00`, plus software and unit)."""
+    m = _WX_RE.match(info)
+    if not m:
+        raise ValueError("not a positionless weather report: %r" % (info,))
+
+    def three(text):
+        return None if set(text) == {"."} else int(text)
+
+    g = m.groups()
+    humidity = None if g[11] is None else (100 if g[11] == "00" else int(g[11]))
+    return {"month": int(g[0]), "day": int(g[1]), "hour": int(g[2]), "minute": int(g[3]),
+            "wind_dir": three(g[4]), "wind_speed": three(g[5]), "gust": three(g[6]), "temp_f": three(g[7]),
+            "rain_1h": None if g[8] is None else int(g[8]), "rain_24h": None if g[9] is None else int(g[9]),
+            "rain_midnight": None if g[10] is None else int(g[10]), "humidity": humidity,
+            "pressure": None if g[12] is None else int(g[12]), "software": g[13], "unit": g[14]}
+
+
+def telemetry_info(seq, analog, bits, comment=""):
+    """A telemetry report `T#sss,a1,a2,a3,a4,a5,bbbbbbbb[comment]`: `seq` is 0..999 or the string `MIC`, `analog` is five
+    integers 0..255, `bits` is eight characters 0/1 (or an integer 0..255, printed most significant bit first)."""
+    if seq == "MIC":
+        head = "MIC"
+    elif isinstance(seq, int) and not isinstance(seq, bool) and 0 <= seq <= 999:
+        head = "%03d" % seq
+    else:
+        raise ValueError("telemetry sequence is 0..999 or MIC: %r" % (seq,))
+    values = tuple(analog)
+    if len(values) != 5 or not all(isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 255 for v in values):
+        raise ValueError("telemetry has five analog values 0..255: %r" % (analog,))
+    if isinstance(bits, int) and not isinstance(bits, bool):
+        if not 0 <= bits <= 255:
+            raise ValueError("telemetry bits as an integer are 0..255: %r" % (bits,))
+        bits = format(bits, "08b")
+    if not re.fullmatch(r"[01]{8}", bits):
+        raise ValueError("telemetry bits are eight characters 0 or 1: %r" % (bits,))
+    if "\r" in comment or "\n" in comment:
+        raise ValueError("a comment has no line breaks")
+    return "T#%s,%s,%s" % (head, ",".join("%03d" % v for v in values), bits) + comment
+
+
+_TLM_RE = re.compile(r"^T#(\d{3}|MIC),(\d{3}),(\d{3}),(\d{3}),(\d{3}),(\d{3}),([01]{8})(.*)$", re.S)
+
+
+def parse_telemetry(info):
+    """{seq (int or "MIC"), analog (tuple of 5), bits (8 characters), comment} of a telemetry report, else ValueError."""
+    m = _TLM_RE.match(info)
+    if not m:
+        raise ValueError("not a telemetry report: %r" % (info,))
+    analog = tuple(int(m.group(i)) for i in range(2, 7))
+    if any(v > 255 for v in analog):
+        raise ValueError("telemetry analog value above 255: %r" % (info,))
+    seq = m.group(1)
+    return {"seq": seq if seq == "MIC" else int(seq), "analog": analog, "bits": m.group(7), "comment": m.group(8)}
+
+
+def query_info(name="APRS"):
+    """A general query information field `?NAME?` (chapter 15): a station asks every station in range to answer.
+    A packet whose information field starts with `?` is a query and an igate must never pass it to the Internet."""
+    if name not in QUERY_NAMES:
+        raise ValueError("query name %r is not one of %s" % (name, ", ".join(QUERY_NAMES)))
+    return "?%s?" % name
+
+
+def parse_query(info):
+    """The name of a general query built like `query_info`, else ValueError."""
+    m = re.fullmatch(r"\?([A-Z]+)\?", info)
+    if not m or m.group(1) not in QUERY_NAMES:
+        raise ValueError("not a general query: %r" % (info,))
+    return m.group(1)
