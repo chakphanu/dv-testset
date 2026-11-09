@@ -81,3 +81,32 @@ def test_run_sh_adds_the_snippet_to_a_native_mmdvm_launch_only():
     assert '"${DVT_SUT_LAUNCH:-direct}" = native' in block
     assert "rig/config/dv-router/soak-edges.toml" in block            # not added twice when the soak snippet is listed
     assert block.count("mmdvm-edges.toml") >= 3
+
+
+# ---- first re-run (out/20261109T062609Z): YSF is linked to the autolink module B until its first frame moves it to its DG-ID module
+
+def test_ysf_row_counts_as_linked_in_the_autolink_module_or_its_dgid_module():
+    rooms = dict(ROOMS, ysf=("B", "J"))
+    in_b = [{"edge": "ysf-1", "kind": "client", "protocol": "ysf", "room": "B"}]
+    in_j = [{"edge": "ysf-1", "kind": "client", "protocol": "ysf", "room": "J"}]
+    elsewhere = [{"edge": "ysf-1", "kind": "client", "protocol": "ysf", "room": "C"}]
+    assert "ysf" in mmdvm_stack.linked_modes(in_b, MODES, rooms, WORDS)
+    assert "ysf" in mmdvm_stack.linked_modes(in_j, MODES, rooms, WORDS)
+    assert "ysf" not in mmdvm_stack.linked_modes(elsewhere, MODES, rooms, WORDS)
+    assert "ysf" not in mmdvm_stack.linked_modes(in_b, MODES, ROOMS, WORDS)      # the old check: one module J only
+    # a string is one module, not a set of characters
+    assert not mmdvm_stack.row_matches({"protocol": "ysf", "room": "J"}, "ysf", "JKL", WORDS)
+    case = (ROOT / "cases" / "test_mmdvm_stack.py").read_text()
+    assert 'YSF_AUTOLINK = os.environ.get("DVT_YSF_AUTOLINK_MODULE", "B")' in case
+    assert "LINK_ROOMS = dict(ROOM, ysf=(YSF_AUTOLINK, ROOM[\"ysf\"]))" in case
+
+
+def test_needs_prime_when_the_gateway_may_be_idle():
+    assert mmdvm_stack.needs_prime(None, 1000.0, 50.0)                  # no RF activity yet
+    assert not mmdvm_stack.needs_prime(990.0, 1000.0, 50.0)
+    assert not mmdvm_stack.needs_prime(950.0, 1000.0, 50.0)             # exactly valid_s old: still switched
+    assert mmdvm_stack.needs_prime(949.0, 1000.0, 50.0)                 # past it: P25Gateway may have dropped the talk group
+    # the window is below the shortest hang time of the rig's P25Gateway.ini (NetHangTime 60)
+    ini = (ROOT / "rig" / "config" / "mmdvmstack" / "P25Gateway.ini.tmpl").read_text()
+    assert "NetHangTime=60" in ini and "RFHangTime=120" in ini
+    assert 'DVT_MMDVM_P25_SWITCHED_S", "50"' in (ROOT / "cases" / "test_mmdvm_stack.py").read_text()

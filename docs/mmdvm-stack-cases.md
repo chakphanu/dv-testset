@@ -177,6 +177,26 @@ group call, LICH direction inbound. All of it from `docs/` of the builders and t
   `[edges.nxdn] enable = "auto"` and `[edges.p25] enable = "auto"` and nothing that serves a module (the run used `web.toml:admin.toml:totp-required.toml`), so the
   edges were not spawned and both our own client link and the gateways got no answer. Fixed by `mmdvm-edges.toml` (above) and by the `offered` fixture.
 
+## Re-run (`out/20261109T062609Z`, same SUT): 9 passed, 2 failed, both again the harness
+
+* **MMDVM1 p25, "voice words changed (first differing frame 0)".** The modem sent 150 words (153 with the 3 NULL_IMBE of the last LDU). On the wire
+  between P25Gateway and the reflector the call starts at record `0x65`: 150 voice records, `gw word[i] == modem word[i+3]` for all 150, so the
+  gateway dropped the first three (`0x62..0x64`). Cause: P25Gateway forwards nothing from RF until the first `0x65` record of a call has switched it
+  to the talk group (`P25Gateway.cpp:424-483`; `Static=` only polls the reflector; its log says "Switched to reflector 31672 due to RF activity" at the
+  first call) and forgets that after the hang time (`RFHangTime` 120 s, `NetHangTime` 60 s). Every call that finds the gateway idle loses its first three
+  words; it is the gateway, not the modem, the comparison or the SUT. The harness now switches the gateway with a 1 s key-up before the p25 cases
+  (`prime_p25`, `DVT_MMDVM_P25_SWITCHED_S` 50 s, `mmdvm_stack.needs_prime`).
+  SUT observation (recorded, not asserted; P-P25-31 asks for "open on any voice record" and the SUT does): for that call that started at `0x65` the
+  SUT sent the same 150 words in the same order but as a new call from `0x62` (the word that came in slot `0x65` left in slot `0x62`, its own LC
+  fields in `0x64..0x66`) and padded the last LDU with its own silence word (`...9e44`, the modem's NULL_IMBE ends `...9e45`). The reference
+  P25Reflector relays records verbatim. A compare of record types would show it; the words are not changed.
+* **MMDVM3 "after start, not linked again: ['ysf']".** Not a slow reconnect: YSFGateway linked 5 ms after the start (3 polls answered at once, then a
+  poll every 5 s, all answered, the edge logs `sessions 1` from 06:33:19). The row was in the wrong module for the check. DV-Router links a new YSF address to
+  module B (P-YSF-29, xlxd `YSF_AUTOLINK_MODULE`) and the DG-ID of the first frame moves it to J (P-YSF-28, `crates/edge/ysf/src/lib.rs`). Before the
+  first over, and again after a restart (the old row timed out after 58 s, the new address starts in B), the row of YSFGateway is in B. The earlier
+  first-run line "linked ['dmr', 'dstar']" without ysf, 90 s of waiting, had the same cause, and MMDVM3 passed that part only because MMDVM1 had already moved
+  the row to J. A YSF row is now "linked" in B or J (`LINK_ROOMS`, `DVT_YSF_AUTOLINK_MODULE`); the on-air check still wants J.
+
 ## UNVERIFIED
 
 1. **Only one run so far.** (First run: the image built and the stack ran, see above.) Originally: the image was never built: the six programs compile with the bookworm compiler (gcc 12) with `-std=c++0x` and

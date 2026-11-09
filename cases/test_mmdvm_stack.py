@@ -42,6 +42,11 @@ MODULE = {"dstar": os.environ.get("DVT_MMDVM_MODULE_DSTAR", "H"), "dmr": os.envi
           "ysf": os.environ.get("DVT_MMDVM_MODULE_YSF", "J")}
 TG = {"p25": int(os.environ.get("DVT_MMDVM_P25_TG", "31672")), "nxdn": int(os.environ.get("DVT_MMDVM_NXDN_TG", "31672"))}
 ROOM = dict(MODULE, p25=os.environ.get("DVT_P25_MODULE", "G"), nxdn=os.environ.get("DVT_NXDN_MODULE", "F"))
+# the module(s) in which the gateway's client row is "linked". YSF: a new address is linked to the autolink module B at its first poll
+# (xlxd YSF_AUTOLINK_MODULE, P-YSF-29) and moves to the module of the DG-ID of its first frame (a permanent move, P-YSF-28), so before
+# any traffic (and again after a restart) the row is in B, afterwards in J
+YSF_AUTOLINK = os.environ.get("DVT_YSF_AUTOLINK_MODULE", "B")
+LINK_ROOMS = dict(ROOM, ysf=(YSF_AUTOLINK, ROOM["ysf"]))
 # the identity of the radio (modem key-up) and of our talker; synthetic: N0CALL / N0TEST, DMR ids 1023007 / 1023008
 # DMR: group call on TG 6, which DMRGateway maps to slot 2 TG 9 of the XLX link; YSF: the DG-ID of the frames picks the module
 RADIO = {"dstar": {"my": "N0CALL"}, "dmr": {"src": 1023007, "dst": 6}, "ysf": {"src": "N0CALL", "dgid": ysf.module_dgid(MODULE["ysf"])},
@@ -92,6 +97,28 @@ def activity():
     _last_activity[0] = time.monotonic()
 
 
+# P25Gateway forwards nothing from RF until the first 0x65 record of a call has switched it to the talk group, and forgets that after its
+# hang time (RFHangTime 120 s, NetHangTime 60 s in rig/config/mmdvmstack/P25Gateway.ini.tmpl): the first three voice words (records
+# 0x62..0x64) of such a call never reach the reflector (first re-run, out/20261109T062609Z). A short key-up switches it first.
+P25_SWITCHED_S = float(os.environ.get("DVT_MMDVM_P25_SWITCHED_S", "50"))
+P25_PRIME_S = 1.0
+_p25_rf = [None]
+
+
+def prime_p25(stack):
+    """Switch P25Gateway to the reflector with a short key-up when it may be idle, so the over of the case is carried whole."""
+    if not mmdvm_stack.needs_prime(_p25_rf[0], time.monotonic(), P25_SWITCHED_S):
+        return
+    quiet()
+    ku = stack.keyup("p25", seconds=P25_PRIME_S, **RADIO["p25"])
+    if not ku.wait(P25_PRIME_S + 20):
+        note("p25: the priming key-up did not finish")
+    time.sleep(1.0)
+    _p25_rf[0] = time.monotonic()
+    activity()
+    note("p25: gateway switched to the reflector by a %.0f s key-up" % P25_PRIME_S)
+
+
 # ------------------------------------------------------------------ fixtures
 
 @pytest.fixture(scope="session")
@@ -133,13 +160,13 @@ def state_rows(anon):
 
 
 def row_matches(row, mode):
-    return mmdvm_stack.row_matches(row, mode, ROOM[mode], PROTO_WORDS)
+    return mmdvm_stack.row_matches(row, mode, LINK_ROOMS[mode], PROTO_WORDS)
 
 
 def linked_modes(anon):
     """(modes with a gateway row in the public state, all client rows)."""
     _state, rows = state_rows(anon)
-    return mmdvm_stack.linked_modes(rows, MODES, ROOM, PROTO_WORDS), rows
+    return mmdvm_stack.linked_modes(rows, MODES, LINK_ROOMS, PROTO_WORDS), rows
 
 
 @pytest.fixture(scope="session")
@@ -252,6 +279,8 @@ def talk(peer, mode, frames):
 def test_mmdvm1_uplink_modem_to_reflector(stack, web_optional, target, mode):
     """The modem keys up OVER_S s; the stack carries it to the reflector. Public state: the callsign on air in the module;
     our client on the module hears the over with the right frame count and the voice words of the modem."""
+    if mode == "p25":
+        prime_p25(stack)
     peer = make_peer(mode, target.xlxd_sut)
     probe = OnAir(web_optional()) if web_optional else None
     try:
@@ -264,6 +293,8 @@ def test_mmdvm1_uplink_modem_to_reflector(stack, web_optional, target, mode):
         got = peer.collect(settle=6.0)
     finally:
         activity()
+        if mode == "p25":
+            _p25_rf[0] = time.monotonic()
         if probe:
             probe.halt.set()
         close_peer(peer)
@@ -289,6 +320,8 @@ def test_mmdvm1_uplink_modem_to_reflector(stack, web_optional, target, mode):
 @pytest.mark.parametrize("mode", MODES)
 def test_mmdvm2_downlink_reflector_to_modem(stack, target, mode):
     """Our client talks OVER_S s into the module; the modem records what MMDVMHost delivers down to RF."""
+    if mode == "p25":
+        prime_p25(stack)
     peer = make_peer(mode, target.xlxd_sut)
     frames = mmdvm_modem.default_frames(mode, int(OVER_S * 50), seed="down")
     t0 = time.monotonic()
