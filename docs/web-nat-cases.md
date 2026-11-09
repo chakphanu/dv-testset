@@ -399,6 +399,16 @@ DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/turn.tom
 7. Whether Firefox and Playwright WebKit report the address of a `prflx` local candidate in `getStats` (Chromium does).
 8. Whether an ICMP port-unreachable (none is sent: the counter rule drops silently) would change the SUT's behaviour; a real NAT usually drops silently too.
 
+### STUN priority evidence per cell (`dvtest/tools/ice1_stun.py`, ICE1e)
+
+`python3 -m dvtest.tools.ice1_stun out/<run>` (a run made with `--capture`) reads `web/ice1-results.jsonl`, `capture/xlxd-sut.pcapng` and `logs/xlxd-sut.log` and prints one row per browser cell: the
+selected local candidate type before and after, the PRIORITY of the nominating check (USE-CANDIDATE), the PRIORITY of the consent checks (no USE-CANDIDATE) before and after the change, how many
+checks came from the new mapping and how many the SUT answered, whether the PRIORITY matches, the `webrtc: rebinding reason=` line of the window (with its offset) and whether the audio resumed. It writes
+`web/ice1-stun.json`. Cells are placed from the results file (the NAT address before and after, the ports of the `router view`, the recorded `first_stun_new_s`), not from clock times. Why it matters:
+DV-Router's consent rule (b) switches only when a consent check from the new mapping carries the same PRIORITY as the nominating check. Measured on the two existing runs: `20261108T144953Z` (220e45b)
+Firefox full cone and port restricted have a prflx pair, nominate and consent both 1853817087 and rebind by consent after 3.46 s and 3.63 s; `20261108T211920Z` (2fcc727) the same two cells have an srflx pair,
+nominate 1853817087 (type preference 110) but consent 1686052863 (100), all four checks from the new mapping answered, no rebinding line, audio not resumed; Firefox symmetric (prflx pair) matches in both runs.
+
 ## Gaps
 
 | What | Why |
