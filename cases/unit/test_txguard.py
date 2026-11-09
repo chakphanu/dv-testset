@@ -95,7 +95,8 @@ def test_absent_field_returns_at_once_on_an_old_image():
     assert res.state == "absent" and res.polls == 1 and res.waited_ms == 0
     res = run([body()], "ax25", lambda b: txguard.ax25_observation(b, "rf-a"))
     assert res.state == "absent" and res.polls == 1
-    assert "indistinguishable" in txguard.describe(res, "ax25", "rf-a")
+    text = txguard.describe(res, "ax25", "rf-a")
+    assert "present without tx_fence" in text and "kind=modem items[].modem" in text
 
 
 def test_timeout_when_the_fence_never_ends_and_the_bound_is_capped():
@@ -167,3 +168,55 @@ def test_ax25_reader_opens_the_step_up_window_once_on_403():
     assert calls == ["get", "step_up", "get"] and obs.fence == "startup_guard"
     other = SimpleNamespace(path=lambda s: s, get=lambda p, expect=None: SimpleNamespace(status=500, json=lambda: {}))
     assert txguard.ax25_reader(other, "rf-a")().found is False
+
+
+def viewer_body():
+    """What a viewer or observer credential gets: the modem session row without the `modem` object."""
+    return {"total": 1, "items": [{"kind": "modem", "protocol": "ax25", "circuit": "c1"}]}
+
+
+def test_ax25_rows_are_matched_by_kind_modem_and_the_port_name():
+    mixed = {"items": [{"kind": "dstar", "modem": {"name": "rf-a", "tx_fence": "startup_guard"}},      # not a modem row: ignored
+                       {"kind": "modem", "modem": {"name": "rf-b", "adapter": "kiss-tcp"}},
+                       {"kind": "modem", "modem": {"name": "rf-a", "adapter": "kiss-tcp", "tx_fence": "session_loss", "tx_guard_ms": 700}}]}
+    obs = txguard.ax25_observation(mixed, "rf-a")
+    assert (obs.found, obs.fenced, obs.fence, obs.guard_ms, obs.via) == (True, True, "session_loss", 700, "kind=modem items[].modem")
+    other = txguard.ax25_observation(mixed, "rf-c")
+    assert other.found is False and other.scope is None and "port not among them" in other.via
+    # the loose walker is a fallback only and says so
+    loose = txguard.ax25_observation({"x": [{"y": {"name": "rf-a", "adapter": "kiss-tcp", "tx_fence": "foreign_holder"}}]}, "rf-a")
+    assert loose.found and loose.via == "fallback walker" and loose.fence == "foreign_holder"
+
+
+def test_modem_row_without_a_modem_object_is_a_scope_problem_not_unfenced():
+    obs = txguard.ax25_observation(viewer_body(), "rf-a")
+    assert obs.found is False and obs.scope == "no_modem_object"
+    res = run([viewer_body()], "ax25", lambda b: txguard.ax25_observation(b, "rf-a"))
+    assert res.state == "scope" and res.polls == 1 and res.waited_ms == 0
+    assert "CREDENTIAL/SCOPE" in txguard.describe(res, "ax25", "rf-a")
+
+
+def test_make_guard_fails_with_a_clear_message_on_a_scope_problem():
+    lines = []
+
+    class Viewer:
+        def path(self, suffix):
+            return suffix
+
+        def get(self, path, expect=None):
+            return SimpleNamespace(status=200, json=viewer_body)
+
+    request = SimpleNamespace(getfixturevalue=lambda name: (lambda role: Viewer()))
+    guard = txguard_support.make_guard(request, lambda case, tag, text: lines.append((case, tag, text)))
+    with pytest.raises(pytest.fail.Exception, match="CREDENTIAL/SCOPE"):
+        guard("DP15-6c")
+    assert lines and lines[-1][1] == "FINDING"
+
+
+def test_no_modem_row_at_all_returns_at_once_and_says_which_case_it_was():
+    res = run([{"total": 1, "items": [{"kind": "dstar"}]}], "ax25", lambda b: txguard.ax25_observation(b, "rf-a"))
+    assert res.state == "no_modem" and res.polls == 1 and res.waited_ms == 0 and res.via == "no modem rows"
+    assert "not a modem session" in txguard.describe(res, "ax25", "rf-a")
+    # and the other quiet return: the modem object is present without a fence
+    res = run([body()], "ax25", lambda b: txguard.ax25_observation(b, "rf-a"))
+    assert res.state == "absent" and "present without tx_fence" in txguard.describe(res, "ax25", "rf-a")

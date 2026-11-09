@@ -34,10 +34,14 @@ PUBLIC_STATE_PATH = "/api/v1/public/state"
 ADMIN_CLIENTS_SUFFIX = "/clients"   # AdminClient.path() puts the mount and /api/v1/admin in front
 
 # found: the port row exists in the reply; present: the fence field exists in it; fenced: the port is fenced now
-Observation = namedtuple("Observation", "found present fenced fence guard_ms keys")
-Result = namedtuple("Result", "state waited_ms fence guard_ms keys polls")
-# state: unfenced (was fenced, ended) | clear (never fenced when first read) | absent (no field: image before RFSAFE1 or an AX.25
-# port that is not fenced) | not_found (no port row within the bound) | timeout (still fenced at the bound) | no_reader
+Observation = namedtuple("Observation", "found present fenced fence guard_ms keys via scope", defaults=(None, None))
+# via: which path matched ("kind=modem items[].modem", "kind=modem items[].modem.ports[]", "fallback walker", "no modem rows");
+# scope: "no_modem_object" when kind "modem" rows exist but none carries the `modem` object (a viewer or observer credential)
+Result = namedtuple("Result", "state waited_ms fence guard_ms keys polls via", defaults=(None,))
+# state: unfenced (was fenced, ended) | clear (never fenced when first read) | absent (no field: radio image before RFSAFE1, or an AX.25
+# `modem` object without tx_fence) | no_modem (no kind "modem" row at all: the edge is not a modem session) | scope (modem rows without
+# the `modem` object: a credential problem, never "not fenced") | not_found (no port row within the bound) | timeout (still
+# fenced at the bound) | no_reader
 
 
 def _first(items, pred):
@@ -82,34 +86,48 @@ def _walk(node):
 
 
 def ax25_observation(body, port):
-    """The Observation of AX.25 port `port` in an admin clients body: items[].modem first, then any object named `port`."""
+    """The Observation of AX.25 port `port` in an admin clients body. Rows are matched by kind == "modem" and the port name of
+    their `modem` object (admin.md about lines 265 and 416, status.md "Built (DP11)"); the loose walk (any object named like the
+    port) is a fallback only, and `via` says which one matched. Rows of kind "modem" WITHOUT a `modem` object (viewer and observer
+    credentials omit it) set `scope` instead of looking like an unfenced port. No kind "modem" row at all: via "no modem rows"."""
     keys = []
     if not isinstance(body, dict):
         return Observation(False, False, False, None, None, ["<not an object>"])
     keys.append("body:" + ",".join(sorted(body)[:12]))
     items = body.get("items")
-    keys.append("items[%d]" % len(items) if isinstance(items, list) else "items: absent")
-    row = None
-    for item in items if isinstance(items, list) else []:
-        modem = item.get("modem") if isinstance(item, dict) else None
-        if isinstance(modem, dict):
-            keys.append("items[].modem:" + ",".join(sorted(modem)[:16]))
-            if modem.get("name") == port:
-                row = modem
-                break
-            inner = _first(modem.get("ports"), lambda p: p.get("name") == port)
-            if inner is not None:
-                keys.append("items[].modem.ports[]:" + ",".join(sorted(inner)))
-                row = inner
-                break
-    if row is None:
-        row = _first(list(_walk(body)), lambda d: d.get("name") == port and ("adapter" in d or "connected" in d or "tx_fence" in d))
+    items = items if isinstance(items, list) else []
+    keys.append("items[%d]" % len(items))
+    rows = [item for item in items if isinstance(item, dict) and item.get("kind") == "modem"]
+    keys.append("items[kind=modem][%d]" % len(rows))
+    row = via = None
+    with_object = 0
+    for item in rows:
+        modem = item.get("modem")
+        if not isinstance(modem, dict):
+            continue
+        with_object += 1
+        keys.append("items[kind=modem].modem:" + ",".join(sorted(modem)[:16]))
+        if modem.get("name") == port:
+            row, via = modem, "kind=modem items[].modem"
+            break
+        inner = _first(modem.get("ports"), lambda p: p.get("name") == port)
+        if inner is not None:
+            keys.append("items[kind=modem].modem.ports[]:" + ",".join(sorted(inner)))
+            row, via = inner, "kind=modem items[].modem.ports[]"
+            break
+    if row is None and rows and not with_object:
+        return Observation(False, False, False, None, None, keys + ["kind=modem rows carry no modem object"], "kind=modem without modem object",
+                           "no_modem_object")
+    if row is None and not rows:
+        # not a modem session at all; the loose walk below still gets one chance for an unexpected nesting
+        row = _first(list(_walk(body)), lambda d: d.get("name") == port and ("adapter" in d or "tx_fence" in d))
+        via = "fallback walker" if row is not None else "no modem rows"
         if row is not None:
             keys.append("object named %s:" % port + ",".join(sorted(row)))
     if row is None:
-        return Observation(False, False, False, None, None, keys + ["port %s: no modem row" % port])
+        return Observation(False, False, False, None, None, keys + ["port %s: no modem row" % port], via or "kind=modem rows, port not among them")
     present = "tx_fence" in row
-    return Observation(True, present, present and row.get("tx_fence") is not None, row.get("tx_fence"), row.get("tx_guard_ms"), keys)
+    return Observation(True, present, present and row.get("tx_fence") is not None, row.get("tx_fence"), row.get("tx_guard_ms"), keys, via)
 
 
 def wait_unfenced(read, *, kind, clock=time.monotonic, sleep=time.sleep, margin_s=MARGIN_S, max_wait_s=MAX_WAIT_S, poll_s=POLL_S):
@@ -129,6 +147,10 @@ def wait_unfenced(read, *, kind, clock=time.monotonic, sleep=time.sleep, margin_
             keys = list(obs.keys)
         now = clock()
         waited = int(round((now - start) * 1000))
+        if obs.scope:
+            return Result("scope", waited, last_fence, last_guard, keys, polls, obs.via)
+        if not obs.found and kind == "ax25" and obs.via == "no modem rows":
+            return Result("no_modem", waited, last_fence, last_guard, keys, polls, obs.via)
         if obs.found:
             if obs.fence is not None:
                 last_fence = obs.fence
@@ -136,14 +158,14 @@ def wait_unfenced(read, *, kind, clock=time.monotonic, sleep=time.sleep, margin_
                 last_guard = obs.guard_ms
                 deadline = max(deadline, min(start + max_wait_s, now + obs.guard_ms / 1000.0 + margin_s))
             if kind == "radio" and not obs.present:
-                return Result("absent", waited, last_fence, last_guard, keys, polls)
+                return Result("absent", waited, last_fence, last_guard, keys, polls, obs.via)
             if not obs.fenced:
                 if kind == "ax25" and not obs.present and not was_fenced:
-                    return Result("absent", waited, last_fence, last_guard, keys, polls)
-                return Result("unfenced" if was_fenced else "clear", waited, last_fence, last_guard, keys, polls)
+                    return Result("absent", waited, last_fence, last_guard, keys, polls, obs.via)
+                return Result("unfenced" if was_fenced else "clear", waited, last_fence, last_guard, keys, polls, obs.via)
             was_fenced = True
         if now >= deadline:
-            return Result("timeout" if obs.found else "not_found", waited, last_fence, last_guard, keys, polls)
+            return Result("timeout" if obs.found else "not_found", waited, last_fence, last_guard, keys, polls, obs.via)
         sleep(poll_s)
 
 
@@ -175,7 +197,11 @@ def describe(result, kind, port):
     """The text of the [RECORD] line for one wait."""
     note = {"unfenced": "the fence ended", "clear": "not fenced when first read", "timeout": "STILL FENCED at the bound",
             "not_found": "the port row never appeared", "no_reader": "no status session available",
+            "no_modem": "no kind \"modem\" row in the admin clients body: the edge is not a modem session, nothing to wait for",
+            "scope": "CREDENTIAL/SCOPE PROBLEM: kind \"modem\" rows carry no `modem` object (viewer and observer rows omit it); "
+                     "the guard cannot be read with this account (operator or admin needed)",
             "absent": ("the field tx_state is absent (image before RFSAFE1)" if kind == "radio" else
-                       "tx_fence is absent (not fenced, or an image before RFSAFE1: indistinguishable)")}[result.state]
-    return "tx guard wait on %s port %s: %s; waited %d ms in %d reads; last fence %r, last guard_ms %r; keys met: %s" % (
-        kind, port, note, result.waited_ms, result.polls, result.fence, result.guard_ms, " | ".join(result.keys))
+                       "the modem object is present without tx_fence: not fenced (an image before RFSAFE1 looks the same)")}[result.state]
+    via = "" if not result.via else "; matched by %s" % result.via
+    return "tx guard wait on %s port %s: %s%s; waited %d ms in %d reads; last fence %r, last guard_ms %r; keys met: %s" % (
+        kind, port, note, via, result.waited_ms, result.polls, result.fence, result.guard_ms, " | ".join(result.keys))

@@ -29,7 +29,10 @@ def make_guard(request, note, port="rf-a", kind="ax25"):
         if read is None:
             return txguard.Result("no_reader", 0, None, None, [], 0)
         result = txguard.wait_unfenced(read, kind=kind)
-        note(case, "FINDING" if result.state in ("timeout", "not_found") else "RECORD", txguard.describe(result, kind, port))
+        text = txguard.describe(result, kind, port)
+        note(case, "FINDING" if result.state in ("timeout", "not_found", "scope") else "RECORD", text)
+        if result.state == "scope":
+            pytest.fail("%s: %s" % (case, text))
         return result
 
     return guard
