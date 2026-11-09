@@ -48,6 +48,16 @@ def test_compact_descriptor_is_bounded():
     assert m2.descriptor_problems(compact_descriptor(), m2.MAX_DESCRIPTOR_BYTES) == []
 
 
+def test_older_descriptor_with_files_has_no_size_bound():
+    # an image before MAP2f carries the glyph inventory; 35767 bytes were seen on caebc57
+    assert m2.descriptor_problems(good_descriptor(), 35767) == []
+    assert m2.descriptor_problems(good_descriptor(), m2.MAX_DESCRIPTOR_BYTES + 1) == []
+
+
+def test_compact_descriptor_over_the_bound_fails_at_the_same_size():
+    assert any("bytes" in p for p in m2.descriptor_problems(compact_descriptor(), 35767))
+
+
 @pytest.mark.parametrize("change,needle", [
     (lambda d: d.update(callsign="N0PGA"), "keys"),
     (lambda d: d.pop("attribution"), "keys"),

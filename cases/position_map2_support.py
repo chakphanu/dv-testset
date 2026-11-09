@@ -55,7 +55,7 @@ def descriptor_problems(desc, raw_len=None):
     """What is wrong with an INSTALLED descriptor, as a list of strings (empty = it has every field web.md names and the shape the
     page's positionDescriptor() accepts). The key set is exact: web.md says it carries no callsign or position timestamp.
     Two shapes: the compact one (MAP2f, no `files`; `raw_len`, the body size in bytes when known, is bounded to 32 KiB) and the older
-    one that adds `files`, a list of {path, ...} entries; a descriptor with the key `files` is held to the older shape."""
+    one that adds `files`, a list of {path, ...} entries (no size bound: the glyph inventory makes it larger, 35767 bytes seen on caebc57); a descriptor with the key `files` is held to the older shape."""
     if not isinstance(desc, dict):
         return ["the descriptor is not a JSON object"]
     out = []
@@ -63,7 +63,7 @@ def descriptor_problems(desc, raw_len=None):
     want = DESCRIPTOR_KEYS if legacy else COMPACT_KEYS
     if set(desc) != want:
         out.append("keys %s, want %s" % (sorted(desc), sorted(want)))
-    if raw_len is not None and raw_len > MAX_DESCRIPTOR_BYTES:
+    if not legacy and raw_len is not None and raw_len > MAX_DESCRIPTOR_BYTES:
         out.append("the descriptor is %d bytes, want at most %d (MAP2f)" % (raw_len, MAX_DESCRIPTOR_BYTES))
     if desc.get("installed") is not True:
         out.append("installed is %r" % (desc.get("installed"),))
