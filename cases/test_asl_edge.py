@@ -27,6 +27,7 @@ from pathlib import Path
 
 import pytest
 
+import asl_edge_support
 from dvtest import asl_lab, asl_nat, asl_register, iax2_frames, nat, webload
 from dvtest.control import RigControl
 from dvtest.proto import iax2, iax2_reg
@@ -291,11 +292,16 @@ def test_t10_client_account_no_registration_needed(lab):
 # ------------------------------------------------------------------ T3: hub, L list exchange
 
 @needs_out
-def test_t3_hub_l_lists_split_horizon(lab):
+def test_t3_hub_l_lists_split_horizon(lab, request):
     """A and B both link to the edge; the edge's own monitor outbound to E (DVT_ASL_EDGE_OUT=1) is
     already up. The L list the edge sends each peer is built per destination (that peer's own branch
-    excluded) with the right mode letter (T transceive, R monitor)."""
+    excluded) with the right mode letter (T transceive, R monitor).
+    Startup-race guard: the edge dials E once, about 60 ms after it starts, and a refused one-shot monitor row is not redialled
+    (as in app_rpt), so if app_rpt on asl-e was not initialised yet E stays unlinked. The case waits up to 30 s for E's IN circuit,
+    else restarts the edge (like T6) and waits again, and skips only when E is still not up. The path taken is a [RECORD] line
+    "T3: E-circuit guard: path=up|restart|restarted|missing" (stdout, pytest.log, out/<run>/asl-lab/guards.txt)."""
     quiet(lab)
+    _ensure_e_circuit(lab, request)
     a, b = lab.node("a"), lab.node("b")
     with lab.scenario("t3-hub", capture=["edge"]) as sc:
         a.cli("rpt fun %s *3%s" % (a.node, lab.node("edge").node))
@@ -448,6 +454,20 @@ def _wait_established(host, peer_node, timeout, direction=None):
         time.sleep(1)
     raise AssertionError("%s: no ESTABLISHED (%s) link to %s after %.0f s:\n%s"
                          % (host.name, direction or "either direction", peer_node, timeout, out))
+
+
+def _ensure_e_circuit(lab, request):
+    """The T3 guard (cases/asl_edge_support.py): E's IN circuit to the edge, restarting the edge once if it is not up."""
+    edge, e = lab.node("edge"), lab.node("e")
+    record = asl_edge_support.recorder(lab.out, "T3")
+
+    def restart():
+        _restart_edge(request.getfixturevalue("edge_control"))      # skips with its reason without the control channel
+    try:
+        asl_edge_support.ensure_circuit(lambda t: _wait_established(e, edge.node, timeout=t, direction="IN"), restart, record,
+                                        "E-circuit")
+    except asl_edge_support.CircuitMissing as exc:
+        pytest.skip("the edge's outbound monitor row to E cannot be established, also not after an edge restart: %s" % exc)
 
 
 def _restart_edge(edge_control, settle=3.0):
