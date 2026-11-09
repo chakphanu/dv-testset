@@ -67,7 +67,7 @@ import position2_support as p2  # noqa: E402
 import position_map2_support as m2  # noqa: E402
 import position_support as ps  # noqa: E402
 import web_pages as pages  # noqa: E402
-from dvtest import browser as brlib, web  # noqa: E402
+from dvtest import browser as brlib, map2d as map2d_helpers, web  # noqa: E402
 from dvtest.proto import m17  # noqa: E402
 
 pytestmark = [pytest.mark.rig, pytest.mark.web, pytest.mark.browser]
@@ -145,6 +145,20 @@ def state_dir(target):
     if not state.is_dir():
         pytest.skip("the SUT state directory %s is not visible in the tester (the web profile mounts out/<run>/sut-state)" % state)
     return state
+
+
+@pytest.fixture(scope="module")
+def map2d_image(rig_control):
+    """Whether the image under test has MAP2d, from what it reports: the hub endpoint carries the dv_basemap_* series of the region
+    worker (dvtest.map2d.image_reports_map2d; DVT_SUT_MAP2D=1|0 overrides). MAP2d makes `preparing` a required descriptor key; for an
+    older image it stays optional. The decision is recorded."""
+    try:
+        text = rig_control.metrics("xlxd-sut")
+    except (RuntimeError, TimeoutError, ValueError, OSError):
+        text = None
+    value, why = map2d_helpers.image_reports_map2d(text)
+    print("[RECORD] MAP2d image: %s (%s)" % (value, why))
+    return value
 
 
 def descriptor_answer(anon):
@@ -371,11 +385,11 @@ def test_positions_page_refuses_a_v1_basemap(browser_page, web_client, seeds, ba
 
 # ================================================================ the map: a MAP2 basemap installed
 
-def assert_base_surface(anon, manifest, desc):
+def assert_base_surface(anon, manifest, desc, map2d=False):
     """The HTTP surface of an installed base (web.md MAP2c, deployment.md MAP2c), from the tester. Returns the tile path used."""
     resp = get(anon, pages.BASEMAP_TILES_JSON)
-    print("[RECORD] tiles.json optional keys: %s" % m2.optional_notes(desc))
-    problems = m2.descriptor_problems(desc, len(resp.body))
+    print("[RECORD] tiles.json optional keys: %s; MAP2d image: %s" % (m2.optional_notes(desc), map2d))
+    problems = m2.descriptor_problems(desc, len(resp.body), map2d=map2d)
     assert not problems, "tiles.json descriptor: %s" % "; ".join(problems[:4])
     gen = desc["gen"]
     etag = resp.headers.get("etag", "")
@@ -434,7 +448,7 @@ def assert_base_surface(anon, manifest, desc):
     return world
 
 
-def test_positions_page_with_a_basemap(browser_page, web_client, seeds, basemap, installed_basemap):
+def test_positions_page_with_a_basemap(browser_page, web_client, seeds, basemap, installed_basemap, map2d_image):
     """With a MAP2 base installed: the descriptor and the tile, glyph and font surface are as specified (assert_base_surface), the
     status line is gone, the map container is visible with a canvas, the attribution link shows `(c) OpenStreetMap contributors`
     with the copyright URL, the table still lists the same rows, the page requested tiles.json, tiles of the descriptor's generation
@@ -444,7 +458,7 @@ def test_positions_page_with_a_basemap(browser_page, web_client, seeds, basemap,
     manifest, desc = installed_basemap
     bp = browser_page
     anon = web_client()
-    assert_base_surface(anon, manifest, desc)
+    assert_base_surface(anon, manifest, desc, map2d=map2d_image)
     audit = p2.OriginAudit(bp.base).install(bp.context)
     open_positions(bp)
     status, text = map_state(bp, MAP_S)

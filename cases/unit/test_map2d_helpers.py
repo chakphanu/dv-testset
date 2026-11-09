@@ -202,3 +202,99 @@ def test_run_sh_wires_the_profile():
     assert "--profile mapsrc" in re.search(r"compose_all=\((.*?)\)\n", RUN_SH, re.S).group(1)
     assert "--profile mapsrc needs --profile web" in RUN_SH and "map2d-source.toml" in RUN_SH
     assert "mmdvm, mapsrc, nat" in RUN_SH
+
+
+# ---------------------------------------------------------------- what the image reports, the ETag relation
+
+def test_image_reports_map2d_from_the_hub_series_and_the_marker_wins():
+    text = "# TYPE dv_basemap_regions gauge\ndv_basemap_regions 0\ndv_other 5\n"
+    assert map2d.image_reports_map2d(text, env="")[0] is True
+    assert map2d.image_reports_map2d("dv_other 5\n", env="")[0] is False
+    assert map2d.image_reports_map2d(None, env="") == (False, "no metrics to probe and no DVT_SUT_MAP2D marker")
+    assert map2d.image_reports_map2d("dv_other 5\n", env="1")[0] is True          # the marker wins over the probe
+    assert map2d.image_reports_map2d(text, env="0")[0] is False
+    assert map2d.image_reports_map2d(text, env="maybe")[0] is True                   # anything but 0 / 1 is not a marker
+    assert "DVT_SUT_MAP2D=1" in map2d.image_reports_map2d(None, env="1")[1]
+
+
+GEN_A, GEN_B = "0123456789abcdef", "fedcba9876543210"
+
+
+def read(gen=GEN_A, etag='"e1"', **over):
+    desc = {"installed": True, "gen": gen, "tiles": ["/basemap/tiles/%s/{z}/{x}/{y}.mvt" % gen], "fetch_enabled": False, "preparing": [],
+            "coverage": {"boxes": [[99.9, 13.0, 101.1, 14.1]], "cells": []}}
+    desc.update(over)
+    return etag, desc
+
+
+def test_identical_reads_keep_the_etag():
+    assert map2d.descriptor_relation(read(), read()) == ("same", [])
+    kind, problems = map2d.descriptor_relation(read(), read(etag='"e2"'))
+    assert kind == "same" and any("identical" in p for p in problems)
+
+
+def test_a_status_only_change_moves_the_etag_but_not_the_tile_urls():
+    for over in ({"fetch_enabled": True}, {"preparing": ["10/793/457"]}, {"fetch_enabled": True, "preparing": ["10/793/457"]}):
+        assert map2d.descriptor_relation(read(), read(etag='"e2"', **over)) == ("status-only", []), over
+
+
+def test_a_status_only_change_with_the_same_etag_is_a_problem():
+    kind, problems = map2d.descriptor_relation(read(), read(fetch_enabled=True))
+    assert kind == "status-only" and any("did not move" in p for p in problems)
+
+
+def test_a_new_generation_moves_the_etag_and_the_tile_urls():
+    after = read(gen=GEN_B, etag='"e2"', coverage={"boxes": [[99.9, 13.0, 101.1, 14.1]], "cells": ["10/793/457"]})
+    assert map2d.descriptor_relation(read(), after) == ("new-generation", [])
+    stale_tiles = ('"e2"', dict(read(gen=GEN_B)[1], tiles=read()[1]["tiles"]))          # gen moved, the tile URL did not
+    kind, problems = map2d.descriptor_relation(read(), stale_tiles)
+    assert kind == "new-generation" and any("do not follow" in p for p in problems)
+    kind, problems = map2d.descriptor_relation(read(), read(gen=GEN_B))
+    assert kind == "new-generation" and any("did not move" in p for p in problems)
+
+
+def test_other_changes_under_one_generation_are_problems():
+    kind, problems = map2d.descriptor_relation(read(), read(etag='"e2"', coverage={"boxes": [], "cells": ["10/1/1"]}))
+    assert kind == "other-change" and any("coverage" in p for p in problems)
+    kind, problems = map2d.descriptor_relation(read(), read(etag='"e2"', tiles=["/basemap/tiles/%s/other" % GEN_A]))
+    assert any("tile URLs changed" in p for p in problems)
+
+
+# ---------------------------------------------------------------- waiting for the telemetry (10 s ingest lag)
+
+class FakeClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def clock(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+def test_wait_for_series_returns_at_once_when_ready():
+    fake = FakeClock()
+    got = map2d.wait_for_series(lambda: {"dv_basemap_regions": 1.0}, lambda v: v["dv_basemap_regions"] >= 1, sleep=fake.sleep, clock=fake.clock)
+    assert got == ({"dv_basemap_regions": 1.0}, 0.0, True)
+
+
+def test_wait_for_series_rides_out_the_ingest_lag():
+    fake, reads = FakeClock(), [{"dv_basemap_regions": 0.0}] * 4 + [{"dv_basemap_regions": 1.0}]
+    series, waited, ok = map2d.wait_for_series(lambda: reads.pop(0), lambda v: v["dv_basemap_regions"] >= 1, timeout=25.0, poll=2.0,
+                                               sleep=fake.sleep, clock=fake.clock)
+    assert ok and series == {"dv_basemap_regions": 1.0} and waited == 8.0 and not reads
+
+
+def test_wait_for_series_gives_up_after_the_timeout_with_the_last_read():
+    fake = FakeClock()
+    series, waited, ok = map2d.wait_for_series(lambda: {"dv_basemap_regions": 0.0}, lambda v: v["dv_basemap_regions"] >= 1, timeout=25.0, poll=2.0,
+                                               sleep=fake.sleep, clock=fake.clock)
+    assert not ok and series == {"dv_basemap_regions": 0.0} and 25.0 <= waited <= 27.0
+
+
+def test_wait_for_series_does_not_wait_for_a_hub_without_the_series():
+    fake = FakeClock()
+    for empty in (None, {}):
+        series, waited, ok = map2d.wait_for_series(lambda: empty, lambda v: True, sleep=fake.sleep, clock=fake.clock)
+        assert series == empty and waited == 0.0 and not ok

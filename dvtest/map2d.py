@@ -9,6 +9,7 @@ dv-svc-web serves from a region, and the dv_basemap_* telemetry. No network exce
 """
 import gzip
 import json
+import os
 import re
 import urllib.request
 from pathlib import Path
@@ -184,3 +185,76 @@ def basemap_metrics(text):
     samples = metrics.parse(text)
     present = {s.name for s in samples}
     return {name: metrics.total(samples, name) for name in METRIC_NAMES if name in present}
+
+
+# ---------------------------------------------------------------- what the image reports
+
+def image_reports_map2d(metrics_text=None, env=None):
+    """(is MAP2d, why) for the image under test, decided from what it REPORTS, not from its name or a commit: the hub endpoint
+    carries the dv_basemap_* series only when the image has the MAP2d worker (dv-svc-status ingests its telemetry kind, every 10 s).
+    The explicit marker DVT_SUT_MAP2D (1 or 0) wins over the probe. A probe taken before the worker first published (about 10 s
+    after its start) or without metrics gives False, the relaxed reading (`preparing` optional): never a false failure."""
+    marker = (os.environ.get("DVT_SUT_MAP2D", "") if env is None else env).strip()
+    if marker in ("0", "1"):
+        return marker == "1", "marker DVT_SUT_MAP2D=%s" % marker
+    if metrics_text is None:
+        return False, "no metrics to probe and no DVT_SUT_MAP2D marker"
+    found = basemap_metrics(metrics_text)
+    if found:
+        return True, "the hub reports %s" % ", ".join(sorted(found))
+    return False, "the hub reports no dv_basemap_* series"
+
+
+STATUS_KEYS = {"fetch_enabled", "preparing"}
+
+
+def descriptor_relation(before, after):
+    """(kind, problems) of two reads of tiles.json, each (etag, descriptor dict), the second later than the first.
+    The ETag is a function of the descriptor body, and a status-only change (`fetch_enabled`, `preparing`: a worker started,
+    a cell queued, the worker gone) moves the ETag but never the generation or the tile URLs:
+      same            identical bodies: the ETag must be identical
+      status-only     same gen, only STATUS_KEYS differ: the ETag must differ, `tiles` must be identical
+      new-generation  another gen: the ETag must differ and `tiles` must follow the gen
+      other-change    same gen but another key differs: always a problem"""
+    (etag0, desc0), (etag1, desc1) = before, after
+    problems = []
+    if desc0 == desc1:
+        if etag0 != etag1:
+            problems.append("the ETag moved (%s -> %s) although the descriptor is identical" % (etag0, etag1))
+        return "same", problems
+    if etag0 == etag1:
+        problems.append("the ETag %s did not move although the descriptor changed" % etag0)
+    if desc0.get("gen") != desc1.get("gen"):
+        want = ["/basemap/tiles/%s/{z}/{x}/{y}.mvt" % desc1.get("gen")]
+        if desc1.get("tiles") != want:
+            problems.append("tiles %r do not follow the new gen %s" % (desc1.get("tiles"), desc1.get("gen")))
+        return "new-generation", problems
+    changed = sorted(k for k in set(desc0) | set(desc1) if desc0.get(k) != desc1.get(k))
+    if desc0.get("tiles") != desc1.get("tiles"):
+        problems.append("the tile URLs changed without a new gen")
+    if not set(changed) <= STATUS_KEYS:
+        problems.append("keys %s changed under the same gen (only %s may)" % (changed, sorted(STATUS_KEYS)))
+        return "other-change", problems
+    return "status-only", problems
+
+
+# ---------------------------------------------------------------- waiting for the telemetry
+
+def wait_for_series(read, ready, timeout=25.0, poll=2.0, sleep=None, clock=None):
+    """Polls `read()` (-> {series: value} or None/{} when the hub does not carry them) until `ready(series)` is true or `timeout`
+    seconds pass. dv-svc-status ingests the worker's telemetry only every 10 s, so a counter read right after the event it counts
+    still shows the old value. Returns (series, waited seconds, ready): the last read, how long it took, whether `ready` held. A
+    hub that carries no dv_basemap_* series at all returns at once ({} or None is not going to change by waiting)."""
+    import time
+    sleep = sleep or time.sleep
+    clock = clock or time.monotonic
+    start = clock()
+    while True:
+        series = read()
+        if not series:
+            return series, clock() - start, False
+        if ready(series):
+            return series, clock() - start, True
+        if clock() - start >= timeout:
+            return series, clock() - start, False
+        sleep(poll)

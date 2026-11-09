@@ -31,10 +31,13 @@ COMPACT_KEYS = {"installed", "gen", "tiles", "minzoom", "maxzoom", "overview_max
 # images before MAP2f (DV-Router 9d6776f) also carried the per-file glyph inventory under `files`; the shape is chosen by the
 # PRESENCE of that key, never by an image name
 DESCRIPTOR_KEYS = COMPACT_KEYS | {"files"}
-# keys an image MAY send on top of the exact set (older images do not): MAP2d (DV-Router 15b07b8, image wip-f9aaebc) adds `preparing`
-# while its region worker is alive. Their presence is allowed, their value is recorded (optional_notes) and not asserted: the shape
-# is not specified yet.
+# MAP2d (DV-Router 15b07b8, image wip-f9aaebc) adds `preparing` to the descriptor: at most 64 canonical z10 cell strings ("10/x/y")
+# queued or in flight, no callsign, no timestamp (web.md, deployment.md "Optional position basemap"); `fetch_enabled` is then
+# "the worker is alive and fetching", a boolean. An image that has MAP2d (descriptor_problems(map2d=True)) MUST send both; an older
+# image (caebc57, c12db8b) does not send `preparing` and says fetch_enabled false. The caller decides MAP2d from what the image
+# reports (dvtest.map2d.image_reports_map2d), never from an image name.
 OPTIONAL_KEYS = {"preparing"}
+MAX_PREPARING = 64
 MAX_DESCRIPTOR_BYTES = 32 * 1024                    # MAP2f: basemap_core.rs MAX_DESCRIPTOR_BYTES, deployment.md "The descriptor includes"
 FONT_URL_RE = re.compile(r"^glyphs/fonts/[A-Za-z0-9_-]+\.(?:ttf|otf)$")
 DATE_RE = re.compile(r"^[0-9]{8}$")
@@ -69,7 +72,23 @@ def optional_notes(desc):
     return ", ".join(parts)
 
 
-def descriptor_problems(desc, raw_len=None):
+def preparing_problems(value):
+    """What is wrong with the `preparing` value of a MAP2d descriptor: a list of at most 64 distinct canonical z10 cell strings
+    ("10/x/y", x and y below 1024). A callsign, a timestamp, an object or any other type is a problem."""
+    if not isinstance(value, list):
+        return ["preparing is %s, want a list" % type(value).__name__]
+    out = []
+    if len(value) > MAX_PREPARING:
+        out.append("preparing has %d entries, want at most %d" % (len(value), MAX_PREPARING))
+    for item in value:
+        if not (isinstance(item, str) and CELL_RE.match(item) and all(int(v) < 1024 for v in item.split("/")[1:])):
+            out.append("preparing entry %r is not a canonical z10 cell string 10/x/y" % (item,))
+    if len(set(v for v in value if isinstance(v, str))) != len([v for v in value if isinstance(v, str)]):
+        out.append("preparing lists a cell twice")
+    return out[:4]
+
+
+def descriptor_problems(desc, raw_len=None, map2d=False):
     """What is wrong with an INSTALLED descriptor, as a list of strings (empty = it has every field web.md names and the shape the
     page's positionDescriptor() accepts). The key set is exact: web.md says it carries no callsign or position timestamp.
     Two shapes: the compact one (MAP2f, no `files`; `raw_len`, the body size in bytes when known, is bounded to 32 KiB) and the older
@@ -79,7 +98,13 @@ def descriptor_problems(desc, raw_len=None):
     out = []
     legacy = "files" in desc
     want = DESCRIPTOR_KEYS if legacy else COMPACT_KEYS
-    if set(desc) - OPTIONAL_KEYS != want:
+    if map2d:
+        # an image with MAP2d: `preparing` is a required key and has the specified shape
+        if set(desc) != want | OPTIONAL_KEYS:
+            out.append("keys %s, want %s (MAP2d image: preparing required)" % (sorted(desc), sorted(want | OPTIONAL_KEYS)))
+        elif "preparing" in desc:
+            out.extend(preparing_problems(desc["preparing"]))
+    elif set(desc) - OPTIONAL_KEYS != want:
         out.append("keys %s, want %s (optional: %s)" % (sorted(desc), sorted(want), sorted(OPTIONAL_KEYS)))
     if not legacy and raw_len is not None and raw_len > MAX_DESCRIPTOR_BYTES:
         out.append("the descriptor is %d bytes, want at most %d (MAP2f)" % (raw_len, MAX_DESCRIPTOR_BYTES))
@@ -109,7 +134,12 @@ def descriptor_problems(desc, raw_len=None):
     builds = desc.get("builds")
     if not isinstance(builds, list) or not builds or not all(isinstance(b, str) and DATE_RE.match(b) for b in builds):
         out.append("builds %r is not a list of YYYYMMDD dates" % (builds,))
-    if desc.get("fetch_enabled") is not False:
+    if map2d:
+        if not isinstance(desc.get("fetch_enabled"), bool):
+            out.append("fetch_enabled is %r, want a boolean" % (desc.get("fetch_enabled"),))
+        elif not desc["fetch_enabled"] and desc.get("preparing"):
+            out.append("preparing lists cells while fetch_enabled is false (no live worker)")
+    elif desc.get("fetch_enabled") is not False:
         out.append("fetch_enabled is %r, want false (automatic fetching is MAP2d, planned)" % (desc.get("fetch_enabled"),))
     if desc.get("attribution") != ATTRIBUTION:
         out.append("attribution %r, want %r" % (desc.get("attribution"), ATTRIBUTION))

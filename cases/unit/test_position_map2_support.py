@@ -74,6 +74,56 @@ def test_unknown_keys_next_to_preparing_still_fail():
     assert any("keys" in p for p in m2.descriptor_problems(desc))
 
 
+def map2d_descriptor(**over):
+    desc = compact_descriptor()
+    desc.update(fetch_enabled=True, preparing=["10/793/457"])
+    desc.update(over)
+    return desc
+
+
+def test_map2d_image_requires_preparing_and_accepts_the_specified_shape():
+    assert m2.descriptor_problems(map2d_descriptor(), map2d=True) == []
+    assert m2.descriptor_problems(map2d_descriptor(preparing=[], fetch_enabled=False), map2d=True) == []
+    assert m2.descriptor_problems(map2d_descriptor(preparing=["10/0/0", "10/1023/1023"]), map2d=True) == []
+    assert m2.descriptor_problems(map2d_descriptor(preparing=["10/%d/5" % i for i in range(64)]), map2d=True) == []
+    missing = compact_descriptor()
+    assert any("preparing required" in p for p in m2.descriptor_problems(missing, map2d=True)), "absent preparing must fail on a MAP2d image"
+    assert m2.descriptor_problems(missing) == []                                    # the same descriptor is fine for an older image
+
+
+@pytest.mark.parametrize("value,needle", [
+    (["10/%d/5" % i for i in range(65)], "at most 64"),
+    ({"cells": []}, "want a list"),
+    ("10/1/1", "want a list"),
+    ([[10, 1, 1]], "canonical z10 cell"),
+    (["9/1/1"], "canonical z10 cell"),
+    (["10/1024/1"], "canonical z10 cell"),
+    (["10/01/1"], "canonical z10 cell"),
+    (["N0CALL"], "canonical z10 cell"),
+    (["10/1/1 1731000000"], "canonical z10 cell"),
+    ([{"cell": "10/1/1", "ts": 1731000000}], "canonical z10 cell"),
+    (["10/1/1", "10/1/1"], "twice"),
+    ([None], "canonical z10 cell"),
+])
+def test_map2d_preparing_shape_is_enforced(value, needle):
+    problems = m2.descriptor_problems(map2d_descriptor(preparing=value), map2d=True)
+    assert any(needle in p for p in problems), problems
+
+
+def test_map2d_fetch_enabled_is_a_boolean_and_preparing_needs_a_live_worker():
+    assert any("boolean" in p for p in m2.descriptor_problems(map2d_descriptor(fetch_enabled="yes"), map2d=True))
+    assert any("no live worker" in p for p in m2.descriptor_problems(map2d_descriptor(fetch_enabled=False, preparing=["10/1/1"]), map2d=True))
+    # an older image still says false and nothing else
+    assert any("fetch_enabled" in p for p in m2.descriptor_problems(compact_descriptor() | {"fetch_enabled": True}))
+
+
+def test_map2d_does_not_loosen_the_other_keys():
+    desc = map2d_descriptor(callsign="N0PGA")
+    assert any("keys" in p for p in m2.descriptor_problems(desc, map2d=True))
+    bad = map2d_descriptor(gen="ABC")
+    assert any("gen" in p for p in m2.descriptor_problems(bad, map2d=True))
+
+
 def test_compact_descriptor_is_bounded():
     problems = m2.descriptor_problems(compact_descriptor(), m2.MAX_DESCRIPTOR_BYTES + 1)
     assert any("bytes" in p for p in problems), problems
