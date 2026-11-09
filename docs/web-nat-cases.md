@@ -416,6 +416,12 @@ sets and the nonzero deltas of `dv_edge_webrtc_rebinding_switches_total` by reas
 (the cell then goes on; a counter can lag by up to one 10 s publish at each read). `ice1_stun.py` uses `t0_utc` when present and compares it with the value derived from `first_stun_new_s`; older runs use the derived one. The `in set` column is the
 ICE1e rule (a consent PRIORITY already seen on an authenticated check from the selected source), `match` the older rule (the nominating check's PRIORITY).
 
+Results, ICE1 NAT cases with `ice1_stun.py` (code 8b9e25e, before the case recorded `t0_utc` and the edge counters, so t0 is the derived value and no counter rows exist). A/B of the pair-type race, Firefox cells only (1 passed, 2 failed in every run): `wip-2fcc727`
+`20261109T012254Z`, `20261109T013148Z` and `wip-220e45b` `20261109T012721Z`, `20261109T013615Z`: in all four runs Firefox full cone and port restricted had an srflx pair (nominate 1853817087, consent 1686052863, four consent checks from the new mapping answered, no rebinding,
+audio not resumed) and symmetric a prflx pair (priorities equal, `rebinding consent` after 2.6 to 5.6 s, resumed). So 220e45b and 2fcc727 behave the same and the pair type is a race of the browser (the original 220e45b run `20261108T144953Z` only won it). `wip-caebc57` (ICE1e), 12 passed in each of
+`20261109T015602Z`, `20261109T020927Z`, `20261109T022252Z`: the nine Firefox cells had 4 prflx pairs (one full cone, three symmetric) and 5 srflx pairs; every one rebound by `consent` after 3.5 to 5.3 s and resumed, also the srflx ones whose consent PRIORITY (1686052863) differs from the nominating
+check's (`match` NO, `in set` yes); no `liveness` switch was logged; Chromium and WebKit switched by `nomination` after 1.1 to 1.9 s.
+
 ## Gaps
 
 | What | Why |
