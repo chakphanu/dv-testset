@@ -125,7 +125,8 @@ against any MMDVMHost: `python3 -m dvtest.mmdvm_modem --udp 0.0.0.0:3334 --keyup
 | NXDNGateway | https://github.com/g4klx/NXDNClients @ `b4b041d2cce9e4e359963d1b8d36911e9c5052eb` (2026-10-25) |
 | DStarGateway | https://github.com/F4FXL/DStarGateway @ `7b75de605dca542a2953dd74c16f0eac96a8944e` (2026-10-28) |
 
-Image size, ESTIMATED (the image was built by the runs below, but its size was not recorded here): about **132 MB** (+/- 8), against `dvt-nxdngw:local` 128 MB and `dvt-dstarsd:local` 116 MB: the base
+Image size, MEASURED: `docker images` shows `dvt-mmdvmstack:local` at **133 MB** (the estimate before the build was 132 MB +/- 8); the disk of the host (`/`) had 370 GB free before and after the
+build and use moved from 90% to 91%. Against `dvt-nxdngw:local` 128 MB and `dvt-dstarsd:local` 116 MB. The parts of the estimate: the base
 `debian:bookworm-slim` as in those two, libmosquitto1 with libssl3 about 6 MB, the mosquitto broker about 3 MB (P25Gateway and NXDNGateway exit
 without a broker), six stripped binaries about 6.4 MB (MMDVMHost 2.0, DStarGateway 2.0, DMRGateway 0.8, YSFGateway 0.65, NXDNGateway 0.5,
 P25Gateway 0.4), entry script, templates and a libcurl stand-in for DStarGateway about 0.1 MB (the real libcurl and its dependencies would add about 15
@@ -212,7 +213,7 @@ a rewrite of a complete one. The same capture shows the priming and downlink-pri
 
 ## UNVERIFIED
 
-1. ~~Nothing ran on a rig~~ answered: the image builds and the stack runs (2 x 11 of 11). Not recorded: the image size (the estimate above stands).
+1. ~~Nothing ran on a rig~~ answered: the image builds and the stack runs (2 x 11 of 11). The image is 133 MB (measured, see "Pins and size").
 2. ~~DV-Router's client services for P25 and NXDN~~ answered: with `mmdvm-edges.toml` all five gateways link and carry voice both ways. Without it (template
    alone) the edges are not spawned: see the first run above.
 3. ~~XLX conventions for DMRGateway~~ answered for DV-Router: the login, the startup link and the slot 2 TG 9 voice work, the DMR gateway sits in module I.
