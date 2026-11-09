@@ -39,6 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "proto"))
 from dvtest import airtime, ax25, kiss_tnc, metrics, slowdata, web  # noqa: E402
 
 import data_support as ds  # noqa: E402
+import txguard_support  # noqa: E402
 from data_support import (  # noqa: E402
     IDLE_GAP_S, PACER, ROOM, SseWatch, dstar_listener, first_header_times, hub_session, m17_client, m17p_packets, pump_for,
     sms_text, texts_of, write_note)
@@ -105,7 +106,7 @@ def dw_config(ax):
 
 
 @pytest.fixture(scope="module")
-def rf(target, hub):
+def rf(request, target, hub):
     """Two fake KISS TNCs on the ports rf-a and rf-b of the rendered config, connected to by the AX.25 edge. Skips when the
     run has no AX.25 edge with those ports (add rig/config/dv-router/dp15-rf.toml); fails when the edge does not connect."""
     got = read_rf_config(target)
@@ -130,7 +131,8 @@ def rf(target, hub):
                 pytest.fail("the AX.25 edge did not connect to the fake TNC %s (port %s) in %.0f s" % (name, rows[name]["port"], CONNECT_S))
         ctx = types.SimpleNamespace(cfg=ax, paths=paths, rows=rows, a=tncs["rf-a"], b=tncs["rf-b"], tx_on=tx_on,
                                     has_out_path=bool(out_paths), tx_per_min=int(rows["rf-a"].get("tx_per_min", 2)),
-                                    tx_burst=int(rows["rf-a"].get("tx_burst", 1)), budget=rows["rf-a"].get("tx_budget") or {})
+                                    tx_burst=int(rows["rf-a"].get("tx_burst", 1)), budget=rows["rf-a"].get("tx_budget") or {},
+                                    tx_guard=txguard_support.make_guard(request, lambda case, tag, text: note(target, case, tag, text)))
         note(target, "rf", "RECORD", "AX.25 edge connected to the fake TNCs; tx_enable %s, port rf-a tx %s, rf-out path %s, tx_per_min %s burst %s, tx_budget %s" % (
             ax.get("tx_enable"), rows["rf-a"].get("tx"), ctx.has_out_path, ctx.tx_per_min, ctx.tx_burst, ctx.budget))
         yield ctx
@@ -200,9 +202,15 @@ def wait_tx_spacing(rf):
         time.sleep(need)
 
 
-def need_tx(rf):
+def need_tx(rf, case=""):
+    """Skip unless RF transmit is on; then wait for the startup / recovery TX guard of the edge (RFSAFE1, radio.md 10.4: 13 s after
+    start, a reload and a recovery) to end, so the first expected transmission is not held back by it. Call it again after any
+    reload or edge restart the case performs."""
     if not (rf.tx_on and rf.has_out_path):
         pytest.skip("RF transmit is off in this run: use DVT_DP15_TX_ENABLE=true with dp15-rf-out.toml (docs/dp15-cases.md)")
+    guard = getattr(rf, "tx_guard", None)
+    if guard is not None:
+        guard("DP15-%s" % case if case else "DP15-6")
 
 
 def need_rx_only(rf):
@@ -316,7 +324,7 @@ def test_dp15_6b_the_receive_only_port_never_transmits(rig, target, hub, rf, web
     """The same on a port without `tx`: with tx_enable true and the path rf-out to rf-a, one room text is transmitted on rf-a
     and NEVER on rf-b (receive only, tx = false). Waits TX_SPACING_S after the last frame first (tx_per_min 2, burst 1)."""
     case = "6b[port rf-b rx only]"
-    need_tx(rf)
+    need_tx(rf, "6b")
     wait_tx_spacing(rf)
     body = ds.nonce_body("RXO")
     t0, _t1, status = post(web_ctx.posters[1], body)
@@ -339,7 +347,7 @@ def test_dp15_6c_room_text_goes_out_as_one_group_message(rig, target, hub, rf, w
     `:XLX999B  :<text>` WITHOUT a message id (no ack, data.md 7.4). A second, 100 character text (30+ s later) is cut to at
     most 67 characters or refused: which one is recorded. Counters: the modem tx, and the scheduler's sent."""
     case = "6c"
-    need_tx(rf)
+    need_tx(rf, "6c")
     wait_tx_spacing(rf)
     body = ds.nonce_body("OUT")
     hub.settle()
@@ -412,7 +420,7 @@ def test_dp15_6d_never_above_the_duty_cycle(rig, target, hub, rf, web_ctx):
     scheduler's drop counters. Only the class defaults are exposed by the snippet (`tx_budget = {}`); a low budget would
     also starve 6c, so no low budget run is written."""
     case = "6d"
-    need_tx(rf)
+    need_tx(rf, "6d")
     wait_tx_spacing(rf)
     duty, window, min_gap = budget_numbers(rf)
     hub.settle()

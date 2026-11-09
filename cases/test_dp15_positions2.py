@@ -45,6 +45,7 @@ from dvtest import aprsis_client as ai, kiss_tnc, web  # noqa: E402
 
 import data_support as ds  # noqa: E402
 import position2_support as p2  # noqa: E402
+import txguard_support  # noqa: E402
 import position_support as ps  # noqa: E402
 import test_dp15_positions as p1  # noqa: E402
 # fixtures of the first set, reused by name: the hub metrics, the web side and the private aprsc (its `shape` argument is
@@ -113,7 +114,7 @@ def shape(target):
 
 
 @pytest.fixture(scope="module")
-def tnc(target, shape, hub):
+def tnc(request, target, shape, hub):
     """The fake KISS TNC rf-a (the AX.25 edge connects to it as a kiss-tcp client); skips without a room-bound port rf-a."""
     if not shape.rf:
         pytest.skip("the rendered config has no AX.25 edge with the room-bound kiss-tcp port rf-a: add rig/config/dv-router/"
@@ -125,6 +126,7 @@ def tnc(target, shape, hub):
             pytest.fail("the AX.25 edge did not connect to the fake TNC rf-a (port %s) in %.0f s" % (shape.rf_port, CONNECT_S))
         note(target, "rf", "RECORD", "AX.25 edge connected to rf-a; tx_on %s, IS-to-RF path %s (courtesy_posit %s), positions %s, optout %s, "
              "aprsis filter_extra %r" % (shape.tx_on, shape.to_rf, shape.courtesy, shape.positions, sorted(shape.optout), shape.filter_extra))
+        fake.tx_guard = txguard_support.make_guard(request, lambda case, tag, text: note(target, case, tag, text))
         yield fake
     finally:
         fake.stop()
@@ -223,7 +225,9 @@ def check_courtesy_frame(frame, call, info):
     assert third["inner_info"] == info, "courtesy position %r, want the position as the station sent it %r" % (third["inner_info"], info)
 
 
-def need_courtesy_shape(shape, positive=True):
+def need_courtesy_shape(shape, positive=True, tnc=None, case="DP7-e"):
+    """Skip unless the courtesy shape is on; then wait for the startup / recovery TX guard of the edge (RFSAFE1, radio.md 10.4) to
+    end before the case provokes its first transmission. Call the guard again after any reload or edge restart."""
     if not shape.aprsis:
         pytest.skip("no enabled [edges.aprsis]: add rig/config/dv-router/dp15-aprsis.toml")
     if not shape.tx_on or not shape.to_rf:
@@ -232,6 +236,9 @@ def need_courtesy_shape(shape, positive=True):
         pytest.skip("the APRS-IS filter_extra %r does not pass the correspondents (p/N0PS): add dp7-courtesy-filter.toml after dp15-aprsis.toml" % shape.filter_extra)
     if positive and not shape.courtesy:
         pytest.skip("the IS-to-RF path has courtesy_posit = false: this case needs dp7-courtesy-path.toml")
+    guard = getattr(tnc, "tx_guard", None)
+    if guard is not None:
+        guard(case)
 
 
 # ================================================================ DP7-e: the courtesy posit
@@ -245,7 +252,7 @@ def test_dp7_e_courtesy_posit_after_a_gated_message(rig, target, hub, shape, tnc
     dv_pkt_rf_drop_total{reason=courtesy_unavailable} is recorded). Two frames are booked on the worker's flat IS-to-RF limit
     (6 per minute, 10 per 5 minutes)."""
     case = "DP7-e[courtesy]"
-    need_courtesy_shape(shape)
+    need_courtesy_shape(shape, tnc=tnc, case=case)
     if not shape.positions or CORR_OK in shape.optout:
         pytest.skip("positions are off or %s is opted out in this run" % CORR_OK)
     call = CORR_OK + "-1"
@@ -281,7 +288,7 @@ def test_dp7_e_no_courtesy_without_a_gated_message(rig, target, hub, shape, tnc,
     """No message was gated for N0PSN-1, so a position of it on APRS-IS earns nothing: the TNC sees no frame from it
     (core_rf_tx.rs: `courtesy()` finds no credit; counter courtesy_unavailable is recorded)."""
     case = "DP7-e[no credit]"
-    need_courtesy_shape(shape)
+    need_courtesy_shape(shape, tnc=tnc, case=case)
     if not shape.positions:
         pytest.skip("positions are off in this run")
     call = CORR_NOCREDIT + "-1"
@@ -310,7 +317,7 @@ def test_dp7_e_no_courtesy_for_optout_or_positions_off(rig, target, hub, shape, 
     blocked correspondent (N0OPT-1 with dp7-position-optout.toml, or N0PSB-1 with positions = false) IS gated and
     transmitted (the control: messages are not spatial), its position on APRS-IS is NOT transmitted."""
     case = "DP7-e[optout]"
-    need_courtesy_shape(shape)
+    need_courtesy_shape(shape, tnc=tnc, case=case)
     blocked = blocked_correspondent(shape)
     if blocked is None:
         pytest.skip("neither positions = false nor position_optout (N0OPT) is configured in this run")
@@ -339,7 +346,7 @@ def test_dp7_e_no_courtesy_for_a_hidden_account(rig, target, hub, web_ctx, shape
     operator) has hide_position: its message is gated (control), its position on APRS-IS is NOT transmitted. After the
     flag is cleared a new message and position of it are transmitted again (a flag change applies to new items)."""
     case = "DP7-e[hide_position]"
-    need_courtesy_shape(shape)
+    need_courtesy_shape(shape, tnc=tnc, case=case)
     if not shape.positions or CORR_HIDE in shape.optout:
         pytest.skip("positions are off or %s is opted out in this run" % CORR_HIDE)
     web_ctx.user(CORR_HIDE, may_tx=False)
@@ -383,7 +390,7 @@ def test_dp7_e_no_courtesy_when_the_path_has_it_off(rig, target, hub, shape, tnc
     """config.md `courtesy_posit` (default false): with the path dp7-is-to-rf and courtesy_posit = false (dp7-courtesy-path-off.toml)
     the message is gated and transmitted, the correspondent's position is not."""
     case = "DP7-e[path off]"
-    need_courtesy_shape(shape, positive=False)
+    need_courtesy_shape(shape, positive=False, tnc=tnc, case=case)
     if shape.courtesy:
         pytest.skip("the IS-to-RF path has courtesy_posit = true in this run: this case needs dp7-courtesy-path-off.toml")
     if not shape.positions:

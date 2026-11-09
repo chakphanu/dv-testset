@@ -79,6 +79,17 @@ def test_sliding_max_counts_events_in_a_half_open_window():
     assert tr.sliding_max([5.0, 0.0, 29.9], 60.0) == 3
 
 
+def test_need_tx_waits_for_the_tx_guard_only_when_transmit_is_on():
+    calls = []
+    on = SimpleNamespace(tx_on=True, has_out_path=True, tx_guard=calls.append)
+    tr.need_tx(on, "6c")
+    assert calls == ["DP15-6c"]
+    off = SimpleNamespace(tx_on=False, has_out_path=True, tx_guard=calls.append)
+    with pytest.raises(pytest.skip.Exception):
+        tr.need_tx(off, "6c")
+    assert calls == ["DP15-6c"]
+
+
 def test_need_tx_and_need_rx_only_skip_in_the_wrong_shape():
     on = SimpleNamespace(tx_on=True, has_out_path=True)
     off = SimpleNamespace(tx_on=False, has_out_path=False)
@@ -125,7 +136,8 @@ def test_the_fixture_against_a_loopback_edge(tmp_path, monkeypatch):
     notes = []
     monkeypatch.setattr(tr, "note", lambda *a: notes.append(a))
     fixture_function = getattr(tr.rf, "__wrapped__", None) or tr.rf._get_wrapped_function()
-    gen = fixture_function(SimpleNamespace(out=str(tmp_path)), object())
+    request = SimpleNamespace(getfixturevalue=lambda name: (_ for _ in ()).throw(pytest.skip.Exception("no admin session in this test")))
+    gen = fixture_function(request, SimpleNamespace(out=str(tmp_path)), object())
     edges = []
     try:
         # the fixture waits for both connections: connect the loopback edges from a thread

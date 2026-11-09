@@ -45,6 +45,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "proto"))
 from dvtest import ax25, kiss_client, kiss_tnc, slowdata, web  # noqa: E402
 
 import data_support as ds  # noqa: E402
+import txguard_support  # noqa: E402
 from data_support import PACER, SseWatch, dstar_listener, m17_client, pump_for, texts_of, write_note  # noqa: E402
 from test_dp15_rf import (  # noqa: E402,F401  (hub and web_ctx are the module fixtures of tier A, reused as they are)
     DRAIN_S, EDGE_TOCALL, MODULE, ROOM_NAME, RF_AT_ONCE_S, RF_SRC, RF_TEXT_OVER_S, SILENCE_S, STATION, TEXT_LIMIT, TX_SPACING_S, TX_WAIT_S,
@@ -72,7 +73,7 @@ def probe_frame(seq, src=PROBE_SRC):
 
 
 @pytest.fixture(scope="module")
-def dw(target, hub):
+def dw(request, target, hub):
     """The tester as a KISS client of both Dire Wolf TNCs, after the AX.25 edge of the run is configured for them and the loop
     carries a probe frame to the edge. Skips when the profile or the snippet is missing; fails when a TNC does not answer."""
     if os.environ.get("DVT_DW") != "on":
@@ -112,7 +113,8 @@ def dw(target, hub):
             edge_rx = modem_total(hub, "rf-a", "rx") > base
         ctx = types.SimpleNamespace(cfg=ax, paths=paths, rows=rows, a=a, b=b, tx_on=tx_on, has_out_path=bool(out_paths), probes=seq,
                                     probes_heard=heard_at_a, edge_connected=edge_rx,
-                                    tx_per_min=int(rows["rf-a"].get("tx_per_min", 2)), tx_burst=int(rows["rf-a"].get("tx_burst", 1)))
+                                    tx_per_min=int(rows["rf-a"].get("tx_per_min", 2)), tx_burst=int(rows["rf-a"].get("tx_burst", 1)),
+                                    tx_guard=txguard_support.make_guard(request, lambda case, tag, text: note(target, case, tag, text)))
         note(target, "dw", "RECORD", "KISS clients connected to dw-a and dw-b; %d probe frames sent through dw-b, %d seen at dw-a, the edge counted a frame at rf-a: %s; "
              "tx_enable %s, port rf-a tx %s, rf-out path %s" % (seq, heard_at_a, edge_rx, ax.get("tx_enable"), rows["rf-a"].get("tx"), ctx.has_out_path))
         if heard_at_a == 0:
@@ -123,9 +125,14 @@ def dw(target, hub):
         b.close()
 
 
-def need_tx(dw):
+def need_tx(dw, case="6"):
+    """Skip unless RF transmit is on; then wait for the startup / recovery TX guard of the edge (RFSAFE1, radio.md 10.4) to end.
+    Call it again after any reload or edge restart the case performs."""
     if not (dw.tx_on and dw.has_out_path):
         pytest.skip("RF transmit is off in this run: use DVT_DP15_TX_ENABLE=true with dp15-rf-out.toml (docs/dp15-cases.md)")
+    guard = getattr(dw, "tx_guard", None)
+    if guard is not None:
+        guard("DP15-%s" % case)
 
 
 def need_rx_only(dw):
@@ -271,7 +278,7 @@ def test_dp15_6c_room_text_goes_out_as_one_group_message(rig, target, hub, dw, w
     does). The edge hears its own frame on rf-b: the room gets no second item for it (the station callsign is an own identity,
     data.md 9.1): one history row. Counters: the modem tx, and the scheduler's sent."""
     case = "6c"
-    need_tx(dw)
+    need_tx(dw, case)
     wait_tx_spacing(dw)
     body = ds.nonce_body("OUT")
     hub.settle()
