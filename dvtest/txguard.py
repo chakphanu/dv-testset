@@ -232,11 +232,17 @@ StartupShape = namedtuple("StartupShape", "outcome detail lateness_s obs")
 # case skips and says how late) | violation (inside the window and the shape is wrong: the case fails)
 
 
+def guard_ok(value):
+    """A reported guard_ms / tx_guard_ms: an int >= 0 (a bool is not one)."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
 def startup_fenced_shape(read, uptime=None, *, kind, window_s=STARTUP_GUARD_S, early_margin_s=1.0, clock=time.monotonic,
                          sleep=time.sleep, gap_s=1.0):
     """One read (AX.25) or two reads `gap_s` apart (radio) right after a start; the window is the startup guard, 13 s after the
-    start of the node. Expected shape: AX.25: tx_fence == "startup_guard" and tx_guard_ms present (an int >= 0); radio: tx_state
-    "fenced", fence "startup_guard", guard_ms present and strictly smaller in the second read. `uptime()` is the node uptime in
+    start of the node. Expected shape: AX.25: tx_fence == "startup_guard"; radio: tx_state "fenced", fence "startup_guard". The guard_ms
+    (tx_guard_ms) is OPTIONAL: it is absent until the end of the fence is known (dv-router, rf_guard.rs); its absence is recorded and
+    never fails. When present it must be an int >= 0, and for radio ports it must decrease across the two reads when both have it. `uptime()` is the node uptime in
     seconds (None when unknown): at or above window_s - early_margin_s the window is treated as over (late), and an unfenced first
     read with unknown uptime is also late, since it cannot be told from a violation. Lateness is never a failure."""
     up = uptime() if uptime is not None else None
@@ -258,8 +264,8 @@ def startup_fenced_shape(read, uptime=None, *, kind, window_s=STARTUP_GUARD_S, e
     problems = []
     if first.fence != "startup_guard":
         problems.append("fence %r, expected 'startup_guard'" % (first.fence,))
-    if first.guard_ms is None or not isinstance(first.guard_ms, int) or first.guard_ms < 0:
-        problems.append("guard_ms %r is not an int >= 0 (present only once the end of the fence is known)" % (first.guard_ms,))
+    if first.guard_ms is not None and not guard_ok(first.guard_ms):
+        problems.append("guard_ms %r is not an int >= 0" % (first.guard_ms,))
     last = first
     if kind == "radio" and not problems:
         sleep(gap_s)
@@ -267,40 +273,50 @@ def startup_fenced_shape(read, uptime=None, *, kind, window_s=STARTUP_GUARD_S, e
         last = second
         if not second.fenced:
             return StartupShape("late", "the fence ended between two reads %.1f s apart (first guard_ms %r)" % (gap_s, first.guard_ms), None, second)
-        if second.guard_ms is None or not second.guard_ms < first.guard_ms:
+        if second.guard_ms is not None and not guard_ok(second.guard_ms):
+            problems.append("guard_ms %r is not an int >= 0" % (second.guard_ms,))
+        elif first.guard_ms is not None and second.guard_ms is not None and not second.guard_ms < first.guard_ms:
             problems.append("guard_ms did not decrease over two reads: %r then %r" % (first.guard_ms, second.guard_ms))
     if problems:
         return StartupShape("violation", "; ".join(problems) + " (keys: %s)" % " | ".join(first.keys), None, last)
-    return StartupShape("fenced", "fence %r, guard_ms %r%s, node uptime %s" % (
-        first.fence, first.guard_ms, "" if last is first else " then %r" % (last.guard_ms,), "%.1f s" % up if up is not None else "unknown"),
+    return StartupShape("fenced", "fence %r, guard_ms %s%s, node uptime %s" % (
+        first.fence, "absent" if first.guard_ms is None else first.guard_ms,
+        "" if last is first else " then %s" % ("absent" if last.guard_ms is None else last.guard_ms), "%.1f s" % up if up is not None else "unknown"),
         None, last)
 
 
 # ---------------------------------------------------------------- re-arming the fence: restart of the AX.25 child (RFSAFE1)
 
+AX25_CHILD = "dv-edge-ax25"             # the launcher child key of the AX.25 edge (admin.md 278-280, router children.rs)
+
+
 def ax25_child_names(status_body):
-    """Names of the launcher children whose key contains "ax25", from GET /api/v1/admin/status `launcher.children[].name`
-    (openapi-admin.yaml, launcher schema: name, pid, restarts, since_ms, state). Also the full list of names for a skip message."""
+    """([AX25_CHILD] when the launcher lists exactly that key, else []), and every child name seen (for a skip message), from GET
+    /api/v1/admin/status `launcher.children[].name` (openapi-admin.yaml: name, pid, restarts, since_ms, state). The key is matched
+    exactly, never by substring."""
     launcher = status_body.get("launcher") if isinstance(status_body, dict) else None
     children = launcher.get("children") if isinstance(launcher, dict) else None
     names = [c.get("name") for c in children or [] if isinstance(c, dict) and isinstance(c.get("name"), str)]
-    return [n for n in names if "ax25" in n], names
+    return [n for n in names if n == AX25_CHILD][:1], names
 
 
-Rearm = namedtuple("Rearm", "outcome cause detail seen_after_ms fence_ms guard_first guard_second decreased row_gone polls keys")
-# outcome: ok | violation (no fence appeared, or tx_guard_ms never present, or a credential problem) | still_fenced (past max_fence_s)
+Rearm = namedtuple("Rearm", "outcome cause detail seen_after_ms fence_ms guard_first guard_second decreased row_gone polls keys absent_ms")
+# outcome: ok | violation (no fence appeared, a wrong cause, a bad or non-decreasing guard, or a credential problem) | still_fenced (past max_fence_s)
 
 
 def rearm_fence(read, restart, *, clock=time.monotonic, sleep=time.sleep, poll_s=0.2, appear_timeout_s=30.0, max_fence_s=MAX_WAIT_S,
-                second_gap_s=1.0):
-    """`restart()` re-arms the fence (the child restart); t0 is taken right before it. Polls `read()` every poll_s until the port is
-    fenced by any cause (a restart may report another cause than startup_guard: it is recorded, not asserted) with a stale unfenced
-    row ignored, up to appear_timeout_s. Then waits for tx_guard_ms to be present, takes a second read at least second_gap_s later to
-    show it decreasing, and polls until unfenced, at most max_fence_s after the fence was first seen. `fence_ms` is the time from t0
-    to the end of the fence (about 13 s of fence plus the restart); `seen_after_ms` the time from t0 to the first fenced read.
-    row_gone says whether the port row disappeared after the restart (the new session)."""
-    t0 = clock()
+                second_gap_s=1.0, expect_cause="startup_guard"):
+    """`restart()` re-arms the fence by restarting the AX.25 child; it returns after the old process has stopped (dv-router), so t0 is
+    taken when it RETURNS and the 13 s window of the new process is counted from there. A new process starts fenced with cause
+    `startup_guard` (rf_guard.rs Reason::Startup; `recovery_probe` is in-process fabric recovery only), asserted as `expect_cause`
+    (None: any non-null cause). Polls `read()` every poll_s until the port is fenced, ignoring a stale unfenced row, up to
+    appear_timeout_s. tx_guard_ms is OPTIONAL: absent until the end of the fence is known, never a failure; `absent_ms` is how long it
+    was absent from the first fenced read (the whole fence when it never appeared). When present it must be an int >= 0 and a second
+    read at least second_gap_s after the first present one must be smaller. Then polls until unfenced, at most max_fence_s after the
+    fence was first seen. `fence_ms` runs from t0 to the end of the fence, `seen_after_ms` from t0 to the first fenced read,
+    `row_gone` says whether the port row disappeared after the restart (the new session)."""
     restart()
+    t0 = clock()
     polls = 0
     row_gone = False
     keys = []
@@ -312,7 +328,7 @@ def rearm_fence(read, restart, *, clock=time.monotonic, sleep=time.sleep, poll_s
             keys = list(obs.keys)
         if obs.scope:
             return Rearm("violation", None, "CREDENTIAL/SCOPE PROBLEM: kind \"modem\" rows carry no `modem` object (operator or admin needed)",
-                         None, None, None, None, None, row_gone, polls, keys)
+                         None, None, None, None, None, row_gone, polls, keys, None)
         if not obs.found:
             row_gone = True
         elif obs.fenced:
@@ -321,42 +337,51 @@ def rearm_fence(read, restart, *, clock=time.monotonic, sleep=time.sleep, poll_s
         if clock() - t0 >= appear_timeout_s:
             return Rearm("violation", None, "no fence by any cause within %.0f s of the restart (the port row %s in between); keys: %s" % (
                 appear_timeout_s, "disappeared and came back" if row_gone and obs.found else ("disappeared" if row_gone else "never disappeared"),
-                " | ".join(obs.keys)), None, None, None, None, None, row_gone, polls, keys)
+                " | ".join(obs.keys)), None, None, None, None, None, row_gone, polls, keys, None)
         sleep(poll_s)
     seen_at = clock()
     cause = first.fence
     guard_first = first.guard_ms
     guard_t = seen_at if guard_first is not None else None
+    absent_until = seen_at if guard_first is not None else None
     guard_second = None
     decreased = None
+    bad_guard = guard_first if guard_first is not None and not guard_ok(guard_first) else None
     last = first
     while last.fenced:
         if clock() - seen_at >= max_fence_s:
             return Rearm("still_fenced", cause, "still fenced %.0f s after the fence was first seen (cause %r, last guard_ms %r)" % (
                 max_fence_s, last.fence or cause, last.guard_ms), int((seen_at - t0) * 1000), None, guard_first, guard_second, decreased,
-                row_gone, polls, keys)
+                row_gone, polls, keys, int(((absent_until if absent_until is not None else clock()) - seen_at) * 1000))
         sleep(poll_s)
         last = read()
         polls += 1
         if not last.fenced:
             break
-        if cause is None:
-            cause = last.fence
         if last.guard_ms is not None:
-            if guard_first is None:
-                guard_first, guard_t = last.guard_ms, clock()
+            if not guard_ok(last.guard_ms):
+                bad_guard = last.guard_ms
+            elif guard_first is None:
+                guard_first, guard_t, absent_until = last.guard_ms, clock(), clock()
             elif guard_second is None and clock() - guard_t >= second_gap_s:
                 guard_second = last.guard_ms
                 decreased = guard_second < guard_first
     end = clock()
+    absent_ms = int(((absent_until if absent_until is not None else end) - seen_at) * 1000)
     problems = []
-    if guard_first is None:
-        problems.append("tx_guard_ms was never present while the port was fenced")
+    if expect_cause is not None and cause != expect_cause:
+        problems.append("fence cause %r, expected %r (a child restart is a new process: Reason::Startup)" % (cause, expect_cause))
+    if bad_guard is not None:
+        problems.append("tx_guard_ms %r is not an int >= 0" % (bad_guard,))
     if decreased is False:
         problems.append("tx_guard_ms did not decrease: %r then %r" % (guard_first, guard_second))
     outcome = "violation" if problems else "ok"
-    detail = "; ".join(problems) if problems else "fence %r seen %d ms after the restart, ended %d ms after it; guard_ms %r then %r%s" % (
-        cause, int((seen_at - t0) * 1000), int((end - t0) * 1000), guard_first, guard_second,
-        "" if decreased is not None else " (the fence ended before a second read)")
+    values = "%r%s" % (guard_first, "" if guard_second is None else " then %r" % (guard_second,))
+    guard_note = ("tx_guard_ms absent for the whole fence" if guard_first is None else
+                  "tx_guard_ms present from the first fenced read: %s" % values if absent_ms == 0 else
+                  "tx_guard_ms absent for the first %d ms, then %s" % (absent_ms, values))
+    detail = "; ".join(problems) if problems else "fence %r seen %d ms after the restart returned, ended %d ms after it; %s%s" % (
+        cause, int((seen_at - t0) * 1000), int((end - t0) * 1000), guard_note,
+        "" if decreased is not None or guard_first is None else " (the fence ended before a second guard read)")
     return Rearm(outcome, cause, detail, int((seen_at - t0) * 1000), int((end - t0) * 1000), guard_first, guard_second, decreased,
-                 row_gone, polls, keys)
+                 row_gone, polls, keys, absent_ms)

@@ -243,18 +243,20 @@ def rearm_ax25(request, target, case, admin_session, port, timing=None):
     (POST /api/v1/admin/children/{name}/restart, admin role, step-up; admin.md about line 278), then read the fence by polling
     GET /api/v1/admin/clients every 200 ms: any non-null fence is the shape (the cause is recorded), tx_guard_ms must be present and
     decrease between two reads, and the case waits until the port is unfenced again (fails after 20 s) so that 6b/6c/6d do not start
-    against a fenced edge. The child key is resolved at run time from GET /api/v1/admin/status launcher.children: the single name
-    containing "ax25" (zero or several: skip with the names). What the fake TNC saw (reconnect, KISS rewrite) is recorded, not asserted."""
+    against a fenced edge. The child key is "dv-edge-ax25", matched EXACTLY in GET /api/v1/admin/status launcher.children (missing:
+    skip with the names seen). A restart starts a new process, so the cause must be startup_guard (asserted); tx_guard_ms is optional
+    (absent until the end of the fence is known: its absence and duration are recorded, never a failure), and when present it must
+    be an int >= 0 and decrease. The 200 ms poll starts when the restart call returns (the old process has stopped by then). What the fake TNC saw (reconnect, KISS rewrite) is recorded, not asserted."""
     reader_admin = admin_session("operator")
     status = reader_admin.get(reader_admin.path("/status"), expect=None)
     names, everything = txguard.ax25_child_names(status.json() if status.status == 200 else {})
-    if len(names) != 1:
-        pytest.skip("cannot re-arm the AX.25 fence: %d launcher children contain 'ax25' (%s); children: %s" % (
-            len(names), names, everything))
+    if names != [txguard.AX25_CHILD]:
+        pytest.skip("cannot re-arm the AX.25 fence: the launcher child %r is not listed by /api/v1/admin/status; children seen: %s" % (
+            txguard.AX25_CHILD, everything))
     child = names[0]
     tnc = request.getfixturevalue("rf")                           # the fake TNCs must be listening before the edge restarts
     before = {"a_conn": tnc.a.connections, "b_conn": tnc.b.connections, "a_params": len(tnc.a.startup_params(tnc.a.connections))}
-    note(target, case, "RECORD", "re-arm: restarting the launcher child %r (key resolved from /api/v1/admin/status); fake TNCs before: %s" % (child, before))
+    note(target, case, "RECORD", "re-arm: restarting the launcher child %r (listed by /api/v1/admin/status); fake TNCs before: %s" % (child, before))
     admin = admin_session("admin")
 
     def restart():
@@ -273,8 +275,8 @@ def rearm_ax25(request, target, case, admin_session, port, timing=None):
         restarts = [c.get("restarts") for c in ((after_status.json().get("launcher") or {}).get("children") or []) if c.get("name") == child]
         note(target, case, "RECORD", "re-arm: child %r restarts counter after: %s" % (child, restarts))
     note(target, case, "FINDING" if res.outcome != "ok" else "RECORD",
-         "re-arm of the fence on ax25 port %s: %s: %s; cause %r; row gone and back: %s; %d reads; keys met: %s" % (
-             port, res.outcome, res.detail, res.cause, res.row_gone, res.polls, " | ".join(res.keys)))
+         "re-arm of the fence on ax25 port %s: %s: %s; cause %r; tx_guard_ms absent for %s ms of the fence; row gone and back: %s; %d reads; keys met: %s" % (
+             port, res.outcome, res.detail, res.cause, res.absent_ms, res.row_gone, res.polls, " | ".join(res.keys)))
     assert res.outcome == "ok", "re-arm of the fence on port %s: %s (%s)" % (port, res.outcome, res.detail)
 
 
@@ -282,8 +284,9 @@ def test_dp15_6g_the_startup_guard_is_a_fence_in_the_first_13_seconds(request, r
     """RFSAFE1 + RIF4b (radio.md 10.4, status.md): right after a start, a reload or a recovery an AX.25 or radio port with effective TX
     is fenced for about 13 s. The FIRST test of this module, with no hub, TNC or web fixtures: the admin status read shows the node
     uptime, and the case reads the port inside the window. AX.25 port rf-a: GET /api/v1/admin/clients, kind modem, tx_fence ==
-    "startup_guard" and tx_guard_ms present. Radio ports with tx (none in the rig snippets today): tx_state fenced, fence
-    startup_guard, guard_ms present and smaller in a second read 1 s later. Lateness is not a failure of this first attempt. When it
+    "startup_guard" (tx_guard_ms is optional: absent until the end of the fence is known; when present an int >= 0). Radio ports with
+    tx (none in the rig snippets today): tx_state fenced, fence startup_guard, guard_ms optional and smaller in a second read 1 s later
+    when both reads have it. Lateness is not a failure of this first attempt. When it
     is too late for AX.25 port rf-a, the fence is RE-ARMED by restarting the AX.25 child through the admin API (rearm_ax25), so the
     case normally passes instead of skipping; the case then ends with the port unfenced. Needs the shape RF-ON (DVT_DP15_TX_ENABLE=true)
     for the AX.25 half."""

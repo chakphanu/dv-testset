@@ -239,7 +239,7 @@ class RearmAdmin:
         self.reads += 1
         modem = {"name": "rf-a", "adapter": "kiss-tcp"}
         if self.restarted and self.reads <= self.fenced_reads:
-            modem.update({"tx_fence": "recovery_probe", "tx_guard_ms": 13000 - 1500 * self.reads})
+            modem.update({"tx_fence": "startup_guard", "tx_guard_ms": 13000 - 1500 * self.reads})
         return SimpleNamespace(status=200, json=lambda: {"items": [{"kind": "modem", "modem": modem}]})
 
 
@@ -276,14 +276,14 @@ def test_6g_rearm_restarts_the_ax25_child_reads_the_fence_and_waits_until_unfenc
     notes = run_rearm(monkeypatch, tmp_path, admin)
     assert admin.posts == ["/api/v1/admin/children/dv-edge-ax25/restart"] and admin.step_ups == 1
     text = " ".join(a[3] for a in notes)
-    assert "restarting the launcher child 'dv-edge-ax25'" in text and "recovery_probe" in text and "reconnected" in text
+    assert "restarting the launcher child 'dv-edge-ax25'" in text and "startup_guard" in text and "reconnected" in text
     assert "restarts counter after: [1]" in text
 
 
-def test_6g_rearm_skips_when_the_child_key_is_not_unique(tmp_path, monkeypatch):
-    for children in ([], [{"name": "dv-edge-ax25"}, {"name": "dv-edge-ax25[b]"}]):
+def test_6g_rearm_skips_unless_the_exact_child_key_is_listed(tmp_path, monkeypatch):
+    for children in ([], [{"name": "dv-edge-ax25[b]"}, {"name": "dv-edge-ax25-old"}]):
         admin = RearmAdmin(children=children)
-        with pytest.raises(pytest.skip.Exception, match=r"launcher children contain 'ax25'"):
+        with pytest.raises(pytest.skip.Exception, match=r"'dv-edge-ax25' is not listed.*children seen"):
             run_rearm(monkeypatch, tmp_path, admin)
         assert admin.posts == []
 
