@@ -34,6 +34,7 @@ from dvtest import dstar_sd, metrics, slowdata, web, webload  # noqa: E402
 from dvtest.proto import dextra  # noqa: E402
 
 import data_support as ds  # noqa: E402
+import worker_gap_support as wg  # noqa: E402
 from echo_support import Drainer  # noqa: E402
 from data_support import (  # noqa: E402
     AT_ONCE_S, IDLE_GAP_S, PACER, ROOM, SseWatch, TOKEN_RENDER_S, ambe, build_over, dstar_listener, first_header_times,
@@ -148,6 +149,18 @@ def wait_cycle(watch, since, timeout=CYCLE_WAIT_S):
         time.sleep(0.05)
 
 
+def wait_down(watch, since, timeout):
+    """Arrival time of the first `data_worker_down` event after `since`, else None after `timeout` seconds."""
+    end = time.monotonic() + timeout
+    while True:
+        downs = [at for at, ev in worker_events(watch, since) if ev == "data_worker_down"]
+        if downs:
+            return downs[0]
+        if time.monotonic() >= end:
+            return None
+        time.sleep(0.01)
+
+
 def wait_new_pid(rig_control, old_pid, timeout=20.0):
     """(ProcSample, time.monotonic() of its reading) of the first process whose pid differs from `old_pid`, else (None, None)."""
     end = time.monotonic() + timeout
@@ -213,7 +226,10 @@ def test_dp15_3a_kill_the_worker_during_traffic(rig, target, hub, rig_control, w
     longer than M17_GAP_S, the public SSE shows worker down then up, the pid changed, the raw counter family kept moving,
     `no_worker` rose when the down window lasted NO_WORKER_MIN_GAP_S or more, a web text posted while the worker was down
     is accepted (202) and shown in the room history, it is never rendered (no M17 SMS, no D-STAR text over, at the
-    latest TEXT_OVER_LATE_S after the voice end), and a NEW web text posted at the token IS rendered on M17 at once."""
+    latest TEXT_OVER_LATE_S after the voice end), and a NEW web text posted at the token IS rendered on M17 at once.
+    The gap POST is ordered by the observed events (cases/worker_gap_support.py): it starts after the down event and its
+    response is complete before the up event; an attempt that misses that window is recorded (margins down->POST, POST->up) and
+    the kill is repeated, up to 3 attempts, then the data.md 4.1 check is skipped with the record (never a silent pass)."""
     case = "3a"
     PACER.wait(TALKER_CALL, "status")
     text = "DVT KILL %04d" % (int(time.time()) % 10000)
@@ -235,15 +251,31 @@ def test_dp15_3a_kill_the_worker_during_traffic(rig, target, hub, rig_control, w
         drainer.start()
         thread = send_over_thread(talker, packets, out)
         time.sleep(0.3 + KILL_AT_S)
-        killed = kill_worker(rig_control)
-        t_kill = killed.t_kill_monotonic
-        note(target, case, "RECORD", "killed %s pid %s %.2f s after the header was sent" % (WORKER, killed.pids, t_kill - t_start))
-        time.sleep(0.2)
-        # web chat while the worker is down (or restarting): accepted, shown by the hub, never rendered
-        t_post_gap0, t_post_gap1, status = post(web_ctx.gap, gap_body)
-        assert status == 202, "POST while the worker is down answered %s, want 202 (the web path does not need the worker)" % status
-        time.sleep(0.5)
-        t_down, t_up = wait_cycle(sse, t_kill - 0.5)
+        # web chat while the worker is down: accepted, shown by the hub, never rendered. The POST is ordered by the OBSERVED events:
+        # it starts after the down event and its response is complete before the up event (the window is about 0.5 s). An attempt
+        # that misses it does not count (recorded) and the kill is repeated, at most wg.MAX_ATTEMPTS times; run 20261109T213056Z
+        # posted 27 ms after the up event, where rendering the text is correct.
+        def attempt(n):
+            body = gap_body if n == 1 else ds.nonce_body("G")
+            PACER.wait(web_ctx.gap.callsign, "text")                # the pacing sleep, if any, is before the kill, not in the window
+            killed = kill_worker(rig_control)
+            t_k = killed.t_kill_monotonic
+            note(target, case, "RECORD", "attempt %d: killed %s pid %s %.2f s after the header was sent" % (n, WORKER, killed.pids, t_k - t_start))
+            t_d = wait_down(sse, t_k - 0.5, wg.DOWN_SEEN_S)
+            t0 = t1 = post_status = None
+            if t_d is not None:
+                t0, t1, post_status = post(web_ctx.gap, body, pace=False)
+            _unused_down, t_u = wait_cycle(sse, t_k - 0.5)
+            got = wg.judge(t_k, t_d, t0, t1, t_u)
+            got.update(n=n, body=body, t_kill=t_k, t_down=t_d, t_up=t_u, status=post_status)
+            return got
+        attempts = wg.run_attempts(attempt, lambda line: note(target, case, "RECORD", line))
+        last = attempts[-1]
+        gap_valid, gap_skip = wg.verdict(attempts)
+        gap_body, t_kill, status = last["body"], last["t_kill"], last["status"]
+        t_down, t_up = last["t_down"], last["t_up"]
+        if status is not None:
+            assert status == 202, "POST while the worker is down answered %s, want 202 (the web path does not need the worker)" % status
         sample, t_new = wait_new_pid(rig_control, worker.pid)
         rows = web.room_messages(web_ctx.reader, MODULE)
         history = [r for r in rows if gap_body in (r.get("body") or "")]
@@ -303,7 +335,10 @@ def test_dp15_3a_kill_the_worker_during_traffic(rig, target, hub, rig_control, w
     note(target, case, "RECORD", "NEW text: M17 SMS %s s after the POST, D-STAR text over %s s after the voice end; the gap text reached M17 %d / D-STAR %d times" % (
         None if not m17_new else "%.3f" % (m17_new[0] - t_new_post), None if not d_new else "%.3f" % (d_new[0] - t_last),
         len(m17_gap_text), len(d_gap)))
-    assert not m17_gap_text and not d_gap, "the text posted while the worker was down was rendered (M17 %d, D-STAR %d); items published meanwhile are never rendered later (data.md 4.1)" % (len(m17_gap_text), len(d_gap))
+    if gap_valid is not None:
+        assert not m17_gap_text and not d_gap, "the text posted while the worker was down was rendered (M17 %d, D-STAR %d); items published meanwhile are never rendered later (data.md 4.1)" % (len(m17_gap_text), len(d_gap))
+    else:
+        note(target, case, "RECORD", "no attempt posted the gap text inside the down window: its rendering (M17 %d, D-STAR %d) is not judged" % (len(m17_gap_text), len(d_gap)))
     assert m17_new, "the NEW text %r posted at the token produced no M17 SMS" % new_body
     assert m17_new[0] - t_new_post <= AT_ONCE_S + TOKEN_RENDER_S, "NEW text reached M17 %.3f s after the POST" % (m17_new[0] - t_new_post)
     assert d_new, "the NEW text %r produced no D-STAR text over within the window" % new_body
@@ -325,6 +360,8 @@ def test_dp15_3a_kill_the_worker_during_traffic(rig, target, hub, rig_control, w
         assert ready_ok, "dv_pkt_ready is %s after the restart, want 1" % ready
     else:
         note(target, case, "RECORD", "no dv_pkt_ready family in the hub metrics")
+    if gap_skip:
+        pytest.skip(gap_skip)       # everything else above was asserted; the data.md 4.1 check is not judged, and the skip says so
 
 
 # ================================================================ 3b: restart, renders resume within 2 s of the token
