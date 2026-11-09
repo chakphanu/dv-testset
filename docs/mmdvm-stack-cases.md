@@ -5,7 +5,7 @@ The main real-world client of a reflector is a Pi-Star style hotspot: the upstre
 (DStarGateway, DMRGateway, YSFGateway, P25Gateway, NXDNGateway). The profile `mmdvm` runs exactly that software, unmodified, against the
 reflector under test, and replaces the radio by a **virtual MMDVM modem** written for dv-testset (`dvtest/mmdvm_modem.py`). It is an
 addition to the protocol clients of `dvtest/`: those speak one protocol each; this is the whole client, with its own link management,
-keepalives, header rewriting and reconnect logic. WRITTEN, NOT RUN ON A RIG: the image has never been built (see "UNVERIFIED").
+keepalives, header rewriting and reconnect logic. RUN ON A RIG: 11 of 11 passed twice against DV-Router `wip-caebc57` (see "Result" and "UNVERIFIED").
 
 ```
   tester .30                                        mmdvm-stack .100 (one container, profile mmdvm)
@@ -125,7 +125,7 @@ against any MMDVMHost: `python3 -m dvtest.mmdvm_modem --udp 0.0.0.0:3334 --keyup
 | NXDNGateway | https://github.com/g4klx/NXDNClients @ `b4b041d2cce9e4e359963d1b8d36911e9c5052eb` (2026-10-25) |
 | DStarGateway | https://github.com/F4FXL/DStarGateway @ `7b75de605dca542a2953dd74c16f0eac96a8944e` (2026-10-28) |
 
-Image size, ESTIMATED (nothing built): about **132 MB** (+/- 8), against `dvt-nxdngw:local` 128 MB and `dvt-dstarsd:local` 116 MB: the base
+Image size, ESTIMATED (the image was built by the runs below, but its size was not recorded here): about **132 MB** (+/- 8), against `dvt-nxdngw:local` 128 MB and `dvt-dstarsd:local` 116 MB: the base
 `debian:bookworm-slim` as in those two, libmosquitto1 with libssl3 about 6 MB, the mosquitto broker about 3 MB (P25Gateway and NXDNGateway exit
 without a broker), six stripped binaries about 6.4 MB (MMDVMHost 2.0, DStarGateway 2.0, DMRGateway 0.8, YSFGateway 0.65, NXDNGateway 0.5,
 P25Gateway 0.4), entry script, templates and a libcurl stand-in for DStarGateway about 0.1 MB (the real libcurl and its dependencies would add about 15
@@ -197,27 +197,33 @@ group call, LICH direction inbound. All of it from `docs/` of the builders and t
   first-run line "linked ['dmr', 'dstar']" without ysf, 90 s of waiting, had the same cause, and MMDVM3 passed that part only because MMDVM1 had already moved
   the row to J. A YSF row is now "linked" in B or J (`LINK_ROOMS`, `DVT_YSF_AUTOLINK_MODULE`); the on-air check still wants J.
 
+## Result (DV-Router `wip-caebc57`, commit 9208aa8 of dv-testset): 11 of 11 passed twice
+
+Runs `out/20261109T064008Z` and `out/20261109T064657Z`, about 6 minutes each. All five gateways (D-STAR, DMR, YSF, P25, NXDN) linked and were in
+the public state (YSF in B or J, the others in H, I, G, F); the voice round trip passed in both directions for all five: MMDVM1 (modem to reflector) with the exact
+frame count and byte-equal voice words (150 / 150 / 150 / 153 / 152 heard for 150 sent, padding included) and N0CALL on air in the right module, MMDVM2
+(reflector to modem) with the same counts and the talker's identity. MMDVM3: all rows held for 65 s; after `stop mmdvm-stack` D-STAR and DMR were gone
+after 0.8 s, NXDN and P25 after 30 to 31 s, YSF after 60.2 s (the reflector's timeouts; the 180 s window is ample); after `start` all five linked again.
+
+**P25 tail padding: settled, the SUT does not change it.** In the primed call (capture of run 064008Z, UDP 41000) P25Gateway sent 153 voice records from
+`0x62` and the reflector sent the same 153 words to our client, byte for byte; the last three are the modem's NULL_IMBE (`...9e45`) on both legs. The
+`...9e44` silence word seen in the re-run before was the SUT completing a call that started at `0x65` (the three records P25Gateway had dropped), not
+a rewrite of a complete one. The same capture shows the priming and downlink-priming overs (51 and 54 records) with no listener.
+
 ## UNVERIFIED
 
-1. **Only one run so far.** (First run: the image built and the stack ran, see above.) Originally: the image was never built: the six programs compile with the bookworm compiler (gcc 12) with `-std=c++0x` and
-   nlohmann-json 3.11 only as far as the sources were read; DStarGateway builds with `-Werror` removed and the libcurl stand-in via the
-   environment; the sub-make of DStarGateway is parallel. The first build may need a fix.
-2. **DV-Router's client services for P25 (UDP 41000) and NXDN (UDP 41400)**: they need `mmdvm-edges.toml` (above; the template alone does not serve a
-   module). Whether the gateways link with it is the next run to tell. If our own client cannot link, MMDVM1 / MMDVM2 of those modes skip with the reason and
-   MMDVM3 leaves the mode out; if only the gateway cannot, MMDVM3 fails for it.
-3. **XLX conventions for DMRGateway**: login with `passw0rd`, the startup link burst (3 headers and 2 terminators, private call to 4001+) and the slot 2
-   TG 9 voice are taken from the sources of DMRGateway and `docs/protocols/mmdvm.md`; the module in `XLXHosts.txt` (third column) is a reading of the
-   source. The room name `I` for DMR, `H` for D-STAR and `J` for YSF must exist in the template.
-4. **The public state shape**: `clients.items[]` rows are matched by `room` / `module` and a protocol word in `protocol` / `edge` / `kind`;
-   `rooms[].onair.callsign(_base)` as in `cases/test_dp15_streams.py`. The first run writes the first rows to `out/<run>/mmdvm-stack.txt`; adjust
-   `PROTO_WORDS` and `row_matches` if the names differ. P25 / NXDN rows may sit in another room than `DVT_P25_MODULE` / `DVT_NXDN_MODULE`.
-5. **Frame counts are asserted exact** (slack 0). Candidates for a measured difference: the D-STAR look-back of two frames and the silence insertion
-   in `CDStarControl`, the last LDU / RF frame padding of P25 and NXDN, a first YSF frame used for the header, `AckReply` frames sent back to the modem
-   after a D-STAR over (they are D-STAR frames in the recording of MMDVM2 only if the over came from the modem, MMDVM1).
-6. **Voice words are asserted equal** in MMDVM1 (the words change only where MMDVMHost regenerates the FEC; the builders make fixed points of it). P25:
-   MMDVMHost forwards each LDU one frame late, the TDU flushes the last one; the LDU2 message indicator, algorithm and key id are re-encoded by the host.
-7. **Unlink at stop**: YSFGateway, P25Gateway and NXDNGateway send nothing at exit (read in the pinned sources); the 180 s window assumes the reflector
-   removes a silent client by then (DV-Router: not known; xlxd drops YSF after 30 s, DMR after 100 s).
+1. ~~Nothing ran on a rig~~ answered: the image builds and the stack runs (2 x 11 of 11). Not recorded: the image size (the estimate above stands).
+2. ~~DV-Router's client services for P25 and NXDN~~ answered: with `mmdvm-edges.toml` all five gateways link and carry voice both ways. Without it (template
+   alone) the edges are not spawned: see the first run above.
+3. ~~XLX conventions for DMRGateway~~ answered for DV-Router: the login, the startup link and the slot 2 TG 9 voice work, the DMR gateway sits in module I.
+   Not checked: the same against xlxd or another reflector.
+4. ~~The public state shape~~ answered: `clients.items[]` rows carry `room` and `protocol` / `edge` / `kind` as matched; YSF is in B until its first frame (above);
+   P25 and NXDN rows are in G and F as `DVT_P25_MODULE` / `DVT_NXDN_MODULE`; `rooms[].onair.callsign` is N0CALL for all five.
+5. ~~Frame counts exact~~ answered: slack 0 held for all five modes (150, 150, 150, 153, 152 with padding), both directions. No difference to record.
+6. ~~Voice words equal~~ answered for the five modes in MMDVM1 (with the harness fixes above: DTMF-like D-STAR words avoided, P25Gateway primed). Not checked:
+   the P25 LDU2 message indicator, algorithm and key id (not asserted).
+7. ~~Unlink at stop~~ answered for DV-Router: 0.8 s (D-STAR, DMR, which unlink at SIGTERM), 30 to 31 s (NXDN, P25) and 60.2 s (YSF) by the reflector's timeout. Not
+   checked against xlxd or the other references.
 8. **Mode hang**: the 12 s wait after an over is derived from `RFModeHang=10` / `NetModeHang=3`; the first run may show a shorter wait is enough.
 9. The buffer-space numbers and the status flags of the modem are a model; MMDVMHost accepts them (checked with the real `CModem`) but a real board
    differs. No RSSI, no BER feedback, no FM, no POCSAG.
