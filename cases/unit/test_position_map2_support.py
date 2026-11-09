@@ -26,8 +26,45 @@ def good_descriptor():
                       {"path": "glyphs/NotoSansRegular/0-255.pbf", "bytes": 7, "sha256": "2" * 64}]}
 
 
+def compact_descriptor():
+    desc = good_descriptor()
+    del desc["files"]
+    return desc
+
+
 def test_good_descriptor_has_no_problems():
     assert m2.descriptor_problems(good_descriptor()) == []
+
+
+def test_compact_descriptor_has_no_problems():
+    # MAP2f: no per-file glyph inventory; the shape is chosen by the presence of the key `files`
+    assert m2.descriptor_problems(compact_descriptor()) == []
+    assert m2.descriptor_problems(compact_descriptor(), 5850) == []
+
+
+def test_compact_descriptor_is_bounded():
+    problems = m2.descriptor_problems(compact_descriptor(), m2.MAX_DESCRIPTOR_BYTES + 1)
+    assert any("bytes" in p for p in problems), problems
+    assert m2.descriptor_problems(compact_descriptor(), m2.MAX_DESCRIPTOR_BYTES) == []
+
+
+@pytest.mark.parametrize("change,needle", [
+    (lambda d: d.update(callsign="N0PGA"), "keys"),
+    (lambda d: d.pop("attribution"), "keys"),
+    (lambda d: d.update(gen="ABC"), "gen"),
+    (lambda d: d.update(fetch_enabled=True), "fetch_enabled"),
+])
+def test_compact_descriptor_stays_strict(change, needle):
+    desc = compact_descriptor()
+    change(desc)
+    problems = m2.descriptor_problems(desc)
+    assert problems and any(needle in p for p in problems), problems
+
+
+def test_files_key_keeps_the_older_shape():
+    desc = compact_descriptor()
+    desc["files"] = "not a list"
+    assert any("files is not a list" in p for p in m2.descriptor_problems(desc))
 
 
 @pytest.mark.parametrize("change,needle", [
@@ -68,6 +105,14 @@ def test_font_faces():
     assert any("not a listed" in p for p in m2.font_face_problems(unlisted, files))
     norange = {"NotoSansRegular": [{"url": "glyphs/fonts/NotoSans-Regular.ttf", "unicode-range": []}]}
     assert any("unicode-range" in p for p in m2.font_face_problems(norange, files))
+
+
+def test_font_faces_against_the_manifest_files():
+    manifest_files = [{"path": "glyphs/fonts/NotoSans-Regular.ttf", "bytes": 3, "sha256": "3" * 64}]
+    faces = {"NotoSansRegular": [{"url": "glyphs/fonts/NotoSans-Regular.ttf", "unicode-range": ["U+20-7E"]}]}
+    assert m2.font_face_problems(faces, manifest_files) == []
+    other = {"NotoSansRegular": [{"url": "glyphs/fonts/Other.ttf", "unicode-range": ["U+20-7E"]}]}
+    assert any("not a listed" in p for p in m2.font_face_problems(other, manifest_files))
 
 
 def test_tile_requests_and_arithmetic():

@@ -74,7 +74,7 @@ import test_xlxd_interlink as interlink_cases  # noqa: E402  (its voice cell hel
 # the helpers below were moved to cases/data_support.py (shared with the DP15 cases) without a change of behaviour
 from data_support import (  # noqa: E402,F401
     FAMILIES, FAMILY_WAIT_S, LINK_CALLSIGN, OVER_WAIT_S, POLL_S, QUIET_S, RESULTS, SMS, EDGE_NAME,
-    Hub, anything_counted, anything_counted_any, check_edge_counts, delta, describe, dstar_listener,
+    Hub, anything_counted, anything_counted_any, check_edge_counts, delta, edge_counted, describe, dstar_listener,
     edge_counts_known, has_text_with, hub_session, m17_client, moved, nonce_body, sms_packet, snapshot,
     texts_of, wait_for_overs, write_note)
 
@@ -111,7 +111,7 @@ def test_direct_sms_becomes_a_dstar_text_over(rig, target, hub):
     with dstar_listener(rig.xlxd_sut) as listener, m17_client(rig.xlxd_sut) as talker:
         talker.client.send(talker.dest, sms_packet(body, LINK_CALLSIGN))
         overs = wait_for_overs(listener, OVER_WAIT_S, has_text_with(body))
-    after, seen = hub.wait_for(before, anything_counted)
+    after, seen = hub.wait_for(before, edge_counted(delivered=True))
     change = delta(after, before)
     note(target, "a", "RECORD", "counter deltas %s; overs %s" % (moved(change), [describe(o) for o in overs]))
     texts = texts_of(overs)
@@ -182,7 +182,7 @@ def test_peer_sms_needs_an_identity(rig, target, hub, m17_peers):
     with dstar_listener(rig.xlxd_sut) as listener:
         peers.dvt.send(m17.with_trailer(sms_packet(body, src), MOD))
         overs = wait_for_overs(listener, OVER_WAIT_S, has_text_with(body))
-    after, seen = hub.wait_for(before, anything_counted)
+    after, seen = hub.wait_for(before, edge_counted(delivered=not REQUIRE_IDENT))
     change = delta(after, before)
     delivered = [got["text"].rstrip() for _sid, got in texts_of(overs) if got["text"].rstrip().endswith(body)]
     note(target, "c", "RECORD", "delivered=%s %s counters=%s %s{unidentified} delta=%d (unverified "

@@ -373,10 +373,10 @@ def test_positions_page_refuses_a_v1_basemap(browser_page, web_client, seeds, ba
 
 def assert_base_surface(anon, manifest, desc):
     """The HTTP surface of an installed base (web.md MAP2c, deployment.md MAP2c), from the tester. Returns the tile path used."""
-    problems = m2.descriptor_problems(desc)
+    resp = get(anon, pages.BASEMAP_TILES_JSON)
+    problems = m2.descriptor_problems(desc, len(resp.body))
     assert not problems, "tiles.json descriptor: %s" % "; ".join(problems[:4])
     gen = desc["gen"]
-    resp = get(anon, pages.BASEMAP_TILES_JSON)
     etag = resp.headers.get("etag", "")
     assert etag.startswith('"') and etag.endswith('"') and etag != m2.NOT_INSTALLED_ETAG, "tiles.json etag %r is not a strong ETag of the descriptor" % etag
     assert resp.headers.get("cache-control") == "no-cache", "tiles.json cache-control %r" % resp.headers.get("cache-control")
@@ -386,11 +386,23 @@ def assert_base_surface(anon, manifest, desc):
         "tiles.json zooms %s/%s differ from the MANIFEST %s/%s" % (desc["overview_maxzoom"], desc["maxzoom"], manifest["overview_maxzoom"], manifest["detail_maxzoom"])
     detail = [t["bbox"] for t in manifest["tiers"] if t["role"] == "detail"]
     assert desc["coverage"]["boxes"] == detail, "coverage.boxes %s differ from the MANIFEST detail boxes %s" % (desc["coverage"]["boxes"], detail)
-    # font faces and glyphs: listed files under /basemap/glyphs/
+    # font faces and glyphs: listed files under /basemap/glyphs/. An older descriptor lists them under `files`; since MAP2f the
+    # descriptor is compact and the server's allowlist is the installed MANIFEST (deployment.md, web.md), which the face urls are held to.
     faces = get(anon, FONT_FACES)
     assert faces.status == 200, "GET %s answered %d" % (FONT_FACES, faces.status)
-    fprob = m2.font_face_problems(faces.json(), desc["files"])
+    listed = desc["files"] if "files" in desc else manifest["files"]
+    fprob = m2.font_face_problems(faces.json(), listed)
     assert not fprob, "FONT-FACES.json: %s" % "; ".join(fprob)
+    if "files" not in desc:
+        # the replacement route of the removed inventory: font binaries and the licence are served from the MANIFEST allowlist, a
+        # glyph path the MANIFEST does not list is not
+        urls = [f["url"] for f in faces.json()["NotoSansRegular"]]
+        for url in dict.fromkeys([urls[0], urls[-1], "glyphs/OFL.txt"]):
+            served = get(anon, BASEMAP_PREFIX + url)
+            assert served.status == 200 and served.body, "GET %s%s answered %d (%d bytes), want 200 (listed in the MANIFEST)" % (
+                BASEMAP_PREFIX, url, served.status, len(served.body))
+        unlisted = get(anon, BASEMAP_PREFIX + "glyphs/NotoSansRegular/dvt-unlisted.pbf")
+        assert unlisted.status == 404, "GET an unlisted glyph path answered %d, want 404 (the server keeps the MANIFEST allowlist)" % unlisted.status
     ranged = get(anon, GLYPH_RANGE, {"Range": "bytes=0-9"})
     assert ranged.status == 206 and len(ranged.body) == 10 and ranged.headers.get("content-range", "").startswith("bytes 0-9/"), \
         "GET %s with Range bytes=0-9 answered %d, %d bytes, content-range %r" % (GLYPH_RANGE, ranged.status, len(ranged.body), ranged.headers.get("content-range"))

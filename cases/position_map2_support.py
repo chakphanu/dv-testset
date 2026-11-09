@@ -26,8 +26,12 @@ NOT_INSTALLED_ETAG = '"not-installed"'              # crates/svc/web/src/basemap
 TILE_CACHE = "public, max-age=31536000, immutable"  # deployment.md MAP2c: tile responses
 MVT_TYPE = "application/vnd.mapbox-vector-tile"
 ATTRIBUTION = "(c) OpenStreetMap contributors"
-DESCRIPTOR_KEYS = {"installed", "gen", "tiles", "minzoom", "maxzoom", "overview_maxzoom", "coverage", "builds", "fetch_enabled",
-                   "attribution", "files"}
+COMPACT_KEYS = {"installed", "gen", "tiles", "minzoom", "maxzoom", "overview_maxzoom", "coverage", "builds", "fetch_enabled",
+                "attribution"}
+# images before MAP2f (DV-Router 9d6776f) also carried the per-file glyph inventory under `files`; the shape is chosen by the
+# PRESENCE of that key, never by an image name
+DESCRIPTOR_KEYS = COMPACT_KEYS | {"files"}
+MAX_DESCRIPTOR_BYTES = 32 * 1024                    # MAP2f: basemap_core.rs MAX_DESCRIPTOR_BYTES, deployment.md "The descriptor includes"
 FONT_URL_RE = re.compile(r"^glyphs/fonts/[A-Za-z0-9_-]+\.(?:ttf|otf)$")
 DATE_RE = re.compile(r"^[0-9]{8}$")
 
@@ -47,14 +51,20 @@ def _box_ok(box):
             and -180 <= box[0] <= 180 and -180 <= box[2] <= 180 and -90 <= box[1] and box[3] <= 90 and box[0] != box[2] and box[1] < box[3])
 
 
-def descriptor_problems(desc):
+def descriptor_problems(desc, raw_len=None):
     """What is wrong with an INSTALLED descriptor, as a list of strings (empty = it has every field web.md names and the shape the
-    page's positionDescriptor() accepts). The key set is exact: web.md says it carries no callsign or position timestamp."""
+    page's positionDescriptor() accepts). The key set is exact: web.md says it carries no callsign or position timestamp.
+    Two shapes: the compact one (MAP2f, no `files`; `raw_len`, the body size in bytes when known, is bounded to 32 KiB) and the older
+    one that adds `files`, a list of {path, ...} entries; a descriptor with the key `files` is held to the older shape."""
     if not isinstance(desc, dict):
         return ["the descriptor is not a JSON object"]
     out = []
-    if set(desc) != DESCRIPTOR_KEYS:
-        out.append("keys %s, want %s" % (sorted(desc), sorted(DESCRIPTOR_KEYS)))
+    legacy = "files" in desc
+    want = DESCRIPTOR_KEYS if legacy else COMPACT_KEYS
+    if set(desc) != want:
+        out.append("keys %s, want %s" % (sorted(desc), sorted(want)))
+    if raw_len is not None and raw_len > MAX_DESCRIPTOR_BYTES:
+        out.append("the descriptor is %d bytes, want at most %d (MAP2f)" % (raw_len, MAX_DESCRIPTOR_BYTES))
     if desc.get("installed") is not True:
         out.append("installed is %r" % (desc.get("installed"),))
     gen = desc.get("gen")
@@ -85,6 +95,8 @@ def descriptor_problems(desc):
         out.append("fetch_enabled is %r, want false (automatic fetching is MAP2d, planned)" % (desc.get("fetch_enabled"),))
     if desc.get("attribution") != ATTRIBUTION:
         out.append("attribution %r, want %r" % (desc.get("attribution"), ATTRIBUTION))
+    if not legacy:
+        return out
     files = desc.get("files")
     if not isinstance(files, list) or len(files) > 512 or not all(isinstance(f, dict) and isinstance(f.get("path"), str) for f in files):
         out.append("files is not a list of {path, ...} entries")
@@ -102,7 +114,9 @@ def descriptor_problems(desc):
 
 def font_face_problems(faces, files):
     """positionFontFaces() of the page: exactly the one font stack NotoSansRegular, 1..256 faces whose url is a listed
-    glyphs/fonts/*.ttf|otf file with a non-empty unicode-range list. `files` is the descriptor's files list."""
+    glyphs/fonts/*.ttf|otf file with a non-empty unicode-range list. `files` is the list of {path, ...} entries to hold the urls
+    against: the descriptor's `files` of an older image, or the installed MANIFEST's `files` (the server's glyph allowlist) when the
+    descriptor is compact (MAP2f)."""
     if not isinstance(faces, dict) or set(faces) != {"NotoSansRegular"} or not isinstance(faces["NotoSansRegular"], list):
         return ["FONT-FACES.json is not exactly {NotoSansRegular: [...]}"]
     entries = faces["NotoSansRegular"]

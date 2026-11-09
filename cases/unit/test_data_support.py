@@ -124,3 +124,30 @@ def test_first_header_times_counts_an_over_once_although_dextra_repeats_the_head
     assert [h["stream_id"] for _at, h in got] == [0x1111, 0x2222] and got[0][0] == 10.0
     assert ds.text_headers(listener) == [10.0]
     assert [h["stream_id"] for _at, h in ds.first_header_times(listener, lambda h: h["stream_id"] == 0x2222)] == [0x2222]
+
+
+def _snap(**kw):
+    base = {"room.all": 0, "pkt.all": 0, "edge_raw.all": 0, "edge_render.all": 0}
+    base.update(kw)
+    return base
+
+
+def test_edge_counted_waits_for_the_edge_publication():
+    before = _snap()
+    main_only = _snap(**{"room.all": 1, "pkt.all": 2})
+    with_raw = _snap(**{"room.all": 1, "pkt.all": 2, "edge_raw.all": 1})
+    with_both = _snap(**{"room.all": 1, "pkt.all": 2, "edge_raw.all": 1, "edge_render.all": 4})
+    delivered, denied = ds.edge_counted(True, known=True), ds.edge_counted(False, known=True)
+    assert not delivered(before, before) and not denied(before, before)
+    assert not delivered(main_only, before) and not denied(main_only, before)      # the 2026-11-09 ident run: edge refresh not yet in
+    assert not delivered(with_raw, before)                                         # a delivered item also needs the render counter
+    assert denied(with_raw, before)                                                # a denied one only the raw counter
+    assert delivered(with_both, before)
+    assert not delivered(_snap(**{"edge_raw.all": 1, "edge_render.all": 4}), before)   # the room and packet counters are still required
+
+
+def test_edge_counted_is_anything_counted_before_the_edge_families():
+    before = _snap()
+    main_only = _snap(**{"room.all": 1, "pkt.all": 2})
+    assert ds.edge_counted(True, known=False)(main_only, before)
+    assert not ds.edge_counted(True, known=False)(before, before)

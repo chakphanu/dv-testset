@@ -190,6 +190,23 @@ def anything_counted(now, before):
     return now["room.all"] > before["room.all"] and now["pkt.all"] > before["pkt.all"]
 
 
+def edge_counted(delivered, known=None):
+    """A predicate for Hub.wait_for: anything_counted AND, on the generations that have the edge families, the edge counters the
+    case checks (check_edge_counts) have moved too: dv_edge_raw_total, and dv_edge_render_total for a delivered item. Each edge
+    process publishes on its own 10 s clock, apart from the controller and the worker, so the edge deltas can show up one refresh
+    after the room and packet deltas (a delivered over leaves through another edge process than the one that received the SMS).
+    Without this a snapshot taken at the first room + packet change reads the edge deltas as 0. `known` overrides edge_counts_known()."""
+    def pred(now, before):
+        if not anything_counted(now, before):
+            return False
+        if not (edge_counts_known() if known is None else known):
+            return True
+        if now["edge_raw.all"] <= before["edge_raw.all"]:
+            return False
+        return not delivered or now["edge_render.all"] > before["edge_render.all"]
+    return pred
+
+
 def anything_counted_any(now, before):
     return now["room.all"] > before["room.all"] or now["pkt.all"] > before["pkt.all"]
 
