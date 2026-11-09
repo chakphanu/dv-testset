@@ -63,6 +63,18 @@ def test_run_attempts_gives_up_after_three_and_skips_with_the_reasons():
     assert len(attempts) == 3 and len(lines) == 3
     valid, skip = wg.verdict(attempts)
     assert valid is None and "3 attempt(s)" in skip and "late 1" in skip and "late 3" in skip
+    assert skip.count("down->POST") == 3 and skip.count("POST->up") == 3
+
+
+def test_the_skip_reason_lists_the_margins_of_every_attempt():
+    first = wg.judge(10.0, 10.002, 10.20, 10.533, 10.506)
+    second = wg.judge(20.0, 20.002, 20.60, 20.70, 21.0)
+    second["valid"], second["reason"] = False, "forced"
+    first.update(n=1)
+    second.update(n=2)
+    valid, skip = wg.verdict([first, second])
+    assert valid is None
+    assert "attempt 1:" in skip and "POST->up -0.027 s" in skip and "attempt 2:" in skip and "down->POST 0.598 s" in skip
 
 
 def test_run_attempts_does_not_retry_a_hard_failure_and_does_not_skip_it():

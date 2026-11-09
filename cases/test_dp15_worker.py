@@ -377,6 +377,7 @@ def test_dp15_3b_renders_resume_within_two_seconds_of_the_token(rig, target, hub
     case = "3b"
     hub.settle()
     current = worker
+    unjudged = []
     for round_no in range(1, ROUNDS + 1):
         tag = "%s r%d" % (case, round_no)
         gap_body, new_body = ds.nonce_body("G"), ds.nonce_body("N")
@@ -384,11 +385,28 @@ def test_dp15_3b_renders_resume_within_two_seconds_of_the_token(rig, target, hub
                 dstar_listener(sutip(rig), module=MODULE, callsign=LISTEN_CALL) as dlist, \
                 m17_client(sutip(rig), callsign=TALKER_CALL, module=MODULE) as mlist:
             assert sse.ready(), "the public SSE gave no hello: %s" % sse.error
-            pump_for(RUN_RESET_S, dlist, mlist)                         # the backoff is back at 0.5 s after a run of 10 s
-            killed = kill_worker(rig_control)
-            t_kill = killed.t_kill_monotonic
-            t_gap0, t_gap1, status_gap = post(web_ctx.gap, gap_body)
-            t_down, t_up = wait_cycle(sse, t_kill - 0.5)
+            # the gap text is ordered by the observed events (cases/worker_gap_support.py): after the down event, its response complete
+            # before the up event; an attempt that misses the window is recorded and the kill repeated (pump_for first: the backoff
+            # is back at 0.5 s after a run of 10 s), at most wg.MAX_ATTEMPTS times
+            def attempt(n):
+                body = gap_body if n == 1 else ds.nonce_body("G")
+                pump_for(RUN_RESET_S, dlist, mlist)
+                PACER.wait(web_ctx.gap.callsign, "text")
+                killed = kill_worker(rig_control)
+                t_k = killed.t_kill_monotonic
+                t_d = wait_down(sse, t_k - 0.5, wg.DOWN_SEEN_S)
+                t0 = t1 = post_status = None
+                if t_d is not None:
+                    t0, t1, post_status = post(web_ctx.gap, body, pace=False)
+                _unused_down, t_u = wait_cycle(sse, t_k - 0.5)
+                got = wg.judge(t_k, t_d, t0, t1, t_u)
+                got.update(n=n, body=body, t_kill=t_k, t_down=t_d, t_up=t_u, status=post_status)
+                return got
+            attempts = wg.run_attempts(attempt, lambda line: note(target, tag, "RECORD", line))
+            last = attempts[-1]
+            gap_valid, gap_skip = wg.verdict(attempts)
+            gap_body, t_kill, status_gap = last["body"], last["t_kill"], last["status"]
+            t_down, t_up = last["t_down"], last["t_up"]
             if t_up is None:
                 pytest.fail("round %d: no data_worker_up event within %.0f s of the kill (down event: %s)" % (round_no, CYCLE_WAIT_S, t_down))
             # the NEW item at the token
@@ -399,18 +417,19 @@ def test_dp15_3b_renders_resume_within_two_seconds_of_the_token(rig, target, hub
             m17_new, m17_gap = m17_text_times(mlist, new_body), m17_text_times(mlist, gap_body)
             d_new, d_gap = dstar_text_times(dlist, new_body), dstar_text_times(dlist, gap_body)
         sample, t_seen = wait_new_pid(rig_control, current.pid, timeout=5.0)
-        in_gap = t_down is not None and t_gap0 > t_down and t_gap1 < t_up
-        note(target, tag, "RECORD", "kill at 0; down event +%s s, up event (token) +%.3f s; gap text POST at +%.3f s answered %s, %s; "
+        in_gap = gap_valid is not None
+        note(target, tag, "RECORD", "kill at 0; down event +%s s, up event (token) +%.3f s; gap text POST at +%s s answered %s, %s; "
              "new pid %s read %s s after the token" % (
-                 None if t_down is None else "%.3f" % (t_down - t_kill), t_up - t_kill, t_gap1 - t_kill, status_gap,
-                 "inside the down window" if in_gap else "NOT inside the down window (worker was back or the down event late)",
+                 None if t_down is None else "%.3f" % (t_down - t_kill), t_up - t_kill,
+                 None if last["kill_to_post"] is None else "%.3f" % last["kill_to_post"], status_gap,
+                 "inside the down window" if in_gap else "NOT inside the down window (see the attempts above)",
                  None if sample is None else sample.pid, None if t_seen is None else "%.3f" % (t_seen - t_up)))
         note(target, tag, "RECORD", "NEW text POST %.3f s after the token answered %s; M17 SMS %s s after the token, %s s after the POST; "
              "D-STAR text over %s s after the token; gap text rendered M17 %d / D-STAR %d" % (
                  t_post1 - t_up, status_new, None if not m17_new else "%.3f" % (m17_new[0] - t_up),
                  None if not m17_new else "%.3f" % (m17_new[0] - t_post1), None if not d_new else "%.3f" % (d_new[0] - t_up),
                  len(m17_gap), len(d_gap)))
-        assert status_gap == 202 and status_new == 202, "POST answers %s / %s, want 202" % (status_gap, status_new)
+        assert status_gap in (None, 202) and status_new == 202, "POST answers %s / %s, want 202" % (status_gap, status_new)
         assert m17_new, "round %d: no M17 SMS of the NEW text %r after the token" % (round_no, new_body)
         assert m17_new[0] - t_up <= TOKEN_RENDER_S, "round %d: first M17 render %.3f s after the token, bound %.1f s" % (
             round_no, m17_new[0] - t_up, TOKEN_RENDER_S)
@@ -424,6 +443,10 @@ def test_dp15_3b_renders_resume_within_two_seconds_of_the_token(rig, target, hub
                 round_no, len(m17_gap), len(d_gap))
         else:
             note(target, tag, "RECORD", "the gap text was not posted inside the down window: its rendering (M17 %d, D-STAR %d) is not judged" % (len(m17_gap), len(d_gap)))
+            if gap_skip:
+                unjudged.append("round %d: %s" % (round_no, gap_skip))
         assert sample is not None and sample.pid != current.pid, "round %d: no new worker process" % round_no
         current = sample
         PACER.wait(web_ctx.fresh.callsign, "text")
+    if unjudged:
+        pytest.skip("; ".join(unjudged))     # every other assertion of every round ran; the data.md 4.1 check was not judged, as recorded

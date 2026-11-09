@@ -51,9 +51,12 @@ def run_attempts(do_attempt, record, max_attempts=MAX_ATTEMPTS):
     return attempts
 
 
+def _fmt(v):
+    return "n/a" if v is None else "%.3f s" % v
+
+
 def describe(n, got):
-    def fmt(v):
-        return "n/a" if v is None else "%.3f s" % v
+    fmt = _fmt
     return "gap attempt %d: %s (%s); down->POST %s, POST->up %s, kill->POST %s, kill->up %s" % (
         n, "valid" if got["valid"] else ("hard failure" if got["hard"] else "does not count"), got["reason"],
         fmt(got["down_to_post"]), fmt(got["post_to_up"]), fmt(got["kill_to_post"]), fmt(got["kill_to_up"]))
@@ -66,4 +69,5 @@ def verdict(attempts):
     if attempts and attempts[-1]["hard"]:
         return None, None
     return None, "the gap text could not be posted inside the worker down window in %d attempt(s): %s" % (
-        len(attempts), "; ".join(a["reason"] for a in attempts))
+        len(attempts), "; ".join("attempt %d: %s (down->POST %s, POST->up %s)" % (
+            i, a["reason"], _fmt(a["down_to_post"]), _fmt(a["post_to_up"])) for i, a in enumerate(attempts, 1)))
