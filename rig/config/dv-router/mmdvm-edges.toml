@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/rig.md, docs/mmdvm-stack-cases.md): the SUT's own NXDN and P25 client ports for
+# the real client stack (profile mmdvm). The native template has no xlxd.* files and its [edges.nxdn] / [edges.p25] are
+# enable = "auto" without a served module, so the edges are not spawned and the gateways NXDNGateway / P25Gateway of mmdvm-stack
+# cannot link (first run, out/20261109T061354Z: our own p25 / nxdn client link unanswered). scripts/run.sh adds this file by itself
+# to a native launch with --profile mmdvm (unless it or soak-edges.toml, which has the same values, is listed already).
+#   NXDN  UDP 41400 (default port), TG 31672 -> module F      (DVT_NXDN_TG / DVT_NXDN_MODULE, DVT_MMDVM_NXDN_TG of the rig)
+#   P25   UDP 41000 (default port), one served module G, TG 31672 (DVT_P25_TG / DVT_P25_MODULE, DVT_MMDVM_P25_TG of the rig)
+# The template's tables are MERGED key by key (dvtest/sut_config.py): only the keys below change. Combine, for example:
+#   DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/admin.toml:rig/config/dv-router/mmdvm-edges.toml
+
+[edges.nxdn]
+enable = true
+tg_modules = "31672:F"
+
+[edges.p25]
+enable = true
+server_module = "G"
+server_tg = 31672

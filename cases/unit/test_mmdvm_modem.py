@@ -291,6 +291,32 @@ def test_canonical_and_padded_frames_per_mode():
     assert [len(x) for x in f] == [11, 11, 11] and f == mm.default_frames("p25", 3)
 
 
+def test_dstar_dtmf_like_words_are_avoided():
+    """DStarGateway blanks a word that looks like a DTMF key to the null AMBE word (first run of MMDVM1 dstar: voice word 82 of 150,
+    seed "mmdvm", arrived as 9e8d3288261a3f61e8). default_frames replaces such words and leaves every other one as it was."""
+    seen_bad = 0
+    for seed in ("mmdvm", "down", "a", "b", "c", "d"):
+        raw = signals.prng_bytes("%s/dstar" % seed, 9 * 400)
+        raw = [raw[i:i + 9] for i in range(0, len(raw), 9)]
+        frames = mm.default_frames("dstar", 400, seed)
+        assert len(frames) == 400 and frames == mm.default_frames("dstar", 400, seed)
+        for old, new in zip(raw, frames):
+            if rf.dstar_dtmf_like(rf.dstar_ambe(old)):
+                seen_bad += 1
+                assert new != old and len(new) == 9
+            else:
+                assert new == old
+            assert not rf.dstar_dtmf_like(rf.dstar_ambe(new))
+    assert seen_bad >= 1                       # the seeds above do contain such words (about 1 in 256)
+    first = mm.default_frames("dstar", 150, "mmdvm")
+    assert not any(rf.dstar_dtmf_like(w) for w in rf.canonical_frames("dstar", first))
+    # the word of the first run: valid form dae8bcabee7f58741d is the key "2" by the masks of DStarBase/DTMF.h
+    assert rf.dstar_dtmf_like(bytes.fromhex("dae8bcabee7f58741d"))
+    assert rf.dstar_ambe(bytes.fromhex("8aada8abaf7b593409")) == bytes.fromhex("dae8bcabee7f58741d")
+    assert first[82] != bytes.fromhex("8aada8abaf7b593409")
+    assert not rf.dstar_dtmf_like(rf.DSTAR_NULL_AMBE) and not rf.dstar_dtmf_like(bytes(9)) and not rf.dstar_dtmf_like(b"short")
+
+
 # ------------------------------------------------------------------ key-up over the wire and recording
 
 @pytest.mark.parametrize("mode,kw", [

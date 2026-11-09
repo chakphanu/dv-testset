@@ -14,7 +14,8 @@ docs/mmdvm-stack-cases.md.
                     (the keepalives), disappears when the stack is stopped (unlink at stop) and comes back when it starts
 
 M17 is not here: the pinned MMDVMHost has no M17 mode (docs/mmdvm-stack-cases.md). Every case skips with the reason unless the
-profile is up (DVT_MMDVM=on). NOT RUN ON A RIG yet.
+profile is up (DVT_MMDVM=on). First run and what it showed: docs/mmdvm-stack-cases.md. A mode whose service the reflector does not offer
+(for DV-Router: no rig/config/dv-router/mmdvm-edges.toml) is skipped or left out of the public-state checks.
 """
 import math
 import os
@@ -24,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from dvtest import clients, mmdvm_modem
+from dvtest import clients, mmdvm_modem, mmdvm_stack
 from dvtest.proto import dextra, dmr, nxdn, p25, ysf
 
 pytestmark = [pytest.mark.rig]
@@ -132,19 +133,34 @@ def state_rows(anon):
 
 
 def row_matches(row, mode):
-    room = str(row.get("room") or row.get("module") or "")
-    text = " ".join(str(row.get(k, "")) for k in ("protocol", "edge", "kind", "proto")).lower()
-    return room == ROOM[mode] and any(word in text for word in PROTO_WORDS[mode])
+    return mmdvm_stack.row_matches(row, mode, ROOM[mode], PROTO_WORDS)
 
 
 def linked_modes(anon):
+    """(modes with a gateway row in the public state, all client rows)."""
     _state, rows = state_rows(anon)
-    return {mode for mode in MODES if any(row_matches(r, mode) for r in rows)}, rows
+    return mmdvm_stack.linked_modes(rows, MODES, ROOM, PROTO_WORDS), rows
 
 
 @pytest.fixture(scope="session")
-def stack(modem, web_optional, target):
-    """Every gateway linked to the reflector (public state when the web profile is up, else a fixed wait)."""
+def offered(modem, target):
+    """The modes whose service the reflector under test offers to clients: our own client of the mode links. A gateway of another
+    mode cannot link either (a SUT config without the p25 / nxdn edges: rig/config/dv-router/mmdvm-edges.toml), so the public-state
+    checks leave those modes out, the way the voice cases skip them."""
+    def probe(mode):
+        peer = open_peer(mode, target.xlxd_sut)
+        if peer is None:
+            return False
+        close_peer(peer)
+        return True
+    got = mmdvm_stack.offered_modes(MODES, probe)
+    note("offered by the reflector under test: %s; not offered: %s" % (got, [m for m in MODES if m not in got]))
+    return got
+
+
+@pytest.fixture(scope="session")
+def stack(modem, web_optional, target, offered):
+    """Every gateway of an offered mode linked to the reflector (public state when the web profile is up, else a fixed wait)."""
     if web_optional is None:
         time.sleep(min(LINK_WAIT_S, 40.0))
         return modem
@@ -153,10 +169,10 @@ def stack(modem, web_optional, target):
     seen = set()
     while time.monotonic() < end:
         seen, rows = linked_modes(anon)
-        if seen == set(MODES):
+        if not mmdvm_stack.not_linked(offered, seen):
             break
         time.sleep(2.0)
-    note("gateways linked in the public state: %s of %s" % (sorted(seen), list(MODES)))
+    note("gateways linked in the public state: %s of %s (offered %s)" % (sorted(seen), list(MODES), list(offered)))
     if rows:
         note("client rows (first 3): %s" % [{k: v for k, v in r.items() if k in ("callsign", "protocol", "edge", "room", "kind")} for r in rows[:3]])
     return modem
@@ -181,8 +197,9 @@ class OnAir(threading.Thread):
             self.halt.wait(0.4)
 
 
-def make_peer(mode, ip):
-    """Our Python client on the same module / talk group as the gateway, linked, inbox empty."""
+def open_peer(mode, ip):
+    """Our Python client on the same module / talk group as the gateway, linked, inbox empty; None when the reflector does not
+    answer the link of that mode."""
     ident = TALKER[mode]
     if mode == "dstar":
         peer = dextra.DstarClient("0.0.0.0", callsign="N0TEST", module=MODULE["dstar"])
@@ -201,9 +218,16 @@ def make_peer(mode, ip):
         ok = peer.link(ip)
     if not ok:
         clients.close(peer)
-        pytest.skip("%s: the reflector under test did not answer our own %s client link (no %s service for clients yet?)"
-                    % (mode, mode, mode))
+        return None
     peer.client.inbox.clear()
+    return peer
+
+
+def make_peer(mode, ip):
+    peer = open_peer(mode, ip)
+    if peer is None:
+        pytest.skip("%s: the reflector under test did not answer our own %s client link (no %s service for clients: for DV-Router "
+                    "name rig/config/dv-router/mmdvm-edges.toml in DVT_SUT_CONFIG_EXTRA)" % (mode, mode, mode))
     return peer
 
 
@@ -326,22 +350,26 @@ def _expected_identity(mode):
 
 # ------------------------------------------------------------------ MMDVM3 lifecycle
 
-def test_mmdvm3_link_keepalive_and_unlink(stack, web_optional, rig_control):
-    """Every gateway is a client row of its module in the public state, still there after KEEPALIVE_WINDOW_S (its keepalives are
-    answered), gone within UNLINK_WAIT_S of `stop mmdvm-stack` for the gateways that unlink at SIGTERM (D-STAR, DMR; the others leave it to
-    the timeout of the reflector, TIMEOUT_GONE_S) and back after `start`."""
+def test_mmdvm3_link_keepalive_and_unlink(stack, web_optional, rig_control, offered):
+    """Every gateway of an offered mode is a client row of its module in the public state, still there after KEEPALIVE_WINDOW_S (its
+    keepalives are answered), gone within UNLINK_WAIT_S of `stop mmdvm-stack` for the gateways that unlink at SIGTERM (D-STAR, DMR; the
+    others leave it to the timeout of the reflector, TIMEOUT_GONE_S) and back after `start`. A mode the reflector does not offer
+    (our own client link of it is not answered) is left out, as the voice cases skip it."""
     if web_optional is None:
         pytest.skip("needs --profile web: the link is read from the public state (/api/v1/public/state clients)")
+    if not offered:
+        pytest.skip("the reflector under test offers none of the modes %s to our clients" % (list(MODES),))
+    modes = list(offered)
     anon = web_optional()
     seen, rows = linked_modes(anon)
-    note("lifecycle: linked %s; rows %s" % (sorted(seen), [{k: v for k, v in r.items() if k in ("callsign", "protocol", "edge", "room")} for r in rows[:6]]))
-    assert seen == set(MODES), "gateways not linked in the public state: %s (rows: %d)" % (sorted(set(MODES) - seen), len(rows))
+    note("lifecycle: checked modes %s; linked %s; rows %s" % (modes, sorted(seen), [{k: v for k, v in r.items() if k in ("callsign", "protocol", "edge", "room")} for r in rows[:6]]))
+    assert not mmdvm_stack.not_linked(modes, seen), "gateways not linked in the public state: %s (rows: %d)" % (mmdvm_stack.not_linked(modes, seen), len(rows))
     # keepalives: the rows stay for the whole window
     end = time.monotonic() + KEEPALIVE_WINDOW_S
     lost = {}
     while time.monotonic() < end:
         now, _ = linked_modes(anon)
-        for mode in set(MODES) - now:
+        for mode in set(modes) - now:
             lost.setdefault(mode, time.monotonic())
         time.sleep(5.0)
     assert not lost, "link dropped during the %.0f s keepalive window: %s" % (KEEPALIVE_WINDOW_S, sorted(lost))
@@ -350,15 +378,15 @@ def test_mmdvm3_link_keepalive_and_unlink(stack, web_optional, rig_control):
     t_stop = time.monotonic()
     rig_control("stop", "mmdvm-stack", timeout=90)
     try:
-        while time.monotonic() < t_stop + TIMEOUT_GONE_S and len(gone) < len(MODES):
+        while time.monotonic() < t_stop + TIMEOUT_GONE_S and len(gone) < len(modes):
             now, _ = linked_modes(anon)
-            for mode in set(MODES) - now:
+            for mode in set(modes) - now:
                 gone.setdefault(mode, time.monotonic() - t_stop)
             time.sleep(1.0)
         note("lifecycle: unlinked after stop (s): %s" % {m: round(t, 1) for m, t in sorted(gone.items())})
     finally:
         rig_control("start", "mmdvm-stack", timeout=90)
-    for mode in MODES:
+    for mode in modes:
         assert mode in gone, "%s: still linked %.0f s after the stack stopped" % (mode, TIMEOUT_GONE_S)
         if UNLINK_AT_STOP[mode]:
             assert gone[mode] <= UNLINK_WAIT_S, "%s: gone after %.1f s, an unlink at stop is expected within %.0f s (the reflector's timeout, not an unlink)" % (
@@ -368,7 +396,7 @@ def test_mmdvm3_link_keepalive_and_unlink(stack, web_optional, rig_control):
     assert stack.wait_configured(HANDSHAKE_S), "MMDVMHost did not reconfigure the modem after the restart"
     end = time.monotonic() + LINK_WAIT_S
     back = set()
-    while time.monotonic() < end and back != set(MODES):
+    while time.monotonic() < end and mmdvm_stack.not_linked(modes, back):
         back, _ = linked_modes(anon)
         time.sleep(2.0)
-    assert back == set(MODES), "after start, linked again: %s of %s" % (sorted(back), list(MODES))
+    assert not mmdvm_stack.not_linked(modes, back), "after start, not linked again: %s of %s" % (mmdvm_stack.not_linked(modes, back), modes)

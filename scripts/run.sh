@@ -428,6 +428,16 @@ case ",$profile," in *,mmdvm,*) has_mmdvm=1 ;; esac
 if [ "$has_mmdvm" = 1 ]; then
   [ -f .cache/mmdvmstack/MMDVMHost/MMDVM-Host.cpp ] \
     || { echo "run.sh: .cache/mmdvmstack missing; run scripts/pre-fetch-mmdvmstack.sh" >&2; exit 2; }
+  # the native template has the NXDN and P25 edges on "auto" without a served module, so they are not spawned and the gateways of
+  # those two modes cannot link: mmdvm-edges.toml serves TG 31672 as module F (NXDN) and G (P25), like the gateways' templates
+  if [ "${DVT_SUT_LAUNCH:-direct}" = native ]; then
+    case ":${DVT_SUT_CONFIG_EXTRA:-}:" in
+      *:rig/config/dv-router/mmdvm-edges.toml:*|*:rig/config/dv-router/soak-edges.toml:*) ;;
+      *) DVT_SUT_CONFIG_EXTRA="${DVT_SUT_CONFIG_EXTRA:+$DVT_SUT_CONFIG_EXTRA:}rig/config/dv-router/mmdvm-edges.toml"
+         export DVT_SUT_CONFIG_EXTRA
+         echo "run.sh: native launch: adding rig/config/dv-router/mmdvm-edges.toml (NXDN and P25 edges for the gateways of --profile mmdvm)" >&2 ;;
+    esac
+  fi
 fi
 # --profile twonode: the second DV-Router node; the SUT's peer row and recorder come from dp15-twonode-a.toml
 has_twonode=0

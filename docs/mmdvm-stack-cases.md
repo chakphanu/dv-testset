@@ -102,6 +102,14 @@ XLXD_SUT_IMAGE=<dv-router image> DVT_SUT_PROFILE=dvrouter DVT_SUT_LAUNCH=native 
     scripts/run.sh -m rig --capture --profile web,mmdvm -- cases/test_mmdvm_stack.py
 ```
 
+With DV-Router (native launch) `scripts/run.sh` adds `rig/config/dv-router/mmdvm-edges.toml` by itself: the template has the NXDN and P25 edges on
+`enable = "auto"` without a served module, so they are not spawned and NXDNGateway / P25Gateway cannot link (first run). The snippet serves TG 31672 as
+NXDN module `F` (UDP 41400) and P25 module `G` (UDP 41000), the modules and talk groups the cases use; it has the same values as `soak-edges.toml`
+(not added twice when that is listed). To name it yourself:
+`DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/admin.toml:rig/config/dv-router/mmdvm-edges.toml`.
+A mode whose service the reflector does not offer is left out the same way everywhere: the fixture `offered` links our own client of each mode once;
+MMDVM1 / MMDVM2 skip the modes that do not answer, and MMDVM3 (and the wait for the links) checks only the offered modes.
+
 Without `--profile web` MMDVM1 / MMDVM2 still run (frame level, a fixed 40 s wait for the links) and MMDVM3 skips. Offline: `python3 -m pytest -m unit
 cases/unit/test_mmdvm_modem.py cases/unit/test_mmdvm_rf_p25.py cases/unit/test_mmdvm_rf_nxdn.py cases/unit/test_mmdvmstack_config.py`. The modem alone
 against any MMDVMHost: `python3 -m dvtest.mmdvm_modem --udp 0.0.0.0:3334 --keyup dmr --seconds 3` (waits for the host, keys up once).
@@ -154,14 +162,29 @@ every 21 frames; DMR: colour code 1, group call to TG 6 on slot 2 (DMRGateway ma
 reflector (the gateway does not rewrite it), V/D mode 2; P25: NAC 0x293, group call, source id in the id lookup (the rig `dmrid.dat`); NXDN: RAN 1,
 group call, LICH direction inbound. All of it from `docs/` of the builders and the entry script header.
 
+## First run (`out/20261109T061354Z`, DV-Router `wip-caebc57`): 5 passed, 2 failed, 4 skipped, both failures were the harness
+
+* **MMDVM1 dstar, "voice words changed (first differing frame 82)".** 150 words sent and heard; word 82 (seq 19 of the fourth superframe, not the
+  last frame: the capture has 151 voice packets, 150 plus the end packet `seq|0x40` with the `55 55 55 55 c8 7a` pattern) was the null AMBE word
+  `9e8d3288261a3f61e8`. The same bytes are in the capture between DStarGateway and the reflector and again from the reflector to our client (in both
+  streams the other 149 words equal the modem's), so the change happened in the client stack, before the reflector. Cause:
+  DStarGateway blanks a voice word that looks like a DTMF key (`CRepeaterHandler::processRepeater`, Common/RepeaterHandler.cpp:752-757, with
+  `CDTMF::decode` and the masks of DStarBase/DTMF.h:49-68, on by default). Eight fixed bits of the nine bytes select it and every value of the four
+  symbol bits is one of the 16 keys; the valid form of the PRNG word 82 (`dae8bcabee7f58741d`) is the key "2". Probability for a random word 1/256, for a 150 word
+  over 44 %. So not a DV-Router change and not an off-by-one. Fixed in the generator: `default_frames("dstar", ...)` replaces such words
+  (`rf.dstar_dtmf_like`, deterministic, the others stay as they were).
+* **MMDVM3 "gateways not linked: ['nxdn', 'p25']" and the p25 / nxdn SKIPs.** The SUT's rendered `dv-router.toml` of the run had
+  `[edges.nxdn] enable = "auto"` and `[edges.p25] enable = "auto"` and nothing that serves a module (the run used `web.toml:admin.toml:totp-required.toml`), so the
+  edges were not spawned and both our own client link and the gateways got no answer. Fixed by `mmdvm-edges.toml` (above) and by the `offered` fixture.
+
 ## UNVERIFIED
 
-1. **Nothing ran on a rig.** The image was never built: the six programs compile with the bookworm compiler (gcc 12) with `-std=c++0x` and
+1. **Only one run so far.** (First run: the image built and the stack ran, see above.) Originally: the image was never built: the six programs compile with the bookworm compiler (gcc 12) with `-std=c++0x` and
    nlohmann-json 3.11 only as far as the sources were read; DStarGateway builds with `-Werror` removed and the libcurl stand-in via the
    environment; the sub-make of DStarGateway is parallel. The first build may need a fix.
-2. **DV-Router's client services for P25 (UDP 41000) and NXDN (UDP 41400)**: the specs say the client-serving edges were not built in some images
-   (`dvtest/specs/dvrouter.py`); which talk group maps to which room in the template is not known. If our own client cannot link, MMDVM1 / MMDVM2 of
-   those modes skip with the reason; if only the gateway cannot, MMDVM3 fails for it.
+2. **DV-Router's client services for P25 (UDP 41000) and NXDN (UDP 41400)**: they need `mmdvm-edges.toml` (above; the template alone does not serve a
+   module). Whether the gateways link with it is the next run to tell. If our own client cannot link, MMDVM1 / MMDVM2 of those modes skip with the reason and
+   MMDVM3 leaves the mode out; if only the gateway cannot, MMDVM3 fails for it.
 3. **XLX conventions for DMRGateway**: login with `passw0rd`, the startup link burst (3 headers and 2 terminators, private call to 4001+) and the slot 2
    TG 9 voice are taken from the sources of DMRGateway and `docs/protocols/mmdvm.md`; the module in `XLXHosts.txt` (third column) is a reading of the
    source. The room name `I` for DMR, `H` for D-STAR and `J` for YSF must exist in the template.

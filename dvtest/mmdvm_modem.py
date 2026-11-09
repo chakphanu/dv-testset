@@ -196,7 +196,20 @@ def default_frames(mode, count, seed="mmdvm"):
     """count deterministic voice words for the mode (PRNG, dvtest.audio.signals)."""
     width = rf.FRAME_WIDTH[mode]
     raw = signals.prng_bytes("%s/%s" % (seed, mode), width * count)
-    return [raw[i:i + width] for i in range(0, width * count, width)]
+    frames = [raw[i:i + width] for i in range(0, width * count, width)]
+    if mode == "dstar":
+        # DStarGateway blanks a word that looks like a DTMF key (rf.dstar_dtmf_like): such a word never reaches the reflector as sent
+        frames = [_without_dtmf(f, seed, i) for i, f in enumerate(frames)]
+    return frames
+
+
+def _without_dtmf(frame, seed, index):
+    """frame, or the first deterministic replacement of it whose valid form is not DTMF-like (the others stay as they were)."""
+    attempt = 0
+    while rf.dstar_dtmf_like(rf.dstar_ambe(frame)):
+        attempt += 1
+        frame = signals.prng_bytes("%s/dstar/nodtmf/%d/%d" % (seed, index, attempt), rf.FRAME_WIDTH["dstar"])
+    return frame
 
 
 class VirtualModem:

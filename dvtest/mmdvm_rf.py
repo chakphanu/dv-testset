@@ -149,6 +149,20 @@ def dstar_ambe(frame9):
     return bytes(out)
 
 
+# DStarGateway (CRepeaterHandler::processRepeater, Common/RepeaterHandler.cpp:752-757, and CDTMF::decode, DStarBase/DTMF.cpp, masks in
+# DStarBase/DTMF.h:49-68) blanks a voice frame that looks like a DTMF tone to the null AMBE word 9e8d3288261a3f61e8, on by default:
+# eight fixed bits of the nine bytes select it and every value of the four symbol bits is one of the 16 keys, so a random word
+# is blanked with probability 1/256 (44 % of a 150 frame over). A byte-exact check must not use such words.
+DSTAR_DTMF_MASK = bytes((0x82, 0x08, 0x20, 0x82, 0x00, 0x00, 0x82, 0x00, 0x00))
+DSTAR_DTMF_SIG = bytes((0x82, 0x08, 0x20, 0x82, 0x00, 0x00, 0x00, 0x00, 0x00))
+
+
+def dstar_dtmf_like(frame9):
+    """True when DStarGateway takes the (valid, as the gateway sees it: see dstar_ambe) word for a DTMF key and blanks it."""
+    frame9 = bytes(frame9)
+    return len(frame9) == 9 and all((b & m) == s for b, m, s in zip(frame9, DSTAR_DTMF_MASK, DSTAR_DTMF_SIG))
+
+
 def dstar_keyup(frames, my="N0CALL", my2="    ", rpt1="N0CALL B", rpt2="N0CALL G", ur="CQCQCQ", slow=None):
     """RF key-up: header, one 12-byte frame per 20 ms (frame 0 of every
     21 carries the sync pattern, the others the slow data `slow(n)` or the null
