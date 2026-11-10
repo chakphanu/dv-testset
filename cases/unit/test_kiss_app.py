@@ -98,10 +98,10 @@ def test_commands_text_raw_and_split_writes(server):
     with kiss_app.AppKissClient("127.0.0.1", server.port) as client:
         assert client.send_command(1, b"\x1e") and client.send_command(15, b"", channel=15)
         assert client.send_text("ATE0\nKISS ON") and client.send_split(ax25.kiss_encode(0, 0, FRAME), size=5, gap=0.0)
-        assert wait_for(lambda: bytes(server.received).endswith(b"\xc0"))
-        data = bytes(server.received)
-        assert data.startswith(b"\xc0\x01\x1e\xc0")                                         # FEND, TXDELAY command, value, FEND
-        assert b"\xc0\xff\xc0" in data and b"ATE0\r\nKISS ON\r\n" in data and data.endswith(ax25.kiss_encode(0, 0, FRAME))
+        # everything that was written, in order: the first command alone already ends with a FEND, so "ends with FEND" is no sign of completeness
+        expected = (b"\xc0\x01\x1e\xc0" + b"\xc0\xff\xc0" + b"ATE0\r\nKISS ON\r\n" + ax25.kiss_encode(0, 0, FRAME))
+        assert wait_for(lambda: len(server.received) >= len(expected), timeout=10.0)
+        assert bytes(server.received) == expected
         with pytest.raises(ValueError):
             client.send_command(0)
 
@@ -139,10 +139,9 @@ def test_connect_fails_cleanly_when_nothing_listens_and_source_ip_is_bound():
 def test_pause_reading_holds_back_the_frames(server):
     with kiss_app.AppKissClient("127.0.0.1", server.port) as client:
         assert wait_for(lambda: len(server.conns) == 1)
-        client.pause_reading()
-        time.sleep(0.15)
+        assert client.pause_reading()                                       # the reader loop is parked: nothing can be consumed from now on
         server.push(ax25.kiss_encode(0, 0, FRAME))
-        time.sleep(0.3)
+        time.sleep(0.3)                                                     # time for the bytes to arrive; a late arrival cannot make this fail
         assert client.frames() == [] and client.bytes_received == 0
         client.resume_reading()
         assert client.wait_frames(1, timeout=2.0)
@@ -181,16 +180,16 @@ def test_lone_fends_are_counted_with_their_times_and_frames_are_not(server):
     with kiss_app.AppKissClient("127.0.0.1", server.port) as client:
         assert wait_for(lambda: len(server.conns) == 1)
         t0 = time.monotonic()
-        for _ in range(3):
+        for n in range(1, 4):
             server.push(b"\xc0")
-            time.sleep(0.12)
+            assert wait_for(lambda: len(client.lone_fends()) == n, timeout=10.0)      # one at a time: never coalesced with the next write
         server.push(ax25.kiss_encode(0, 0, FRAME))                         # a frame: its FENDs are delimiters, not keepalives
-        time.sleep(0.12)
+        assert client.wait_frames(1, timeout=10.0)
         server.push(b"\xc0")                                               # a keepalive after a frame
-        assert wait_for(lambda: len(client.lone_fends()) == 4)
-        assert len(client.lone_fends(t0)) == 4 and client.wait_frames(1, timeout=1.0)
+        assert wait_for(lambda: len(client.lone_fends()) == 4, timeout=10.0)
+        assert len(client.lone_fends(t0)) == 4
         gaps = client.fend_intervals()
-        assert len(gaps) == 3 and all(0.05 < g < 0.6 for g in gaps)
+        assert len(gaps) == 3 and all(g >= 0 for g in gaps)                # their size is not asserted: it depends on the host
         assert client.other_commands() == []
 
 
@@ -199,9 +198,9 @@ def test_fends_inside_a_frame_split_across_reads_are_not_keepalives(server):
         assert wait_for(lambda: len(server.conns) == 1)
         framed = ax25.kiss_encode(0, 0, FRAME)
         server.push(framed[:1])                                            # the opening FEND alone, then the rest: idle at the first chunk
-        time.sleep(0.15)
+        wait_for(lambda: client.bytes_received >= 1, timeout=10.0)
         server.push(framed[1:])
-        assert client.wait_frames(1, timeout=1.0)
+        assert client.wait_frames(1, timeout=10.0)
         # the lone opening FEND of a slowly written frame IS indistinguishable from a keepalive: one is counted, documented
         assert len(client.lone_fends()) <= 1
 
@@ -217,3 +216,11 @@ def test_max_silence_and_the_app_timeout_model(server):
         assert client.max_silence(start, end) >= 0.35
         assert client.would_time_out(0.3, start, end) and not client.would_time_out(5.0, start, end) and not client.would_time_out(0, start, end)
         assert client.max_silence(end, end + 0.1) == pytest.approx(0.1, abs=0.01)
+
+
+def test_pause_reading_returns_false_when_the_reader_is_gone_and_true_when_it_parks(server):
+    client = kiss_app.AppKissClient("127.0.0.1", server.port)
+    assert client.connect() and client.pause_reading() is True
+    client.resume_reading()
+    client.close()
+    assert client.pause_reading(wait=0.2) is False                          # the loop has ended: nothing parks

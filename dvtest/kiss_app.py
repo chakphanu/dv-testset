@@ -46,6 +46,7 @@ class AppKissClient:
         self._stop = threading.Event()
         self._reading = threading.Event()
         self._reading.set()
+        self._parked = threading.Event()    # set by the reader loop while it is paused: pause_reading() waits for it
 
     # ------------------------------------------------------------ connection
 
@@ -68,6 +69,7 @@ class AppKissClient:
     def _read_loop(self):
         while not self._stop.is_set():
             if not self._reading.is_set():
+                self._parked.set()
                 time.sleep(0.02)
                 continue
             try:
@@ -108,9 +110,12 @@ class AppKissClient:
                 self.lock.wait(min(left, 0.2))
         return True
 
-    def pause_reading(self):
-        """Stop calling recv: the kernel buffers fill and the server's writes back up (a slow client)."""
+    def pause_reading(self, wait=2.0):
+        """Stop calling recv: the kernel buffers fill and the server's writes back up (a slow client). Returns once the reader loop has
+        parked (True), so no recv is in flight any more and nothing can be consumed after the call; False when it did not park in `wait` s."""
         self._reading.clear()
+        self._parked.clear()
+        return self._parked.wait(wait)
 
     def resume_reading(self):
         self._reading.set()
