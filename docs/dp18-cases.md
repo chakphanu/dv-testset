@@ -31,8 +31,11 @@ XLXD_SUT_IMAGE=<image> DVT_SUT_PROFILE=dvrouter DVT_SUT_LAUNCH=native DVT_SUT_GE
 DVT_SUT_CONFIG_EXTRA=$E:$R/dp18-origin.toml scripts/run.sh -m rig --capture --profile web,aprs -- cases/test_dp18_origin.py
 # W: the position policy withholds the gateway call (about 12 minutes)
 ... DVT_SUT_CONFIG_EXTRA=$E:$R/dp18-origin.toml:$R/dp18-origin-withheld.toml scripts/run.sh -m rig --capture --profile web,aprs -- cases/test_dp18_origin.py
-# S: simulate port, reload simulate <-> true, restore (about 8 minutes; the config file must be writable)
-... DVT_SUT_CONFIG_EXTRA=$E:$R/dp18-rf.toml scripts/run.sh -m rig --capture --profile web,aprs -- cases/test_dp18_rf.py -k "dp18_s or dp18_r"
+# S: simulate port, reload simulate <-> true, restore (about 8 minutes). DVT_SUT_CONFIG_RW=1 is REQUIRED for the reload cases r1 and r2: the rendered
+# config is then a copy in out/<run>/xlxd-config/xlxd-sut/rw/, mounted read-write at /etc/dv-router-rw, so the admin API can replace it (the
+# default single-file :ro mount answers 409 read_only and the cases skip naming the variable). Do not combine with the echo cases E3 / E7, which
+# edit the rendered file directly.
+... DVT_SUT_CONFIG_RW=1 DVT_SUT_CONFIG_EXTRA=$E:$R/dp18-rf.toml scripts/run.sh -m rig --capture --profile web,aprs -- cases/test_dp18_rf.py -k "dp18_s or dp18_r"
 # R: eleven reports with RF copies (about 27 minutes for 2 cycles: DVT_DP18_CYCLES=2, the default)
 ... DVT_SUT_CONFIG_EXTRA=$E:$R/dp18-rf.toml:$R/dp18-rf-objects.toml scripts/run.sh -m rig --capture --profile web,aprs -- cases/test_dp18_rf.py -k dp18_o
 ```
@@ -70,3 +73,7 @@ Limits and what is NOT covered:
   a restart-class change without `accept_pending_restart`, a path to a simulated port being accepted by the launcher, the q tail the aprsc puts after `qAC`, the object `kind` labels of the
   scheduler counters. The first rig run compares them with the documents.
 * The TX guard (RFSAFE1): `rf.tx_guard` waits for the fence after the start; after each edge restart the reload cases wait for `tx_fence` to end (`txguard.wait_unfenced`) before expecting a frame.
+* **Config access.** The reload cases read and write the configuration only through the admin API (`GET /config` for `meta.etag` and `meta.writable`, `POST /config/changes`
+  with `base_etag`, `GET /config/history`, `POST /config/history/{seq}/restore`) and the status route for the child's `restarts` and pid. The rendered `dv-router.toml` of the run is only
+  READ at the start (the shape: port numbers and `tx` modes), never edited; with `DVT_SUT_CONFIG_RW=1` it stays the pre-reload copy, and both reload cases leave the SUT on the original shape.
+  `cases/unit/test_dp18_support.py` scans the three DP18 modules for file writes.

@@ -314,9 +314,9 @@ def test_apply_tx_posts_the_replace_with_the_current_etag_and_skips_when_read_on
     trf.apply_tx(sim, "rf-b", True, "dvt")
     path, body = admin.posts[0]
     assert path == "/api/v1/admin/config/changes" and body["base_etag"] == "e1" and body["ops"][0]["path"] == "/edges/ax25/port/1/tx" and admin.step_ups == 1
-    with pytest.raises(pytest.skip.Exception, match="not writable"):
+    with pytest.raises(pytest.skip.Exception, match=r"not writable.*DVT_SUT_CONFIG_RW=1"):
         trf.apply_tx(SimpleNamespace(admin_adm=FakeAdmin(writable=False), doc=doc), "rf-b", True, "dvt")
-    with pytest.raises(pytest.skip.Exception, match="read_only"):
+    with pytest.raises(pytest.skip.Exception, match=r"read_only.*DVT_SUT_CONFIG_RW=1"):
         trf.apply_tx(SimpleNamespace(admin_adm=FakeAdmin(post_status=409), doc=doc), "rf-b", True, "dvt")
     with pytest.raises(AssertionError, match="HTTP 422"):
         trf.apply_tx(SimpleNamespace(admin_adm=FakeAdmin(post_status=422), doc=doc), "rf-b", True, "dvt")
@@ -448,3 +448,14 @@ def test_flow_s_fails_on_each_way_a_simulated_port_can_leak(monkeypatch):
         run_s(monkeypatch, ptt_moves=True)
     with pytest.raises(AssertionError, match="more than once|exactly 1"):
         run_s(monkeypatch, a_frames=2)
+
+
+def test_the_dp18_modules_never_write_files_and_the_docs_name_the_rw_variable():
+    """The reload cases change the config through the admin API only: no file write, no direct edit of the rendered dv-router.toml."""
+    import re
+    for name in ("cases/dp18_support.py", "cases/test_dp18_rf.py", "cases/test_dp18_origin.py"):
+        text = (ROOT / name).read_text(encoding="utf-8")
+        assert not re.search(r"write_text|write_bytes|shutil\.|os\.(replace|rename|remove|unlink)|open\([^)]*[\"'][wa]b?[\"']", text), name
+    docs = (ROOT / "docs" / "dp18-cases.md").read_text(encoding="utf-8")
+    s_line = next(l for l in docs.split("\n") if l.startswith("... DVT_SUT_CONFIG_RW=1 DVT_SUT_CONFIG_EXTRA=") and "dp18-rf.toml scripts" in l)
+    assert "-k \"dp18_s or dp18_r\"" in s_line

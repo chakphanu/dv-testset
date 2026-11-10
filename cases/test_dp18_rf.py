@@ -166,7 +166,9 @@ def test_dp18_s_a_simulated_port_never_reaches_its_tnc(rig, target, hub, sim):
 # ================================================================ DP18-r1 / r2: reload of the mode
 
 def config_state(sim):
-    """(etag, writable) of GET /api/v1/admin/config; skips when the file is not writable (a :ro mount)."""
+    """(etag, writable) of GET /api/v1/admin/config. The configuration is read and written ONLY through the admin API (GET /config, POST
+    /config/changes, the history restore); the rendered out/<run>/xlxd-config/xlxd-sut/dv-router.toml is only READ at the start, for the
+    shape, and never edited (the echo cases E3 / E7 edit it directly and cannot share a run with these)."""
     admin = sim.admin_adm
     resp = admin.get(admin.path("/config"), expect=None)
     assert resp.status == 200, "GET config answered HTTP %d" % resp.status
@@ -179,13 +181,15 @@ def apply_tx(sim, port, value, comment):
     admin = sim.admin_adm
     etag, writable = config_state(sim)
     if not writable:
-        pytest.skip("the configuration file is not writable (a read-only mount): the reload cases cannot change it")
+        pytest.skip("the configuration file is not writable (the single-file :ro mount of the rig): run with DVT_SUT_CONFIG_RW=1 "
+                    "(scripts/run.sh, native launch: the config is a copy in a directory mounted read-write at /etc/dv-router-rw)")
     assert etag, "GET config returned no etag"
     index = dc.port_index(sim.doc, port)
     admin.step_up()
     resp = admin.post(admin.path("/config/changes"), dc.tx_change_request(index, value, etag, comment), expect=None)
     if resp.status == 409:
-        pytest.skip("the configuration change answered 409 (read_only): %s" % resp.text()[:200])
+        pytest.skip("the configuration change answered 409 (read_only): the SUT cannot replace its config file; run with DVT_SUT_CONFIG_RW=1 "
+                    "(scripts/run.sh, native launch). Reply: %s" % resp.text()[:200])
     assert resp.status == 200, "POST config/changes (tx of %s -> %r) answered HTTP %d: %s" % (port, value, resp.status, resp.text()[:300])
     return resp
 
