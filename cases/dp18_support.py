@@ -283,11 +283,14 @@ def history_seqs(body):
 
 
 def child_state(status_body, name):
-    """{pid, restarts, state, since_ms} of the launcher child `name` in GET /api/v1/admin/status `launcher.children`, else None."""
+    """{pid, restarts, state, since_ms} of the launcher child `name` in GET /api/v1/admin/status `launcher.children` (a single `name[<instance>]` entry when there is no exact
+    one), else None. `since_ms` is the Unix milliseconds of the CURRENT child start (launcher shell.rs:223), 0 only if it never started."""
     launcher = status_body.get("launcher") if isinstance(status_body, dict) else None
-    for child in (launcher or {}).get("children") or []:
-        if isinstance(child, dict) and child.get("name") == name:
-            return {k: child.get(k) for k in ("pid", "restarts", "state", "since_ms")}
+    children = [c for c in (launcher or {}).get("children") or [] if isinstance(c, dict)]
+    exact = [c for c in children if c.get("name") == name]
+    named = [c for c in children if str(c.get("name", "")).startswith(name + "[")]          # dv-edge-ax25[<name>]: a named instance of the same edge
+    for child in exact or (named if len(named) == 1 else []):
+        return {k: child.get(k) for k in ("pid", "restarts", "state", "since_ms")}
     return None
 
 

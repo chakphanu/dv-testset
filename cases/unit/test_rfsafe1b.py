@@ -94,5 +94,18 @@ def test_collect_polls_until_the_port_is_unfenced_and_reports_scope_and_timeouts
     assert rb.collect(lambda: obs(False, found=False), now["t"], clock=clock, sleep=sleep, max_wait_s=2.0).state == "not_found"
 
 
+def test_the_child_start_origin_is_unix_ms_not_an_uptime():
+    now_unix, now_mono = 1_794_000_100.0, 5000.0
+    origin, age = rb.child_start_origin(1_794_000_097_500, now_unix, now_mono)
+    assert age == 2.5 and origin == 4997.5                                       # the child started 2.5 s ago: the origin lies 2.5 s before now
+    assert rb.child_start_origin(1_794_000_100_500, now_unix, now_mono) == (5000.0, 0.0)          # 0.5 s in the future: clock skew, clamped to now
+    for bad in (None, 0, -5, True, "x", 1_794_000_103_000, 1_793_999_900_000, 300):               # unusable: not a number, 0, the future, 200 s old, an uptime-sized value
+        assert rb.child_start_origin(bad, now_unix, now_mono) == (None, None), bad
+    # the lower bound stays active with a known origin: a view that clears 12 s after a start taken from since_ms is early
+    samples = [rb.Sample(t, True, "startup_guard", max(0, int((13.0 - t) * 1000))) for t in (0.5, 6.0, 11.5)] + [rb.Sample(12.0, False, None, None)]
+    assert any("before the guard" in p for p in rb.judge(samples, strict=True, check_early=True).problems)
+    assert rb.judge(samples, strict=True, check_early=False).problems == []
+
+
 def test_the_switch_reads_dvt_rfsafe1b():
     assert rb.strict_on({"DVT_RFSAFE1B": "on"}) and rb.strict_on({"DVT_RFSAFE1B": "1"}) and not rb.strict_on({}) and not rb.strict_on({"DVT_RFSAFE1B": "off"})

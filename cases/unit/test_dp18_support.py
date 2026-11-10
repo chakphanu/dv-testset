@@ -178,6 +178,10 @@ def test_tx_change_request_and_the_other_admin_helpers():
     assert dc.history_seqs({"history": [{"seq": True}]}) == [] and dc.history_seqs("x") == []
     status = {"launcher": {"children": [{"name": "dv-edge-ax25", "pid": 10, "restarts": 0, "state": "up", "since_ms": 5}]}}
     before = dc.child_state(status, "dv-edge-ax25")
+    named = {"launcher": {"children": [{"name": "dv-edge-ax25[b]", "pid": 7, "restarts": 2, "state": "up", "since_ms": 1794000000000}, {"name": "dv-room[B]", "pid": 8}]}}
+    assert dc.child_state(named, "dv-edge-ax25") == {"pid": 7, "restarts": 2, "state": "up", "since_ms": 1794000000000}        # a single named instance stands in
+    two = {"launcher": {"children": [{"name": "dv-edge-ax25[a]", "pid": 1}, {"name": "dv-edge-ax25[b]", "pid": 2}]}}
+    assert dc.child_state(two, "dv-edge-ax25") is None                                                                       # ambiguous: no guess
     assert before["pid"] == 10 and dc.child_state(status, "nope") is None and dc.child_state({}, "x") is None
     assert dc.restarted(before, dict(before, restarts=1)) and dc.restarted(before, dict(before, pid=11)) and not dc.restarted(before, dict(before))
     assert not dc.restarted(None, before)
@@ -475,7 +479,7 @@ def test_dp18_r1_fence_view_bounds_follow_the_switch(monkeypatch):
         return rb.Trace(samples + [S(end, False, None, None)], end, "unfenced")
 
     def run(tmp, end, since=300, state=None):
-        monkeypatch.setattr(trf, "children_state", lambda sim: {"since_ms": since})
+        monkeypatch.setattr(trf, "children_state", lambda sim: {"since_ms": None if since is None else int(trf.time.time() * 1000) - since})
         monkeypatch.setattr(trf.txguard, "ax25_reader", lambda admin, port: (lambda: None))
         seen = {}
         def fake_collect(read, origin, **kw):
@@ -495,6 +499,10 @@ def test_dp18_r1_fence_view_bounds_follow_the_switch(monkeypatch):
         run(tmp, 12.0)
     judged, _ = run(tmp, 12.0, since=None)                                      # no usable since_ms: the early bound cannot be checked
     assert judged.problems == []
+    judged, _ = run(tmp, 12.0, since=-1000 * 3600)                              # a start in the FUTURE is not a start: fallback, no early check
+    assert judged.problems == []
+    with pytest.raises(AssertionError, match="before the guard"):
+        run(tmp, 12.0, since=2500)                                              # the child started 2.5 s before the first read: the origin is that start, 12 s is early
     with pytest.raises(AssertionError, match="expected within 16.0 s"):
         run(tmp, 17.0)
     with pytest.raises(pytest.fail.Exception, match="no `modem` object"):

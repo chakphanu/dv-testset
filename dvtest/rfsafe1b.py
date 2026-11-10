@@ -39,6 +39,24 @@ def strict_on(environ=None):
     return (environ if environ is not None else os.environ).get("DVT_RFSAFE1B", "").lower() in ("on", "1", "true", "yes")
 
 
+CHILD_AGE_MAX_S = 120.0                 # a child start older than this when the case reads it is not "the restart just made"
+CHILD_AGE_SKEW_S = 1.0                  # tolerated clock difference between the launcher (a container) and the tester
+
+
+def child_start_origin(since_ms, now_unix_s, now_mono):
+    """(origin on the monotonic clock, age in seconds) of the launcher's current child start, or (None, None) when `since_ms` cannot be it. `since_ms` is the Unix
+    milliseconds of the current child start in the admin status `launcher.children[]` entry (launcher shell.rs:223; 0 only if the child never started). It is NOT an uptime, and the
+    hub's procs[] row of a token-bearing edge has none by design (status.md 599-606, procs.rs:120-148). An implausible value (not a number, 0, in the future by more than the
+    skew, older than CHILD_AGE_MAX_S) gives (None, None): the caller falls back to the time it saw the pid change and skips the 13.0 s lower-bound check."""
+    if isinstance(since_ms, bool) or not isinstance(since_ms, (int, float)) or since_ms <= 0:
+        return None, None
+    age = now_unix_s - since_ms / 1000.0
+    if age < -CHILD_AGE_SKEW_S or age > CHILD_AGE_MAX_S:
+        return None, None
+    age = max(age, 0.0)
+    return now_mono - age, age
+
+
 def collect(read, origin, *, clock=time.monotonic, sleep=time.sleep, poll_s=POLL_S, max_wait_s=MAX_WAIT_S):
     """Poll `read()` (a txguard Observation) every poll_s until the port is unfenced after having been fenced, at most max_wait_s after `origin` (a clock value:
     the child start, or the return of the restart call). Returns a Trace."""

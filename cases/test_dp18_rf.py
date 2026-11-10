@@ -96,17 +96,21 @@ def fence_view_bounds(sim, target, case, port):
     """RFSAFE1b (dvtest/rfsafe1b.py): right after the launcher child dv-edge-ax25 restarted, poll the fence view of `port` until it clears and judge it. Strict
     (DVT_RFSAFE1B=on): only startup_guard may show, the view clears within 16 s of the child start and not before 13.0 s, tx_guard_ms is <= 13000 and
     non-increasing, read time + tx_guard_ms predicts the end within 1.5 s; any other cause or a "probe failed" log line is a FINDING. Lenient (default): the view
-    may show a fence for up to about 24.5 s (wait up to 30 s); the cause and the timing are recorded, nothing is asserted. The origin is the child start taken
-    from the launcher's since_ms (read at once; an unusable value falls back to now and the early bound is not checked)."""
+    may show a fence for up to about 24.5 s (wait up to 30 s); the cause and the timing are recorded, nothing is asserted. The origin is the child start: `since_ms` of the
+    launcher's `launcher.children[]` entry of the admin status (Unix ms of the CURRENT child start, read at once; the hub's procs[] row of an edge has none by design). A value that
+    cannot be a recent start falls back to the time the pid change was seen, and the 13.0 s lower-bound check is then skipped."""
     strict = rfsafe1b.strict_on()
     st = children_state(sim)
     since = (st or {}).get("since_ms")
-    known = isinstance(since, (int, float)) and not isinstance(since, bool) and 0 <= since <= 30000
-    origin = time.monotonic() - (since / 1000.0 if known else 0.0)
+    origin, age = rfsafe1b.child_start_origin(since, time.time(), time.monotonic())
+    known = origin is not None
+    if not known:
+        origin = time.monotonic()
     trace = rfsafe1b.collect(txguard.ax25_reader(sim.admin, port), origin, max_wait_s=rfsafe1b.MAX_WAIT_S if strict else 30.0)
     judged = rfsafe1b.judge(trace.samples, strict=strict, check_early=known)
-    note(target, case, "RECORD", "RFSAFE1b %s view of %s after the restart (child start from since_ms %s): %s; trace %s" % (
-        "strict" if strict else "lenient (DVT_RFSAFE1B off)", port, since if known else "unknown", judged.summary, trace.state))
+    note(target, case, "RECORD", "RFSAFE1b %s view of %s after the restart (child start %s s before the first read, from since_ms %s%s): %s; trace %s" % (
+        "strict" if strict else "lenient (DVT_RFSAFE1B off)", port, "%.1f" % age if known else "unknown", since, "" if known else ", unusable: the observed restart time is the origin",
+        judged.summary, trace.state))
     for finding in judged.findings:
         note(target, case, "FINDING", "RFSAFE1b: " + finding)
     out_dir = getattr(target, "out", None)
