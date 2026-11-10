@@ -26,6 +26,8 @@ at any object whose `name` is the port. Every first call records the keys met on
 import time
 from collections import namedtuple
 
+from dvtest import rfsafe1b
+
 STARTUP_GUARD_S = 13.0              # radio.md 10.4 rule 3: G = D 2.5 s + max(B) 10 s + 0.5 s
 MARGIN_S = 2.0                      # slack on top of the guard (poll interval, publish delay of the status record)
 MAX_WAIT_S = 20.0                   # never wait longer than this for one fence
@@ -300,7 +302,8 @@ def ax25_child_names(status_body):
     return [n for n in names if n == AX25_CHILD][:1], names
 
 
-Rearm = namedtuple("Rearm", "outcome cause detail seen_after_ms fence_ms guard_first guard_second decreased row_gone polls keys absent_ms")
+Rearm = namedtuple("Rearm", "outcome cause detail seen_after_ms fence_ms guard_first guard_second decreased row_gone polls keys absent_ms samples", defaults=(None,))
+# samples: [rfsafe1b.Sample] of every read since the restart call returned (t in seconds), for the RFSAFE1b bounds (dvtest/rfsafe1b.py)
 # outcome: ok | violation (no fence appeared, a wrong cause, a bad or non-decreasing guard, or a credential problem) | still_fenced (past max_fence_s)
 
 
@@ -321,9 +324,12 @@ def rearm_fence(read, restart, *, clock=time.monotonic, sleep=time.sleep, poll_s
     row_gone = False
     keys = []
     first = None
+    samples = []
     while True:
         obs = read()
         polls += 1
+        if obs.found:
+            samples.append(rfsafe1b.Sample(clock() - t0, bool(obs.fenced), obs.fence if obs.fenced else None, obs.guard_ms if obs.fenced else None))
         if not keys:
             keys = list(obs.keys)
         if obs.scope:
@@ -356,6 +362,8 @@ def rearm_fence(read, restart, *, clock=time.monotonic, sleep=time.sleep, poll_s
         sleep(poll_s)
         last = read()
         polls += 1
+        if last.found:
+            samples.append(rfsafe1b.Sample(clock() - t0, bool(last.fenced), last.fence if last.fenced else None, last.guard_ms if last.fenced else None))
         if not last.fenced:
             break
         if last.guard_ms is not None:
@@ -384,4 +392,4 @@ def rearm_fence(read, restart, *, clock=time.monotonic, sleep=time.sleep, poll_s
         cause, int((seen_at - t0) * 1000), int((end - t0) * 1000), guard_note,
         "" if decreased is not None or guard_first is None else " (the fence ended before a second guard read)")
     return Rearm(outcome, cause, detail, int((seen_at - t0) * 1000), int((end - t0) * 1000), guard_first, guard_second, decreased,
-                 row_gone, polls, keys, absent_ms)
+                 row_gone, polls, keys, absent_ms, samples)

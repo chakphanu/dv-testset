@@ -459,3 +459,47 @@ def test_the_dp18_modules_never_write_files_and_the_docs_name_the_rw_variable():
     docs = (ROOT / "docs" / "dp18-cases.md").read_text(encoding="utf-8")
     s_line = next(l for l in docs.split("\n") if l.startswith("... DVT_SUT_CONFIG_RW=1 DVT_SUT_CONFIG_EXTRA=") and "dp18-rf.toml scripts" in l)
     assert "-k \"dp18_s or dp18_r\"" in s_line
+
+
+def test_dp18_r1_fence_view_bounds_follow_the_switch(monkeypatch):
+    from dvtest import rfsafe1b as rb
+    notes = []
+    monkeypatch.setattr(trf, "note", lambda *a: notes.append(a))
+    S = rb.Sample
+
+    def trace(end):
+        samples, t = [], 0.2
+        while t < end - 0.01:
+            samples.append(S(t, True, "startup_guard", max(0, int(round((13.0 - t) * 1000)))))
+            t += 0.5
+        return rb.Trace(samples + [S(end, False, None, None)], end, "unfenced")
+
+    def run(tmp, end, since=300, state=None):
+        monkeypatch.setattr(trf, "children_state", lambda sim: {"since_ms": since})
+        monkeypatch.setattr(trf.txguard, "ax25_reader", lambda admin, port: (lambda: None))
+        seen = {}
+        def fake_collect(read, origin, **kw):
+            seen.update(kw)
+            t = trace(end)
+            return t if state is None else t._replace(state=state)
+        monkeypatch.setattr(trf.rfsafe1b, "collect", fake_collect)
+        out = trf.fence_view_bounds(SimpleNamespace(admin=None), SimpleNamespace(out=str(tmp)), "DP18-r1", "rf-b")
+        return out, seen
+
+    import tempfile
+    tmp = Path(tempfile.mkdtemp())
+    monkeypatch.setenv("DVT_RFSAFE1B", "on")
+    judged, seen = run(tmp, 14.0)
+    assert judged.problems == [] and seen["max_wait_s"] == 20.0 and (tmp / "logscan" / "DP18-r1-probe-failed.json").is_file()
+    with pytest.raises(AssertionError, match="before the guard"):
+        run(tmp, 12.0)
+    judged, _ = run(tmp, 12.0, since=None)                                      # no usable since_ms: the early bound cannot be checked
+    assert judged.problems == []
+    with pytest.raises(AssertionError, match="expected within 16.0 s"):
+        run(tmp, 17.0)
+    with pytest.raises(pytest.fail.Exception, match="no `modem` object"):
+        run(tmp, 14.0, state="scope")
+    monkeypatch.delenv("DVT_RFSAFE1B")
+    judged, seen = run(tmp, 22.0)                                               # lenient: a view that lags up to 24.5 s is recorded, not asserted
+    assert judged.problems == [] and seen["max_wait_s"] == 30.0
+    assert any("lenient (DVT_RFSAFE1B off)" in a[3] for a in notes)

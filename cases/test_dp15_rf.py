@@ -38,7 +38,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "proto"))
 
-from dvtest import airtime, ax25, kiss_tnc, metrics, slowdata, txguard, web  # noqa: E402
+from dvtest import airtime, ax25, kiss_tnc, logscan, metrics, rfsafe1b, slowdata, txguard, web  # noqa: E402
 
 import data_support as ds  # noqa: E402
 import txguard_support  # noqa: E402
@@ -264,7 +264,10 @@ def rearm_ax25(request, target, case, admin_session, port, timing=None):
         resp = admin.post(admin.path("/children/%s/restart" % child), {}, expect=None)
         assert resp.status == 200, "POST children/%s/restart answered HTTP %d, want 200" % (child, resp.status)
 
-    res = txguard.rearm_fence(txguard.ax25_reader(reader_admin, port), restart, **(timing or {}))
+    timing = dict(timing or {})
+    if rfsafe1b.strict_on():
+        timing.setdefault("expect_cause", None)        # RFSAFE1b: a cause other than startup_guard is a FINDING (judged below), not a failure of the re-arm
+    res = txguard.rearm_fence(txguard.ax25_reader(reader_admin, port), restart, **timing)
     tnc.a.wait(lambda t: t.connections > before["a_conn"] and len(t.startup_params(t.connections)) >= 5, 15.0)
     after = {"a_conn": tnc.a.connections, "b_conn": tnc.b.connections, "a_params": len(tnc.a.startup_params(tnc.a.connections))}
     note(target, case, "RECORD", "re-arm: fake TNCs after (not asserted): %s; the edge %s and %s the KISS parameters" % (
@@ -278,6 +281,19 @@ def rearm_ax25(request, target, case, admin_session, port, timing=None):
          "re-arm of the fence on ax25 port %s: %s: %s; cause %r; tx_guard_ms absent for %s ms of the fence; row gone and back: %s; %d reads; keys met: %s" % (
              port, res.outcome, res.detail, res.cause, res.absent_ms, res.row_gone, res.polls, " | ".join(res.keys)))
     assert res.outcome == "ok", "re-arm of the fence on port %s: %s (%s)" % (port, res.outcome, res.detail)
+    # RFSAFE1b bounds (dvtest/rfsafe1b.py): asserted with DVT_RFSAFE1B=on, recorded otherwise. The origin is the return of the restart call.
+    strict = rfsafe1b.strict_on()
+    judged = rfsafe1b.judge(res.samples or [], strict=strict)
+    note(target, case, "RECORD", "RFSAFE1b %s view bounds after the restart: %s" % ("strict" if strict else "lenient (DVT_RFSAFE1B off)", judged.summary))
+    for finding in judged.findings:
+        note(target, case, "FINDING", "RFSAFE1b: " + finding)
+    out_dir = getattr(target, "out", None)
+    if out_dir:
+        state, found, _looked = logscan.request(out_dir, case + "-probe-failed", [rfsafe1b.PROBE_FAILED_NEEDLE])
+        note(target, case, "RECORD", ("SUT log scanned: probe failed lines %s" % {os.path.basename(k): v[:3] for k, v in found.items()}) if state == "scanned" else
+             "SUT log scan left for the host: `%s` (a FOUND for %s-probe-failed is a finding after a healthy restart on an RFSAFE1b image, not a failure)" % (
+                 logscan.command_for(out_dir), case))
+    assert not judged.problems, "RFSAFE1b bounds (DVT_RFSAFE1B=on): %s; %s" % (judged.problems, judged.summary)
 
 
 def test_dp15_6g_the_startup_guard_is_a_fence_in_the_first_13_seconds(request, rig, target, admin_session, web_client):

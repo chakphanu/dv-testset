@@ -581,6 +581,8 @@ services:
       DVT_SUT_USRP: ${DVT_SUT_USRP:-off}
       # on for an image with the OBSPKT1b fixes: OBSPKT1-d2 asserts that a step-up does not end the stream and a logout does (cases/test_obspkt1_monitor.py)
       DVT_OBSPKT1B: ${DVT_OBSPKT1B:-}
+      # on for an image with RFSAFE1b: DP18-r1 and DP15-6g assert the bounds of the fence view after a healthy restart (dvtest/rfsafe1b.py)
+      DVT_RFSAFE1B: ${DVT_RFSAFE1B:-}
       # SECRELOAD1 / SECRELOAD2 (cases/test_secret_reload.py): on = the APRS-IS edge and the image rule are EXPECTED, so a missing series or route
       # fails instead of skipping. Not passing them made the strict mode inert in every rig run (cases/unit/test_tester_env.py guards the class).
       DVT_SECRELOAD1: ${DVT_SECRELOAD1:-}

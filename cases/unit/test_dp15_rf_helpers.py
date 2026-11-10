@@ -216,7 +216,8 @@ def test_6g_flow_fenced_at_startup_and_violation(tmp_path, monkeypatch):
 class RearmAdmin:
     """Admin client double for the re-arm: the clients route reports a fence for `fenced_reads` reads after the restart, then none."""
 
-    def __init__(self, fenced_reads=6, children=None, restart_status=200):
+    def __init__(self, fenced_reads=6, children=None, restart_status=200, step_ms=1500, cause="startup_guard"):
+        self.step_ms, self.cause = step_ms, cause
         self.fenced_reads, self.reads, self.restarted, self.posts, self.step_ups = fenced_reads, 0, False, [], 0
         self.children = [{"name": "dv-edge-ax25", "restarts": 0}, {"name": "dv-room[B]", "restarts": 0}] if children is None else children
         self.restart_status = restart_status
@@ -239,7 +240,7 @@ class RearmAdmin:
         self.reads += 1
         modem = {"name": "rf-a", "adapter": "kiss-tcp"}
         if self.restarted and self.reads <= self.fenced_reads:
-            modem.update({"tx_fence": "startup_guard", "tx_guard_ms": 13000 - 1500 * self.reads})
+            modem.update({"tx_fence": self.cause, "tx_guard_ms": max(0, 13000 - self.step_ms * self.reads)})
         return SimpleNamespace(status=200, json=lambda: {"items": [{"kind": "modem", "modem": modem}]})
 
 
@@ -306,3 +307,24 @@ def test_6g_runs_the_rearm_only_after_a_late_startup_attempt(tmp_path, monkeypat
     assert calls == []                                                   # fenced inside the window: no re-arm
     tr.test_dp15_6g_the_startup_guard_is_a_fence_in_the_first_13_seconds(None, None, target, lambda role: fake_admin(40.0, False), None)
     assert calls == ["DP15-6g"] or len(calls) == 1                       # late: the re-arm path
+
+
+def test_6g_rearm_asserts_the_rfsafe1b_bounds_with_the_switch_and_only_records_without_it(tmp_path, monkeypatch):
+    # a realistic fence: 200 ms polls, the guard counting down from 12.8 s, the view clear at about 13.6 s after the restart call returned
+    monkeypatch.setenv("DVT_RFSAFE1B", "on")
+    notes = run_rearm(monkeypatch, tmp_path, RearmAdmin(fenced_reads=68, step_ms=200))
+    text = " ".join(a[3] for a in notes)
+    assert "RFSAFE1b strict view bounds" in text and "startup_guard" in text and not [a for a in notes if a[2] == "FINDING" and "RFSAFE1b" in a[3]]
+    assert (tmp_path / "logscan" / "DP15-6g-probe-failed.json").is_file()                      # the needle for the host scan
+    with pytest.raises(AssertionError, match="before the guard"):
+        run_rearm(monkeypatch, tmp_path, RearmAdmin(fenced_reads=6))                          # the view cleared at ~1 s: TX could have happened in the guard
+    with pytest.raises(AssertionError, match="predicts the end"):
+        run_rearm(monkeypatch, tmp_path, RearmAdmin(fenced_reads=68, step_ms=100))
+    # another cause after a healthy restart is a FINDING in strict mode, not a failure
+    notes = run_rearm(monkeypatch, tmp_path, RearmAdmin(fenced_reads=68, step_ms=200, cause="recovery_probe"))
+    assert [a for a in notes if a[2] == "FINDING" and "RFSAFE1b" in a[3] and "recovery_probe" in a[3]]
+    monkeypatch.delenv("DVT_RFSAFE1B")
+    notes = run_rearm(monkeypatch, tmp_path, RearmAdmin(fenced_reads=6))                      # lenient: today's behaviour, only recorded
+    assert "RFSAFE1b lenient (DVT_RFSAFE1B off)" in " ".join(a[3] for a in notes)
+    with pytest.raises(AssertionError, match="expected 'startup_guard'"):
+        run_rearm(monkeypatch, tmp_path, RearmAdmin(fenced_reads=6, cause="recovery_probe"))   # lenient keeps the cause assertion

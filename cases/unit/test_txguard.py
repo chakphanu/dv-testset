@@ -393,3 +393,12 @@ def test_rearm_violations_and_overlong_fences():
 def test_rearm_the_fence_ending_before_a_second_read_is_not_a_failure():
     res, _ = rearm([fenced(guard=300), ax_obs(None)])
     assert res.outcome == "ok" and res.decreased is None and "ended before a second guard read" in res.detail
+
+
+def test_rearm_records_every_found_read_as_a_sample_for_the_rfsafe1b_bounds():
+    seq = [ax_obs(None), ax_obs(found=False), fenced(guard=12000)] + [fenced(guard=12000 - 400 * i) for i in range(1, 4)] + [ax_obs(None)]
+    res, _ = rearm(seq)
+    assert [(s.fenced, s.fence, s.guard_ms) for s in res.samples] == [
+        (False, None, None), (True, "startup_guard", 12000), (True, "startup_guard", 11600), (True, "startup_guard", 11200), (True, "startup_guard", 10800),
+        (False, None, None)]                                            # the not-found read is not a sample; t is seconds since the restart call returned
+    assert [round(s.t, 1) for s in res.samples] == sorted(round(s.t, 1) for s in res.samples)

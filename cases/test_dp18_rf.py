@@ -31,7 +31,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "proto"))
 
-from dvtest import ax25, kiss_tnc, metrics, txguard  # noqa: E402
+from dvtest import ax25, kiss_tnc, logscan, metrics, rfsafe1b, txguard  # noqa: E402
 
 import data_support as ds  # noqa: E402
 import dp18_support as dc  # noqa: E402
@@ -90,6 +90,37 @@ def wait_unfenced(sim, target, case, port):
     result = txguard.wait_unfenced(txguard.ax25_reader(sim.admin, port), kind="ax25")
     note(target, case, "FINDING" if result.state in ("timeout", "not_found", "scope") else "RECORD", txguard.describe(result, "ax25", port))
     return result
+
+
+def fence_view_bounds(sim, target, case, port):
+    """RFSAFE1b (dvtest/rfsafe1b.py): right after the launcher child dv-edge-ax25 restarted, poll the fence view of `port` until it clears and judge it. Strict
+    (DVT_RFSAFE1B=on): only startup_guard may show, the view clears within 16 s of the child start and not before 13.0 s, tx_guard_ms is <= 13000 and
+    non-increasing, read time + tx_guard_ms predicts the end within 1.5 s; any other cause or a "probe failed" log line is a FINDING. Lenient (default): the view
+    may show a fence for up to about 24.5 s (wait up to 30 s); the cause and the timing are recorded, nothing is asserted. The origin is the child start taken
+    from the launcher's since_ms (read at once; an unusable value falls back to now and the early bound is not checked)."""
+    strict = rfsafe1b.strict_on()
+    st = children_state(sim)
+    since = (st or {}).get("since_ms")
+    known = isinstance(since, (int, float)) and not isinstance(since, bool) and 0 <= since <= 30000
+    origin = time.monotonic() - (since / 1000.0 if known else 0.0)
+    trace = rfsafe1b.collect(txguard.ax25_reader(sim.admin, port), origin, max_wait_s=rfsafe1b.MAX_WAIT_S if strict else 30.0)
+    judged = rfsafe1b.judge(trace.samples, strict=strict, check_early=known)
+    note(target, case, "RECORD", "RFSAFE1b %s view of %s after the restart (child start from since_ms %s): %s; trace %s" % (
+        "strict" if strict else "lenient (DVT_RFSAFE1B off)", port, since if known else "unknown", judged.summary, trace.state))
+    for finding in judged.findings:
+        note(target, case, "FINDING", "RFSAFE1b: " + finding)
+    out_dir = getattr(target, "out", None)
+    if out_dir:
+        state, found, _looked = logscan.request(out_dir, case + "-probe-failed", [rfsafe1b.PROBE_FAILED_NEEDLE])
+        if state == "scanned":
+            note(target, case, "RECORD", "SUT log scanned: probe failed lines %s" % {os.path.basename(k): v[:3] for k, v in found.items()})
+        else:
+            note(target, case, "RECORD", "SUT log scan left for the host: `%s` (a FOUND for %s-probe-failed is a finding after a healthy restart on an RFSAFE1b image, "
+                 "not a failure)" % (logscan.command_for(out_dir), case))
+    if trace.state == "scope":
+        pytest.fail("the fence view of %s carries no `modem` object (operator or admin needed)" % port)
+    assert not judged.problems, "RFSAFE1b bounds (DVT_RFSAFE1B=on): %s; %s" % (judged.problems, judged.summary)
+    return judged
 
 
 def post_text(sim, poster_index, tag):
@@ -234,6 +265,7 @@ def test_dp18_r1_simulate_to_true_drops_the_queued_simulated_frames(rig, target,
     apply_tx(sim, "rf-b", True, "dvt DP18-r1 simulate -> true")
     after = wait_edge_restart(sim, before, case, target)
     assert dc.restarted(before, after), "the AX.25 edge was not restarted by the tx change: %s -> %s" % (before, after)
+    fence_view_bounds(sim, target, case, "rf-b")                         # first: the view clears 13-16 s after the child start, the TNC wait must not eat it
     assert sim.rf.b.wait(lambda t: t.connections > b_conn and t.is_connected(), 30.0), "the edge did not reconnect to rf-b after the restart"
     wait_unfenced(sim, target, case, "rf-b")
     time.sleep(WATCH_AFTER_CHANGE_S)
