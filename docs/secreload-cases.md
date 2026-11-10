@@ -43,10 +43,9 @@ log shows no login line, so the edge's metric is the observation of "the new val
 
 The reload is the admin API's: `PUT /api/v1/admin/config/raw?mode=apply` with `If-Match: <ETag of GET /config/raw>` after a step-up
 (TOTP; the case renews the 5 minute window only when it is old). dv-svc-admin applies nothing for byte-identical text (`noop: true`),
-and the reload that re-reads the secrets without a TOML change (`SIGHUP`, the fabric `admin/config/reload`) has no HTTP route yet (dv-router is
-opening a unit for one). Every reload of the first case therefore carries one changed comment line
+and the reload that re-reads the secrets without a TOML change (`SIGHUP`, the fabric `admin/config/reload`) had no HTTP route before SECRELOAD2 (merge `11e19ace`, section below). Every reload of the first case therefore carries one changed comment line
 (`# secreload1 reload marker N`): the file hash changes, the configuration does not, and the launcher evaluates the secrets in the
-same pass. The reload that re-reads the secrets without any TOML change is covered by the second case (SIGHUP, below). What is not covered: the file watcher and `admin/config/reload` through fabric; dv-router's own tests cover them.
+same pass. The reload that re-reads the secrets without any TOML change is covered by the second case (SIGHUP, below). The same reload without a comment change is the SECRELOAD2 route (below). What is not covered: the file watcher; dv-router's own tests cover it.
 
 `DVT_SUT_CONFIG_RW=1` (native launch only): the admin service writes the configuration by writing a temporary file and renaming it over
 the config, which the usual single-file read-only mount refuses. With the variable `run.sh` copies the rendered config to
@@ -78,6 +77,66 @@ the launcher. DV-Router allowed it for this case only; do not use it elsewhere. 
 
 The launcher log is not readable in-case (no control action reads it), so H4's log line is an end-of-run verdict of `run.sh` (exit 5), like the value
 scan; a SIGHUP that was ignored would show as a missing line. The case writes `out/<run>/secreload/log-expect.json` ({t_hup, key, path}, no value).
+
+## SECRELOAD2: the admin reload routes
+
+DV-Router merge `11e19ace` (SECRELOAD2) adds the operator path that SECRELOAD1 lacked: a reload of the CURRENT file against the running generation,
+over HTTP, without editing the TOML and without a history entry (`openapi-admin.yaml` ReloadPreview / ReloadApplied, `admin.md` "Secret reload").
+Both routes need an admin session with step-up.
+
+| Route | Reply |
+|---|---|
+| `GET /api/v1/admin/config/reload` | `{mode:"preview", etag, changed, no_change, actions, warnings}` and an `ETag` header; `changed` holds only the dotted key names of referenced secret files whose content changed (no bytes, no digests); nothing is applied |
+| `POST /api/v1/admin/config/reload` | CSRF header, same origin, JSON body `{}`, `If-Match` = the current file ETag; `{status:"applied", etag, changed, no_change, inc, gen, actions, pending_restart}`; an unchanged reload has `no_change` true and empty `changed` / `actions` |
+| errors | 401 no session; 403 `forbidden` (below admin, before anything else) or `step_up_required`; 428 `precondition_required` (no `If-Match`); 412 `etag_mismatch` with `current_etag` (stale or weak `If-Match`); 409 conflict; 422 `validation` (an unreadable secret: the key and path, never content); 429; 503 |
+
+A missing `If-Match` is 428, not 412 (the openapi lists 428 for the POST and `admin.md` says "missing is 428 `precondition_required`, stale is 412"); the case asserts
+428 for missing and 412 for stale and weak.
+
+Audit (`GET /api/v1/admin/audit`): `config.reload` records `requested` (before the launcher is asked, fail closed) and then `applied`, `unchanged`, `invalid` (`diff.changed` =
+the key names), or `denied` for a missing / stale / weak `If-Match`; a session below admin is `config.reload` / `config.reload.preview` `denied`. Repeated denials of one kind
+inside the denial interval are collapsed (`suppressed`), so the case asserts that a denied record exists, not how many.
+
+### Cases (same file, same fixtures as SECRELOAD1; the second case needs no throwaway value)
+
+The secret kind is the APRS-IS passcode file, as in the first case, NOT a node-link account key: the rig has no node-link client (a Python implementation of the link v1
+handshake, link.md Appendix A, would have to be written and could not be run offline) and no `[edges.link]` snippet or key-file mount. The statement "old key refused, new key
+accepted" is shown by the aprsc's verdict on the edge's login (`dv_edge_aprsis_verified` 1 with the fixture value, 0 with the throwaway one). The key name is
+`edges.aprsis.passcode_file` instead of `edges.link.account[N].secret_file`. See GAPs.
+
+| Case | Stages | Asserted |
+|---|---|---|
+| `test_secreload2_preview_and_reload_apply_a_replaced_secret` | R0 preview of the unchanged file | 200, exact keys, `mode` preview, `etag` = the `ETag` header = the ETag of `GET config/raw`, `no_change` true, `changed` and `actions` empty |
+| | R1 file rewritten in place (same inode and size), preview | `changed` is exactly `["edges.aprsis.passcode_file"]`, `no_change` false, an action restarts `dv-edge-aprsis` and names `content changed`, the file ETag is unchanged, the edge process is still the same 3 s later (a preview applies nothing) |
+| | R2 `POST` with `If-Match` = the preview's ETag | 200 `applied`, exact keys, `changed` = the key, `pending_restart` empty; the TOML ETag and the number of history entries are unchanged; new `dv-edge-aprsis` process, its restart counter +1; `dv_edge_aprsis_verified` 1 -> 0 |
+| | R3 second `POST` | 200, `no_change` true, `changed` and `actions` empty, `(inc, gen)` unchanged, nothing restarted; the preview agrees |
+| | R4 fixture value back by rename, preview, `POST` | `changed` the key, restart again, verified 0 -> 1 |
+| | R5 file mode 000, preview and `POST` | both 422 `validation`, the reply names the key `passcode_file` and the path as the SUT sees it; process, counters and the verified login unchanged; mode restored |
+| | R6 audit tail | the admin's `config.reload` records contain, in order: requested, applied (`changed` = the key), requested, unchanged (`[]`), requested, applied, requested, invalid (key and path names) |
+| | R7 secrecy | no value (old or new) in any reply, the audit tail, a note or any file of `out/<run>` visible now (the audit file is `sut-state/admin/audit.jsonl`); `run.sh` scans the collected logs |
+| `test_secreload2_guards_and_preconditions` | G1 | no session: GET and POST 401 |
+| | G2 | viewer and operator: GET and POST 403 `forbidden` |
+| | G3 | admin POST without `If-Match` 428 `precondition_required`; stale and weak `If-Match` 412 `etag_mismatch`, each with `current_etag` = the file's ETag; the edge is not restarted |
+| | G4 | audit: `config.reload` `denied` for the admin's refusals; `config.reload.preview` and `config.reload` `denied` for the viewer and the operator accounts; no secret value in the tail |
+| | G5 | after the 5 minute step-up window of the session (the case waits it out, keeping the session alive with a read every minute): GET and POST 403 `step_up_required`, nothing restarted |
+
+Skips: the route answers 404 (an image without SECRELOAD2; `DVT_SECRELOAD2=on` turns that into a failure); the edge is not running; no aprs profile. Run (about 12 minutes: the first
+case about 4 minutes, the second dominated by the 5 minute step-up wait; `DVT_SUT_CONFIG_RW` is NOT needed, the routes do not write the file):
+
+```sh
+DVT_SECRELOAD2=on DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/admin.toml:rig/config/dv-router/totp-required.toml:rig/config/dv-router/data-ident.toml:rig/config/dv-router/dp15-aprsis.toml \
+  scripts/run.sh -m rig --profile web,aprs -- cases/test_secret_reload.py -k secreload2
+```
+
+Unit tests: `cases/unit/test_secret_reload2_case.py` runs both cases against a fake admin service that follows the documents (roles, step-up window on a fake clock, `If-Match`, audit, the
+launcher's restart), and checks that a service that accepts a weak `If-Match`, lets a viewer reload or restarts nothing for a replaced secret fails them; reply shapes:
+`dvtest/secret_reload.py` (`preview_problems`, `applied_problems`, `reload_audit`) with `cases/unit/test_secret_reload_helpers.py`.
+
+Shapes not confirmed (read from the documents and `crates/svc/admin/src/app_reload.rs`, not seen on a running image): the dotted key name for the APRS-IS passcode
+(`edges.aprsis.passcode_file`, by analogy with the documented `edges.link.account[0].secret_file`); the `actions[]` item fields (matched as lower-case JSON text, as in the first case);
+the field of the 422 `errors[]` that carries the path (the case looks for the key and the path anywhere in the body); the shape of `GET /config/history` (a list, or an object with
+`items` / `entries` / `history`; when unrecognised the "no history entry" check is skipped and a note says so); whether a login with TOTP already opens the step-up window (the case steps up
+explicitly and measures from that moment).
 
 ## Run it
 
@@ -120,7 +179,7 @@ synthetic callsign; the handling follows the secret rules of the repository so t
 
 * One secret kind (APRS-IS passcode). A `restart` of the owning child is proven by a new process and the restart counter, not by the child's
   other effects. The value in effect is shown by the aprsc's verdict on the login as seen by the edge.
-* Not covered: `admin/config/reload` through fabric (no HTTP route yet), the watcher, other secret kinds (link, AllStar, TURN, callhome),
+* Not covered: the watcher, a node-link account key (see SECRELOAD2 above: no link client in the rig), other secret kinds (link, AllStar, TURN, callhome),
   the "absent default passcode" rule (an unset `passcode_file` selects `<state>/secrets/aprs-passcode`), a symlink, FIFO or oversize file.
 * The restart counter and the verified gauge reach the hub every 10 s: "nothing restarted" is judged 12 s after the reload, together with the
   process identity (`proc-stat`, immediate). A restart of the same child for another reason during a wait would fail the case.

@@ -33,6 +33,11 @@ replaced": SIGHUP to the launcher (control action `hup xlxd-sut`, scripts/lib/hu
 admin API, no TOML change, no DVT_SUT_CONFIG_RW. The refusal of an unreadable file has no reply to read, so run.sh checks the collected
 launcher log after the run (a line after the SIGHUP naming the key and the path, shape recorded in out/<run>/secreload/log-shape.txt).
 
+SECRELOAD2 (DV-Router merge 11e19ace): test_secreload2_preview_and_reload_apply_a_replaced_secret and test_secreload2_guards_and_preconditions
+use GET / POST /api/v1/admin/config/reload (a preview and a reload of the current file, no TOML edit, no history entry) with their guards
+(401, 403 forbidden / step_up_required, 428 / 412 If-Match, 422 for an unreadable secret) and the config.reload audit records. They skip
+on a 404 (DVT_SECRELOAD2=on makes that a failure) and need no DVT_SUT_CONFIG_RW. docs/secreload-cases.md, "SECRELOAD2".
+
 Values are never printed, logged or committed: notes carry lengths only. Run:
   ... DVT_SUT_CONFIG_RW=1 DVT_SECRELOAD1=on DVT_SUT_CONFIG_EXTRA=<web:admin:totp-required:data-ident:dp15-aprsis snippets> \\
       scripts/run.sh -m rig --profile web,aprs -- cases/test_secret_reload.py
@@ -464,3 +469,277 @@ def test_secreload1_sighup_reload_of_unchanged_toml(target, rig_control, sr_base
     assert not ctx.leaks.found, "a secret value appeared in: %s" % ctx.leaks.report()
     hits = sr.scan_tree(ctx.out, ctx.entries, skip=["aprs-secrets/passcode", "secreload/scan.json"], skip_dirs=["capture"])
     assert not hits, "a secret value is in out/<run> files: %s" % "; ".join("%s (%s, line %d)" % h for h in hits[:6])
+
+
+# ---------------------------------------------------------------- SECRELOAD2: GET / POST /api/v1/admin/config/reload
+
+RELOAD_ROUTE = "/config/reload"
+STEP_UP_WINDOW_S = 300.0        # admin.md: re-authentication within the last 5 minutes
+
+
+def jbody(resp):
+    """The parsed JSON of a response, else its text (never raises)."""
+    try:
+        return resp.json()
+    except Exception:
+        return resp.text()
+
+
+def reload_get(ctx, client=None, stepped=True):
+    """GET /config/reload (the preview). The reply is checked for secret values."""
+    client = client or ctx.client
+    if stepped:
+        step_up(ctx)
+    resp = client.get(client.path(RELOAD_ROUTE))
+    ctx.leaks.check("GET config/reload", resp.body)
+    return resp
+
+
+def reload_post(ctx, etag, client=None, stepped=True):
+    """POST /config/reload with `If-Match: etag` (None: no If-Match header), JSON body {}. Checked for secret values."""
+    client = client or ctx.client
+    if stepped:
+        step_up(ctx)
+    headers = {} if etag is None else {"If-Match": etag}
+    resp = client.post(client.path(RELOAD_ROUTE), headers=headers)
+    ctx.leaks.check("POST config/reload", resp.body)
+    return resp
+
+
+def history_len(ctx):
+    step_up(ctx)
+    resp = ctx.client.get(ctx.client.path("/config/history"))
+    ctx.leaks.check("GET config/history", resp.body)
+    return sr.history_count(jbody(resp)) if resp.status == 200 else None
+
+
+def audit_tail(ctx):
+    step_up(ctx)
+    resp = ctx.client.get(ctx.client.path("/audit") + "?limit=200")
+    ctx.leaks.check("GET audit", resp.body)
+    assert resp.status == 200, "GET audit answered %d" % resp.status
+    return jbody(resp)
+
+
+def is_subsequence(wanted, seen):
+    it = iter(seen)
+    return all(any(w == x for x in it) for w in wanted)
+
+
+def require_route(ctx, strict):
+    """The preview route answers (200, 422 or 403 are all "present"); 404 is an image without SECRELOAD2."""
+    resp = reload_get(ctx)
+    if resp.status == 404:
+        reason = "GET %s answered 404: the image has no admin reload route (SECRELOAD2)" % ctx.client.path(RELOAD_ROUTE)
+        if strict:
+            pytest.fail("DVT_SECRELOAD2=on but " + reason)
+        pytest.skip("image without SECRELOAD2: " + reason)
+    return resp
+
+
+def test_secreload2_preview_and_reload_apply_a_replaced_secret(target, rig_control, sr_ctx):
+    ctx = sr_ctx
+    strict = os.environ.get("DVT_SECRELOAD2", "").lower() in ("on", "1", "true", "yes")
+    say(ctx, "R0", "SECRELOAD2: old value %s, throwaway value %s (same size); strict=%s" % (
+        sr.digest_note(ctx.old.strip()), sr.digest_note(ctx.new.strip()), strict))
+    first = require_route(ctx, strict)
+    ver, own, everything = hub(ctx)
+    if ver is None or own is None:
+        pytest.skip("no dv_edge_aprsis_verified / dv_launcher_child_restarts_total{child=%s} in the hub metrics: the APRS-IS edge is "
+                    "not running (--profile aprs with dp15-aprsis.toml)" % CHILD)
+    raw_text, file_etag = raw_config(ctx)
+    path_match = re.search(r"(?m)^\s*passcode_file\s*=\s*\"([^\"]+)\"", raw_text)
+    assert path_match, "the raw configuration has no passcode_file under [edges.aprsis]"
+    sut_path = path_match.group(1)
+
+    # ---- R0 the preview of an unchanged file: the shape, no_change, the ETag of the file
+    assert first.status == 200, "GET config/reload answered %d: %s" % (first.status, ctx.client.scrub(first.text())[:300])
+    body = jbody(first)
+    problems = sr.preview_problems(body, first.headers.get("etag"))
+    assert not problems, "the preview of an unchanged file: %s" % "; ".join(problems)
+    assert body["no_change"] is True and body["changed"] == [] and body["actions"] == [], \
+        "the preview of an unchanged file lists changes: %s" % json.dumps({k: body[k] for k in ("changed", "no_change", "actions")})[:300]
+    assert sr.etag_value(first.headers.get("etag")) == sr.etag_value(file_etag), "the preview ETag differs from the ETag of GET config/raw"
+    if not wait_for(lambda: hub(ctx)[0], 60.0):
+        pytest.fail("the APRS-IS edge is not logged in and verified with the fixture passcode (dv_edge_aprsis_verified 0)")
+    base = state(ctx)
+    hist0 = history_len(ctx)
+    say(ctx, "R0", "preview of the unchanged file: no_change, changed [], ETag equals the file's; baseline edge process %s, restarts %s, "
+        "history entries %s" % (pid_text(base.pid), base.restarts, hist0))
+
+    # ---- R1 the file replaced in place (same inode and size): the preview lists the key, applies nothing
+    write_in_place(ctx.path, ctx.new)
+    prev = reload_get(ctx)
+    assert prev.status == 200, "preview after the replacement answered %d: %s" % (prev.status, ctx.client.scrub(prev.text())[:300])
+    body = jbody(prev)
+    problems = sr.preview_problems(body, prev.headers.get("etag"))
+    assert not problems, "the preview after the replacement: %s" % "; ".join(problems)
+    assert body["changed"] == [sr.RELOAD_KEY] and body["no_change"] is False, \
+        "preview changed %s no_change %s, want exactly [%s] and false" % (body["changed"], body["no_change"], sr.RELOAD_KEY)
+    assert any(sr.names_secret_change(a) for a in sr.reload_actions(body)), \
+        "no preview action restarts %s and names `content changed`: %s" % (CHILD, json.dumps(body["actions"])[:300])
+    assert sr.etag_value(prev.headers.get("etag")) == sr.etag_value(file_etag), "the TOML changed under a preview"
+    time.sleep(3.0)
+    assert pid_of_edge(ctx) == base.pid, "a preview restarted dv-edge-aprsis (it applies nothing)"
+    say(ctx, "R1", "preview after a same-size in-place replacement: changed [%s], restart action names the key and `content changed`, "
+        "nothing applied" % sr.RELOAD_KEY)
+
+    # ---- R2 POST with If-Match: applied, no TOML edit, no history entry, the owning child restarts, the new value is in effect
+    resp = reload_post(ctx, prev.headers.get("etag"))
+    assert resp.status == 200, "POST config/reload answered %d: %s" % (resp.status, ctx.client.scrub(resp.text())[:300])
+    applied = jbody(resp)
+    problems = sr.applied_problems(applied, resp.headers.get("etag"))
+    assert not problems, "the reload reply: %s" % "; ".join(problems)
+    assert applied["changed"] == [sr.RELOAD_KEY] and applied["no_change"] is False and applied["pending_restart"] == [], \
+        "reload reply changed %s no_change %s pending_restart %s" % (applied["changed"], applied["no_change"], applied["pending_restart"])
+    _text, etag_after = raw_config(ctx)
+    assert sr.etag_value(etag_after) == sr.etag_value(file_etag), "the reload edited the TOML (ETag %s -> %s)" % (file_etag, etag_after)
+    hist1 = history_len(ctx)
+    if hist0 is None:
+        say(ctx, "R2", "GET config/history has no list shape the case knows: the 'no history entry' check is not made")
+    else:
+        assert hist1 == hist0, "the reload added a history entry (%s -> %s)" % (hist0, hist1)
+    changed = assert_restarted(ctx, base, applied, "R2 reload")
+    assert wait_for(lambda: hub(ctx)[0] is False, EFFECT_S), \
+        "the new passcode is not in effect: dv_edge_aprsis_verified stayed %s (a throwaway value logs in unverified)" % hub(ctx)[0]
+    say(ctx, "R2", "POST with If-Match: applied (inc %s, gen %s), changed [%s], new process %s, restarts %s -> %s, verified 1 -> 0; TOML ETag and "
+        "history unchanged" % (applied["inc"], applied["gen"], sr.RELOAD_KEY, pid_text(changed.pid), base.restarts, changed.restarts))
+
+    # ---- R3 a second POST: no_change, empty changed and actions, nothing restarts
+    keep = state(ctx)
+    again = reload_post(ctx, resp.headers.get("etag"))
+    assert again.status == 200, "second POST answered %d: %s" % (again.status, ctx.client.scrub(again.text())[:300])
+    second = jbody(again)
+    problems = sr.applied_problems(second, again.headers.get("etag"))
+    assert not problems, "the second reload reply: %s" % "; ".join(problems)
+    assert second["no_change"] is True and second["changed"] == [] and second["actions"] == [], \
+        "second reload: no_change %s changed %s actions %s" % (second["no_change"], second["changed"], json.dumps(second["actions"])[:200])
+    assert (second["inc"], second["gen"]) == (applied["inc"], applied["gen"]), \
+        "the second reload advanced the generation (%s.%s -> %s.%s)" % (applied["inc"], applied["gen"], second["inc"], second["gen"])
+    assert_nothing_restarted(ctx, keep, "R3 second POST")
+    quiet = jbody(reload_get(ctx))
+    assert isinstance(quiet, dict) and quiet.get("no_change") is True and quiet.get("changed") == [], "the preview after the reload is not no_change"
+    say(ctx, "R3", "second POST: no_change true, changed and actions empty, generation unchanged, nothing restarted; the preview agrees")
+
+    # ---- R4 the fixture value back by an atomic replacement: preview, POST, restart, verified again
+    write_atomic(ctx.path, ctx.old)
+    prev = reload_get(ctx)
+    assert jbody(prev).get("changed") == [sr.RELOAD_KEY], "preview after the restoring replacement: %s" % ctx.client.scrub(prev.text())[:200]
+    resp = reload_post(ctx, prev.headers.get("etag"))
+    assert resp.status == 200, "POST after the restoring replacement answered %d: %s" % (resp.status, ctx.client.scrub(resp.text())[:300])
+    back = assert_restarted(ctx, keep, jbody(resp), "R4 atomic replacement")
+    assert wait_for(lambda: hub(ctx)[0] is True, EFFECT_S), "the fixture passcode is not in effect again (dv_edge_aprsis_verified %s)" % hub(ctx)[0]
+    say(ctx, "R4", "atomic replacement (new inode) by the fixture value: preview lists the key, POST restarts, new process %s, verified 0 -> 1" % pid_text(back.pid))
+
+    # ---- R5 an unreadable secret file: preview and POST are 422 naming the key and the path, the running login stays
+    held = state(ctx)
+    os.chmod(ctx.path, 0o000)
+    try:
+        prev = reload_get(ctx)
+        post_etag = prev.headers.get("etag") or raw_config(ctx)[1]
+        post = reload_post(ctx, post_etag)
+        for what, r in (("preview", prev), ("POST", post)):
+            body = jbody(r)
+            assert r.status == 422 and sr.problem_code(body) == "validation", \
+                "%s with an unreadable file answered %d %s, want 422 validation" % (what, r.status, sr.problem_code(body))
+            names_key, names_path = sr.error_names(body, KEY, sut_path)
+            assert names_key and names_path, "%s: the 422 names the key %s (%s) and the path (%s): %s" % (
+                what, KEY, names_key, names_path, ctx.client.scrub(r.text())[:300])
+        assert_nothing_restarted(ctx, held, "R5 unreadable file")
+    finally:
+        os.chmod(ctx.path, 0o600)
+    say(ctx, "R5", "mode 000: preview and POST are 422 validation naming %s and the path; process, counters and the verified login unchanged" % KEY)
+
+    # ---- R6 the audit: requested / applied / unchanged / invalid, key names only
+    me = ctx.client.identity["user"]
+    audit = audit_tail(ctx)
+    mine = [(a, u, r, c) for a, u, r, c in sr.reload_audit(audit, user=me, actions=("config.reload",))]
+    results = [(r, c) for _a, _u, r, c in mine]
+    expected = [("requested", []), ("applied", [sr.RELOAD_KEY]), ("requested", []), ("unchanged", []), ("requested", []),
+                ("applied", [sr.RELOAD_KEY]), ("requested", []), ("invalid", None)]
+    got = [(r, c if r != "invalid" else None) for r, c in results]
+    assert is_subsequence(expected, got), "the audit lacks the config.reload sequence %s; saw %s" % (expected, got[-12:])
+    invalid = [c for r, c in results if r == "invalid"]
+    assert invalid and any(isinstance(c, list) and any(sr.RELOAD_KEY in x or KEY in x for x in c) for c in invalid), \
+        "the invalid record does not name the key: %s" % invalid
+    say(ctx, "R6", "audit: config.reload requested / applied / requested / unchanged / requested / applied / requested / invalid, "
+        "changed key names only")
+
+    # ---- R7 no secret value anywhere visible now
+    assert not ctx.leaks.found, "a secret value appeared in: %s" % ctx.leaks.report()
+    hits = sr.scan_tree(ctx.out, ctx.entries, skip=["aprs-secrets/passcode", "secreload/scan.json"], skip_dirs=["capture"])
+    assert not hits, "a secret value is in out/<run> files (the audit file is under sut-state/admin): %s" % "; ".join(
+        "%s (%s, line %d)" % h for h in hits[:6])
+    say(ctx, "R7", "no secret value in any reply, the audit tail, the notes or the files of out/<run> visible now; run.sh scans the collected logs")
+
+
+def test_secreload2_guards_and_preconditions(target, rig_control, sr_ctx, admin_session):
+    ctx = sr_ctx
+    strict = os.environ.get("DVT_SECRELOAD2", "").lower() in ("on", "1", "true", "yes")
+    require_route(ctx, strict)
+    ctx.client.step_up()
+    ctx.stepped = t_step = time.monotonic()
+    base = state(ctx)
+    _text, file_etag = raw_config(ctx)
+    current = sr.etag_value(file_etag)
+
+    # ---- G1 no session: 401 on both methods
+    anon = ctx.client.clone()
+    for method, r in (("GET", reload_get(ctx, anon, stepped=False)), ("POST", reload_post(ctx, file_etag, anon, stepped=False))):
+        assert r.status == 401, "%s config/reload without a session answered %d, want 401" % (method, r.status)
+    say(ctx, "G1", "no session: GET and POST are 401")
+
+    # ---- G2 below admin: 403 forbidden before anything else (the audit records the denial)
+    denied_users = []
+    for role in ("viewer", "operator"):
+        client = admin_session(role)
+        for method, r in (("GET", reload_get(ctx, client, stepped=False)), ("POST", reload_post(ctx, file_etag, client, stepped=False))):
+            body = jbody(r)
+            assert r.status == 403 and sr.problem_code(body) == "forbidden", \
+                "%s config/reload as %s answered %d %s, want 403 forbidden" % (method, role, r.status, sr.problem_code(body))
+        denied_users.append((role, client.identity["user"]))
+    say(ctx, "G2", "viewer and operator: GET and POST are 403 forbidden")
+
+    # ---- G3 If-Match: missing 428, stale 412, weak 412 (current_etag in the body); nothing reloads
+    for what, header, status, code in (("missing", None, 428, "precondition_required"), ("stale", sr.stale_etag(file_etag), 412, "etag_mismatch"),
+                                       ("weak", sr.weak_etag(file_etag), 412, "etag_mismatch")):
+        r = reload_post(ctx, header)
+        body = jbody(r)
+        assert (r.status, sr.problem_code(body)) == (status, code), "%s If-Match: HTTP %d %s, want %d %s" % (
+            what, r.status, sr.problem_code(body), status, code)
+        assert isinstance(body, dict) and sr.etag_value(body.get("current_etag")) == current, \
+            "%s If-Match: current_etag %r differs from the file's ETag" % (what, body.get("current_etag") if isinstance(body, dict) else body)
+        time.sleep(1.2)         # the action bucket (2/s) and the denial records
+    assert pid_of_edge(ctx) == base.pid, "a refused POST restarted dv-edge-aprsis"
+    say(ctx, "G3", "POST without If-Match is 428 precondition_required; a stale and a weak If-Match are 412 etag_mismatch, each with current_etag")
+
+    # ---- G4 the audit: the denials are recorded, no secret byte in it
+    audit = audit_tail(ctx)
+    me = ctx.client.identity["user"]
+    mine = sr.reload_audit(audit, user=me, actions=("config.reload",))
+    assert any(r == "denied" for _a, _u, r, _c in mine), "no config.reload record with result denied for %s after the 428 / 412 refusals: %s" % (
+        me, [r for _a, _u, r, _c in mine][-6:])
+    for role, user in denied_users:
+        seen = sr.reload_audit(audit, user=user)
+        assert ("config.reload.preview", user, "denied", None) in [(a, u, r, None) for a, u, r, _c in seen] and \
+            any(a == "config.reload" and r == "denied" for a, _u, r, _c in seen), \
+            "the audit has no denied config.reload(.preview) record for the %s account: %s" % (role, [(a, r) for a, _u, r, _c in seen])
+    say(ctx, "G4", "audit: config.reload denied for the missing / stale / weak If-Match (admin) and config.reload + config.reload.preview denied for viewer and operator")
+
+    # ---- G5 step_up_required once the 5 minute window of this session has passed
+    left = t_step + STEP_UP_WINDOW_S + 5.0 - time.monotonic()
+    if left > 0:
+        say(ctx, "G5", "waiting %.0f s for the step-up window of the session to pass" % left)
+        while left > 0:
+            time.sleep(min(60.0, left))
+            left = t_step + STEP_UP_WINDOW_S + 5.0 - time.monotonic()
+            if left > 0:
+                ctx.client.session()        # keeps the session from idling out; a read is not a step-up
+    ctx.stepped = None
+    for method, r in (("GET", reload_get(ctx, stepped=False)), ("POST", reload_post(ctx, file_etag, stepped=False))):
+        body = jbody(r)
+        assert r.status == 403 and sr.problem_code(body) == "step_up_required", \
+            "%s config/reload after the step-up window answered %d %s, want 403 step_up_required" % (method, r.status, sr.problem_code(body))
+    assert pid_of_edge(ctx) == base.pid, "a POST without step-up restarted dv-edge-aprsis"
+    say(ctx, "G5", "after the 5 minute window: GET and POST are 403 step_up_required, nothing restarted")
+    assert not ctx.leaks.found, "a secret value appeared in: %s" % ctx.leaks.report()

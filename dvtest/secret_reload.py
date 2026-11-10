@@ -202,6 +202,128 @@ def read_only_reply(status, body):
     return status >= 400 and "read-only" in text.lower().replace("read_only", "read-only")
 
 
+# ---------------------------------------------------------------- SECRELOAD2: GET / POST /api/v1/admin/config/reload
+
+PREVIEW_KEYS = {"mode", "etag", "changed", "no_change", "actions", "warnings"}
+APPLIED_KEYS = {"status", "etag", "changed", "no_change", "inc", "gen", "actions", "pending_restart"}
+RELOAD_KEY = "edges.aprsis.passcode_file"        # the dotted key name `changed` lists for the APRS-IS passcode file
+
+
+def etag_value(header):
+    """The bare entity tag of an ETag / If-Match header value: the W/ prefix and the quotes cut."""
+    value = (header or "").strip()
+    if value.startswith("W/"):
+        value = value[2:]
+    return value.strip('"')
+
+
+def stale_etag(current):
+    """A well-formed entity tag that is not `current`: its last character changed."""
+    bare = etag_value(current)
+    if not bare:
+        raise ValueError("no ETag to make stale")
+    return '"%s%s"' % (bare[:-1], "0" if bare[-1] != "0" else "1")
+
+
+def weak_etag(current):
+    """The weak form of `current`: a weak tag never matches a write precondition (RFC 9110, 13.1.1)."""
+    return 'W/"%s"' % etag_value(current)
+
+
+def _list_of_str(value):
+    return isinstance(value, list) and all(isinstance(v, str) for v in value)
+
+
+def preview_problems(body, header_etag=None):
+    """What is wrong with a GET /config/reload 200 body (ReloadPreview: the exact keys, types, mode `preview`, and an `etag` equal to
+    the ETag header when given; an empty `actions` goes with no_change true). [] when it is as specified."""
+    if not isinstance(body, dict):
+        return ["the preview is not a JSON object"]
+    out = []
+    if set(body) != PREVIEW_KEYS:
+        out.append("keys %s, want %s" % (sorted(body), sorted(PREVIEW_KEYS)))
+    if body.get("mode") != "preview":
+        out.append("mode %r, want preview" % (body.get("mode"),))
+    out += _common_problems(body, header_etag)
+    if not isinstance(body.get("warnings"), list):
+        out.append("warnings is not a list")
+    return out
+
+
+def applied_problems(body, header_etag=None):
+    """The same for a POST /config/reload 200 body (ReloadApplied): status `applied`, inc and gen non-negative integers,
+    pending_restart a list of strings."""
+    if not isinstance(body, dict):
+        return ["the reply is not a JSON object"]
+    out = []
+    if set(body) != APPLIED_KEYS:
+        out.append("keys %s, want %s" % (sorted(body), sorted(APPLIED_KEYS)))
+    if body.get("status") != "applied":
+        out.append("status %r, want applied" % (body.get("status"),))
+    for name in ("inc", "gen"):
+        value = body.get(name)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            out.append("%s %r is not a non-negative integer" % (name, value))
+    if not _list_of_str(body.get("pending_restart")):
+        out.append("pending_restart is not a list of strings")
+    out += _common_problems(body, header_etag)
+    return out
+
+
+def _common_problems(body, header_etag):
+    out = []
+    if not isinstance(body.get("etag"), str) or not body.get("etag"):
+        out.append("etag is not a non-empty string")
+    elif header_etag is not None and etag_value(header_etag) != body["etag"]:
+        out.append("etag in the body differs from the ETag header")
+    if not _list_of_str(body.get("changed")):
+        out.append("changed is not a list of strings")
+    if not isinstance(body.get("no_change"), bool):
+        out.append("no_change is not a boolean")
+    if not isinstance(body.get("actions"), list):
+        out.append("actions is not a list")
+    elif body.get("no_change") is True and (body.get("actions") or body.get("changed")):
+        out.append("no_change is true but changed / actions are not empty")
+    elif body.get("no_change") is False and not body.get("actions") and not body.get("changed"):
+        out.append("no_change is false but changed and actions are empty")
+    return out
+
+
+def problem_code(body):
+    """The `code` of a problem+json body, None when it has none."""
+    return body.get("code") if isinstance(body, dict) else None
+
+
+def audit_items(body):
+    """The records of an audit tail ({total, items}), [] for anything else."""
+    items = body.get("items") if isinstance(body, dict) else None
+    return [i for i in items if isinstance(i, dict)] if isinstance(items, list) else []
+
+
+def reload_audit(body, user=None, actions=("config.reload", "config.reload.preview")):
+    """[(action, user, result, changed key names)] of the reload records of an audit tail (oldest first as served), optionally of
+    one user."""
+    out = []
+    for item in audit_items(body):
+        if item.get("action") not in actions or (user is not None and item.get("user") != user):
+            continue
+        diff = item.get("diff")
+        changed = diff.get("changed") if isinstance(diff, dict) else None
+        out.append((item.get("action"), item.get("user"), item.get("result"), changed))
+    return out
+
+
+def history_count(body):
+    """The number of entries of a GET /config/history body (a list, or an object holding the list), None when unrecognised."""
+    if isinstance(body, list):
+        return len(body)
+    if isinstance(body, dict):
+        for key in ("items", "entries", "history"):
+            if isinstance(body.get(key), list):
+                return len(body[key])
+    return None
+
+
 # ---------------------------------------------------------------- launcher log
 
 LOG_TIME = re.compile(r"(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(\.\d+)?Z")

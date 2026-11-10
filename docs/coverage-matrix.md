@@ -22,7 +22,7 @@ unit test `cases/unit/test_coverage_matrix.py` runs it).
 | DP7 (D-PRS positions) | 39 | 33 | 2 | 4 | 0 |
 | Stream registry (LEAK2) | 10 | 6 | 2 | 2 | 0 |
 | Config load (COMPAT1) | 19 | 18 | 0 | 1 | 0 |
-| Secret-file reload (SECRELOAD1) | 10 | 7 | 1 | 2 | 0 |
+| Secret-file reload (SECRELOAD1) | 18 | 15 | 1 | 2 | 0 |
 | M17 | 86 | 65 | 20 | 1 | 0 |
 | M17 v3 | 29 | 0 | 25 | 4 | 0 |
 | IMRS | 24 | 18 | 5 | 1 | 0 |
@@ -44,7 +44,7 @@ unit test `cases/unit/test_coverage_matrix.py` runs it).
 | Echo return integrity E9 (D-STAR kinds) | 14 | 13 | 1 | 0 | 0 |
 | Real-transcoder cross-mode audio into YSF (related to ECHO1) | 3 | 3 | 0 | 0 | 0 |
 | DP15 (APRS / AX.25 / KISS data path) | 99 | 70 | 6 | 23 | 0 |
-| **Total** | **1249** | **786** | **276** | **179** | **8** |
+| **Total** | **1257** | **794** | **276** | **179** | **8** |
 <!-- summary:end -->
 
 ## Top 15 gaps (ranked by how much real-world traffic they touch)
@@ -468,7 +468,15 @@ Sources: secreload-cases.md (config.md "Actions", reload table; status.md launch
 | An unreadable (mode 000) or missing explicit secret file refuses the reload with the key and the path and keeps the running generation (the old login stays up) | secreload-cases.md "Stages" 2a, 2b | `test_secret_reload::test_secreload1_passcode_file_replaced_at_the_same_path` | rig | b:aprsc | OK |
 | No secret value in any admin reply, note or file of the run, nor in the collected logs | secreload-cases.md "Stages" 6 | `test_secret_reload::test_secreload1_passcode_file_replaced_at_the_same_path`, `test_secret_reload_helpers::test_scan_tree_reports_paths_and_lines_never_values` | rig | b:aprsc | PARTIAL |
 | A byte-identical TOML reload by SIGHUP re-reads the secrets: a replaced file restarts the owning child (counter +1, nothing else), a second SIGHUP restarts nothing, an unreadable file is refused and the old login stays up (the launcher-log line is an end-of-run check of run.sh) | secreload-cases.md "The SIGHUP variant" | `test_secret_reload::test_secreload1_sighup_reload_of_unchanged_toml` | rig | b:aprsc | OK |
-| The same by the fabric `admin/config/reload` (no HTTP route yet) | secreload-cases.md "Limits" | - | - | - | GAP |
+| `GET /api/v1/admin/config/reload` previews the current file against the running generation: exact ReloadPreview shape, `changed` = dotted key names only, nothing applied | secreload-cases.md "SECRELOAD2" R0, R1 | `test_secret_reload::test_secreload2_preview_and_reload_apply_a_replaced_secret`, `test_secret_reload_helpers::test_preview_problems_accepts_the_specified_shape` | rig | b:aprsc | OK |
+| `POST /api/v1/admin/config/reload` with `If-Match` applies a replaced secret without a TOML edit or history entry: ReloadApplied shape, owning child restarts, new value in effect | secreload-cases.md "SECRELOAD2" R2, R4 | `test_secret_reload::test_secreload2_preview_and_reload_apply_a_replaced_secret`, `test_secret_reload_helpers::test_applied_problems` | rig | b:aprsc | OK |
+| A second reload is `no_change` with empty `changed` / `actions` and restarts nothing | secreload-cases.md "SECRELOAD2" R3 | `test_secret_reload::test_secreload2_preview_and_reload_apply_a_replaced_secret` | rig | b:aprsc | OK |
+| An unreadable secret file is 422 `validation` naming the key and path (never content) on preview and POST, the running generation kept | secreload-cases.md "SECRELOAD2" R5 | `test_secret_reload::test_secreload2_preview_and_reload_apply_a_replaced_secret` | rig | b:aprsc | OK |
+| The reload is audited as `config.reload` requested / applied / unchanged / invalid with key names only | secreload-cases.md "SECRELOAD2" R6 | `test_secret_reload::test_secreload2_preview_and_reload_apply_a_replaced_secret` | rig | b:aprsc | OK |
+| No session 401; viewer and operator 403 `forbidden`, audited as `denied` | secreload-cases.md "SECRELOAD2" G1, G2, G4 | `test_secret_reload::test_secreload2_guards_and_preconditions` | rig | b:aprsc | OK |
+| POST `If-Match`: missing 428, stale and weak 412 `etag_mismatch` with `current_etag`, audited `denied`, nothing reloads | secreload-cases.md "SECRELOAD2" G3, G4 | `test_secret_reload::test_secreload2_guards_and_preconditions` | rig | b:aprsc | OK |
+| Both routes need step-up: 403 `step_up_required` after the 5 minute window | secreload-cases.md "SECRELOAD2" G5 | `test_secret_reload::test_secreload2_guards_and_preconditions` | rig | b:aprsc | OK |
+| The reload routes for a node-link account key (`edges.link.account[N].secret_file`), 409 conflict, 429, 503 | secreload-cases.md "SECRELOAD2" | - | - | - | GAP |
 | Link, AllStar, TURN and callhome secret kinds follow the same rule | secreload-cases.md "Limits" | - | - | - | GAP |
 
 ## M17

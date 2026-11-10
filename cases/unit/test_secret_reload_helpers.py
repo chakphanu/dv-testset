@@ -246,3 +246,87 @@ def test_cli_logcheck(tmp_path, capsys):
     assert sr.main(["logcheck", "--log", str(log), "--expect", str(expect)]) == 1
     assert "no launcher log line" in capsys.readouterr().out
     assert sr.main(["logcheck", "--log", str(tmp_path / "missing.log"), "--expect", str(expect)]) == 2
+
+
+# ---------------------------------------------------------------- SECRELOAD2: reload preview / apply replies
+
+PREVIEW_OK = {"mode": "preview", "etag": "f-0123456789abcdef", "changed": ["edges.aprsis.passcode_file"], "no_change": False,
+              "actions": [{"class": "Restart", "child": "dv-edge-aprsis"}], "warnings": []}
+APPLIED_OK = {"status": "applied", "etag": "f-0123456789abcdef", "changed": ["edges.aprsis.passcode_file"], "no_change": False, "inc": 1,
+              "gen": 3, "actions": [{"class": "Restart", "child": "dv-edge-aprsis"}], "pending_restart": []}
+
+
+def test_etag_helpers():
+    assert sr.etag_value('"f-1"') == sr.etag_value('W/"f-1"') == sr.etag_value("f-1") == "f-1" and sr.etag_value(None) == ""
+    stale = sr.stale_etag('"f-0123456789abcdef"')
+    assert stale == '"f-0123456789abcde0"' and sr.etag_value(stale) != "f-0123456789abcdef"
+    assert sr.stale_etag('"f-0"') == '"f-1"'
+    assert sr.weak_etag('"f-1"') == 'W/"f-1"'
+    with pytest.raises(ValueError):
+        sr.stale_etag("")
+
+
+def test_preview_problems_accepts_the_specified_shape():
+    assert sr.preview_problems(PREVIEW_OK, '"f-0123456789abcdef"') == []
+    unchanged = dict(PREVIEW_OK, changed=[], no_change=True, actions=[])
+    assert sr.preview_problems(unchanged) == []
+
+
+@pytest.mark.parametrize("change,needle", [
+    (lambda b: b.pop("warnings"), "keys"),
+    (lambda b: b.update(extra=1), "keys"),
+    (lambda b: b.update(mode="apply"), "mode"),
+    (lambda b: b.update(etag=""), "etag"),
+    (lambda b: b.update(changed="edges.aprsis.passcode_file"), "changed"),
+    (lambda b: b.update(no_change="no"), "no_change"),
+    (lambda b: b.update(no_change=True), "no_change is true"),
+    (lambda b: b.update(changed=[], actions=[]), "no_change is false"),
+    (lambda b: b.update(actions={}), "actions"),
+    (lambda b: b.update(warnings=None), "warnings"),
+])
+def test_preview_problems_names_the_field(change, needle):
+    body = json.loads(json.dumps(PREVIEW_OK))
+    change(body)
+    problems = sr.preview_problems(body)
+    assert problems and any(needle in p for p in problems), problems
+    assert sr.preview_problems([]) == ["the preview is not a JSON object"]
+
+
+def test_preview_etag_must_equal_the_header():
+    assert any("ETag header" in p for p in sr.preview_problems(PREVIEW_OK, '"f-ffffffffffffffff"'))
+
+
+def test_applied_problems():
+    assert sr.applied_problems(APPLIED_OK, "f-0123456789abcdef") == []
+    assert sr.applied_problems(dict(APPLIED_OK, changed=[], no_change=True, actions=[])) == []
+    for change, needle in [(lambda b: b.update(status="preview"), "status"), (lambda b: b.update(gen=-1), "gen"),
+                           (lambda b: b.update(inc=True), "inc"), (lambda b: b.update(pending_restart="x"), "pending_restart"),
+                           (lambda b: b.pop("inc"), "keys"), (lambda b: b.update(mode="apply"), "keys")]:
+        body = json.loads(json.dumps(APPLIED_OK))
+        change(body)
+        assert any(needle in p for p in sr.applied_problems(body)), needle
+
+
+def test_problem_code():
+    assert sr.problem_code({"code": "etag_mismatch"}) == "etag_mismatch" and sr.problem_code([]) is None and sr.problem_code({}) is None
+
+
+AUDIT = {"total": 4, "items": [
+    {"action": "login", "user": "ada", "result": "ok"},
+    {"action": "config.reload.preview", "user": "otto", "result": "denied"},
+    {"action": "config.reload", "user": "ada", "result": "requested", "diff": {"changed": []}},
+    {"action": "config.reload", "user": "ada", "result": "applied", "diff": {"changed": ["edges.aprsis.passcode_file"]}},
+]}
+
+
+def test_reload_audit_selects_the_reload_records():
+    assert sr.reload_audit(AUDIT) == [("config.reload.preview", "otto", "denied", None), ("config.reload", "ada", "requested", []),
+                                      ("config.reload", "ada", "applied", ["edges.aprsis.passcode_file"])]
+    assert sr.reload_audit(AUDIT, user="otto") == [("config.reload.preview", "otto", "denied", None)]
+    assert sr.reload_audit(AUDIT, actions=("login",)) == [("login", "ada", "ok", None)]
+    assert sr.reload_audit({}) == [] and sr.reload_audit(None) == []
+
+
+def test_history_count():
+    assert sr.history_count([1, 2]) == 2 and sr.history_count({"items": [1]}) == 1 and sr.history_count({"entries": []}) == 0
+    assert sr.history_count({"x": 1}) is None and sr.history_count("no") is None
