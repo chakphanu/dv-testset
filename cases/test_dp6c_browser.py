@@ -98,6 +98,12 @@ def open_positions(bp, lang):
     pages.positions_room(bp.page).select_option(dp6c.ROOM)
 
 
+def table_headings(bp):
+    """The headings of the MAIN positions table: the first thead of the first table (the station details of a row hold nested tables with their own thead, which closed <details> show as
+    empty strings; the first rig run read those too)."""
+    return [h.strip() for h in pages.positions_page(bp.page).locator("table").first.locator("thead").first.locator("th").all_inner_texts()]
+
+
 def row_of(bp, call):
     return pages.positions_rows(bp.page).filter(has=bp.page.locator("td", has_text=call)).first
 
@@ -130,7 +136,7 @@ def test_dp6c_4_station_details_are_text_only_in_both_languages(browser_page, se
     assert solo_cells[COL_LAT] == none_text and solo_cells[COL_LON] == none_text and solo_cells[COL_WEATHER] == "25.0 C 6 km/h", solo_cells
     assert wx_cells[COL_LAT] != none_text and tlm_cells[COL_LAT] != none_text, "a station with a position shows its coordinates"
     # the headings carry the new Weather and Station details columns
-    heads = [h.strip() for h in pages.positions_page(bp.page).locator("table thead th").all_inner_texts()]
+    heads = table_headings(bp)
     assert (heads[COL_WEATHER], heads[COL_DETAILS]) == ((TH["Weather"], TH["Station details"]) if th else ("Weather", "Station details")), heads
     assert th or heads == pages.POSITIONS_COLUMNS_DP6C, "the English headings %s differ from cases/web_pages.py POSITIONS_COLUMNS_DP6C" % heads
     # weather details: open the native control by its summary

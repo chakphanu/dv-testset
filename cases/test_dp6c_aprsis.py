@@ -38,8 +38,8 @@ def wx_path(target):
     paths = (doc.get("data") or {}).get("path") or []
     typed = any(p.get("from") == "edge:aprsis" and p.get("to") == "room:B" and {"weather", "telemetry"} <= set(p.get("types") or []) for p in paths)
     filt = ((doc.get("edges") or {}).get("aprsis") or {}).get("filter_extra", "")
-    if "p/N0WXI" not in filt:
-        pytest.skip("the aprsis filter_extra does not name p/N0WXI: add rig/config/dv-router/dp6c-aprsis-filter.toml (after dp15-aprsis.toml)")
+    if "p/N0WXI/N0WXJ" not in filt:
+        pytest.skip("the aprsis filter_extra does not name p/N0WXI/N0WXJ (the sources of this module): add rig/config/dv-router/dp6c-aprsis-filter.toml (after dp15-aprsis.toml)")
     return typed
 
 

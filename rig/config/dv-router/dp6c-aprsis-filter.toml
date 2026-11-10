@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: MIT
 # Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/dp6c-cases.md): the server-side filter that lets the private aprsc send the STATION reports of the DP6c cases
 # to DV-Router. The automatic login filter is only `g/<room addressee>` (message groups: data.md 9.2, "the automatic room-addressee filter does not request station
-# reports"); `filter_extra` adds `p/N0WXI` (callsigns that start with N0WXI), the sources of cases/test_dp6c_aprsis.py. Merged key by key into the [edges.aprsis]
+# reports"); `filter_extra` adds `p/N0WXI/N0WXJ` (callsigns that start with N0WXI or N0WXJ, aprsc prefix filter), the sources of cases/test_dp6c_aprsis.py (N0WXJ is the positionless weather station:
+# one weather per base callsign per 30 s, so it needs a base of its own; the first rig run filtered N0WXI only and never received it). Merged key by key into the [edges.aprsis]
 # table of dp15-aprsis.toml (use it AFTER that file). Alone, this is the "no weather types" shape: the edge RECEIVES the weather and telemetry packets and the
 # path rows do not admit them (no annex row appears); with dp6c-aprsis-wx.toml the same packets give weather and telemetry rows without a position.
 [edges.aprsis]
-filter_extra = "p/N0WXI"
+filter_extra = "p/N0WXI/N0WXJ"

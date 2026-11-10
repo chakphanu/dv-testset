@@ -28,6 +28,45 @@ def test_the_thai_strings_are_the_catalog_escapes_and_the_columns_follow_positio
     assert dp6c.weather_summary(dp6c.G5_WEATHER) == "25.0 C 6 km/h"
 
 
+def test_table_headings_read_the_first_table_only():
+    class Cells:
+        def __init__(self, texts):
+            self.texts = texts
+
+        def all_inner_texts(self):
+            return list(self.texts)
+
+    class Scope:
+        def __init__(self, thead_texts):
+            self.thead_texts = thead_texts
+
+        @property
+        def first(self):
+            return self
+
+        def locator(self, css):
+            return Cells(self.thead_texts) if css == "th" else self
+
+    class Page:
+        def __init__(self):
+            self.css = []
+
+        def locator(self, css):
+            self.css.append(css)
+            return Scope([" Callsign / object ", "Weather", "Station details"])
+
+    page = Page()
+    bp = type("BP", (), {"page": None})()
+    import web_pages as pages
+    original = pages.positions_page
+    pages.positions_page = lambda p: page
+    try:
+        assert tb.table_headings(bp) == ["Callsign / object", "Weather", "Station details"]
+    finally:
+        pages.positions_page = original
+    assert page.css == ["table"]
+
+
 def test_the_page_source_files_of_this_module_are_ascii():
     for name in ("test_dp6c_browser.py", "test_dp6c_rf.py", "test_dp6c_aprsis.py", "test_dp19_locator.py", "test_dp6c_config.py", "dp6c_support.py"):
         text = (Path(__file__).resolve().parent.parent / name).read_text(encoding="utf-8")

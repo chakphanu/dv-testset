@@ -42,7 +42,7 @@ def test_the_rf_snippet_binds_one_receive_only_port_to_room_b():
 
 def test_the_aprsis_snippets_add_the_typed_path_and_the_station_filter():
     doc = rendered("data-ident.toml", "dp15-aprsis.toml", "dp6c-aprsis-filter.toml", "dp6c-aprsis-wx.toml")
-    assert doc["edges"]["aprsis"]["filter_extra"] == "p/N0WXI" and doc["edges"]["aprsis"]["callsign"] == "N0TEST-5"
+    assert doc["edges"]["aprsis"]["filter_extra"] == "p/N0WXI/N0WXJ" and doc["edges"]["aprsis"]["callsign"] == "N0TEST-5"
     paths = {p["name"]: p for p in doc["data"]["path"]}
     wx = paths["aprsis-wx"]
     assert (wx["from"], wx["to"], wx["types"]) == ("edge:aprsis", "room:B", ["weather", "telemetry"]) and "aprsis-down" in paths
