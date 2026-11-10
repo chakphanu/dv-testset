@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: MIT
 """dvtest.crossmode (expected listener frames, link checks) and
 dvtest.fake_ctl against a FakeAmbedServer on 127.0.0.1."""
+import time
+
 import pytest
 
 from dvtest import crossmode as cm
@@ -244,7 +246,13 @@ def test_sessions_busy_and_dropped_data(worker, server):
     st = worker.stream(1, [2], 6)
     st.sock.sendto(b"\x02\x00" + bytes(9), st.dest)                   # wrong input codec: dropped
     assert st.reply(0.15) is None
-    sessions, strays = cm.sessions(FakeCtl(HOST, server.control_port).log())
+    # the datagram is handled on the server thread: on a loaded host the log may not have the note yet after the 0.15 s of silence, so poll for it
+    deadline = time.monotonic() + 5.0
+    while True:
+        sessions, strays = cm.sessions(FakeCtl(HOST, server.control_port).log())
+        if any(e["note"] == "dropped" for e in strays) or time.monotonic() > deadline:
+            break
+        time.sleep(0.02)
     assert len(sessions) == 2 and any(e["note"] == "dropped" for e in strays)
 
 
