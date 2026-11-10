@@ -298,3 +298,134 @@ def test_wait_for_series_does_not_wait_for_a_hub_without_the_series():
     for empty in (None, {}):
         series, waited, ok = map2d.wait_for_series(lambda: empty, lambda v: True, sleep=fake.sleep, clock=fake.clock)
         assert series == empty and waited == 0.0 and not ok
+
+
+# ---------------------------------------------------------------- MAP2h: the unavailable gauge, the old INDEX, the held lock
+
+def gauge_text(active=None, failures=0, extra=""):
+    lines = ["# TYPE dv_basemap_unavailable gauge"]
+    for reason in map2d.UNAVAILABLE_REASONS:
+        lines.append('dv_basemap_unavailable{proc="dv-svc-basemap",reason="%s"} %d' % (reason, 1 if reason == active else 0))
+    lines.append('dv_basemap_failures_total{proc="dv-svc-basemap"} %d' % failures)
+    lines.append('dv_basemap_fetches_total{proc="dv-svc-basemap"} 2')
+    return "\n".join(lines) + "\n" + extra
+
+
+def test_the_documented_reason_strings():
+    assert map2d.UNAVAILABLE_REASONS == ("old_index", "writer_active", "no_install")       # status.md, deployment.md (MAP2h)
+    assert map2d.INSTALL_LOCK == ".basemap-install.lock"
+
+
+def test_snapshot_reads_the_labelled_series_and_the_counters():
+    snap = map2d.unavailable_snapshot(gauge_text("old_index", failures=3))
+    assert snap == {"reasons": {"old_index": 1.0, "writer_active": 0.0, "no_install": 0.0}, "failures": 3.0, "fetches": 2.0}
+    assert map2d.snapshot_problems(snap) == []
+    assert map2d.unavailable_snapshot("dv_basemap_regions 0\n") == {}                  # an image before MAP2h
+    assert map2d.unavailable_snapshot("") == {}
+    no_counters = map2d.unavailable_snapshot('dv_basemap_unavailable{reason="no_install"} 1\n')
+    assert no_counters["failures"] is None and no_counters["fetches"] is None
+
+
+def test_reason_is_needs_a_well_formed_one_hot_gauge():
+    for active in map2d.UNAVAILABLE_REASONS:
+        snap = map2d.unavailable_snapshot(gauge_text(active))
+        assert map2d.reason_is(snap, active)
+        assert not map2d.reason_is(snap, None)
+        assert all(not map2d.reason_is(snap, other) for other in map2d.UNAVAILABLE_REASONS if other != active)
+    available = map2d.unavailable_snapshot(gauge_text(None))
+    assert map2d.reason_is(available, None) and not map2d.reason_is(available, "no_install")
+    assert not map2d.reason_is({}, None) and not map2d.reason_is(None, "no_install")
+
+
+@pytest.mark.parametrize("text,needle", [
+    ('dv_basemap_unavailable{reason="old_index"} 1\ndv_basemap_unavailable{reason="no_install"} 1\ndv_basemap_unavailable{reason="writer_active"} 0\n', "more than one"),
+    ('dv_basemap_unavailable{reason="old_index"} 2\ndv_basemap_unavailable{reason="no_install"} 0\ndv_basemap_unavailable{reason="writer_active"} 0\n', "not 0 or 1"),
+    ('dv_basemap_unavailable{reason="old_index"} 0\ndv_basemap_unavailable{reason="no_install"} 0\n', "want exactly"),
+    ('dv_basemap_unavailable{reason="old_index"} 0\ndv_basemap_unavailable{reason="no_install"} 0\ndv_basemap_unavailable{reason="writer_active"} 0\n'
+     'dv_basemap_unavailable{reason="hub_not_ready"} 0\n', "want exactly"),
+])
+def test_snapshot_problems_name_a_malformed_gauge(text, needle):
+    problems = map2d.snapshot_problems(map2d.unavailable_snapshot(text))
+    assert any(needle in p for p in problems), problems
+    assert not map2d.reason_is(map2d.unavailable_snapshot(text), "old_index")
+
+
+def test_old_index_bytes_drop_exactly_the_fields_map2d_added():
+    index = good_index()
+    old = map2d.old_index_bytes(index)
+    doc = json.loads(old)
+    assert old.isascii() and old.endswith(b"\n")
+    assert not ({"fetch_enabled", "preparing", "too_large"} & set(doc))
+    assert doc["version"] == 1 and {k: v for k, v in doc.items()} == {k: v for k, v in index.items() if k not in map2d.PRE_WORKER_INDEX_KEYS}
+    assert map2d.is_pre_worker_index(doc) and not map2d.is_pre_worker_index(index)
+    assert not map2d.is_map2d_index(doc)                                            # the helper that the other cases skip on agrees
+    assert map2d.old_index_bytes(json.dumps(index).encode()) == old                 # bytes in, same out
+    assert good_index() == index                                                    # the input is not mutated
+    assert not map2d.is_pre_worker_index(None) and not map2d.is_pre_worker_index({"version": 2})
+
+
+def test_replace_file_is_atomic_and_leaves_no_temp(tmp_path):
+    target = tmp_path / "INDEX"
+    target.write_bytes(b"old")
+    inode = target.stat().st_ino
+    map2d.replace_file(target, b"new")
+    assert target.read_bytes() == b"new" and not (tmp_path / "INDEX.dvt-tmp").exists()
+    assert target.stat().st_ino != inode                                            # a rename: readers see the old or the new file whole
+
+
+def test_held_lock_conflicts_with_a_second_flock_like_the_workers_and_releases(tmp_path):
+    import fcntl
+    import os
+    lock = map2d.HeldLock(tmp_path)
+    assert not lock.held and not lock.path.exists()
+    lock.acquire()
+    assert lock.held and lock.path.is_file() and lock.path.name == ".basemap-install.lock"
+    fd = os.open(lock.path, os.O_RDWR)
+    try:
+        with pytest.raises(BlockingIOError):                                        # the worker's flock(LOCK_EX | LOCK_NB) would be refused
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(BlockingIOError):
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        with pytest.raises(BlockingIOError):
+            map2d.HeldLock(tmp_path).acquire()
+        lock.release()
+        assert not lock.held
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)                              # free again
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+    lock.release()                                                                  # releasing twice is harmless
+
+
+def test_held_lock_context_waits_for_a_busy_lock_and_refuses_odd_files(tmp_path):
+    import threading
+    import time
+    first = map2d.HeldLock(tmp_path).acquire()
+    threading.Timer(0.4, first.release).start()
+    started = time.monotonic()
+    with map2d.HeldLock(tmp_path) as second:                                        # retried until the first one lets go
+        assert second.held and time.monotonic() - started >= 0.3
+    assert not second.held
+    link = tmp_path / "linked"
+    link.mkdir()
+    (link / ".basemap-install.lock").symlink_to(tmp_path / ".basemap-install.lock")
+    with pytest.raises(OSError):                                                    # O_NOFOLLOW: the worker refuses a symlink too
+        map2d.HeldLock(link).acquire()
+    folder = tmp_path / "dir"
+    (folder / ".basemap-install.lock").mkdir(parents=True)
+    with pytest.raises(OSError):
+        map2d.HeldLock(folder).acquire()
+    with pytest.raises(BlockingIOError):
+        busy = map2d.HeldLock(tmp_path).acquire()
+        try:
+            map2d.HeldLock(tmp_path).acquire_retry(timeout=0.3, poll=0.05)
+        finally:
+            busy.release()
+
+
+def test_the_map2h_case_names_only_documented_reasons():
+    text = (ROOT / "cases" / "test_map2h_unavailable.py").read_text()
+    import re
+    used = set(re.findall(r'"(old_index|writer_active|no_install|[a-z]+_[a-z]+_[a-z]+)"', text)) & {"old_index", "writer_active", "no_install"}
+    assert used == set(map2d.UNAVAILABLE_REASONS)
+    assert "python3 -m pytest" not in text

@@ -277,6 +277,20 @@ def test_install_tree_copies_a_verified_base_and_removes_only_its_own(tmp_path):
     assert m2.remove_tree(state) is False and (state / "basemap").is_dir()      # no marker: not ours
 
 
+def test_install_tree_can_stage_another_index_without_touching_the_source(tmp_path):
+    src, _m = make_tree(tmp_path / "product")
+    state = tmp_path / "state"
+    state.mkdir()
+    before = (src / "regions" / "INDEX").read_bytes()
+    m2.install_tree(state, src, index_bytes=b'{"version": 1, "old": true}\n')
+    assert (state / "basemap" / "regions" / "INDEX").read_bytes() == b'{"version": 1, "old": true}\n'
+    assert (src / "regions" / "INDEX").read_bytes() == before                      # the source tree is read only
+    assert (state / "basemap" / m2.INSTALLED_MARK).is_file() and not (state / "basemap.dvt-staging").exists()
+    assert m2.remove_tree(state) is True
+    m2.install_tree(state, src)                                                      # default: the source INDEX as it is
+    assert (state / "basemap" / "regions" / "INDEX").read_bytes() == before
+
+
 def test_install_tree_refuses_what_is_not_a_complete_v2_tree(tmp_path):
     state = tmp_path / "state"
     state.mkdir()

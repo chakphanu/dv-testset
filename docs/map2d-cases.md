@@ -101,6 +101,27 @@ start) reads as "not MAP2d", the relaxed side, never a false failure. The DP7 ca
 Not covered here (the in-repo tests cover them, `crates/svc/basemap/tests/worker.rs`, `src/core/worker/tests.rs`): eviction, backoff timing (1 h and up, not
 shortenable), the 412 restart, `too_large`, midnight roll-over of the daily counters, a refresh of an old region, integrity failures (MAP2e R4 to R6).
 
+## MAP2h: unavailable is a gauge, not a failure (`cases/test_map2h_unavailable.py`)
+
+DV-Router MAP2h (6ef82fd9, on main d20532de) makes `dv_basemap_failures_total` count failed jobs only and reports an unavailable worker as the gauge
+`dv_basemap_unavailable{reason}`: three series, always exported, one-hot (at most one is 1, all are 0 when the worker can work). The reasons (status.md, deployment.md
+"Automatic detail regions"): `old_index` (the INDEX predates MAP2d), `writer_active` (another writer holds `<state>/.basemap-install.lock`), `no_install` (no
+`<state>/basemap/base/MANIFEST`). The worker retries on every 5 s tick, logs once per message, emits no `failed` event and starts no job. NOT RUN: no image with MAP2h yet.
+
+| Case | Steps | Asserted | Recorded only |
+|------|-------|----------|---------------|
+| no_install | no tree in the state dir | `no_install` is 1 and only it (45 s allowed: tick 5 s + publish 10 s + ingest 10 s); `failures_total` never above its baseline for 25 s more; the source saw no request | values, seconds, tiles.json |
+| old_index | a tree installed as a whole (rename of `basemap/`) whose `regions/INDEX` is the saved MAP2d INDEX without `fetch_enabled`, `preparing`, `too_large` | `old_index` is 1 and only it; `failures_total` flat over 25 s; the worker did not rewrite the old INDEX; when tiles.json says installed, `fetch_enabled` false and `preparing` []; no source request. Then the INDEX is restored by an atomic replace: the gauge returns to all 0, tiles.json is installed again, the INDEX is in the MAP2d shape (the worker rewrites it), `failures_total` flat | the `installed` flag while the INDEX is old |
+| writer_active | the tester holds `flock(LOCK_EX \| LOCK_NB)` on `<state>/.basemap-install.lock` (one inode on both sides of the sut-state bind mount; BSD flock, as `publish.rs`) | `writer_active` is 1 and only it; `failures_total` flat 25 s; tiles.json `fetch_enabled` false and `preparing` [] (the worker dropped its lease); no source request. Lock released: gauge all 0 again | whether `fetch_enabled` is true again (a finding if not) |
+
+The INDEX is swapped only while the worker has no base: its `open` re-reads the INDEX each tick, while a RUNNING worker re-reads it only when the MANIFEST identity changes,
+so an in-place swap under a running worker would not be noticed. An INDEX of another version, with unknown keys, or a missing INDEX next to a MANIFEST is a counted failure
+by design (not `old_index`); the generation is never compared. The tester must keep the lock descriptor open: `fcntl.lockf` would not conflict with the worker's `flock`.
+The tree, the lock and the INDEX are restored in `finally` blocks and a module fixture. The case skips with the reason without `dv_basemap_unavailable` in the hub metrics.
+
+Run (about 5 minutes; the same environment as the MAP2d case, alone or together with it, the MAP2d file first): `... scripts/run.sh -m rig --capture --profile web,mapsrc -- cases/test_map2d_regions.py cases/test_map2h_unavailable.py`.
+Do not restart `xlxd-sut` in the run.
+
 ## UNVERIFIED
 
 * That the 30 s windows are long enough (read from the source: the worker cycle is 5 s, one cell is admitted per cycle, there is no minimum position age,

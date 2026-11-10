@@ -7,10 +7,12 @@ HEAD + ranged GETs, publishing `<state>/basemap/regions/r-10-<x>-<y>-<build>.pmt
 read what that leaves behind: the INDEX, the request log of the fixture source (dvtest/basemap_fixture.py), the tiles that
 dv-svc-web serves from a region, and the dv_basemap_* telemetry. No network except `source_stats` (the fixture's log listener).
 """
+import fcntl
 import gzip
 import json
 import os
 import re
+import stat
 import urllib.request
 from pathlib import Path
 
@@ -258,3 +260,122 @@ def wait_for_series(read, ready, timeout=25.0, poll=2.0, sleep=None, clock=None)
         if clock() - start >= timeout:
             return series, clock() - start, False
         sleep(poll)
+
+
+# ---------------------------------------------------------------- MAP2h: unavailability is a gauge, not a failure
+
+UNAVAILABLE_REASONS = ("old_index", "writer_active", "no_install")      # the fixed reasons (status.md, deployment.md "Automatic detail regions")
+INSTALL_LOCK = ".basemap-install.lock"                                  # <state>/, flock(2) LOCK_EX | LOCK_NB by the worker per cycle and by `install`
+PRE_WORKER_INDEX_KEYS = ("fetch_enabled", "preparing", "too_large")     # the fields MAP2d added; an INDEX without them is "written before MAP2d"
+
+
+def unavailable_snapshot(text):
+    """{"reasons": {reason: value}, "failures": float|None, "fetches": float|None} from a Prometheus text, or {} when the image
+    exports no dv_basemap_unavailable at all (an image before MAP2h). The three reason series are one-hot: exported always, at most
+    one of them 1, all 0 while the worker is available."""
+    from dvtest import metrics
+    samples = metrics.parse(text)
+    reasons = {s.labels.get("reason"): s.value for s in samples if s.name == "dv_basemap_unavailable"}
+    if not reasons:
+        return {}
+    names = {s.name for s in samples}
+    return {"reasons": reasons,
+            "failures": metrics.total(samples, "dv_basemap_failures_total") if "dv_basemap_failures_total" in names else None,
+            "fetches": metrics.total(samples, "dv_basemap_fetches_total") if "dv_basemap_fetches_total" in names else None}
+
+
+def snapshot_problems(snap):
+    """What is wrong with the SHAPE of the gauge: a missing or unknown reason, a value other than 0 or 1, two reasons at once."""
+    reasons = (snap or {}).get("reasons") or {}
+    out = []
+    if set(reasons) != set(UNAVAILABLE_REASONS):
+        out.append("reasons %s, want exactly %s" % (sorted(map(str, reasons)), sorted(UNAVAILABLE_REASONS)))
+    if any(v not in (0.0, 1.0) for v in reasons.values()):
+        out.append("values %s are not 0 or 1" % sorted(reasons.items(), key=str))
+    if sum(1 for v in reasons.values() if v == 1.0) > 1:
+        out.append("more than one reason is 1: %s" % sorted(r for r, v in reasons.items() if v == 1.0))
+    return out
+
+
+def reason_is(snap, reason):
+    """True when the gauge is well formed and `reason` is the one series at 1; reason None means all three at 0 (available)."""
+    if not snap or snapshot_problems(snap):
+        return False
+    active = sorted(r for r, v in snap["reasons"].items() if v == 1.0)
+    return active == ([] if reason is None else [reason])
+
+
+def old_index_bytes(index):
+    """The regions/INDEX of an install that predates MAP2d: the given INDEX (dict, or bytes of a MAP2d INDEX) without the fields MAP2d
+    added (`fetch_enabled`, `preparing`, `too_large`), version 1. The worker refuses it with `region INDEX was written before MAP2d`."""
+    doc = json.loads(index) if isinstance(index, (bytes, str)) else dict(index)
+    for key in PRE_WORKER_INDEX_KEYS:
+        doc.pop(key, None)
+    doc["version"] = 1
+    return (json.dumps(doc, indent=2, sort_keys=True) + "\n").encode("ascii")
+
+
+def is_pre_worker_index(doc):
+    return isinstance(doc, dict) and doc.get("version") == 1 and any(k not in doc for k in PRE_WORKER_INDEX_KEYS)
+
+
+def replace_file(path, data):
+    """Writes `data` to `path` through a temporary file in the same directory and a rename (the worker never reads half a file)."""
+    path = os.fspath(path)
+    tmp = path + ".dvt-tmp"
+    with open(tmp, "wb") as fh:
+        fh.write(data)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+
+
+class HeldLock:
+    """Holds the install lock of a state directory like another writer would: flock(2) LOCK_EX | LOCK_NB on <state>/.basemap-install.lock
+    (what dv-svc-basemap takes, publish.rs: BSD flock, not fcntl/lockf, which would not conflict). The file is created if the worker
+    has not made it yet (mode 0666 minus umask, as the worker does), a symlink or a non-regular file is refused (the worker refuses it
+    too, counting a failure). The lock lives as long as this object holds the descriptor: release() or leaving the `with` drops it,
+    and so does a crash of the tester. BlockingIOError when someone else (the worker, mid cycle) holds it: try again."""
+
+    def __init__(self, state_dir):
+        self.path = Path(state_dir) / INSTALL_LOCK
+        self.fd = None
+
+    def acquire(self):
+        fd = os.open(self.path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o666)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise ValueError("%s is not a regular file" % self.path)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BaseException:
+            os.close(fd)
+            raise
+        self.fd = fd
+        return self
+
+    def acquire_retry(self, timeout=30.0, poll=0.2):
+        """acquire(), retrying while the worker holds the lock for one of its short cycles."""
+        import time
+        end = time.monotonic() + timeout
+        while True:
+            try:
+                return self.acquire()
+            except BlockingIOError:
+                if time.monotonic() >= end:
+                    raise
+                time.sleep(poll)
+
+    def release(self):
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
+
+    @property
+    def held(self):
+        return self.fd is not None
+
+    def __enter__(self):
+        return self.acquire_retry()
+
+    def __exit__(self, *exc):
+        self.release()

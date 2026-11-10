@@ -322,11 +322,12 @@ def tree_problems(root, manifest):
 INSTALLED_MARK = ".dvt-installed"
 
 
-def install_tree(state_dir, source):
+def install_tree(state_dir, source, index_bytes=None):
     """Installs a tree made by `dv-svc-basemap install --state <dir>` (it holds base/ and regions/) as <state_dir>/basemap/ by one
     rename from a staging directory next to it (never over an existing basemap/), with a marker INSIDE (remove_tree deletes only
     what this made). The product's own tool made the bytes; this copies and re-checks them. Returns the MANIFEST dict.
-    ValueError for anything that is not a complete verified v2 tree."""
+    ValueError for anything that is not a complete verified v2 tree. `index_bytes` replaces regions/INDEX in the STAGED copy before the
+    rename (the source is never touched): the MAP2h case installs a tree whose INDEX predates MAP2d."""
     source = map2_root(source) or Path(source)
     manifest = read_manifest2(source)
     if manifest is None:
@@ -342,6 +343,8 @@ def install_tree(state_dir, source):
         raise ValueError("%s or %s exists already: not overwritten" % (final, staging))
     try:
         shutil.copytree(source, staging, symlinks=False)
+        if index_bytes is not None:
+            (staging / "regions" / "INDEX").write_bytes(index_bytes)
         (staging / INSTALLED_MARK).write_text("installed by dv-testset\n", encoding="ascii")
         os.rename(staging, final)
     except Exception:
