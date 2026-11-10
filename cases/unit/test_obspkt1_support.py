@@ -405,9 +405,14 @@ class Scripted:
 
     user_agent = "dvt-web/1"
 
-    def __init__(self, script, frames):
+    def __init__(self, script, frames, on_kill=(), on_restart=()):
         self.script, self.frames, self.calls, self.step_ups, self.restarts = script, frames, 0, 0, 0
+        self.on_kill, self.on_restart, self.on_frame = list(on_kill), list(on_restart), None
         self.authenticator = SimpleNamespace(next_code=lambda: "000000")
+
+    def deliver(self, frames):
+        for frame in frames:
+            self.on_frame(frame)
 
     def clone(self):
         return self
@@ -434,16 +439,17 @@ class Scripted:
 
     def post(self, path, body, expect=None):
         self.restarts += 1
+        self.deliver(self.on_restart)                                   # the old edge id's gap comes after the restart call
         return SimpleNamespace(status=200)
 
     def sse(self, path, max_events=1, timeout=1.0, on_frame=None, stop=None, **kw):
-        for frame in self.frames:
-            on_frame(frame)
+        self.on_frame = on_frame
+        self.deliver(self.frames)
         stop.wait(2.0)
         return 200, "text/event-stream", []
 
 
-def restart_flow(monkeypatch, new_ax="ax25-0000000000000009", gaps=True, keep_old_rows=False, worker_boot_changes=True, old_edge_gap=True, bye=False):
+def restart_flow(monkeypatch, new_ax="ax25-0000000000000009", gaps=True, keep_old_rows=False, worker_boot_changes=True, old_edge_gap=True, bye=False, extra_gap=None, double_old_gap=False):
     new_boot = [9] * 16
     worker0 = {"id": W, "boot": BOOT}
     edge0, edge_is = {"id": E_AX, "boot": BOOT}, {"id": E_IS, "boot": BOOT}
@@ -455,22 +461,21 @@ def restart_flow(monkeypatch, new_ax="ax25-0000000000000009", gaps=True, keep_ol
     script = [(rows0, [worker0, edge0, edge_is]),
               (stage1, [{"id": W, "boot": new_boot if worker_boot_changes else BOOT}, edge0, edge_is]),
               (stage2, [{"id": W, "boot": new_boot if worker_boot_changes else BOOT}, {"id": new_ax, "boot": [7] * 16}, edge_is])]
+    gap = lambda pid: {"event": "gap", "data": json.dumps({"id": pid})}  # noqa: E731
     frames = [{"event": "hello", "data": json.dumps({"producers": [worker0, edge0, edge_is]})}]
-    if gaps:
-        frames += [{"event": "gap", "data": json.dumps({"id": W})}]
-        if old_edge_gap:
-            frames += [{"event": "gap", "data": json.dumps({"id": E_AX})}]
-    frames += [{"event": "rows", "data": json.dumps({"id": new_ax, "boot": [7] * 16, "rows": [{"seq": 1}]})}]
+    on_kill = [gap(W)] if gaps else []                                  # the worker's gap comes after the kill
+    on_restart = ([gap(E_AX)] * (2 if double_old_gap else 1) if gaps and old_edge_gap else []) + ([gap(extra_gap)] if extra_gap else [])
+    on_restart += [{"event": "rows", "data": json.dumps({"id": new_ax, "boot": [7] * 16, "rows": [{"seq": 1}]})}]
     if bye:
-        frames += [{"event": "bye", "data": json.dumps({"reason": "session ended"})}]
-    admin = Scripted(script, frames)
+        on_restart += [{"event": "bye", "data": json.dumps({"reason": "session ended"})}]
+    admin = Scripted(script, frames, on_kill, on_restart)
     ticks = iter(range(0, 10 ** 6))
     monkeypatch.setattr(tm, "time", SimpleNamespace(sleep=lambda s: None, monotonic=lambda: next(ticks)))
     monkeypatch.setattr(tm.ds, "write_note", lambda *a, **k: None)
     factory = lambda role: admin  # noqa: E731
     factory.credentials = lambda role: ("u", "p")
     ctx = SimpleNamespace(admin=admin, admin_session=factory)
-    control = SimpleNamespace(kill_proc=lambda *a, **k: SimpleNamespace(pids=[1]))
+    control = SimpleNamespace(kill_proc=lambda *a, **k: (admin.deliver(admin.on_kill), SimpleNamespace(pids=[1]))[1])
     hub = SimpleNamespace(total=lambda family, **labels: 0)
     notes = []
     monkeypatch.setattr(tm.ds, "write_note", lambda target, case, tag, text, **kw: notes.append((tag, text)))
@@ -484,12 +489,16 @@ def test_the_restart_case_expects_the_worker_id_to_stay_and_the_edge_id_to_chang
     assert admin.restarts == 1
     assert not [t for tag, t in admin.notes if tag == "FINDING"] and any("monitor eviction counters" in t for _tag, t in admin.notes)
     assert any("producer ids seen" in t for _tag, t in admin.notes) and any("rows around the gap" in t for _tag, t in admin.notes)
-    with pytest.raises(AssertionError, match="no `gap` .id. for the restarted worker"):
-        restart_flow(monkeypatch, gaps=False)                                            # the worker gap stays a hard assertion
-    with pytest.raises(AssertionError, match="although nothing stepped up on its session"):
+    with pytest.raises(AssertionError, match=r"0 gap\(s\) for the restarted worker"):
+        restart_flow(monkeypatch, gaps=False)
+    with pytest.raises(AssertionError, match=r"0 gap\(s\) for the old edge id"):
+        restart_flow(monkeypatch, old_edge_gap=False)                                    # OBSPKT1b image: the old id's gap is a hard assertion
+    with pytest.raises(AssertionError, match=r"2 gap\(s\) for the old edge id"):
+        restart_flow(monkeypatch, double_old_gap=True)
+    with pytest.raises(AssertionError, match="a gap for aprsis-0000000000000001, which did not restart"):
+        restart_flow(monkeypatch, extra_gap="aprsis-0000000000000001")
+    with pytest.raises(AssertionError, match="the stream ended with bye session ended"):
         restart_flow(monkeypatch, bye=True)
-    no_old = restart_flow(monkeypatch, old_edge_gap=False)                               # the old edge id's gap is a recorded FINDING (OBSPKT1b)
-    assert [t for tag, t in no_old.notes if tag == "FINDING" and "OBSPKT1b" in t and "OLD AX.25 id" in t]
     with pytest.raises(AssertionError, match="rows of the old AX.25 id survived"):
         restart_flow(monkeypatch, keep_old_rows=True)
     with pytest.raises(AssertionError, match="worker boot did not change"):
@@ -523,8 +532,9 @@ def test_replay_after_gap_separates_a_new_boot_from_a_replay_of_old_sequences():
 class StreamSession:
     """A dedicated admin session for OBSPKT1-d2: the stream replays `frames` at once, a step-up on it (after which `bye_after_step_up`) ends the stream."""
 
-    def __init__(self, bye_after_step_up):
+    def __init__(self, bye_after_step_up, bye_after_logout=True, slow_logout_ticks=0):
         self.bye, self.step_ups, self.frames_sent = bye_after_step_up, 0, []
+        self.bye_after_logout, self.logouts, self.slow_logout_ticks, self.clock = bye_after_logout, 0, slow_logout_ticks, None
         self.authenticator = SimpleNamespace(next_code=lambda: "000000")
         self.on_frame = None
 
@@ -541,6 +551,13 @@ class StreamSession:
     def step_up(self):
         self.step_ups += 1
         if self.bye and self.on_frame:
+            self.on_frame({"event": "bye", "data": json.dumps({"reason": "session ended"})})
+
+    def logout(self):
+        self.logouts += 1
+        for _ in range(self.slow_logout_ticks):
+            self.clock()                                                # the bye comes late
+        if self.bye_after_logout and self.on_frame:
             self.on_frame({"event": "bye", "data": json.dumps({"reason": "session ended"})})
 
 
@@ -568,3 +585,44 @@ def test_stream_id_problems_accept_an_id_introduced_by_its_boot_and_name_the_oth
     problems = ob.stream_id_problems(bad)
     assert len(problems) == 2 and "gap" in problems[0] and "rows" in problems[1]
     assert ob.stream_id_problems([{"event": "gap", "data": "x"}]) == []
+
+
+def test_gap_problems_judge_counts_phases_window_other_ids_and_byes():
+    old, workers = ["ax25-1"], ["pkt"]
+    ok = [(1.0, "hello", None), (6.0, "gap", "pkt"), (15.0, "gap", "ax25-1")]
+    assert ob.gap_problems(ok, old, workers, t_kill=5.0, t_restart_call=12.0) == []
+    assert ob.gap_problems(ok, old, workers, 5.0, 12.0, window=2.0) != []                       # 3 s after the call, window 2 s
+    assert any("outside the worker-kill phase" in p for p in ob.gap_problems(ok, old, workers, t_kill=7.0, t_restart_call=12.0))     # before the kill
+    assert any("outside the worker-kill phase" in p for p in ob.gap_problems(ok, old, workers, t_kill=5.0, t_restart_call=6.0))      # in the AX.25 phase
+    assert any("came -" in p for p in ob.gap_problems(ok, old, workers, t_kill=5.0, t_restart_call=16.0))                          # before the restart call
+    assert any("2 gap(s) for the restarted worker" in p for p in ob.gap_problems(ok + [(20.0, "gap", "pkt")], old, workers, 5.0, 12.0))
+    assert any("aprsis-1, which did not restart" in p for p in ob.gap_problems(ok + [(16.0, "gap", "aprsis-1")], old, workers, 5.0, 12.0))
+    assert any("ended with bye" in p for p in ob.gap_problems(ok + [(30.0, "bye", "session ended")], old, workers, 5.0, 12.0))
+    assert any("ended with resync" in p for p in ob.gap_problems(ok + [(30.0, "resync", "lag")], old, workers, 5.0, 12.0))
+    assert ob.obspkt1b_on({"DVT_OBSPKT1B": "on"}) and not ob.obspkt1b_on({}) and not ob.obspkt1b_on({"DVT_OBSPKT1B": "off"})
+
+
+def test_the_step_up_probe_asserts_on_the_obspkt1b_image_and_probes_the_logout(monkeypatch):
+    def run(sessions, strict=True):
+        monkeypatch.setattr(tm.ds, "write_note", lambda *a, **k: None)
+        monkeypatch.setenv("DVT_OBSPKT1B", "on" if strict else "")
+        queue = iter(sessions)
+        monkeypatch.setattr(tm, "second_login", lambda ctx: next(queue))
+        ticks = iter(x * 0.5 for x in range(0, 10 ** 6))
+        clock = lambda: next(ticks)  # noqa: E731
+        for sess in sessions:
+            sess.clock = clock
+        monkeypatch.setattr(tm, "time", SimpleNamespace(sleep=lambda s: None, monotonic=clock))
+        tm.test_obspkt1_d2_a_step_up_on_the_streams_own_session_is_recorded(SimpleNamespace(), None)
+    first, second = StreamSession(False), StreamSession(False, bye_after_logout=True)
+    run([first, second])
+    assert first.step_ups == 1 and second.logouts == 1 and second.step_ups == 0
+    with pytest.raises(AssertionError, match="a step-up on the stream's own session ended the stream"):
+        run([StreamSession(True), StreamSession(False)])
+    with pytest.raises(AssertionError, match="did not end with a bye after the logout"):
+        run([StreamSession(False), StreamSession(False, bye_after_logout=False)])
+    with pytest.raises(AssertionError, match="the bye came .* s after the logout"):
+        run([StreamSession(False), StreamSession(False, slow_logout_ticks=6)])
+    lone = StreamSession(False)
+    run([lone], strict=False)                                           # the default: no logout probe, nothing asserted
+    assert lone.step_ups == 1 and lone.logouts == 0

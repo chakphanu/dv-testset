@@ -12,10 +12,12 @@ command, runtime, GAPs and the shapes that are not confirmed: docs/obspkt1-cases
              line; a station hidden LATER loses its position from the rows still retained
   OBSPKT1-e  no packet body anywhere else: container logs, public state, other admin routes, telemetry labels
   OBSPKT1-f  admin without a fresh step-up window gets 403 step_up_required on both routes (waits until the login's window has closed)
-  OBSPKT1-d  (LAST) a process restart clears the rings: kill dv-data-worker (same id, a new boot, worker rows go, `gap` {id}), restart dv-edge-ax25 (the edge id
-             CHANGES with the process: a `gap` for the old id (a recorded FINDING on wip-16e8e6c, OBSPKT1b), the new id appears in rows with its boot; `hello` is
-             not complete by design); the stream runs on its OWN session because a step-up rotates the cookie and ends a stream opened with the old one
-  OBSPKT1-d2 (LAST) records, as a FINDING, whether a step-up on the session that holds an open packet stream ends that stream
+  OBSPKT1-d  (LAST) a process restart clears the rings: kill dv-data-worker (same id, a new boot, worker rows go, EXACTLY ONE `gap` {id} in the kill phase),
+             restart dv-edge-ax25 (the edge id CHANGES with the process: EXACTLY ONE `gap` for the old id within 20 s after the restart call, none for any other
+             id, no bye, nothing replayed; the new id appears in rows with its boot; `hello` is not complete by design); the stream runs on its OWN session
+             because a step-up rotates the cookie and ends a stream opened with the old one
+  OBSPKT1-d2 (LAST) a step-up on the session that holds an open packet stream: a FINDING (OBSPKT1b) by default; with DVT_OBSPKT1B=on the stream must survive
+             it and a logout on its session must end it with a bye within 1 s
 
 Shape: dp11e-kiss.toml + dp11e-kiss-igate.toml + dp15-aprsis.toml + dp15-rf-out.toml + obspkt1-hidden.toml, profile web,aprs. Skips with a reason on an image
 without the packets routes (404), without the shape, or without a prerequisite. NOT RUN ON A RIG. Observations: stdout and out/<run>/obspkt1.txt.
@@ -583,6 +585,7 @@ def test_obspkt1_d_a_process_restart_clears_its_rings(ctx, traffic, rig_control,
     with Streamer(stream_admin) as stream:
         time.sleep(5.0)
         t_stream = stream.t0
+        t_kill = time.monotonic()
         rig_control.kill_proc("xlxd-sut", "dv-data-worker", "KILL")
         end, after = time.monotonic() + 90.0, None
         while time.monotonic() < end and after is None:
@@ -599,7 +602,8 @@ def test_obspkt1_d_a_process_restart_clears_its_rings(ctx, traffic, rig_control,
         for m in markers:
             assert not ob.mentions(ob.worker_rows(after["rows"]), m), "a worker row survived the worker restart: %s" % ob.mentions(ob.worker_rows(after["rows"]), m)[:1]
         assert ob.edge_rows(after["rows"]) and all(new_boot.get(e) == boot0[e] for e in edge_ids), "the edge rings or boots changed with the worker restart"
-        admin.step_up()
+        admin.step_up()                                            # may wait up to 30 s for a new TOTP code: the restart call is timed after it
+        t_call = time.monotonic()
         child = admin.post(admin.path("/children/%s/restart" % txguard.AX25_CHILD), {}, expect=None)
         assert child.status == 200, "restart of %s answered HTTP %d" % (txguard.AX25_CHILD, child.status)
         t_restart = time.monotonic()
@@ -648,19 +652,18 @@ def test_obspkt1_d_a_process_restart_clears_its_rings(ctx, traffic, rig_control,
             note(target, case, "RECORD", "admin log lines with `query failed`: %s" % {os.path.basename(k): v[:3] for k, v in found.items()})
         else:
             note(target, case, "RECORD", "admin log scan left for the host: `%s` (a FOUND for OBSPKT1-d-query-failed is the finding, not a failure)" % logscan.command_for(out_dir))
-    assert any(w in events.gaps for w in worker_ids), "no `gap` {id} for the restarted worker: gaps %s" % events.gaps
-    if any(e in events.gaps for e in old_ax):
-        note(target, case, "RECORD", "the OLD AX.25 id %s got a gap, as data.md 13.5 and the DV-Router note describe" % old_ax)
-    else:
-        note(target, case, "FINDING", "OBSPKT1b: no `gap` for the OLD AX.25 id %s after its restart (gaps %s; stream ended with %s; the hub process table may still list "
-              "the id, or the poller re-bootstrapped instead); timeline %s" % (old_ax, events.gaps, stream.ended(), stream.timeline()))
-    assert not stream.ended() or stream.ended()[0][0] != "bye" or stream.ended()[0][1] != "session ended", (
-        "the stream ended with bye `session ended` although nothing stepped up on its session: %s" % stream.timeline())
+    # Hard (OBSPKT1b image): exactly one gap for the old edge id, within 20 s after the restart call; exactly one for the worker, in the worker-kill phase only;
+    # none for any other id (aprsis, the new AX.25 id); no bye, no resync; and nothing replayed after the worker's gap.
+    t_kill_rel, t_call_rel = t_kill - stream.t0, t_call - stream.t0
+    gap_times = [("%.1f" % t, tag) for t, event, tag in stream.times if event == "gap"]
+    note(target, case, "RECORD", "gap frames (seconds since the stream opened): %s; worker kill at %.1f s, AX.25 restart call at %.1f s" % (gap_times, t_kill_rel, t_call_rel))
+    problems = ob.gap_problems(stream.times, old_ax, worker_ids, t_kill_rel, t_call_rel)
+    assert not problems, "the stream's gap, bye and resync frames: %s; timeline %s" % (problems, stream.timeline())
+    for pid in worker_ids:
+        replayed = ob.replay_after_gap(stream.frames, pid)["replayed"]
+        assert not replayed, "rows after the gap of %s replay %d old (boot, seq) pairs: %s" % (pid, len(replayed), replayed[:3])
     id_problems = ob.stream_id_problems(stream.frames)
     assert not id_problems, "a producer id appears in the stream without hello or a rows batch with its boot: %s" % id_problems
-    if any(n in events.gaps for n in new_ax):
-        note(target, case, "FINDING", "OBSPKT1b: a gap was reported for the NEW AX.25 id %s: gaps %s (the poller re-bootstraps every producer with a cursor when discovery fails)" % (
-            new_ax, events.gaps))
     note(target, case, "RECORD", "hello is not complete by design (it lists the producers the feed already holds a cursor for): new AX.25 id in hello: %s" % (
         any(n in [p.get("id") for p in events.hello or []] for n in new_ax)))
 
@@ -668,9 +671,13 @@ def test_obspkt1_d_a_process_restart_clears_its_rings(ctx, traffic, rig_control,
 def test_obspkt1_d2_a_step_up_on_the_streams_own_session_is_recorded(ctx, target):
     """dv-router (app_packets.rs:87-95): the stream checks every 100 ms that the session id it was opened with is alive, and an explicit step-up ROTATES the
     session cookie and ends the old id. So a step-up on the session that holds an open packet stream ends the stream with `bye` `session ended`: the
-    administrator's own step-up kills their stream. That is recorded here as a FINDING (OBSPKT1b), not a failure: a dedicated login opens a stream, waits
-    for `hello`, steps up on the same session and watches for the `bye` for up to 10 s."""
+    administrator's own step-up kills their stream. A dedicated login opens a stream, waits for `hello`, steps up on the same session and watches for the
+    `bye` for up to 10 s.
+    Default (an image before the OBSPKT1b fixes): a `bye` is a FINDING (OBSPKT1b), a surviving stream a RECORD; the case never fails on that outcome.
+    DVT_OBSPKT1B=on (the fixed image): the stream must SURVIVE the step-up, and a second dedicated stream must END with a `bye` within 1 s of a logout on
+    its session (the logout probe)."""
     case = "OBSPKT1-d2"
+    strict = ob.obspkt1b_on()
     session = second_login(ctx)
     with Streamer(session) as stream:
         end = time.monotonic() + 15.0
@@ -686,10 +693,32 @@ def test_obspkt1_d2_a_step_up_on_the_streams_own_session_is_recorded(ctx, target
         while time.monotonic() < end and not stream.ended():
             time.sleep(0.2)
     ended = stream.ended()
-    note(target, case, "RECORD", "step-up started %.1f s and finished %.1f s after the stream opened; stream ended with %s; timeline %s" % (
-        t_step, t_done, ended, stream.timeline()))
-    if ended and ended[0][0] == "bye":
+    note(target, case, "RECORD", "step-up started %.1f s and finished %.1f s after the stream opened; stream ended with %s; timeline %s; strict %s" % (
+        t_step, t_done, ended, stream.timeline(), strict))
+    if strict:
+        assert not ended, "a step-up on the stream's own session ended the stream (DVT_OBSPKT1B=on): %s" % (ended,)
+    elif ended and ended[0][0] == "bye":
         note(target, case, "FINDING", "OBSPKT1b: a step-up on the session that holds an open packet stream ended the stream with bye %r (the step-up rotates the cookie and "
               "the stream follows the old session id): the administrator's own step-up kills their stream" % (ended[0][1],))
     else:
         note(target, case, "RECORD", "the stream survived a step-up on its own session")
+    if not strict:
+        return
+    # the logout probe: a logout on the session that holds the stream ends the stream within 1 s
+    session = second_login(ctx)
+    with Streamer(session) as stream:
+        end = time.monotonic() + 15.0
+        while time.monotonic() < end and not any(event == "hello" for _t, event, _tag in stream.times):
+            time.sleep(0.2)
+        assert any(event == "hello" for _t, event, _tag in stream.times), "the logout-probe stream did not open: %s" % stream.timeline()
+        time.sleep(1.0)
+        assert not stream.ended(), "the logout-probe stream ended before the logout: %s" % stream.timeline()
+        t_out = time.monotonic() - stream.t0
+        session.logout()
+        end = time.monotonic() + 5.0
+        while time.monotonic() < end and not stream.ended():
+            time.sleep(0.05)
+    byes = [(t, tag) for t, event, tag in stream.times if event == "bye"]
+    note(target, case, "RECORD", "logout at %.2f s after the stream opened; bye frames %s; timeline %s" % (t_out, byes, stream.timeline()))
+    assert byes, "the stream did not end with a bye after the logout (5 s): %s" % stream.timeline()
+    assert byes[0][0] - t_out <= ob.LOGOUT_BYE_S, "the bye came %.2f s after the logout, expected within %.0f s" % (byes[0][0] - t_out, ob.LOGOUT_BYE_S)

@@ -579,6 +579,8 @@ services:
       DVT_AMBED_ADDR: ${DVT_AMBED_ADDR:-${DVT_NET:-172.30.0}.21}
       # on when xlxd-sut has USRP endpoints (A/B -> allstar, C -> tester)
       DVT_SUT_USRP: ${DVT_SUT_USRP:-off}
+      # on for an image with the OBSPKT1b fixes: OBSPKT1-d2 asserts that a step-up does not end the stream and a logout does (cases/test_obspkt1_monitor.py)
+      DVT_OBSPKT1B: ${DVT_OBSPKT1B:-}
       DVT_OUT: /dvt/out/${DVT_RUN_ID:-manual}
       HOME: /tmp
     env_file:

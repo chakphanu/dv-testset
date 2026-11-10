@@ -286,6 +286,41 @@ def stream_id_problems(frames):
     return problems
 
 
+GAP_WINDOW_S = 20.0                      # the old edge id's gap after the restart call (OBSPKT1b: 3 failed queries about 1 s apart, then one gap)
+LOGOUT_BYE_S = 1.0
+
+
+def obspkt1b_on(environ=None):
+    """DVT_OBSPKT1B=on: the image has the OBSPKT1b fixes (a step-up does not end the admin's own stream, a logout ends it within 1 s), so OBSPKT1-d2 asserts."""
+    import os
+    return (environ if environ is not None else os.environ).get("DVT_OBSPKT1B", "").lower() in ("on", "1", "true", "yes")
+
+
+def gap_problems(times, old_edge, worker_ids, t_kill, t_restart_call, window=GAP_WINDOW_S):
+    """Problems ([] = fine) of the `gap`, `bye` and `resync` frames of the restart stream. `times` is [(seconds, event, id or reason)] on one clock with
+    `t_kill` (just before the worker kill) and `t_restart_call` (just before the AX.25 restart call). Hard rules: exactly ONE gap for each old edge id, from
+    the restart call to `window` s after it; exactly ONE gap for each restarted worker, after the kill and before the AX.25 restart call (none in the
+    AX.25 phase); no gap for any other id (aprsis, the new AX.25 id); no `bye` and no `resync`."""
+    gaps = [(t, tag) for t, event, tag in times if event == "gap"]
+    problems = []
+    for pid in old_edge:
+        mine = [t for t, tag in gaps if tag == pid]
+        if len(mine) != 1:
+            problems.append("%d gap(s) for the old edge id %s, expected exactly 1" % (len(mine), pid))
+        elif not t_restart_call <= mine[0] <= t_restart_call + window:
+            problems.append("the gap for the old edge id %s came %.1f s after the restart call, expected within 0-%.0f s" % (pid, mine[0] - t_restart_call, window))
+    for pid in worker_ids:
+        mine = [t for t, tag in gaps if tag == pid]
+        if len(mine) != 1:
+            problems.append("%d gap(s) for the restarted worker %s, expected exactly 1 (none after the AX.25 restart)" % (len(mine), pid))
+        elif not t_kill <= mine[0] < t_restart_call:
+            problems.append("the gap for the worker %s came at %.1f s, outside the worker-kill phase [%.1f, %.1f)" % (pid, mine[0], t_kill, t_restart_call))
+    known = set(old_edge) | set(worker_ids)
+    problems += ["a gap for %s, which did not restart (at %.1f s)" % (tag, t) for t, tag in gaps if tag not in known]
+    problems += ["the stream ended with %s %s at %.1f s" % (event, tag, t) for t, event, tag in times if event in ("bye", "resync")]
+    return problems
+
+
 def split_retry(frames):
     """(retry, frames without the leading retry-only blocks). `retry: 3000` is the first line of the stream; the parser may yield that bare block as a frame
     of its own (only the key `retry`) before `hello`, or attach it to the first event. `retry` is the value of the last one seen in the leading blocks or on the
