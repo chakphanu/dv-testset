@@ -449,3 +449,26 @@ def settled_value(read, poll=12.0, timeout=90.0, sleep=None, clock=None):
         previous = current
         if clock() - start >= timeout:
             return current
+
+
+def stats_delta(before, after):
+    """Per-field difference of two source summaries (`summarize` documents, `after` the later one): every number, and `statuses` as a
+    {code: difference}. The request log of the mapsrc sidecar is CUMULATIVE for the whole rig run, so a case that wants to know what
+    the worker did DURING it compares against a baseline taken at its start, never against zero."""
+    out = {key: after.get(key, 0) - before.get(key, 0) for key in after if isinstance(after.get(key), (int, float)) and not isinstance(after.get(key), bool)}
+    codes = set(before.get("statuses", {})) | set(after.get("statuses", {}))
+    out["statuses"] = {code: after.get("statuses", {}).get(code, 0) - before.get("statuses", {}).get(code, 0) for code in sorted(codes)}
+    return out
+
+
+def delta_problems(delta):
+    """Findings of a delta that should be empty: any request at all, and a log that went backwards (the sidecar restarted: the baseline
+    is void)."""
+    out = []
+    moved = {k: v for k, v in delta.items() if k != "statuses" and v}
+    moved.update({"status %s" % c: v for c, v in delta.get("statuses", {}).items() if v})
+    if any(v < 0 for v in moved.values()):
+        out.append("the source's request log went backwards %s: the sidecar restarted, the baseline is void" % moved)
+    elif moved:
+        out.append("the source saw new requests %s" % moved)
+    return out

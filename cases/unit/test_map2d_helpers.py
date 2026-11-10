@@ -509,3 +509,51 @@ def test_the_map2h_case_has_the_contrast_variants():
     text = (ROOT / "cases" / "test_map2h_unavailable.py").read_text()
     for name in ("index_unknown_key", "glyph_hash_mismatch", "PRODUCT_FINDING", "contrast_problems", "remove_tree"):
         assert name in text, name
+
+
+# ---------------------------------------------------------------- the source log is cumulative: cases compare against a baseline
+
+def summary_of(*rows):
+    return fx.summarize(list(rows))
+
+
+def test_stats_delta_is_the_difference_per_field_and_per_status():
+    before = fx.summarize(one_job())                                   # what an earlier case (the MAP2d one) caused
+    after = fx.summarize(one_job() + [row("GET", "/builds.json"), row("HEAD", ARCHIVE, status=404)])
+    delta = map2d.stats_delta(before, after)
+    assert delta["total"] == 2 and delta["builds"] == 1 and delta["head"] == 1 and delta["range_get"] == 0
+    assert delta["statuses"] == {"200": 1, "206": 0, "404": 1}
+    assert delta["bad_ranges"] == 0 and map2d.delta_problems(delta)
+
+
+def test_an_unchanged_log_has_a_zero_delta_however_busy_the_log_already_is():
+    busy = fx.summarize(one_job() * 3)
+    assert busy["total"] == 12
+    delta = map2d.stats_delta(busy, fx.summarize(one_job() * 3))
+    assert delta["total"] == 0 and all(v == 0 for k, v in delta.items() if k != "statuses") and all(v == 0 for v in delta["statuses"].values())
+    assert map2d.delta_problems(delta) == []
+    assert map2d.delta_problems(map2d.stats_delta(fx.summarize([]), fx.summarize([]))) == []
+
+
+def test_new_requests_and_a_restarted_log_are_both_problems():
+    one = fx.summarize(one_job())
+    more = map2d.delta_problems(map2d.stats_delta(one, fx.summarize(one_job() + one_job())))
+    assert len(more) == 1 and "new requests" in more[0] and "'total': 4" in more[0]
+    gone = map2d.delta_problems(map2d.stats_delta(fx.summarize(one_job() * 2), one))
+    assert len(gone) == 1 and "went backwards" in gone[0] and "sidecar restarted" in gone[0]
+    only_status = map2d.delta_problems(map2d.stats_delta(one, dict(one, statuses={"200": 5})))
+    assert only_status and "status" in only_status[0]
+
+
+def test_every_map2h_case_takes_a_source_baseline_instead_of_an_absolute_total():
+    import re
+    text = (ROOT / "cases" / "test_map2h_unavailable.py").read_text()
+    assert 'summary["total"] == 0' not in text                                      # the absolute assertion that failed on the first rig run
+    bodies = re.split(r"^def test_", text, flags=re.M)[1:]
+    assert len(bodies) == 4                                                         # no_install, corrupt (parametrized), old_index, writer_active
+    for body in bodies:
+        name = body.split("(")[0]
+        assert body.count("src0 = source_baseline(stats_url)") == 1, name           # taken once, first thing
+        assert re.search(r"source_quiet\(stats_url, .*, src0\)", body), name       # and used
+        before_mutation = [body.find(m) for m in ("m2.install_tree(", "lock.acquire_retry(") if m in body]
+        assert all(body.index("src0 = source_baseline") < i for i in before_mutation), name

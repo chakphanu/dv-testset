@@ -11,7 +11,7 @@ Needs `scripts/run.sh --profile web,mapsrc` like cases/test_map2d_regions.py (do
 image without `dv_basemap_unavailable` (before MAP2h). NOT RUN on a rig yet: written against the sources of d20532de (no image yet).
 
   test_no_install_is_a_reason_not_a_failure   no tree installed: reason no_install is 1 and the other two 0, failures_total did not
-                                          move, the source never saw a request
+                                          move, the source saw no request SINCE the case started (a delta against a baseline taken first: its log is cumulative for the run)
   test_an_old_index_is_a_reason_not_a_failure  a tree whose regions/INDEX predates MAP2d is installed: reason old_index is 1 (and
                                           only it), the worker retries every 5 s tick yet failures_total stays put over 25 s more,
                                           tiles.json says fetch_enabled false and preparing []; the INDEX is restored (atomic
@@ -177,10 +177,21 @@ def failures_stay(control, baseline, label, seconds=HOLD_S, finding=False):
         snap = read_snapshot(control)
 
 
-def source_quiet(stats_url, label):
-    _rows, summary = map2d.source_stats(stats_url)
-    assert summary["total"] == 0, "%s: the source saw %d request(s): an unavailable worker must not start a job: %s" % (label, summary["total"], summary)
-    return summary
+def source_baseline(stats_url):
+    """The source's request summary NOW. The log of the mapsrc sidecar is cumulative for the whole rig run (test_map2d_regions.py ran
+    before and its worker jobs are in it), so every case takes this at its start, before it installs or mutates anything."""
+    return map2d.source_stats(stats_url)[1]
+
+
+def source_quiet(stats_url, label, baseline):
+    """Asserts the source saw NO request since `baseline` (an unavailable worker must not start a job). Returns the text for the record:
+    the baseline total and the delta."""
+    _rows, now = map2d.source_stats(stats_url)
+    delta = map2d.stats_delta(baseline, now)
+    problems = map2d.delta_problems(delta)
+    assert not problems, "%s: %s; an unavailable worker must not start a job (baseline total %d, now %d: %s)" % (
+        label, "; ".join(problems), baseline["total"], now["total"], now)
+    return "baseline total %d, delta %d" % (baseline["total"], delta["total"])
 
 
 def record(text):
@@ -193,12 +204,13 @@ def test_no_install_is_a_reason_not_a_failure(gauge, control, state_dir, web_cli
     anon = web_client()
     if (state_dir / "basemap").exists():
         pytest.skip("%s exists already: the cases do not replace an installed tree" % (state_dir / "basemap"))
+    src0 = source_baseline(stats_url)
     snap, waited, reached = wait_reason(control, "no_install")
     assert_reached(snap, waited, reached, "no_install", "no tree installed")
     baseline = settled_baseline(control)
     snap = failures_stay(control, baseline, "no tree installed")
     assert map2d.reason_is(snap, "no_install"), "no_install did not hold for %.0f s: %s" % (HOLD_S, snap["reasons"])
-    summary = source_quiet(stats_url, "no tree installed")
+    summary = source_quiet(stats_url, "no tree installed", src0)
     resp, body = descriptor(anon)
     record("no_install after %.0f s, held %.0f s; failures_total %s; fetches_total %s; tiles.json %d %s; source %s" % (
         waited, HOLD_S, snap["failures"], snap["fetches"], resp.status, body, summary))
@@ -216,6 +228,7 @@ CORRUPTIONS = {
 def test_a_corrupt_tree_of_the_current_format_is_a_failure_not_a_reason(kind, gauge, control, basemap, state_dir, stats_url):
     if (state_dir / "basemap").exists():
         pytest.skip("%s exists already: the cases do not replace an installed tree" % (state_dir / "basemap"))
+    src0 = source_baseline(stats_url)
     baseline = settled_baseline(control)
     m2.install_tree(state_dir, basemap.path, **CORRUPTIONS[kind](basemap))
     try:
@@ -233,7 +246,7 @@ def test_a_corrupt_tree_of_the_current_format_is_a_failure_not_a_reason(kind, ga
             assert later["reasons"].get("old_index") != 1.0, "corrupt tree (%s): old_index became 1. %s" % (kind, map2d.PRODUCT_FINDING)
         problems = map2d.contrast_problems(later, baseline, "failure")
         assert not problems, "corrupt tree (%s), after %.0f s: %s" % (kind, HOLD_S, "; ".join(problems))
-        summary = source_quiet(stats_url, "corrupt tree (%s)" % kind)
+        summary = source_quiet(stats_url, "corrupt tree (%s)" % kind, src0)
         record("%s: failures_total %s -> %s after %.0f s (+%d at first sight, +%d after %.0f s: the worker retries each tick); reasons %s; source %s" % (
             kind, baseline, snap["failures"], waited, first_rise, later["failures"] - baseline, HOLD_S, later["reasons"], summary))
     finally:
@@ -246,6 +259,7 @@ def test_an_old_index_is_a_reason_not_a_failure(gauge, control, basemap, state_d
         pytest.skip("%s exists already: the cases do not replace an installed tree" % (state_dir / "basemap"))
     old = map2d.old_index_bytes(basemap.index_bytes)
     assert map2d.is_pre_worker_index(json.loads(old)), "the synthetic old INDEX is not in the pre-MAP2d shape"
+    src0 = source_baseline(stats_url)
     baseline = settled_baseline(control)
     m2.install_tree(state_dir, basemap.path, index_bytes=old)
     index_path = state_dir / "basemap" / "regions" / "INDEX"
@@ -263,7 +277,7 @@ def test_an_old_index_is_a_reason_not_a_failure(gauge, control, basemap, state_d
         if resp.status == 200 and isinstance(body, dict) and body.get("installed") is True:
             assert body.get("fetch_enabled") is False and body.get("preparing") == [], \
                 "tiles.json says fetch_enabled %r, preparing %r with no live worker" % (body.get("fetch_enabled"), body.get("preparing"))
-        summary = source_quiet(stats_url, "INDEX written before MAP2d")
+        summary = source_quiet(stats_url, "INDEX written before MAP2d", src0)
         record("old_index after %.0f s, held %.0f s; failures_total %s (baseline %s); tiles.json %d installed=%r; source %s" % (
             waited, HOLD_S, held["failures"], baseline, resp.status, body.get("installed") if isinstance(body, dict) else None, summary))
     finally:
@@ -291,6 +305,7 @@ def test_a_held_install_lock_is_a_reason_not_a_failure(gauge, control, state_dir
         pytest.skip("no installed tree is served (the old-INDEX case did not leave one): tiles.json %d %s" % (resp.status, body))
     snap, waited, reached = wait_reason(control, None)
     assert_reached(snap, waited, reached, None, "before the lock is taken")
+    src0 = source_baseline(stats_url)
     baseline = settled_baseline(control)
     lock = map2d.HeldLock(state_dir)
     cleanup.append(lock)
@@ -310,7 +325,7 @@ def test_a_held_install_lock_is_a_reason_not_a_failure(gauge, control, state_dir
                 pytest.fail("tiles.json still says fetch_enabled %r with the install lock held for %.0f s" % (body and body.get("fetch_enabled"), time.monotonic() - t0))
             time.sleep(1.0)
         assert body.get("preparing") == [], "tiles.json lists preparing %r with no live worker" % (body.get("preparing"),)
-        summary = source_quiet(stats_url, "install lock held")
+        summary = source_quiet(stats_url, "install lock held", src0)
         record("writer_active after %.0f s, held %.0f s in all; failures_total %s (baseline %s); tiles.json fetch_enabled %r; source %s" % (
             waited, time.monotonic() - t0, held["failures"], baseline, body.get("fetch_enabled"), summary))
     finally:
