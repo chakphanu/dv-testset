@@ -65,6 +65,7 @@ UPLINK_ABSENT_S = 15.0
 OPT_CALL = "N0OPT"                  # rig/config/dv-router/dp7-position-optout.toml (DMR: N0DMP)
 OPT_DMR = "N0DMP"
 HIDE_CALL = "N0HIDE"                # the account of the hide_position case
+SSID_CALL = "N0SSID"                # DP6c: the account whose two SSID stations (-9, -13) are separate rows and are hidden together
 RF_TOCALL = "APDVT1"
 
 # one base callsign per case and source: the controller admits 1 position per 30 s per base callsign
@@ -550,6 +551,50 @@ def test_dp7_b_account_hide_position(rig, target, hub, web_ctx, shape):
             note(target, case, "RECORD", "could not clear hide_position at the end: %s" % exc)
 
 
+def test_dp6c_ssid_stations_are_separate_rows_and_hidden_together(rig, target, hub, web_ctx, shape):
+    """DP6c decision D2 (DV-Router 4ac79f26): public state and SSE rows are keyed by the guard identity WITH the SSID, privacy stays per BASE
+    callsign. N0SSID-9 and N0SSID-13 (M17 packets, 30 s apart: the position bucket is per base callsign) are two rows with their own callsign,
+    both carry hops / forwarded; an account hide of N0SSID removes both. Skips on an image before DP6c (the rows have no hops / forwarded)."""
+    case = "DP6c-ssid"
+    if not shape.positions:
+        pytest.skip("this run has positions = false")
+    web_ctx.user(SSID_CALL, may_tx=False)
+    ctx = types.SimpleNamespace(rig=rig, rf=None)
+    nine, thirteen = SSID_CALL + "-9", SSID_CALL + "-13"
+    try:
+        with feeds(web_ctx) as fd:
+            send_m17(ctx, nine, ps.LAT, ps.LON, comment="nine")
+            first = collect(web_ctx, fd, SSID_CALL)
+            send_m17(ctx, thirteen, ps.LAT + 0.001, ps.LON + 0.001, comment="thirteen")
+            pred = lambda r: ps.identity_matches(r.get("callsign", ""), thirteen)           # noqa: E731
+            second, _rows = ps.wait_public_row(web_ctx.anon(), SSID_CALL, room=MODULE, item_type="position", pred=pred)
+        assert first.state is not None and second is not None, "%s: both SSID stations must be public (first %s, second %s)" % (
+            case, first.state is not None, second is not None)
+        if not ps.has_dp6c_fields(first.state):
+            pytest.skip("image before DP6c: the rows have no hops / forwarded and one row per base callsign")
+        rows = ps.spatial_rows(ps.public_rows(web_ctx.anon(), MODULE), SSID_CALL, "position")
+        calls = sorted(r["callsign"] for r in rows)
+        note(target, case, "RECORD", "rows of %s in the anonymous public state: %s" % (SSID_CALL, [(r["callsign"], r.get("hops"), r.get("forwarded")) for r in rows]))
+        assert calls == sorted([nine, thirteen]), "want two separate rows %s, the state has %s" % ([nine, thirteen], calls)
+        assert len({r["id"] for r in rows}) == 2, "the two stations share an id: %s" % [(r["callsign"], r["id"]) for r in rows]
+        for row in rows:
+            ps.check_public_row(row)
+            ps.check_identity(row, row["callsign"])
+        ps.check_identity(first.state, nine)
+        ps.check_identity(second, thirteen)
+        set_hide_position(web_ctx, SSID_CALL, True)
+        time.sleep(3.0)                                                          # the policy is pushed on web/position-policy-updates
+        gone = ps.wait_gone(web_ctx.anon(), SSID_CALL, room=MODULE, item_type="position")
+        left = [r["callsign"] for r in ps.spatial_rows(ps.public_rows(web_ctx.anon(), MODULE), SSID_CALL)]
+        note(target, case, "RECORD", "after the hide of %s: both rows gone %s, left %s" % (SSID_CALL, gone, left))
+        assert gone and not left, "hiding the base callsign %s must remove every SSID station; left: %s" % (SSID_CALL, left)
+    finally:
+        try:
+            set_hide_position(web_ctx, SSID_CALL, False)
+        except (AssertionError, web.WebError) as exc:
+            note(target, case, "RECORD", "could not clear hide_position at the end: %s" % exc)
+
+
 def aprsc_lines(client, mark, call):
     return client.matching(lambda p: ps.same_base(p["src"], call), mark)
 
@@ -778,6 +823,9 @@ def test_dp7_d_object_kill_is_coordinate_free(rig, target, hub, web_ctx, shape):
         assert live.state["body"].get("state") == 1 and str(live.state["body"].get("name")).strip() == OBJECT_NAME, live.state
         note(target, case, "RECORD", "live object row: %s" % {k: live.state.get(k) for k in ("callsign", "protocol", "ident", "via", "hops", "forwarded")})
         note(target, case, "RECORD", "identity (DP6c keeps the SSID in the row callsign): %s" % ps.identity_note(live.state, call + "-7"))
+        strict = ps.check_identity(live.state, call + "-7")
+        ps.check_identity(live.sse, call + "-7")
+        note(target, case, "RECORD", "identity check: %s" % ("strict (DP6c row: the callsign with its SSID)" if strict else "base only (image before DP6c)"))
         t_kill = time.monotonic()
         send_m17_object(ctx, call + "-7", ps.LAT, ps.LON, name=OBJECT_NAME, live=False)
         hit = fd.pub.wait_data(spatial_pred(call, "object", OBJECT_NAME, state=0), ps.PUBLIC_WAIT_S, since=t_kill)
@@ -788,6 +836,7 @@ def test_dp7_d_object_kill_is_coordinate_free(rig, target, hub, web_ctx, shape):
     note(target, case, "RECORD", "kill event %s; keys at any depth %s; left the public listing: %s; operator feed kill row: %s; retention of a live "
          "object: 30 min (data.md 13.2), not waited for" % (event, sorted(keys_of(event)), gone, ops[0] if ops else None))
     ps.check_public_row(event)
+    ps.check_identity(event, OBJECT_REPORTER + "-7")
     assert event["item_type"] == "object", event
     body = event["body"]
     assert str(body.get("name")).strip() == OBJECT_NAME and body.get("state") == 0, "kill body %r, want name %r and state 0" % (body, OBJECT_NAME)

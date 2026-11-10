@@ -345,3 +345,15 @@ def test_identity_note_never_asserts():
     old = ps.identity_note(row("N0PAD"), "N0PAD-7")
     assert "dp6c=False" in old and "same identity False" in old and "same base True" in old
     assert "same base False" in ps.identity_note({"callsign": "N0XXX"}, "N0PAD-7") and "''" in ps.identity_note("x", "N0PAD")
+
+
+def test_check_identity_is_strict_on_a_dp6c_row_and_base_only_before():
+    assert ps.check_identity(dp6c("N0PAD-9"), "n0pad-9") is True
+    assert ps.check_identity(dp6c("N0PAD-9 T"), "N0PAD-9") is True            # the page's station key is cut at the first space
+    assert ps.check_identity(dp6c("N0PAD/P"), "N0PAD/P") is True              # a suffix is kept, never turned into an SSID
+    for shown, sent in (("N0PAD", "N0PAD-9"), ("N0PAD-13", "N0PAD-9"), ("N0PAD-9", "N0PAD"), ("N0PAD/P", "N0PAD")):
+        with pytest.raises(AssertionError, match="guard identity"):
+            ps.check_identity(dp6c(shown), sent)
+    assert ps.check_identity(row("N0PAD"), "N0PAD-9") is False                # an image before DP6c: the base only
+    with pytest.raises(AssertionError, match="base"):
+        ps.check_identity(row("N0XXX"), "N0PAD-9")

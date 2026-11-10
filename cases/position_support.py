@@ -212,6 +212,19 @@ def identity_note(row, sent_call):
         has_dp6c_fields(row), sent_call, shown, identity_matches(shown, sent_call), same_base(shown, sent_call))
 
 
+def check_identity(row, sent_call):
+    """The hard identity check of DP6c (dv-router, 2026-11-10): on a row WITH the DP6c fields the displayed callsign is the guard identity,
+    the callsign as the protocol gave it, upper case, with -SSID and /suffix KEPT (a D-STAR /suffix stays a suffix, DMR / YSF / NXDN / P25 give a plain
+    callsign), i.e. equal to the sent callsign upper-cased (cut at the first space, the page's station key). A row without the DP6c fields (an image
+    before DP6c) is held only to the base callsign. Raises AssertionError; returns True when the strict rule applied, False for the base-only rule."""
+    shown = str(row.get("callsign", ""))
+    if has_dp6c_fields(row):
+        assert identity_matches(shown, sent_call), "row callsign %r is not the guard identity of the sent callsign %r (SSID / suffix kept, upper case)" % (shown, sent_call)
+        return True
+    assert same_base(shown, sent_call), "row callsign %r is not the base of the sent callsign %r" % (shown, sent_call)
+    return False
+
+
 def check_public_rows_consistent(rows):
     """All rows of one read agree on the shape: either every row has hops and forwarded (DP6c) or none does. Raises AssertionError."""
     flags = {has_dp6c_fields(r) for r in rows if isinstance(r, dict)}
