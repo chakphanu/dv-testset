@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (docs/obspkt1-cases.md): the position policy hides the base callsign N0HID, so the admin packet monitor must blank the
+# position of every packet of N0HID-* in every row (data.md 13.5: "hidden base source, configured position_optout, disabled positions, or an unknown
+# hidden set"). Admin privileges do not bypass it. Nothing else of the run uses the base callsign N0HID. With dp11e-kiss.toml, dp11e-kiss-igate.toml,
+# dp15-aprsis.toml and dp15-rf-out.toml (the run command is in docs/obspkt1-cases.md).
+[data]
+position_optout = ["N0HID"]
