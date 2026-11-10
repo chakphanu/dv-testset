@@ -424,3 +424,24 @@ def test_origin_audit_records_and_aborts_foreign():
     handler(route)
     assert route.aborted and audit.blocked == ["https://tiles.example.invalid/x"]
     assert audit.paths("/basemap/") == ["/basemap/MANIFEST", "/basemap/basemap-20261106-z8.pmtiles"]
+
+
+# ------------------------------------------------------------------ DP6c: the page (positions.js at 4ac79f26) requires hops and forwarded
+
+def test_page_row_ok_dp6c_fields():
+    assert p2.page_row_ok(row(), "C", NOW)                                      # an image before DP6c: neither key
+    assert p2.page_row_ok(row(hops=0, forwarded=False), "C", NOW)
+    assert p2.page_row_ok(row(hops=255, forwarded=True), "C", NOW)
+    for kw in ({"hops": 256, "forwarded": False}, {"hops": -1, "forwarded": False}, {"hops": True, "forwarded": False},
+               {"hops": "0", "forwarded": False}, {"hops": 0, "forwarded": 1}, {"hops": 0}, {"forwarded": False}):
+        assert not p2.page_row_ok(row(**kw), "C", NOW), kw
+
+
+def test_page_rows_keep_the_ssid_in_the_label_and_the_stations_apart():
+    state = {"rooms": [{"room": "C", "positions": [row(call="N0PGA-9", rid=7, hops=0, forwarded=False), row(call="N0PGA", rid=6, hops=0, forwarded=False),
+                                                   row(call="N0PGA-13", rid=5, hops=1, forwarded=True),
+                                                   row(item_type="weather", call="N0PGA-13", rid=8, hops=0, forwarded=False, body={})]}]}
+    rows = p2.page_rows(state, "C", NOW)
+    assert [p2.row_label(r) for r in rows] == ["N0PGA-9", "N0PGA", "N0PGA-13"]       # types 5 and 6 are not mirrored: the DOM case sends none
+    obj = row(item_type="object", call="N0PGA-9", body={"name": "OBJ1", "state": 1, "lat_e7": 1, "lon_e7": 2, "ambiguity": 0}, hops=0, forwarded=False)
+    assert p2.row_label(obj) == "OBJ1 (N0PGA-9)"

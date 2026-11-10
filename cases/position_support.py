@@ -32,8 +32,14 @@ OPERATOR_WAIT_S = 15.0
 PUBLIC_WAIT_S = 20.0            # the hub, the web process and the SSE ring: seconds, not minutes
 
 POSITION_SOURCE = {"dprs": 1, "ysf": 3, "dmr": 4, "aprs": 5, "nxdn": 6}
-ROW_KEYS = {"type", "id", "item_type", "room", "callsign", "protocol", "ts_ms", "ident", "via", "body"}     # openapi Position
+ROW_KEYS = {"type", "id", "item_type", "room", "callsign", "protocol", "ts_ms", "ident", "via", "body"}     # openapi Position before DP6c
+# DP6c (DV-Router 4ac79f26, decision D2): the public row also carries `hops` (0..255) and `forwarded` (boolean), both required; `callsign` is
+# the guard identity WITH its SSID and suffix (N0CALL-9, not N0CALL); privacy stays per base callsign. An image before DP6c has neither key.
+DP6C_KEYS = {"hops", "forwarded"}
+ROW_KEYS_DP6C = ROW_KEYS | DP6C_KEYS
 ADMIN_EXTRA_KEYS = {"hops", "forwarded", "dst_kind", "dst_call"}
+# item types of the positions view only (DP6c): the weather report (5) and the telemetry report (6) of a station; the events views show none
+ANNEX_TYPES = ("weather", "telemetry")
 BODY_KEYS = {"lat_e7", "lon_e7", "alt_dm", "course_deg", "speed_dmh", "fix_unix_ms", "symbol", "source", "ambiguity", "comment"}
 OBJECT_BODY_KEYS = BODY_KEYS | {"name", "state"}
 KILL_BODY_KEYS = {"name", "state"}
@@ -157,6 +163,52 @@ def is_spatial(row):
     return isinstance(row, dict) and row.get("item_type") in ("position", "object")
 
 
+def is_annex(row):
+    """A weather or telemetry row (DP6c types 5 and 6): in the positions view (public state, SSE data), not a position or an object."""
+    return isinstance(row, dict) and row.get("item_type") in ANNEX_TYPES
+
+
+def has_dp6c_fields(row):
+    """Whether a public row carries the DP6c fields (the probe for the image: `hops` or `forwarded` present)."""
+    return isinstance(row, dict) and bool(DP6C_KEYS & set(row))
+
+
+def dp6c_image(rows):
+    """True when the rows come from an image with DP6c (any row has hops / forwarded), False when none has, None without rows."""
+    rows = [r for r in rows if isinstance(r, dict)]
+    return None if not rows else any(has_dp6c_fields(r) for r in rows)
+
+
+def dp6c_field_problems(row):
+    """What is wrong with the DP6c fields of a row that has either of them: both are required, `hops` an integer 0..255 (not a boolean),
+    `forwarded` a boolean. [] for a row of an image before DP6c (neither key) and for a valid DP6c row."""
+    if not has_dp6c_fields(row):
+        return []
+    out = []
+    for key in sorted(DP6C_KEYS - set(row)):
+        out.append("row has %s but lacks %s" % (", ".join(sorted(DP6C_KEYS & set(row))), key))
+    hops = row.get("hops")
+    if "hops" in row and (not isinstance(hops, int) or isinstance(hops, bool) or not 0 <= hops <= 255):
+        out.append("hops %r is not an integer 0..255" % (hops,))
+    if "forwarded" in row and not isinstance(row.get("forwarded"), bool):
+        out.append("forwarded %r is not a boolean" % (row.get("forwarded"),))
+    return out
+
+
+def identity_matches(callsign, identity):
+    """Whether a row callsign (the guard identity with SSID and suffix since DP6c, the base callsign before) is `identity`: equal after
+    upper case and a cut at the first space (the page's station key), so `N0CALL-9` matches `N0CALL-9` but not `N0CALL`."""
+    def key(value):
+        return str(value).strip().upper().split(" ")[0]
+    return key(callsign) == key(identity)
+
+
+def check_public_rows_consistent(rows):
+    """All rows of one read agree on the shape: either every row has hops and forwarded (DP6c) or none does. Raises AssertionError."""
+    flags = {has_dp6c_fields(r) for r in rows if isinstance(r, dict)}
+    assert len(flags) <= 1, "rows of one read mix the pre-DP6c shape and the DP6c shape (hops / forwarded on some rows only)"
+
+
 def spatial_rows(rows, callsign=None, item_type=None, name=None):
     """The position / object rows of a list, optionally of one base callsign, one item type and one object name."""
     out = []
@@ -189,7 +241,10 @@ def check_public_row(row):
     """The public shape of openapi-web.yaml (additionalProperties false on Position and its bodies): only the allow-listed
     keys, no radio id, account, origin, address or path. Returns nothing; raises AssertionError."""
     assert is_spatial(row), row
-    extra = set(row) - ROW_KEYS
+    # image tolerant: the DP6c fields hops / forwarded are accepted, and when either is there both must be valid (4ac79f26, openapi-web Position)
+    problems = dp6c_field_problems(row)
+    assert not problems, "public row: %s (row %s)" % ("; ".join(problems), sorted(row))
+    extra = set(row) - ROW_KEYS_DP6C
     assert not extra, "public row carries keys outside the allow-list: %s (row %s)" % (sorted(extra), sorted(row))
     body = row.get("body")
     assert isinstance(body, dict), "public body is %r" % (body,)

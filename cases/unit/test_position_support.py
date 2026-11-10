@@ -265,3 +265,76 @@ def test_axis_values_are_the_generators_not_the_parsers():
     assert amb == 2 and la == aprs_expect.plain("4903.  N/07201.  W>")["lat"]
     assert la == {"int": 49 * 6000 + 3 * 100, "per_degree": 6000}
     assert ps.box_centre_degrees(la, 2) == Fraction(49 * 6000 + 350, 6000)
+
+
+# ------------------------------------------------------------------ DP6c (DV-Router 4ac79f26, decision D2)
+
+def dp6c(call="N0PAD-9", hops=0, forwarded=False, **kw):
+    out = row(call, **kw)
+    out["hops"], out["forwarded"] = hops, forwarded
+    return out
+
+
+def test_check_public_row_accepts_both_shapes_and_the_dp6c_fields():
+    ps.check_public_row(row())                                           # an image before DP6c
+    ps.check_public_row(dp6c())
+    ps.check_public_row(dp6c(hops=255, forwarded=True))
+    ps.check_public_row(dp6c(item_type="object", name="OBJ1", state=1))
+    kill = dp6c(item_type="object")
+    kill["body"] = {"name": "OBJ1", "state": 0}
+    ps.check_public_row(kill)
+    assert ps.DP6C_KEYS == {"hops", "forwarded"} and ps.ROW_KEYS_DP6C == ps.ROW_KEYS | ps.DP6C_KEYS
+
+
+@pytest.mark.parametrize("change,needle", [
+    (lambda r: r.pop("forwarded"), "lacks forwarded"),
+    (lambda r: r.pop("hops"), "lacks hops"),
+    (lambda r: r.update(hops=256), "hops"),
+    (lambda r: r.update(hops=-1), "hops"),
+    (lambda r: r.update(hops=True), "hops"),
+    (lambda r: r.update(hops="1"), "hops"),
+    (lambda r: r.update(forwarded=1), "forwarded"),
+    (lambda r: r.update(forwarded="no"), "forwarded"),
+])
+def test_check_public_row_refuses_a_half_or_malformed_dp6c_row(change, needle):
+    bad = dp6c()
+    change(bad)
+    with pytest.raises(AssertionError, match=needle):
+        ps.check_public_row(bad)
+
+
+def test_check_public_row_still_refuses_other_extra_keys_on_a_dp6c_row():
+    leak = dp6c()
+    leak["dst_kind"] = 1                       # an operator-feed key, not a public one
+    with pytest.raises(AssertionError, match="allow-list"):
+        ps.check_public_row(leak)
+
+
+def test_dp6c_probe_and_consistency():
+    assert ps.dp6c_image([]) is None and ps.dp6c_image([row()]) is False and ps.dp6c_image([row(), dp6c()]) is True
+    assert ps.dp6c_image(["x", None]) is None
+    ps.check_public_rows_consistent([row(), row("N0PAE")])
+    ps.check_public_rows_consistent([dp6c(), dp6c("N0PAE")])
+    with pytest.raises(AssertionError, match="mix"):
+        ps.check_public_rows_consistent([row(), dp6c()])
+    assert ps.dp6c_field_problems(row()) == [] and ps.dp6c_field_problems(dp6c()) == []
+    assert ps.dp6c_field_problems("x") == []
+
+
+def test_station_identity_has_the_ssid_but_privacy_stays_per_base_callsign():
+    rows = [dp6c("N0PAD-9"), dp6c("N0PAD-13"), dp6c("N0PAD"), dp6c("N0PAX-9")]
+    assert [r["callsign"] for r in ps.spatial_rows(rows, "N0PAD")] == ["N0PAD-9", "N0PAD-13", "N0PAD"]       # a hide of the base covers every SSID
+    assert [r["callsign"] for r in ps.spatial_rows(rows, "n0pad-1")] == ["N0PAD-9", "N0PAD-13", "N0PAD"]
+    assert ps.identity_matches("N0PAD-9", "n0pad-9") and ps.identity_matches("N0PAD-9 T", "N0PAD-9")
+    assert not ps.identity_matches("N0PAD-9", "N0PAD") and not ps.identity_matches("N0PAD", "N0PAD-9")
+
+
+def test_annex_rows_are_not_spatial_rows():
+    weather = dp6c("N0WX-13", item_type="weather")
+    telemetry = dp6c("N0WX-13", item_type="telemetry")
+    assert ps.is_annex(weather) and ps.is_annex(telemetry) and not ps.is_annex(dp6c()) and not ps.is_annex("x")
+    assert not ps.is_spatial(weather) and not ps.is_spatial(telemetry)
+    state = {"rooms": [{"room": "B", "positions": [dp6c(), weather, telemetry]}]}
+    assert len(ps.state_rows(state)) == 3
+    assert len(ps.spatial_rows(ps.state_rows(state))) == 1                 # position selectors ignore types 5 and 6
+    assert ps.ANNEX_TYPES == ("weather", "telemetry")

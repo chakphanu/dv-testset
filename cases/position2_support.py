@@ -153,7 +153,8 @@ NAME_RE = re.compile(r"^[\x20-\x7e]{1,9}$")
 
 
 def page_row_ok(row, room, now_ms):
-    """Port of positionRow() of web/site/positions.js (read only): does the page accept this public row for `room`?
+    """Port of positionRow() of web/site/positions.js (read only): does the page accept this public row for `room`? Position and object rows
+    only: the DP6c weather and telemetry rows (types 5 and 6) are merged into station rows by the page and are not mirrored (the DOM case sends none).
     UNVERIFIED mirror: the page code is the authority; a row the page drops and this accepts shows as a count mismatch."""
     if not isinstance(row, dict) or row.get("type") != "data" or row.get("room") != room:
         return False
@@ -168,6 +169,14 @@ def page_row_ok(row, room, now_ms):
         return False
     if not isinstance(row.get("protocol"), str) or not PROTO_RE.match(row["protocol"]):
         return False
+    if "hops" in row or "forwarded" in row:
+        # DP6c (4ac79f26, positions.js): hops an integer 0..255, forwarded a boolean, both required, and the station key (the callsign cut at
+        # the first space) not empty; a row without either key is judged by the pre-DP6c rule (the probe is the row itself, not an env switch)
+        hops = row.get("hops")
+        if not isinstance(hops, int) or isinstance(hops, bool) or not 0 <= hops <= 255 or not isinstance(row.get("forwarded"), bool):
+            return False
+        if not row["callsign"].split(" ")[0]:
+            return False
     body = row.get("body")
     if not isinstance(body, dict) or row.get("ident") not in IDENTS or row.get("via") not in VIAS:
         return False
