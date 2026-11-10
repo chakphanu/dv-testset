@@ -1,0 +1,115 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (docs/dp18-cases.md, DP18-o): the node beacon and TEN node objects with RF copies on the transmitting port
+# rf-a of dp18-rf.toml (class afsk1200-shared: queue 8, the beacon class share is 1/8 of the 5 % duty per 600 s, about four 0.8 s object
+# frames), for cases/test_dp18_rf.py. ONLY with dp18-rf.toml and dp15-aprsis.toml (INSTEAD of dp18-origin.toml). Every report has the 600 s
+# interval; the first emissions are staggered 35 s apart (beacon at 600 s, object k at 600 + 35 k s), so eleven reports spread over 950 s
+# and never share a tick. Names DVTOB01..DVTOB10 have 7 characters (not station callsigns). Distinct positions, so no two frames are equal.
+[edges.aprsis.beacon]
+enable = true
+interval_secs = 600
+lat_e7 = 105000000
+lon_e7 = 202500000
+symbol = "/&"
+comment = "dvt dp18 rf"
+ambiguity = 0
+rf_ports = ["rf-a"]
+
+[[edges.aprsis.objects]]
+name = "DVTOB01"
+comment = "dvt1"
+interval_secs = 600
+lat_e7 = 106000000
+lon_e7 = 203500000
+symbol = "/r"
+ambiguity = 0
+rf_ports = ["rf-a"]
+
+[[edges.aprsis.objects]]
+name = "DVTOB02"
+comment = "dvt2"
+interval_secs = 600
+lat_e7 = 107000000
+lon_e7 = 204500000
+symbol = "/r"
+ambiguity = 0
+rf_ports = ["rf-a"]
+
+[[edges.aprsis.objects]]
+name = "DVTOB03"
+comment = "dvt3"
+interval_secs = 600
+lat_e7 = 108000000
+lon_e7 = 205500000
+symbol = "/r"
+ambiguity = 0
+rf_ports = ["rf-a"]
+
+[[edges.aprsis.objects]]
+name = "DVTOB04"
+comment = "dvt4"
+interval_secs = 600
+lat_e7 = 109000000
+lon_e7 = 206500000
+symbol = "/r"
+ambiguity = 0
+rf_ports = ["rf-a"]
+
+[[edges.aprsis.objects]]
+name = "DVTOB05"
+comment = "dvt5"
+interval_secs = 600
+lat_e7 = 110000000
+lon_e7 = 207500000
+symbol = "/r"
+ambiguity = 0
+rf_ports = ["rf-a"]
+
+[[edges.aprsis.objects]]
+name = "DVTOB06"
+comment = "dvt6"
+interval_secs = 600
+lat_e7 = 111000000
+lon_e7 = 208500000
+symbol = "/r"
+ambiguity = 0
+rf_ports = ["rf-a"]
+
+[[edges.aprsis.objects]]
+name = "DVTOB07"
+comment = "dvt7"
+interval_secs = 600
+lat_e7 = 112000000
+lon_e7 = 209500000
+symbol = "/r"
+ambiguity = 0
+rf_ports = ["rf-a"]
+
+[[edges.aprsis.objects]]
+name = "DVTOB08"
+comment = "dvt8"
+interval_secs = 600
+lat_e7 = 113000000
+lon_e7 = 210500000
+symbol = "/r"
+ambiguity = 0
+rf_ports = ["rf-a"]
+
+[[edges.aprsis.objects]]
+name = "DVTOB09"
+comment = "dvt9"
+interval_secs = 600
+lat_e7 = 114000000
+lon_e7 = 211500000
+symbol = "/r"
+ambiguity = 0
+rf_ports = ["rf-a"]
+
+[[edges.aprsis.objects]]
+name = "DVTOB10"
+comment = "dvt10"
+interval_secs = 600
+lat_e7 = 115000000
+lon_e7 = 212500000
+symbol = "/r"
+ambiguity = 0
+rf_ports = ["rf-a"]

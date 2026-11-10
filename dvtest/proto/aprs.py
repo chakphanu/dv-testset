@@ -142,3 +142,87 @@ def parse_query(info):
     if not m or m.group(1) not in QUERY_NAMES:
         raise ValueError("not a general query: %r" % (info,))
     return m.group(1)
+
+
+# ---------------------------------------------------------------- positions and live objects with an HMS timestamp (APRS101 ch. 6, 8, 11)
+# Used by the DP18 cases (cases/dp18_support.py): the node beacon `!` and the node objects `;NAME     *HHMMSSh` that DV-Router
+# originates. The expected lines are built here from degrees times 10^7, independently of DV-Router's encoder.
+
+def _hundredths_of_minute(e7):
+    """(hemisphere sign, whole degrees, minutes as an int of hundredths) of |e7| degrees x 10^7, rounded to the nearest hundredth of
+    a minute with half rounding up and the carry into the degrees (59.995 minutes becomes the next degree)."""
+    sign = -1 if e7 < 0 else 1
+    total = (abs(e7) * 6 + 5000) // 10000                  # hundredths of a minute: |e7| / 1e7 * 60 * 100
+    return sign, total // 6000, total % 6000
+
+
+def lat_text_e7(lat_e7, ambiguity=0):
+    """`ddmm.hhN` of a latitude in degrees x 10^7; ambiguity 0..4 replaces that many trailing digits (hundredths, units of minute,
+    tens of minute, then the decimal point's neighbour) with spaces (APRS101 ch. 6, position ambiguity)."""
+    if not -900000000 <= lat_e7 <= 900000000:
+        raise ValueError("latitude outside -90..90 degrees: %d" % lat_e7)
+    sign, deg, hund = _hundredths_of_minute(lat_e7)
+    text = "%02d%02d.%02d" % (deg, hund // 100, hund % 100) + ("N" if sign >= 0 else "S")
+    return _blank(text, ambiguity)
+
+
+def lon_text_e7(lon_e7, ambiguity=0):
+    """`dddmm.hhE` of a longitude in degrees x 10^7."""
+    if not -1800000000 <= lon_e7 <= 1800000000:
+        raise ValueError("longitude outside -180..180 degrees: %d" % lon_e7)
+    sign, deg, hund = _hundredths_of_minute(lon_e7)
+    text = "%03d%02d.%02d" % (deg, hund // 100, hund % 100) + ("E" if sign >= 0 else "W")
+    return _blank(text, ambiguity)
+
+
+def _blank(text, ambiguity):
+    """Blank `ambiguity` trailing digits of the number part of `ddmm.hhX` (hemisphere letter kept, the point kept):
+    1 = hundredths, 2 = + units of minutes, 3 = + tens of minutes, 4 = + ... the minute digits (APRS101 p.30)."""
+    if not 0 <= ambiguity <= 4:
+        raise ValueError("ambiguity is 0..4: %r" % (ambiguity,))
+    chars = list(text)
+    digits = [i for i, c in enumerate(chars[:-1]) if c.isdigit()]          # digit positions, left to right
+    for i in digits[len(digits) - ambiguity:] if ambiguity else []:
+        chars[i] = " "
+    return "".join(chars)
+
+
+def position_report(lat_e7, lon_e7, symbol="/&", comment="", ambiguity=0):
+    """An uncompressed position without timestamp and without messaging, `!ddmm.hhN/dddmm.hhE&comment`."""
+    if len(symbol) != 2:
+        raise ValueError("a symbol is the table/overlay byte and the code byte: %r" % (symbol,))
+    return "!" + lat_text_e7(lat_e7, ambiguity) + symbol[0] + lon_text_e7(lon_e7, ambiguity) + symbol[1] + comment
+
+
+def object_report(name, hms, lat_e7, lon_e7, symbol="/r", comment="", ambiguity=0, live=True):
+    """A live (`*`) or killed (`_`) object with an HMS timestamp: `;NAME     *HHMMSShddmm.hhN/dddmm.hhE` + code + comment.
+    The name is 1..9 printable ASCII bytes padded with spaces to 9; `hms` is `HHMMSS` (UTC)."""
+    if not 1 <= len(name) <= 9 or any(not 32 <= ord(c) < 127 for c in name):
+        raise ValueError("an object name is 1..9 printable ASCII bytes: %r" % (name,))
+    if not re.fullmatch(r"(?:[01]\d|2[0-3])[0-5]\d[0-5]\d", hms):
+        raise ValueError("hms is HHMMSS: %r" % (hms,))
+    return ";%-9s%s%sh" % (name, "*" if live else "_", hms) + position_report(lat_e7, lon_e7, symbol, comment, ambiguity)[1:]
+
+
+_OBJ_RE = re.compile(r"^;(.{9})([*_])(\d{6})h(\d{2}[\d ]{2}\.[\d ]{2}[NS])(.)(\d{3}[\d ]{2}\.[\d ]{2}[EW])(.)(.*)$", re.S)
+
+
+def parse_object(info):
+    """{name (stripped of its padding on the right), name_wire, live, hms, lat, symbol_table, lon, symbol_code, comment} of an
+    object with an HMS timestamp, else ValueError."""
+    m = _OBJ_RE.match(info)
+    if not m:
+        raise ValueError("not an object with an HMS timestamp: %r" % (info,))
+    return {"name": m.group(1).rstrip(" "), "name_wire": m.group(1), "live": m.group(2) == "*", "hms": m.group(3), "lat": m.group(4),
+            "symbol_table": m.group(5), "lon": m.group(6), "symbol_code": m.group(7), "comment": m.group(8)}
+
+
+_POS_RE = re.compile(r"^!(\d{2}[\d ]{2}\.[\d ]{2}[NS])(.)(\d{3}[\d ]{2}\.[\d ]{2}[EW])(.)(.*)$", re.S)
+
+
+def parse_position_report(info):
+    """{lat, symbol_table, lon, symbol_code, comment} of a `!` position without timestamp, else ValueError."""
+    m = _POS_RE.match(info)
+    if not m:
+        raise ValueError("not an uncompressed `!` position: %r" % (info,))
+    return {"lat": m.group(1), "symbol_table": m.group(2), "lon": m.group(3), "symbol_code": m.group(4), "comment": m.group(5)}

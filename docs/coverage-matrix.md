@@ -22,6 +22,7 @@ unit test `cases/unit/test_coverage_matrix.py` runs it).
 | DP7 (D-PRS positions) | 39 | 33 | 2 | 4 | 0 |
 | Stream registry (LEAK2) | 10 | 6 | 2 | 2 | 0 |
 | Config load (COMPAT1) | 19 | 18 | 0 | 1 | 0 |
+| Secret-file reload (SECRELOAD1) | 9 | 6 | 1 | 2 | 0 |
 | M17 | 86 | 65 | 20 | 1 | 0 |
 | M17 v3 | 29 | 0 | 25 | 4 | 0 |
 | IMRS | 24 | 18 | 5 | 1 | 0 |
@@ -42,8 +43,8 @@ unit test `cases/unit/test_coverage_matrix.py` runs it).
 | Built-in echo (ECHO1) | 27 | 19 | 2 | 6 | 0 |
 | Echo return integrity E9 (D-STAR kinds) | 14 | 13 | 1 | 0 | 0 |
 | Real-transcoder cross-mode audio into YSF (related to ECHO1) | 3 | 3 | 0 | 0 | 0 |
-| DP15 (APRS / AX.25 / KISS data path) | 59 | 42 | 3 | 14 | 0 |
-| **Total** | **1199** | **751** | **272** | **168** | **8** |
+| DP15 (APRS / AX.25 / KISS data path) | 70 | 50 | 5 | 15 | 0 |
+| **Total** | **1219** | **765** | **275** | **171** | **8** |
 <!-- summary:end -->
 
 ## Top 15 gaps (ranked by how much real-world traffic they touch)
@@ -453,6 +454,21 @@ Sources: config-load-cases.md.
 | An image without the `config check` subcommand reads as unsupported, never as every old key rejected | config-load-cases.md:67 | `test_config_check::test_judge_check_image_without_the_subcommand_is_unsupported_not_invalid`, `test_cfgload::test_accept_and_unsupported` | unit | a | OK |
 | Warnings carry no `config warning:` word; a positioned line is a warning only when exit status is 0 | config-load-cases.md:69 | `test_config_check::test_judge_check_valid_exit_zero_keeps_positioned_lines_as_warnings` | unit | a | OK |
 | `DV_MMDVM_*` environment names are ignored on compat1 (only `DV_DMRHB_*` counts); no file to refuse | config-load-cases.md:61 | - | - | - | GAP |
+
+## Secret-file reload (SECRELOAD1)
+Sources: secreload-cases.md (config.md "Actions", reload table; status.md launcher metrics).
+
+| Obligation | Source | Case ids | Marker | Client | Status |
+|---|---|---|---|---|---|
+| A secret file replaced at the same path and a reload restart the owning child (`edges.aprsis.passcode_file` contents: Restart(dv-edge-aprsis)); the reply lists the action, a new process starts, `dv_launcher_child_restarts_total` rises by one | secreload-cases.md "Stages" 3, 5 | `test_secret_reload::test_secreload1_passcode_file_replaced_at_the_same_path` | rig | b:aprsc | OK |
+| The new bytes are what the edge uses: the fixture passcode logs in verified, a same-size throwaway one unverified, the fixture one again after an atomic replacement | secreload-cases.md "Stages" 3, 5 | `test_secret_reload::test_secreload1_passcode_file_replaced_at_the_same_path` | rig | b:aprsc | OK |
+| A same-size rewrite in place (same inode) and a rename-over replacement (new inode) are both detected | secreload-cases.md "Stages" 3, 5 | `test_secret_reload::test_secreload1_passcode_file_replaced_at_the_same_path`, `test_secret_reload_case::test_write_in_place_keeps_the_inode_the_size_and_the_mode` | rig | b:aprsc | OK |
+| The action preview names the dotted key and says `content changed` | secreload-cases.md "Stages" 0 | `test_secret_reload::test_secreload1_passcode_file_replaced_at_the_same_path`, `test_secret_reload_helpers::test_capability_is_read_from_the_preview` | rig | b:aprsc | OK |
+| An unchanged secret (and no other change) causes no restart | secreload-cases.md "Stages" 1, 2c, 4 | `test_secret_reload::test_secreload1_passcode_file_replaced_at_the_same_path` | rig | b:aprsc | OK |
+| An unreadable (mode 000) or missing explicit secret file refuses the reload with the key and the path and keeps the running generation (the old login stays up) | secreload-cases.md "Stages" 2a, 2b | `test_secret_reload::test_secreload1_passcode_file_replaced_at_the_same_path` | rig | b:aprsc | OK |
+| No secret value in any admin reply, note or file of the run, nor in the collected logs | secreload-cases.md "Stages" 6 | `test_secret_reload::test_secreload1_passcode_file_replaced_at_the_same_path`, `test_secret_reload_helpers::test_scan_tree_reports_paths_and_lines_never_values` | rig | b:aprsc | PARTIAL |
+| A byte-identical TOML reload (SIGHUP, fabric `admin/config/reload`) re-reads the secrets | secreload-cases.md "What is specified" | - | - | - | GAP |
+| Link, AllStar, TURN and callhome secret kinds follow the same rule | secreload-cases.md "Limits" | - | - | - | GAP |
 
 ## M17
 Sources: protocols/m17.md.
@@ -1428,6 +1444,17 @@ Sources: dp15-cases.md.
 | DP15-5b repeated APRS-IS message is acked again byte for byte and delivered once | dp15-cases.md:320 | `test_dp15_aprsis::test_dp15_5b_a_repeated_aprsis_message_is_acked_again_and_delivered_once` | rig | b:aprsc | OK |
 | DP15-5c to 5e unverified login, qAC on an uplink path, NOGATE | dp15-cases.md:324 | - | - | - | GAP |
 | DP15-5f 2 s repeat of the plan (server dupecheck only) | dp15-cases.md:324 | - | - | - | GAP |
+| DP18-a DP18 node beacon and object arrive at the private aprsc as the gateway call's own reports (`TCPIP*`, server `qAC`, hand-built information field, first line after one interval) | dp18-cases.md "DP18-a" | `test_dp18_origin::test_dp18_a_beacon_and_object_arrive_as_the_gateways_own_reports` | rig | b:aprsc | OK |
+| DP18-b the object comes 35 s after the beacon (stagger) | dp18-cases.md "DP18-b" | `test_dp18_origin::test_dp18_b_the_object_comes_35_s_after_the_beacon` | rig | b:aprsc | OK |
+| DP18-c the object HMS timestamp is the send time within 1 s | dp18-cases.md "DP18-c" | `test_dp18_origin::test_dp18_c_the_object_timestamp_is_the_send_time` | rig | b:aprsc | OK |
+| DP18-n `dv_pkt_origin_total{result=generated}` grows per report | dp18-cases.md "DP18-n" | `test_dp18_origin::test_dp18_n_origin_counters_count_generated_reports` | rig | b:aprsc | OK |
+| DP18-k after a dv-data-worker kill nothing arrives before one full interval | dp18-cases.md "DP18-k" | `test_dp18_origin::test_dp18_k_nothing_arrives_before_one_full_interval_after_a_worker_kill` | rig | b:aprsc | OK |
+| DP18-e a position policy withholding the gateway call: no line, `withheld` grows | dp18-cases.md "DP18-e" | `test_dp18_origin::test_dp18_e_a_withheld_gateway_call_sends_nothing` | rig | b:aprsc | OK |
+| DP12c-s a simulated AX.25 port never reaches its TNC, counts `simulated`, the real port on the same physical keeps its timing | dp18-cases.md "DP18-s" | `test_dp18_rf::test_dp18_s_a_simulated_port_never_reaches_its_tnc` | rig | a | OK |
+| DP12c-r reload simulate <-> true through the admin config API: the edge restarts, nothing queued before the change is transmitted after it, restore from history | dp18-cases.md "DP18-r1" | `test_dp18_rf::test_dp18_r1_simulate_to_true_drops_the_queued_simulated_frames`, `test_dp18_rf::test_dp18_r2_true_to_simulate_then_restore_from_history` | rig | a | OK |
+| DP18-o several RF objects on afsk1200-shared: releases spread, drops counted and not always the same object (the second half recorded only) | dp18-cases.md "DP18-o" | `test_dp18_rf::test_dp18_o_object_copies_are_spread_and_drops_are_counted` | rig | a | PARTIAL |
+| DP12c radio port with `tx = "simulate"` never keys PTT or sends audio (no radio ports in the rig) | dp18-cases.md "Limits" | - | - | - | GAP |
+| DP12c the `rf/<physical>/ptt` token of a simulated port is never declared (not observable black-box) | dp18-cases.md "Limits" | `test_dp18_rf::test_dp18_s_a_simulated_port_never_reaches_its_tnc` (counters and silence only) | rig | a | PARTIAL |
 | DP15-8w RF-heard positionless weather is gated to the private aprsc once, `qAR` + igate call, path as heard, information byte-identical (`qAO` receive-only) | dp15-cases.md "RF to APRS-IS igate" | `test_dp15_igate::test_dp15_8w_rf_weather_is_gated_with_qar` | rig | b:aprsc | OK |
 | DP15-8t RF-heard telemetry `T#` is gated the same way | dp15-cases.md "RF to APRS-IS igate" | `test_dp15_igate::test_dp15_8t_rf_telemetry_is_gated_with_qar` | rig | b:aprsc | OK |
 | DP15-8q RF-heard general query `?APRS?` is never gated (bounded window from the run's latency, control frame) | dp15-cases.md "RF to APRS-IS igate" | `test_dp15_igate::test_dp15_8q_rf_general_query_is_not_gated` | rig | b:aprsc | OK |

@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (docs/dp18-cases.md): the AX.25 edge with TWO kiss-tcp ports on ONE physical transmitter, for the DP12c
+# simulate cases (cases/test_dp18_rf.py): rf-a transmits (tx = true) and rf-b only SIMULATES (tx = "simulate": the same gates and scheduler,
+# the release is counted dv_edge_rf_tx_total{result=simulated} and never reaches the adapter). Use it INSTEAD of dp15-rf.toml (both define
+# [edges.ax25]); it needs dp15-aprsis.toml too, because the station callsign must equal the APRS-IS login N0TEST-5 for RF copies of the
+# node objects (config.md: "exactly equal APRS-IS and AX.25 station callsigns").
+# The tester plays the TNCs (dvtest/kiss_tnc.py): <TESTER_IP>:8101 is rf-a, :8102 is rf-b; reconnect 1..5 s as in dp15-rf.toml.
+# Both ports: physical "radio1", band 2m, class afsk1200-shared, explicit budget {} (class defaults), tx_per_min 2 and burst 1, so a second
+# text within 30 s waits in the queue (the reload cases need a queued frame). tx_enable is true: this snippet is the transmitting shape.
+# Paths: rf-out (room B text to rf-a) and rf-out-sim (the same text to the simulated rf-b); the launcher refuses a path to an RF port
+# without effective TX, and "simulate" is meant to pass the same gate (UNVERIFIED until the first run on an image with DP12c).
+[edges.ax25]
+enable = true
+callsign = "N0TEST-5"
+tx_enable = true
+alias_calls = []
+
+[[edges.ax25.port]]
+name = "rf-a"
+kind = "kiss-tcp"
+host = "<TESTER_IP>"
+port = 8101
+channel = 0
+tx = true
+physical = "radio1"
+band = "2m"
+class = "afsk1200-shared"
+tx_budget = {}
+tx_per_min = 2
+tx_burst = 1
+reconnect = { min_secs = 1, max_secs = 5 }
+
+[[edges.ax25.port]]
+name = "rf-b"
+kind = "kiss-tcp"
+host = "<TESTER_IP>"
+port = 8102
+channel = 0
+tx = "simulate"
+physical = "radio1"
+band = "2m"
+class = "afsk1200-shared"
+tx_budget = {}
+tx_per_min = 2
+tx_burst = 1
+reconnect = { min_secs = 1, max_secs = 5 }
+
+[[data.path]]
+name = "rf-out"
+from = "room:B"
+to = "edge:ax25/rf-a"
+types = ["text"]
+addressee = "XLX999B"
+min_ident = "session"
+per_min = 30
+
+[[data.path]]
+name = "rf-out-sim"
+from = "room:B"
+to = "edge:ax25/rf-b"
+types = ["text"]
+addressee = "XLX999B"
+min_ident = "session"
+per_min = 30

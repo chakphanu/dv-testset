@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (docs/dp18-cases.md, DP18-e): the position policy withholds the gateway call. position_optout matches the
+# BASE callsign of the APRS-IS login N0TEST-5 (data.md 9.5: "All node-published positions apply [data] positions, base-callsign
+# position_optout and the account hidden set to the originating gateway call"), so the beacon and the object are withheld, counted in
+# dv_pkt_origin_total{result=withheld} and never sent. ONLY together with dp18-origin.toml (the report rows) and dp15-aprsis.toml.
+# No other rig case uses the base callsign N0TEST for a position, so the opt-out touches nothing else of this run.
+[data]
+position_optout = ["N0TEST"]

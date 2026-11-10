@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/dp18-cases.md): the DP18 node beacon and ONE node object that DV-Router originates
+# to APRS-IS (data.md 9.5, config.md `[edges.aprsis.beacon]` and `[[edges.aprsis.objects]]`), for cases/test_dp18_origin.py. ONLY with
+# dp15-aprsis.toml (the APRS-IS edge: login N0TEST-5 on the private aprsc) and data-ident.toml (the data worker; its carriers default to
+# "all", which includes aprs-is-line). No RF copies here (rf_ports stays empty).
+# interval_secs = 600 is the floor: the first beacon comes one full interval after the data worker started, the object 35 s later (one
+# earlier report), so a case needs about 11 minutes before the first line. Synthetic position 10 deg 30.00 min N, 20 deg 15.00 min E for the
+# beacon and 10 deg 33.00 min N, 20 deg 15.00 min E for the object; the object name DVTOBJ1 has 7 characters, so it cannot parse as a
+# station callsign (project rule: an object name must not impersonate a station callsign).
+[edges.aprsis.beacon]
+enable = true
+interval_secs = 600
+lat_e7 = 105000000
+lon_e7 = 202500000
+symbol = "/&"
+comment = "dvt dp18 beacon"
+ambiguity = 0
+
+[[edges.aprsis.objects]]
+name = "DVTOBJ1"
+room = "B"
+frequency = "144.800MHz"
+comment = "dvt"
+interval_secs = 600
+lat_e7 = 105500000
+lon_e7 = 202500000
+symbol = "/r"
+ambiguity = 0

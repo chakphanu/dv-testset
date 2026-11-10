@@ -406,6 +406,10 @@ another launch mode the variable draws a warning. Snippets in
 | `dp15-rf.toml` | the AX.25 edge for the DP15 RF cases of tier A (`cases/test_dp15_rf.py`, `docs/dp15-cases.md`): `[edges.ax25]` enabled, station callsign `N0TEST-1`, `tx_enable = <DP15_TX_ENABLE>`, two `kiss-tcp` ports to the tester (`rf-a` `<TESTER_IP>:8101` with `tx = <DP15_TX_ENABLE>`, `rf-b` `<TESTER_IP>:8102` receive only; the edge is the CLIENT, the tester plays the TNCs, reconnect 1 to 5 s) and the path `rf-in` (all ports to room B, text to `XLX999B`). Name it after `data-ident.toml` |
 | `dp15-rf-out.toml` | the path `rf-out` (room B to `edge:ax25/rf-a`, text, addressee `XLX999B`, `min_ident = "session"`). ONLY with `dp15-rf.toml` and `DVT_DP15_TX_ENABLE=true`: the launcher refuses a path to an RF port without effective TX |
 | `dp15-rf-igate.toml` | the transit path `dp15-igate` (`edge:ax25/rf-a` to `edge:aprsis`, `types = ["transit"]`, `per_min` 20) for the RF-to-APRS-IS igate cases (`cases/test_dp15_igate.py`, `docs/dp15-cases.md` "RF to APRS-IS igate"). ONLY with `dp15-rf.toml` AND `dp15-aprsis.toml` (the launcher refuses a path whose endpoint is not enabled); `DVT_DP15_TX_ENABLE=true` gives `qAR`, `false` gives `qAO` |
+| `dp18-origin.toml` | DP18 node beacon (interval 600 s) and one node object `DVTOBJ1` to APRS-IS, no RF copies (`cases/test_dp18_origin.py`, `docs/dp18-cases.md`). ONLY with `dp15-aprsis.toml` and `data-ident.toml` |
+| `dp18-origin-withheld.toml` | `[data] position_optout = ["N0TEST"]`: the position policy withholds the gateway call (DP18-e). ONLY with `dp18-origin.toml` |
+| `dp18-rf.toml` | DP12c: `[edges.ax25]` callsign `N0TEST-5`, ports `rf-a` (`tx = true`) and `rf-b` (`tx = "simulate"`) on one physical, paths `rf-out` / `rf-out-sim` (`cases/test_dp18_rf.py`). INSTEAD of `dp15-rf.toml`; needs `dp15-aprsis.toml` |
+| `dp18-rf-objects.toml` | DP18: the beacon and ten objects with RF copies on `rf-a` (DP18-o). INSTEAD of `dp18-origin.toml`; needs `dp18-rf.toml` and `dp15-aprsis.toml` |
 | `xlx-peer.toml` | `[[edges.xlx.peer]]` XLX998 at `<NET>.12` on modules `DE` |
 | `xlx-peer-host.toml` | the same peer named by HOST NAME (`xlxd-peer-sut`, resolved by the rig network DNS), for SANSIO4; `xlx-peer-host-bad.toml` adds a second row `no-such-peer.example.invalid` that never resolves (must stay pending, no start-up failure). Use one of the three XLX peer snippets, never two |
 | `xlx-peer2.toml` / `xlx-peer2-host.toml` | the second XLX peer XLX997 (`xlxd-peer2-sut`, `<NET>.14`) by IP / by host name, for `test_interlink_no_xlx_transit` (it needs two XLX peers); add next to `xlx-peer.toml` / `xlx-peer-host*.toml` |
@@ -759,6 +763,10 @@ scripts/contained.sh --name build -- docker build -f rig/Dockerfile.aprsc --buil
   packets whose SOURCE starts with `N0CALL`, `NOCALL` or `SERVER`, so every source here is `N0TEST-n` or `XLX999..`. The DV-Router passcode file is
   written by `run.sh` to `out/<run>/aprs-secrets/passcode` (mode 600; nothing secret, a function of a synthetic callsign) and mounted read-only at
   `/etc/dv-router/aprs-secrets`; the SUT then runs as the host user, like with the web and asl-edge profiles.
+* `DVT_SUT_CONFIG_RW=1` (native launch, off by default): the rendered config is copied to `out/<run>/xlxd-config/xlxd-sut/rw/dv-router.toml` and that
+  directory is mounted read-write at `/etc/dv-router-rw` (the image starts with `--config /etc/dv-router-rw/dv-router.toml`), so that dv-svc-admin can
+  replace the file (it writes a temporary file and renames it; the usual single-file read-only mount refuses). For the cases that apply a configuration
+  through the admin API, [secreload-cases.md](secreload-cases.md). The rendered file next to it is then not the live one.
 * DV-Router side: the snippet `rig/config/dv-router/dp15-aprsis.toml` (`[edges.aprsis]` pointing at `<NET>.47:14580`, and the path row `aprsis-down`
   `edge:aprsis -> room:B`, addressee `XLX999B`) is added by `run.sh` when `--profile aprs` is given and it is not listed in `DVT_SUT_CONFIG_EXTRA`. The
   profile needs `DVT_SUT_LAUNCH=native`. The tester gets `DVT_APRS=on` and `DVT_APRSC=<net>.47`.
