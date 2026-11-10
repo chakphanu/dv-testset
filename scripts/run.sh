@@ -187,6 +187,10 @@
 # DVT_REQUIRE_IDENT, true or false, default true), <DP15_TX_ENABLE> (env
 # DVT_DP15_TX_ENABLE, true or false, default false) and <WEB_PROXY_IP> (<net>.90);
 # a plain [table] the template already has is merged key by key; docs/rig.md.
+# DVT_SUT_CONFIG_RW=1 (native launch): the rendered config is a copy in a directory that is mounted READ-WRITE at /etc/dv-router-rw
+# (the command line names /etc/dv-router-rw/dv-router.toml), so dv-svc-admin can replace it (the admin API writes a temporary file and
+# renames it over the config, which a read-only or single-file mount refuses). Only for the cases that apply a configuration through
+# the admin API (cases/test_secret_reload.py, docs/secreload-cases.md); the file is local to out/<run>/xlxd-config/xlxd-sut/rw/.
 # The launcher reads no other xlxd.* file: DVT_NXDN, DVT_P25, DVT_INTERLINK and
 # DVT_XLXD_BLACKLIST only draw a warning (DVT_SUT_USRP=on, set by --profile allstar and load, adds the
 # snippet rig/config/dv-router/usrp-rig.toml with the USRP endpoints A/B/C instead), and DVT_UNSERVED_MODULE=M|N is refused
@@ -972,6 +976,10 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
   if [ "$svc" = xlxd-sut ] && [ "${DVT_SUT_LAUNCH:-direct}" = native ]; then
     python3 -m dvtest.sut_config "$DVT_SUT_CONFIG" "$cfg/dv-router.toml" --net "$net" --own "$3" --transcoder "$4" --tester 30 \
       "${cfg_opts[@]}" || exit 2
+    if [ "${DVT_SUT_CONFIG_RW:-}" = 1 ]; then
+      mkdir -p "$cfg/rw"
+      cp "$cfg/dv-router.toml" "$cfg/rw/dv-router.toml"
+    fi
   fi
   for f in xlxd.whitelist xlxd.blacklist xlxd.terminal ysfnode.dat; do : > "$cfg/$f"; done
   [ -z "${DVT_XLXD_BLACKLIST:-}" ] || printf '%s\n' $DVT_XLXD_BLACKLIST > "$cfg/xlxd.blacklist"
@@ -979,7 +987,9 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
     if [ "$svc" = xlxd-sut ] && [ "${DVT_SUT_LAUNCH:-direct}" = native ]; then
       # the image's own entrypoint (dv-router) takes a TOML file; no importer
       printf '  %s:\n    image: "%s"\n' "$svc" "$img"
-      printf '    command: ["--config", "/etc/dv-router/dv-router.toml", "XLX999", "%s.%s", "%s.%s"]\n' "$net" "$3" "$net" "$4"
+      printf '    command: ["--config", "%s", "XLX999", "%s.%s", "%s.%s"]\n' \
+        "$([ "${DVT_SUT_CONFIG_RW:-}" = 1 ] && echo /etc/dv-router-rw/dv-router.toml || echo /etc/dv-router/dv-router.toml)" \
+        "$net" "$3" "$net" "$4"
     elif [ "$svc" = xlxd-sut ] && [ "${DVT_SUT_LAUNCH:-direct}" = import ]; then
       # DEPRECATED: the shim converts the mounted /xlxd files, then execs dv-router (same three words)
       printf '  %s:\n    image: "%s"\n    entrypoint: ["/usr/local/bin/dv-xlxd-import"]\n' "$svc" "$img"
@@ -1021,7 +1031,11 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
       printf '      - "%s/%s:/xlxd/%s:ro"\n' "$cfg" "$f" "$f"
     done
     if [ "$svc" = xlxd-sut ] && [ "${DVT_SUT_LAUNCH:-direct}" = native ]; then
-      printf '      - "%s/dv-router.toml:/etc/dv-router/dv-router.toml:ro"\n' "$cfg"
+      if [ "${DVT_SUT_CONFIG_RW:-}" = 1 ]; then
+        printf '      - "%s/rw:/etc/dv-router-rw"\n' "$cfg"
+      else
+        printf '      - "%s/dv-router.toml:/etc/dv-router/dv-router.toml:ro"\n' "$cfg"
+      fi
     fi
     if [ "$svc" = xlxd-sut ] && [ "$has_web" = 1 ]; then
       printf '      - "%s/%s/sut-state:/var/lib/dv"\n' "$DVT_ROOT" "$out"
@@ -1337,6 +1351,18 @@ if [ "$has_nat" = 1 ]; then
     --skip web/turn.secret --skip coturn/turnserver.conf || scan_rc=$?
   if [ "$scan_rc" != 0 ]; then
     echo "run.sh: the TURN secret was found in the output above (exit $scan_rc)" >&2
+    [ "$rc" != 0 ] || rc=5
+  fi
+fi
+# SECRELOAD1 (cases/test_secret_reload.py): the case lists the passcode values it used in out/<utc>/secreload/scan.json (mode 600);
+# neither may be in any collected log or file of the output directory (the wire captures carry a passcode by protocol and are skipped).
+# Paths and line numbers only, never a value.
+if [ -f "$out/secreload/scan.json" ]; then
+  scan_rc=0
+  PYTHONPATH="$DVT_ROOT" python3 -m dvtest.secret_reload scan --values-file "$out/secreload/scan.json" --root "$out" \
+    --skip secreload/scan.json --skip aprs-secrets/passcode --skip-dir capture || scan_rc=$?
+  if [ "$scan_rc" != 0 ]; then
+    echo "run.sh: a SECRELOAD1 secret value was found in the output above (exit $scan_rc)" >&2
     [ "$rc" != 0 ] || rc=5
   fi
 fi

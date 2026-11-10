@@ -22,6 +22,7 @@ unit test `cases/unit/test_coverage_matrix.py` runs it).
 | DP7 (D-PRS positions) | 39 | 33 | 2 | 4 | 0 |
 | Stream registry (LEAK2) | 10 | 6 | 2 | 2 | 0 |
 | Config load (COMPAT1) | 19 | 18 | 0 | 1 | 0 |
+| Secret-file reload (SECRELOAD1) | 9 | 6 | 1 | 2 | 0 |
 | M17 | 86 | 65 | 20 | 1 | 0 |
 | M17 v3 | 29 | 0 | 25 | 4 | 0 |
 | IMRS | 24 | 18 | 5 | 1 | 0 |
@@ -43,7 +44,7 @@ unit test `cases/unit/test_coverage_matrix.py` runs it).
 | Echo return integrity E9 (D-STAR kinds) | 14 | 13 | 1 | 0 | 0 |
 | Real-transcoder cross-mode audio into YSF (related to ECHO1) | 3 | 3 | 0 | 0 | 0 |
 | DP15 (APRS / AX.25 / KISS data path) | 70 | 50 | 5 | 15 | 0 |
-| **Total** | **1210** | **759** | **274** | **169** | **8** |
+| **Total** | **1219** | **765** | **275** | **171** | **8** |
 <!-- summary:end -->
 
 ## Top 15 gaps (ranked by how much real-world traffic they touch)
@@ -453,6 +454,21 @@ Sources: config-load-cases.md.
 | An image without the `config check` subcommand reads as unsupported, never as every old key rejected | config-load-cases.md:67 | `test_config_check::test_judge_check_image_without_the_subcommand_is_unsupported_not_invalid`, `test_cfgload::test_accept_and_unsupported` | unit | a | OK |
 | Warnings carry no `config warning:` word; a positioned line is a warning only when exit status is 0 | config-load-cases.md:69 | `test_config_check::test_judge_check_valid_exit_zero_keeps_positioned_lines_as_warnings` | unit | a | OK |
 | `DV_MMDVM_*` environment names are ignored on compat1 (only `DV_DMRHB_*` counts); no file to refuse | config-load-cases.md:61 | - | - | - | GAP |
+
+## Secret-file reload (SECRELOAD1)
+Sources: secreload-cases.md (config.md "Actions", reload table; status.md launcher metrics).
+
+| Obligation | Source | Case ids | Marker | Client | Status |
+|---|---|---|---|---|---|
+| A secret file replaced at the same path and a reload restart the owning child (`edges.aprsis.passcode_file` contents: Restart(dv-edge-aprsis)); the reply lists the action, a new process starts, `dv_launcher_child_restarts_total` rises by one | secreload-cases.md "Stages" 3, 5 | `test_secret_reload::test_secreload1_passcode_file_replaced_at_the_same_path` | rig | b:aprsc | OK |
+| The new bytes are what the edge uses: the fixture passcode logs in verified, a same-size throwaway one unverified, the fixture one again after an atomic replacement | secreload-cases.md "Stages" 3, 5 | `test_secret_reload::test_secreload1_passcode_file_replaced_at_the_same_path` | rig | b:aprsc | OK |
+| A same-size rewrite in place (same inode) and a rename-over replacement (new inode) are both detected | secreload-cases.md "Stages" 3, 5 | `test_secret_reload::test_secreload1_passcode_file_replaced_at_the_same_path`, `test_secret_reload_case::test_write_in_place_keeps_the_inode_the_size_and_the_mode` | rig | b:aprsc | OK |
+| The action preview names the dotted key and says `content changed` | secreload-cases.md "Stages" 0 | `test_secret_reload::test_secreload1_passcode_file_replaced_at_the_same_path`, `test_secret_reload_helpers::test_capability_is_read_from_the_preview` | rig | b:aprsc | OK |
+| An unchanged secret (and no other change) causes no restart | secreload-cases.md "Stages" 1, 2c, 4 | `test_secret_reload::test_secreload1_passcode_file_replaced_at_the_same_path` | rig | b:aprsc | OK |
+| An unreadable (mode 000) or missing explicit secret file refuses the reload with the key and the path and keeps the running generation (the old login stays up) | secreload-cases.md "Stages" 2a, 2b | `test_secret_reload::test_secreload1_passcode_file_replaced_at_the_same_path` | rig | b:aprsc | OK |
+| No secret value in any admin reply, note or file of the run, nor in the collected logs | secreload-cases.md "Stages" 6 | `test_secret_reload::test_secreload1_passcode_file_replaced_at_the_same_path`, `test_secret_reload_helpers::test_scan_tree_reports_paths_and_lines_never_values` | rig | b:aprsc | PARTIAL |
+| A byte-identical TOML reload (SIGHUP, fabric `admin/config/reload`) re-reads the secrets | secreload-cases.md "What is specified" | - | - | - | GAP |
+| Link, AllStar, TURN and callhome secret kinds follow the same rule | secreload-cases.md "Limits" | - | - | - | GAP |
 
 ## M17
 Sources: protocols/m17.md.
