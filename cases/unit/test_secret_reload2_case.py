@@ -41,8 +41,8 @@ def problem(status, code, **extra):
 class Sut:
     """The fake admin service plus the launcher and the APRS-IS edge behind it."""
 
-    def __init__(self, path, fixture, has_route=True, weak_preview=False):
-        self.path, self.fixture, self.has_route = path, fixture, has_route
+    def __init__(self, path, fixture, has_route=True, password_login=True):
+        self.path, self.fixture, self.has_route, self.password_login = path, fixture, has_route, password_login
         self.running = path.read_text()
         self.pid, self.edge_restarts, self.other_restarts = 100, 0.0, 2.0
         self.inc, self.gen = 1, 3
@@ -83,6 +83,16 @@ class Client:
     def clone(self):
         return Client(self.sut, session=False)
 
+    def hide(self, *values):
+        pass
+
+    def login(self, user, password, totp_code=None, expect=200):
+        if not self.sut.password_login:
+            return Resp(401, {"code": "totp_required"})
+        self.has_session, self.role, self.user = True, "admin", user
+        self.stepped_at = None
+        return self.identity
+
     def session(self):
         return self.identity
 
@@ -101,6 +111,7 @@ class Client:
                 self.sut.audit(denied_action, self.user, "denied")
             return problem(403, "forbidden")
         if not self.stepped():
+            self.sut.audit("step_up", self.user, "denied")
             return problem(403, "step_up_required")
         return None
 
@@ -111,7 +122,7 @@ class Client:
             denied = self.guard("raw")
             return denied or Resp(200, RAW.encode(), {"ETag": '"%s"' % sut.etag})
         if route == "/config/history":
-            return self.guard("history") or Resp(200, sut.history)
+            return self.guard("history") or Resp(200, {"total": len(sut.history), "items": sut.history})
         if route == "/audit":
             return self.guard("audit") or Resp(200, {"total": len(sut.audit_items), "items": sut.audit_items})
         if route == "/config/reload":
@@ -124,7 +135,7 @@ class Client:
             if errors:
                 return problem(422, "validation", errors=errors, current_etag=sut.etag)
             changed = [KEY] if text != sut.running else []
-            actions = [{"class": "Restart", "child": "dv-edge-aprsis", "path": KEY, "impact": "%s content changed; restart dv-edge-aprsis" % KEY}] if changed else []
+            actions = [{"class": "restart", "child": "dv-edge-aprsis", "path": KEY, "changed_secret_keys": [KEY], "impact": "restart dv-edge-aprsis (quiet)"}] if changed else []
             return Resp(200, {"mode": "preview", "etag": sut.etag, "changed": changed, "no_change": not changed, "actions": actions, "warnings": []},
                         {"ETag": '"%s"' % sut.etag})
         if route == "/session":
@@ -159,10 +170,23 @@ class Client:
             sut.pid += 1
             sut.edge_restarts += 1
             sut.gen += 1
-            actions = [{"class": "Restart", "child": "dv-edge-aprsis", "path": KEY, "impact": "%s content changed; restart dv-edge-aprsis" % KEY}]
+            actions = [{"class": "restart", "child": "dv-edge-aprsis", "path": KEY, "changed_secret_keys": [KEY], "impact": "restart dv-edge-aprsis (quiet)"}]
         sut.audit("config.reload", self.user, "applied" if changed else "unchanged", changed)
         return Resp(200, {"status": "applied", "etag": sut.etag, "changed": changed, "no_change": not changed, "inc": sut.inc, "gen": sut.gen,
                           "actions": actions, "pending_restart": []}, {"ETag": '"%s"' % sut.etag})
+
+
+class Sessions:
+    """The admin_session factory: sessions(role) and sessions.credentials(role)."""
+
+    def __init__(self, sut):
+        self.sessions = {"viewer": Client(sut, "viewer", "vic"), "operator": Client(sut, "operator", "otto")}
+
+    def __call__(self, role):
+        return self.sessions[role]
+
+    def credentials(self, role):
+        return ("ada", "password-not-a-secret")
 
 
 def build(monkeypatch, tmp_path, **kw):
@@ -222,15 +246,21 @@ def test_main_case_fails_when_the_reload_edits_the_toml_or_ignores_the_secret(mo
 
 def test_guards_case_follows_the_documented_refusals(monkeypatch, tmp_path):
     ctx, sut = build(monkeypatch, tmp_path)
-    sessions = {"viewer": Client(sut, "viewer", "vic"), "operator": Client(sut, "operator", "otto")}
-    case.test_secreload2_guards_and_preconditions(ctx.target, None, ctx, lambda role: sessions[role])
+    case.test_secreload2_guards_and_preconditions(ctx.target, None, ctx, Sessions(sut))
     assert sut.posts == [] and sut.pid == 100
     denied = [(i["action"], i["user"]) for i in sut.audit_items if i["result"] == "denied"]
     for user in ("vic", "otto"):
         assert ("config.reload.preview", user) in denied and ("config.reload", user) in denied
-    assert [i["result"] for i in sut.audit_items if i["user"] == "ada"] == ["denied", "denied", "denied"]
-    assert sut.clock[0] >= 305.0          # the case waited out the 5 minute step-up window
-    assert ctx.stepped is None
+    assert [i["result"] for i in sut.audit_items if i["user"] == "ada" and i["action"] == "config.reload"] == ["denied"] * 5
+    assert ("step_up", "ada") in [(i["action"], i["user"]) for i in sut.audit_items if i["result"] == "denied"]
+    assert sut.clock[0] < 120.0           # a password-only login has no step-up window: no 5 minute wait
+
+
+def test_guards_case_waits_out_the_window_when_the_password_only_login_is_refused(monkeypatch, tmp_path):
+    ctx, sut = build(monkeypatch, tmp_path, password_login=False)
+    case.test_secreload2_guards_and_preconditions(ctx.target, None, ctx, Sessions(sut))
+    assert sut.clock[0] >= 305.0 and sut.posts == []
+    assert ("step_up", "ada") in [(i["action"], i["user"]) for i in sut.audit_items if i["result"] == "denied"]
 
 
 def test_guards_case_fails_when_a_weak_etag_is_accepted(monkeypatch, tmp_path):
@@ -244,16 +274,16 @@ def test_guards_case_fails_when_a_weak_etag_is_accepted(monkeypatch, tmp_path):
         return original(self, path, json_body, h, **kw)
 
     monkeypatch.setattr(Client, "post", lax)
-    sessions = {"viewer": Client(sut, "viewer", "vic"), "operator": Client(sut, "operator", "otto")}
     with pytest.raises(AssertionError, match="weak If-Match"):
-        case.test_secreload2_guards_and_preconditions(ctx.target, None, ctx, lambda role: sessions[role])
+        case.test_secreload2_guards_and_preconditions(ctx.target, None, ctx, Sessions(sut))
 
 
 def test_guards_case_fails_when_a_viewer_may_reload(monkeypatch, tmp_path):
     ctx, sut = build(monkeypatch, tmp_path)
-    sessions = {"viewer": Client(sut, "admin", "vic"), "operator": Client(sut, "operator", "otto")}
+    sessions = Sessions(sut)
+    sessions.sessions["viewer"] = Client(sut, "admin", "vic")
     with pytest.raises(AssertionError, match="viewer"):
-        case.test_secreload2_guards_and_preconditions(ctx.target, None, ctx, lambda role: sessions[role])
+        case.test_secreload2_guards_and_preconditions(ctx.target, None, ctx, sessions)
 
 
 def test_helpers_jbody_is_subsequence_and_history_len(monkeypatch, tmp_path):

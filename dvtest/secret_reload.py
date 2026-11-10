@@ -169,10 +169,38 @@ def reload_actions(reply, child_needle="aprsis"):
 
 
 def names_secret_change(action, key="passcode_file"):
-    """True when the action's text names the dotted key and says `content changed` (config.md: an action preview names the key and
-    reveals no value)."""
+    """True when the action names the key as a changed secret: its text says `<key> ... content changed` (config.md: an action preview
+    names the key and reveals no value), or, as the admin HTTP reply of 11e19ace carries it, its `changed_secret_keys` list holds a
+    dotted key ending in `key`."""
     text = json.dumps(action, sort_keys=True).lower()
-    return key in text and "content changed" in text
+    if key in text and "content changed" in text:
+        return True
+    keys = action.get("changed_secret_keys") if isinstance(action, dict) else None
+    return isinstance(keys, list) and any(isinstance(k, str) and k.endswith(key) for k in keys)
+
+
+def validation_problems(body, key=None):
+    """What is wrong with the 422 body of a refused reload (admin.md, 11e19ace): problem+json `code` validation, `errors[]` of
+    {path, pointer, msg} naming the dotted key, `current_etag` (unquoted), and NO `actions`. [] when it is as specified."""
+    key = key or RELOAD_KEY
+    if not isinstance(body, dict):
+        return ["the 422 body is not a JSON object"]
+    out = []
+    if body.get("code") != "validation":
+        out.append("code %r, want validation" % (body.get("code"),))
+    if "actions" in body:
+        out.append("a 422 carries no actions[]")
+    errors = body.get("errors")
+    if not isinstance(errors, list) or not errors:
+        return out + ["errors[] is missing or empty"]
+    for index, error in enumerate(errors):
+        if not isinstance(error, dict) or not all(isinstance(error.get(f), str) for f in ("path", "pointer", "msg")):
+            out.append("errors[%d] is not {path, pointer, msg}" % index)
+    if not any(isinstance(e, dict) and e.get("path") == key for e in errors):
+        out.append("no error has path %s" % key)
+    if "current_etag" in body and (not isinstance(body["current_etag"], str) or body["current_etag"].startswith(('"', "W/"))):
+        out.append("current_etag %r is not an unquoted tag" % (body["current_etag"],))
+    return out
 
 
 def error_names(problem_json, key, path):
@@ -314,13 +342,12 @@ def reload_audit(body, user=None, actions=("config.reload", "config.reload.previ
 
 
 def history_count(body):
-    """The number of entries of a GET /config/history body (a list, or an object holding the list), None when unrecognised."""
+    """The number of entries of a GET /config/history body, {total, items:[{seq, etag, replaced_by, ts_ms, user, comment, source}]} newest
+    first (a bare list is accepted too); None when unrecognised."""
     if isinstance(body, list):
         return len(body)
-    if isinstance(body, dict):
-        for key in ("items", "entries", "history"):
-            if isinstance(body.get(key), list):
-                return len(body[key])
+    if isinstance(body, dict) and isinstance(body.get("items"), list):
+        return len(body["items"])
     return None
 
 

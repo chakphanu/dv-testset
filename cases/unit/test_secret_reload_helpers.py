@@ -328,5 +328,38 @@ def test_reload_audit_selects_the_reload_records():
 
 
 def test_history_count():
-    assert sr.history_count([1, 2]) == 2 and sr.history_count({"items": [1]}) == 1 and sr.history_count({"entries": []}) == 0
-    assert sr.history_count({"x": 1}) is None and sr.history_count("no") is None
+    assert sr.history_count([1, 2]) == 2 and sr.history_count({"total": 1, "items": [{"seq": 1}]}) == 1
+    assert sr.history_count({"total": 0, "items": []}) == 0
+    assert sr.history_count({"entries": []}) is None and sr.history_count({"x": 1}) is None and sr.history_count("no") is None
+
+
+def test_names_secret_change_accepts_the_changed_secret_keys_of_the_http_reply():
+    action = {"class": "restart", "child": "dv-edge-aprsis", "path": "edges.aprsis.passcode_file",
+              "changed_secret_keys": ["edges.aprsis.passcode_file"], "impact": "restart dv-edge-aprsis (quiet)"}
+    assert sr.names_secret_change(action) and sr.reload_actions({"actions": [action]}) == [action]
+    assert not sr.names_secret_change({"class": "restart", "child": "dv-edge-aprsis", "changed_secret_keys": ["web.turn_secret_file"]})
+    assert not sr.names_secret_change({"class": "restart", "child": "dv-edge-aprsis", "changed_secret_keys": "edges.aprsis.passcode_file"})
+
+
+VALIDATION = {"type": "/api/v1/problems/validation", "title": "configuration rejected", "status": 422, "code": "validation", "detail": "d",
+              "instance": "/api/v1/admin/config/reload", "current_etag": "f-0123456789abcdef",
+              "errors": [{"path": "edges.aprsis.passcode_file", "pointer": "/edges/aprsis/passcode_file",
+                          "msg": "/etc/dv-router/aprs-secrets/passcode: cannot read secret file: permission denied"}]}
+
+
+def test_validation_problems():
+    assert sr.validation_problems(VALIDATION) == []
+    for change, needle in [
+        (lambda b: b.update(code="etag_mismatch"), "code"),
+        (lambda b: b.update(actions=[]), "actions"),
+        (lambda b: b.pop("errors"), "errors[]"),
+        (lambda b: b.update(errors=[]), "errors[]"),
+        (lambda b: b["errors"][0].pop("pointer"), "pointer"),
+        (lambda b: b["errors"][0].update(path="web.turn_secret_file"), "no error has path"),
+        (lambda b: b.update(current_etag='"f-0123456789abcdef"'), "unquoted"),
+    ]:
+        body = json.loads(json.dumps(VALIDATION))
+        change(body)
+        assert any(needle in p for p in sr.validation_problems(body)), needle
+    assert sr.validation_problems("x") == ["the 422 body is not a JSON object"]
+    assert sr.validation_problems(dict(VALIDATION, errors=[dict(VALIDATION["errors"][0], path="a.b")]), key="a.b") == []

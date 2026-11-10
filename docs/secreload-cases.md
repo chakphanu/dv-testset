@@ -108,20 +108,20 @@ accepted" is shown by the aprsc's verdict on the edge's login (`dv_edge_aprsis_v
 |---|---|---|
 | `test_secreload2_preview_and_reload_apply_a_replaced_secret` | R0 preview of the unchanged file | 200, exact keys, `mode` preview, `etag` = the `ETag` header = the ETag of `GET config/raw`, `no_change` true, `changed` and `actions` empty |
 | | R1 file rewritten in place (same inode and size), preview | `changed` is exactly `["edges.aprsis.passcode_file"]`, `no_change` false, an action restarts `dv-edge-aprsis` and names `content changed`, the file ETag is unchanged, the edge process is still the same 3 s later (a preview applies nothing) |
-| | R2 `POST` with `If-Match` = the preview's ETag | 200 `applied`, exact keys, `changed` = the key, `pending_restart` empty; the TOML ETag and the number of history entries are unchanged; new `dv-edge-aprsis` process, its restart counter +1; `dv_edge_aprsis_verified` 1 -> 0 |
+| | R2 `POST` with `If-Match` = the preview's ETag | 200 `applied`, exact keys, `changed` = the key, `pending_restart` empty; the TOML ETag and the number of history entries (`GET /config/history` `items`) are unchanged; new `dv-edge-aprsis` process, its restart counter +1; `dv_edge_aprsis_verified` 1 -> 0 |
 | | R3 second `POST` | 200, `no_change` true, `changed` and `actions` empty, `(inc, gen)` unchanged, nothing restarted; the preview agrees |
 | | R4 fixture value back by rename, preview, `POST` | `changed` the key, restart again, verified 0 -> 1 |
-| | R5 file mode 000, preview and `POST` | both 422 `validation`, the reply names the key `passcode_file` and the path as the SUT sees it; process, counters and the verified login unchanged; mode restored |
-| | R6 audit tail | the admin's `config.reload` records contain, in order: requested, applied (`changed` = the key), requested, unchanged (`[]`), requested, applied, requested, invalid (key and path names) |
+| | R5 file mode 000, preview and `POST` | both 422 `validation`: `errors[]` of `{path, pointer, msg}` with `path` = the key, the file path in `msg`, `current_etag` unquoted, no `actions[]`; process, counters and the verified login unchanged; mode restored |
+| | R6 audit tail | (a successful preview writes no record) the admin's `config.reload` records contain, in order: requested, applied (`changed` = the key), requested, unchanged (`[]`), requested, applied, requested, invalid (key and path names) |
 | | R7 secrecy | no value (old or new) in any reply, the audit tail, a note or any file of `out/<run>` visible now (the audit file is `sut-state/admin/audit.jsonl`); `run.sh` scans the collected logs |
 | `test_secreload2_guards_and_preconditions` | G1 | no session: GET and POST 401 |
 | | G2 | viewer and operator: GET and POST 403 `forbidden` |
-| | G3 | admin POST without `If-Match` 428 `precondition_required`; stale and weak `If-Match` 412 `etag_mismatch`, each with `current_etag` = the file's ETag; the edge is not restarted |
-| | G4 | audit: `config.reload` `denied` for the admin's refusals; `config.reload.preview` and `config.reload` `denied` for the viewer and the operator accounts; no secret value in the tail |
-| | G5 | after the 5 minute step-up window of the session (the case waits it out, keeping the session alive with a read every minute): GET and POST 403 `step_up_required`, nothing restarted |
+| | G3 | admin POST without `If-Match` 428 `precondition_required`; a stale, a weak, a `*` and a malformed `If-Match` 412 `etag_mismatch`, each with `current_etag` = the file's ETag; the edge is not restarted |
+| | G4 | audit: `config.reload` `denied` for the admin's refusals; at least one `config.reload` or `config.reload.preview` `denied` record for each of the viewer and the operator accounts; every `config.reload.preview` record is `denied`; no secret value in the tail |
+| | G5 | a session without step-up (a fresh password-only login when the rig lets the TOTP-enrolled admin account log in that way, else the stepped-up session after its 5 minute window, kept alive by a read every minute): GET and POST 403 `step_up_required`, nothing restarted; the audit has `step_up` `denied` |
 
-Skips: the route answers 404 (an image without SECRELOAD2; `DVT_SECRELOAD2=on` turns that into a failure); the edge is not running; no aprs profile. Run (about 12 minutes: the first
-case about 4 minutes, the second dominated by the 5 minute step-up wait; `DVT_SUT_CONFIG_RW` is NOT needed, the routes do not write the file):
+Skips: the route answers 404 (an image without SECRELOAD2; `DVT_SECRELOAD2=on` turns that into a failure); the edge is not running; no aprs profile. Run (about 7 to 12 minutes: the first
+case about 4 minutes, the second 5 minutes longer only when the password-only login is refused; `DVT_SUT_CONFIG_RW` is NOT needed, the routes do not write the file):
 
 ```sh
 DVT_SECRELOAD2=on DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/admin.toml:rig/config/dv-router/totp-required.toml:rig/config/dv-router/data-ident.toml:rig/config/dv-router/dp15-aprsis.toml \
@@ -132,11 +132,20 @@ Unit tests: `cases/unit/test_secret_reload2_case.py` runs both cases against a f
 launcher's restart), and checks that a service that accepts a weak `If-Match`, lets a viewer reload or restarts nothing for a replaced secret fails them; reply shapes:
 `dvtest/secret_reload.py` (`preview_problems`, `applied_problems`, `reload_audit`) with `cases/unit/test_secret_reload_helpers.py`.
 
-Shapes not confirmed (read from the documents and `crates/svc/admin/src/app_reload.rs`, not seen on a running image): the dotted key name for the APRS-IS passcode
-(`edges.aprsis.passcode_file`, by analogy with the documented `edges.link.account[0].secret_file`); the `actions[]` item fields (matched as lower-case JSON text, as in the first case);
-the field of the 422 `errors[]` that carries the path (the case looks for the key and the path anywhere in the body); the shape of `GET /config/history` (a list, or an object with
-`items` / `entries` / `history`; when unrecognised the "no history entry" check is skipped and a note says so); whether a login with TOTP already opens the step-up window (the case steps up
-explicitly and measures from that moment).
+Shapes confirmed by dv-router (merge `11e19ace`, reply of 2026-11-10): `changed` is a sorted, de-duplicated list of dotted keys, array rows as `[N]`
+(`edges.aprsis.passcode_file`, `edges.link.account[N].secret_file`, `edges.link.uplink[N].secret_file`, `edges.allstar.account[N].secret_file`,
+`edges.allstar.node[N].password_file`, `web.turn_secret_file`, `callhome.hash_file`); the reload is a quiet restart of `dv-edge-aprsis` (SIGUSR1, about 1 s), not live; an
+`actions[]` item is `{class:"restart", child, path, changed_secret_keys:[...], impact}` (the case accepts the key in `changed_secret_keys` or in the `impact` text); problem+json is
+`{type, title, status, detail, instance, code, errors?, current_etag?, retry_after?}` with `current_etag` UNQUOTED (`f-<16 hex>`) and the `ETag` header quoted; a 422 is `code`
+`validation`, `errors[]` of `{path, pointer, msg}` plus `current_etag` and no `actions[]`, the file path only inside `msg`; 412 covers a stale, weak, `*` and malformed `If-Match`, 428 a
+missing one; `GET /config/history` is `{total, items:[{seq, etag, replaced_by, ts_ms, user, comment, source}]}` newest first; a login with a valid TOTP code opens the 300 s step-up
+window, a password-only login does not. Audit: a successful preview writes NO record; `config.reload.preview` appears only as `denied` (a role below admin); a POST writes
+`config.reload` `requested` and then `applied` / `unchanged` (also `conflict`, `refused`, `invalid`, `unavailable`); `denied` for a missing or stale `If-Match` or a role below admin;
+a missing step-up is the action `step_up`, result `denied`; denials are coalesced per session (the case asserts that a record exists, not how many). Two product text defects
+are NOT asserted (the 428 `detail` mentions `base_etag`; the unreadable-file `msg` says mode 0600).
+
+Not confirmed on an image: the exact `msg` text of the 422. G5: the case first tries a fresh password-only login of the admin account; the rig accounts are TOTP-enrolled, so
+the login may be refused, and then the 5 minute window is waited out (the case says which path it took in its note).
 
 ## Run it
 

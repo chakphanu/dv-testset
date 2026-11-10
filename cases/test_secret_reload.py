@@ -594,6 +594,7 @@ def test_secreload2_preview_and_reload_apply_a_replaced_secret(target, rig_contr
         pytest.fail("the APRS-IS edge is not logged in and verified with the fixture passcode (dv_edge_aprsis_verified 0)")
     base = state(ctx)
     hist0 = history_len(ctx)
+    assert hist0 is not None, "GET config/history is not {total, items[]} (admin.md): the 'no history entry' check cannot be made"
     say(ctx, "R0", "preview of the unchanged file: no_change, changed [], ETag equals the file's; baseline edge process %s, restarts %s, "
         "history entries %s" % (pid_text(base.pid), base.restarts, hist0))
 
@@ -625,10 +626,7 @@ def test_secreload2_preview_and_reload_apply_a_replaced_secret(target, rig_contr
     _text, etag_after = raw_config(ctx)
     assert sr.etag_value(etag_after) == sr.etag_value(file_etag), "the reload edited the TOML (ETag %s -> %s)" % (file_etag, etag_after)
     hist1 = history_len(ctx)
-    if hist0 is None:
-        say(ctx, "R2", "GET config/history has no list shape the case knows: the 'no history entry' check is not made")
-    else:
-        assert hist1 == hist0, "the reload added a history entry (%s -> %s)" % (hist0, hist1)
+    assert hist1 == hist0, "the reload added a history entry (%s -> %s)" % (hist0, hist1)
     changed = assert_restarted(ctx, base, applied, "R2 reload")
     assert wait_for(lambda: hub(ctx)[0] is False, EFFECT_S), \
         "the new passcode is not in effect: dv_edge_aprsis_verified stayed %s (a throwaway value logs in unverified)" % hub(ctx)[0]
@@ -675,6 +673,8 @@ def test_secreload2_preview_and_reload_apply_a_replaced_secret(target, rig_contr
             names_key, names_path = sr.error_names(body, KEY, sut_path)
             assert names_key and names_path, "%s: the 422 names the key %s (%s) and the path (%s): %s" % (
                 what, KEY, names_key, names_path, ctx.client.scrub(r.text())[:300])
+            shape = sr.validation_problems(body)
+            assert not shape, "%s: the 422 body: %s" % (what, "; ".join(shape))
         assert_nothing_restarted(ctx, held, "R5 unreadable file")
     finally:
         os.chmod(ctx.path, 0o600)
@@ -733,7 +733,8 @@ def test_secreload2_guards_and_preconditions(target, rig_control, sr_ctx, admin_
 
     # ---- G3 If-Match: missing 428, stale 412, weak 412 (current_etag in the body); nothing reloads
     for what, header, status, code in (("missing", None, 428, "precondition_required"), ("stale", sr.stale_etag(file_etag), 412, "etag_mismatch"),
-                                       ("weak", sr.weak_etag(file_etag), 412, "etag_mismatch")):
+                                       ("weak", sr.weak_etag(file_etag), 412, "etag_mismatch"), ("star", "*", 412, "etag_mismatch"),
+                                       ("malformed", "not-an-etag", 412, "etag_mismatch")):
         r = reload_post(ctx, header)
         body = jbody(r)
         assert (r.status, sr.problem_code(body)) == (status, code), "%s If-Match: HTTP %d %s, want %d %s" % (
@@ -742,7 +743,8 @@ def test_secreload2_guards_and_preconditions(target, rig_control, sr_ctx, admin_
             "%s If-Match: current_etag %r differs from the file's ETag" % (what, body.get("current_etag") if isinstance(body, dict) else body)
         time.sleep(1.2)         # the action bucket (2/s) and the denial records
     assert pid_of_edge(ctx) == base.pid, "a refused POST restarted dv-edge-aprsis"
-    say(ctx, "G3", "POST without If-Match is 428 precondition_required; a stale and a weak If-Match are 412 etag_mismatch, each with current_etag")
+    say(ctx, "G3", "POST without If-Match is 428 precondition_required; a stale, a weak, a `*` and a malformed If-Match are 412 etag_mismatch, each with "
+        "current_etag")
 
     # ---- G4 the audit: the denials are recorded, no secret byte in it
     audit = audit_tail(ctx)
@@ -751,26 +753,56 @@ def test_secreload2_guards_and_preconditions(target, rig_control, sr_ctx, admin_
     assert any(r == "denied" for _a, _u, r, _c in mine), "no config.reload record with result denied for %s after the 428 / 412 refusals: %s" % (
         me, [r for _a, _u, r, _c in mine][-6:])
     for role, user in denied_users:
+        # admin.md: a session below admin is recorded as config.reload or config.reload.preview with result denied; denials are coalesced
+        # per session, so at least one record is asserted, not one per request
         seen = sr.reload_audit(audit, user=user)
-        assert ("config.reload.preview", user, "denied", None) in [(a, u, r, None) for a, u, r, _c in seen] and \
-            any(a == "config.reload" and r == "denied" for a, _u, r, _c in seen), \
+        assert any(r == "denied" for _a, _u, r, _c in seen), \
             "the audit has no denied config.reload(.preview) record for the %s account: %s" % (role, [(a, r) for a, _u, r, _c in seen])
-    say(ctx, "G4", "audit: config.reload denied for the missing / stale / weak If-Match (admin) and config.reload + config.reload.preview denied for viewer and operator")
+    previews = [i for i in sr.audit_items(audit) if i.get("action") == "config.reload.preview"]
+    assert all(i.get("result") == "denied" for i in previews), \
+        "config.reload.preview is audited only as denied (a successful preview writes no record): %s" % sorted({i.get("result") for i in previews})
+    say(ctx, "G4", "audit: config.reload denied for the refused If-Match values (admin), config.reload(.preview) denied for viewer and operator; "
+        "no record for a successful preview")
 
-    # ---- G5 step_up_required once the 5 minute window of this session has passed
-    left = t_step + STEP_UP_WINDOW_S + 5.0 - time.monotonic()
-    if left > 0:
-        say(ctx, "G5", "waiting %.0f s for the step-up window of the session to pass" % left)
-        while left > 0:
-            time.sleep(min(60.0, left))
-            left = t_step + STEP_UP_WINDOW_S + 5.0 - time.monotonic()
-            if left > 0:
-                ctx.client.session()        # keeps the session from idling out; a read is not a step-up
-    ctx.stepped = None
-    for method, r in (("GET", reload_get(ctx, stepped=False)), ("POST", reload_post(ctx, file_etag, stepped=False))):
-        body = jbody(r)
-        assert r.status == 403 and sr.problem_code(body) == "step_up_required", \
-            "%s config/reload after the step-up window answered %d %s, want 403 step_up_required" % (method, r.status, sr.problem_code(body))
+    # ---- G5 step_up_required: a session that has not stepped up. A fresh password-only login does not open the window (admin.md: only a
+    # login with a valid TOTP code does), so try that first; the rig accounts are TOTP-enrolled and the login may be refused, in which
+    # case the window of the stepped-up session is waited out (5 minutes, the session kept alive by a read every minute).
+    user, password = admin_session.credentials("admin")
+    fresh = ctx.client.clone()
+    fresh.hide(password)
+    proven = False
+    try:
+        login = fresh.login(user, password, expect=None)
+        if not isinstance(login, dict) and getattr(login, "status", None) != 200:
+            login = None
+    except Exception:
+        login = None
+    if login is not None:
+        r_get, r_post = reload_get(ctx, fresh, stepped=False), reload_post(ctx, file_etag, fresh, stepped=False)
+        codes = [(r.status, sr.problem_code(jbody(r))) for r in (r_get, r_post)]
+        if codes == [(403, "step_up_required")] * 2:
+            proven = True
+        else:
+            say(ctx, "G5", "a password-only login already has a step-up window here (GET %s, POST %s): waiting the window out instead" % tuple(
+                c[0] for c in codes))
+    if not proven:
+        left = t_step + STEP_UP_WINDOW_S + 5.0 - time.monotonic()
+        if left > 0:
+            say(ctx, "G5", "waiting %.0f s for the step-up window of the session to pass" % left)
+            while left > 0:
+                time.sleep(min(60.0, left))
+                left = t_step + STEP_UP_WINDOW_S + 5.0 - time.monotonic()
+                if left > 0:
+                    ctx.client.session()        # keeps the session from idling out; a read is not a step-up
+        ctx.stepped = None
+        for method, r in (("GET", reload_get(ctx, stepped=False)), ("POST", reload_post(ctx, file_etag, stepped=False))):
+            body = jbody(r)
+            assert r.status == 403 and sr.problem_code(body) == "step_up_required", \
+                "%s config/reload after the step-up window answered %d %s, want 403 step_up_required" % (method, r.status, sr.problem_code(body))
     assert pid_of_edge(ctx) == base.pid, "a POST without step-up restarted dv-edge-aprsis"
-    say(ctx, "G5", "after the 5 minute window: GET and POST are 403 step_up_required, nothing restarted")
+    audit = audit_tail(ctx)         # steps up again when the window of this session was waited out
+    assert any(i.get("action") == "step_up" and i.get("result") == "denied" for i in sr.audit_items(audit)), \
+        "a missing step-up is recorded as action step_up, result denied; none in the tail"
+    say(ctx, "G5", "%s: GET and POST are 403 step_up_required, nothing restarted; the audit has step_up denied" % (
+        "fresh password-only login" if proven else "after the 5 minute window"))
     assert not ctx.leaks.found, "a secret value appeared in: %s" % ctx.leaks.report()
