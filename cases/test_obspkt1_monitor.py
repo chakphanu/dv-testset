@@ -241,7 +241,10 @@ def test_obspkt1_a_admin_with_a_step_up_gets_the_documented_snapshot_and_stream(
     assert retry == "3000", "the stream's retry is %r, expected 3000" % (retry,)
     assert frames and frames[0].get("event") == "hello", "first stream event: %s" % frames[:1]
     hello = ob.parse_stream(frames).hello
-    assert hello and all(isinstance(p, dict) and p.get("id") and ob._boot_ok(p.get("boot")) for p in hello), "hello producers: %s" % hello
+    # OBSPKT1b: the FIRST hello lists only the producers that already answered, so it may be empty; later hellos upsert one producer before its rows (ob.wire_problems judges the
+    # order in OBSPKT1-d). Before OBSPKT1b the first hello must list the producers.
+    assert hello is not None and (ob.obspkt1b_on() or hello), "hello producers: %s" % hello
+    assert all(isinstance(p, dict) and p.get("id") and ob._boot_ok(p.get("boot")) for p in hello), "hello producers: %s" % hello
     note(target, "OBSPKT1-a", "RECORD", "snapshot keys %s, ports %s, hello producers %s, retry %s" % (
         sorted(body), body["ports"][:4], [p["id"] for p in hello], retry))
 
@@ -777,6 +780,33 @@ def status_with_cookies(session, cookies, path="/session"):
     return probe.get(session.path(path), expect=None).status
 
 
+def closed_window_session(ctx, target, case):
+    """(session, how) of a LIVE admin session whose step-up window has CLOSED: a plain snapshot answers 403 `step_up_required`. ctx.stale is the first choice (its window closed during
+    OBSPKT1-f); a 200 means the window is still open and the case waits for it to close (at most the window plus a minute); any other answer (401: the session is dead, expired or rotated)
+    is a HARNESS problem, noted, and a fresh dedicated login that waits out its own window takes its place. The case fails with a harness message when no session ever reaches the state."""
+    def state(sess):
+        resp, _body = snapshot(sess, limit=1)
+        if resp.status == 403 and code_of(resp) == "step_up_required":
+            return "closed"
+        return "open" if resp.status == 200 else "dead (HTTP %d)" % resp.status
+
+    sess, how = ctx.stale, "ctx.stale"
+    current = state(sess)
+    if current.startswith("dead"):
+        note(target, case, "RECORD", "ctx.stale is %s: expired or rotated since OBSPKT1-f; a fresh dedicated login waits out its own step-up window instead" % current)
+        sess, how = second_login(ctx), "fresh login"
+        current = state(sess)
+    end = time.monotonic() + ob.STEP_UP_WINDOW_S + 60.0
+    waited = 0.0
+    while current == "open" and time.monotonic() < end:
+        time.sleep(10.0)
+        waited += 10.0
+        current = state(sess)
+    note(target, case, "RECORD", "step-up window of the %s session: %s after waiting %.0f s" % (how, current, waited))
+    assert current == "closed", "harness: the %s session never reached a closed step-up window (%s)" % (how, current)
+    return sess, how
+
+
 def test_obspkt1_d2_a_step_up_on_the_streams_own_session_is_recorded(ctx, target):
     """OBSPKT1b (dv-router review 245, merged 432cecc8): a step-up through POST /session/step-up ROTATES the session cookie: the OLD cookie gets 401 at once, but
     the session's open packet stream CONTINUES (the stream follows a stable session key, not the cookie). Before it, the stream followed the cookie id and
@@ -838,10 +868,11 @@ def test_obspkt1_d2_a_step_up_on_the_streams_own_session_is_recorded(ctx, target
                 t_out, logout_ended, "%.2f" % took if took is not None else "?", time.monotonic() - t_wall, second.timeline()))
     assert logout_ended == [("bye", "session ended")], "after the logout the stream ended with %s, expected bye `session ended`" % (logout_ended,)
     assert took <= ob.LOGOUT_BYE_S, "the bye came %.2f s after the logout, expected within %.0f s" % (took, ob.LOGOUT_BYE_S)
-    # the X-DV-TOTP header step-up does not rotate the cookie; ctx.stale has had its window closed since OBSPKT1-f
-    stale = ctx.stale
+    # the X-DV-TOTP header step-up does not rotate the cookie: on a LIVE session whose step-up window has CLOSED (a plain request answers 403 step_up_required)
+    stale, how = closed_window_session(ctx, target, case)
     before = dict(stale.cookies)
     without = stale.get(stale.path(PACKETS) + "?limit=1", expect=None).status         # 403 `step_up_required` while its window is closed
+    assert without == 403, "harness: the session (%s) answered HTTP %s to the plain request, expected 403 step_up_required" % (how, without)
     resp = stale.get(stale.path(PACKETS) + "?limit=1", headers=stale.step_up_headers(), expect=None)
     after = dict(stale.cookies)
     still = status_with_cookies(stale, before)

@@ -683,8 +683,10 @@ class RotSession:
         if headers:
             if self.header_rotates:
                 self._rotate()
-            return SimpleNamespace(status=200)
-        return SimpleNamespace(status=200 if self.window_open else 403)
+            return SimpleNamespace(status=200, json=lambda: {"rows": [], "producers": []})
+        if self.window_open:
+            return SimpleNamespace(status=200, json=lambda: {"rows": [], "producers": []})
+        return SimpleNamespace(status=403, json=lambda: {"code": "step_up_required"})
 
     def sse(self, path, max_events=1, timeout=1.0, on_frame=None, stop=None, **kw):
         if self.replace:
@@ -721,7 +723,8 @@ def test_d2_strict_passes_on_the_obspkt1b_contract_and_names_each_defect(monkeyp
     assert session.step_ups == 1 and "cookie rotated: True" in text and "GET /session with the old cookie: HTTP 401" in text
     assert "second stream opened; first stream ended with [('bye', 'replaced')]" in text and "the stream ended with [('bye', 'session ended')]" in text
     assert "cookie jar unchanged: True" in text and "HTTP 403" in text
-    d2_strict(monkeypatch, window_open=True)                                                    # a still open window: the note says the header only refreshes it
+    with pytest.raises(AssertionError, match="harness: the ctx.stale session never reached a closed step-up window"):
+        d2_strict(monkeypatch, window_open=True)                                                # a window that never closes is a harness failure, not a product one
     cases = [(dict(rotate=False), "did not rotate the session cookie"), (dict(old_cookie_ok=True), "OLD cookie answered HTTP 200"),
              (dict(kill_on_step_up=True), "a step-up on the stream's own session ended the stream"), (dict(replace=False), "expected bye `replaced`"),
              (dict(logout_delay=1.5), "the bye came 1.50 s after the logout"), (dict(header_rotates=True), "rotated the session cookie")]
@@ -802,3 +805,74 @@ def test_the_locator_monitor_case_passes_and_catches_each_leak(monkeypatch):
         run_locator_case(monkeypatch, client_leak=True)
     with pytest.raises(AssertionError, match="still shows its text"):
         run_locator_case(monkeypatch, later_stays=True)
+
+
+class WindowSession:
+    """A session double for closed_window_session: `answers` is the list of HTTP statuses of the plain snapshot, the last one repeats."""
+
+    def __init__(self, answers):
+        self.answers, self.calls = list(answers), 0
+
+    def path(self, suffix):
+        return "/api/v1/admin" + suffix
+
+    def get(self, path, expect=None, headers=None):
+        status = self.answers[min(self.calls, len(self.answers) - 1)]
+        self.calls += 1
+        body = {403: {"code": "step_up_required"}, 200: {"rows": [], "producers": []}}.get(status, {"code": "unauthorized"})
+        return SimpleNamespace(status=status, json=lambda: body)
+
+
+def run_window_case(monkeypatch, stale_answers, fresh_answers=(403,)):
+    now = {"t": 0.0}
+    monkeypatch.setattr(tm, "time", SimpleNamespace(sleep=lambda s: now.__setitem__("t", now["t"] + s), monotonic=lambda: now["t"]))
+    notes = []
+    monkeypatch.setattr(tm.ds, "write_note", lambda target, case, tag, text, **kw: notes.append((tag, text)))
+    fresh = WindowSession(fresh_answers)
+    monkeypatch.setattr(tm, "second_login", lambda ctx: fresh)
+    stale = WindowSession(stale_answers)
+    sess, how = tm.closed_window_session(SimpleNamespace(stale=stale), None, "OBSPKT1-d2")
+    return stale, fresh, sess, how, notes, now["t"]
+
+
+def test_closed_window_session_prefers_the_live_stale_session_and_never_blames_the_product(monkeypatch):
+    stale, fresh, sess, how, notes, waited = run_window_case(monkeypatch, [403])
+    assert sess is stale and how == "ctx.stale" and fresh.calls == 0 and waited == 0.0
+    stale, fresh, sess, how, notes, waited = run_window_case(monkeypatch, [200, 200, 403])        # the window is still open: wait for it to close
+    assert sess is stale and waited == 20.0
+    stale, fresh, sess, how, notes, waited = run_window_case(monkeypatch, [401], fresh_answers=[200, 200, 403])   # dead: a fresh login waits out its own window
+    assert sess is fresh and how == "fresh login" and waited == 20.0 and any("ctx.stale is dead (HTTP 401)" in t for _tag, t in notes)
+    with pytest.raises(AssertionError, match="harness: the ctx.stale session never reached a closed step-up window"):
+        run_window_case(monkeypatch, [200])
+    with pytest.raises(AssertionError, match="harness: the fresh login session never reached a closed step-up window .dead .HTTP 401"):
+        run_window_case(monkeypatch, [401], fresh_answers=[401])
+
+
+def test_the_header_check_runs_on_the_closed_window_session_and_a_dead_one_is_a_harness_failure(monkeypatch):
+    notes = []
+    monkeypatch.setattr(tm.ds, "write_note", lambda target, case, tag, text, **kw: notes.append((tag, text)))
+    clock = FakeTime()
+    session = RotSession(clock)
+    stale = RotSession(clock)
+    monkeypatch.setattr(tm, "second_login", lambda ctx: session)
+    monkeypatch.setattr(tm, "time", clock)
+    monkeypatch.setenv("DVT_OBSPKT1B", "on")
+    tm.test_obspkt1_d2_a_step_up_on_the_streams_own_session_is_recorded(SimpleNamespace(stale=stale), None)
+    assert any("step-up window of the ctx.stale session: closed" in t for _tag, t in notes)
+
+
+def test_the_first_hello_may_be_empty_only_under_obspkt1b(monkeypatch):
+    monkeypatch.setattr(tm.ds, "write_note", lambda *a, **k: None)
+    empty = PacketServer(bare_retry=True)
+    empty.sse = lambda path, max_events=1, timeout=1.0, **kw: (200, "text/event-stream", [{"retry": "3000"}, {"event": "hello", "data": json.dumps({"producers": []})}])
+    monkeypatch.setenv("DVT_OBSPKT1B", "on")
+    tm.test_obspkt1_a_admin_with_a_step_up_gets_the_documented_snapshot_and_stream(SimpleNamespace(admin=empty, target=None), None)
+    monkeypatch.delenv("DVT_OBSPKT1B")
+    empty.sse = lambda path, max_events=1, timeout=1.0, **kw: (200, "text/event-stream", [{"event": "hello", "retry": "3000", "data": json.dumps({"producers": []})}])
+    with pytest.raises(AssertionError, match="hello producers"):
+        tm.test_obspkt1_a_admin_with_a_step_up_gets_the_documented_snapshot_and_stream(SimpleNamespace(admin=empty, target=None), None)
+    nohello = PacketServer()
+    nohello.sse = lambda path, max_events=1, timeout=1.0, **kw: (200, "text/event-stream", [{"retry": "3000"}, {"event": "rows", "data": "{}"}])
+    monkeypatch.setenv("DVT_OBSPKT1B", "on")
+    with pytest.raises(AssertionError, match="first stream event"):
+        tm.test_obspkt1_a_admin_with_a_step_up_gets_the_documented_snapshot_and_stream(SimpleNamespace(admin=nohello, target=None), None)
