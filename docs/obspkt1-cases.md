@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # OBSPKT1 cases: the admin packet monitor
 
-Status: written offline for the image after wip-8891cc7 (merge `b9a6839e`); **nothing here has run on a rig**. Sources: DV-Router `docs/design/data.md` 13.5 ("Admin packet monitor"),
+Status: written offline for the image after wip-8891cc7 (merge `b9a6839e`); **nothing here has run on a rig**. The response shapes were checked by DV-Router against the code at that commit (section "Confirmed shapes"). Sources: DV-Router `docs/design/data.md` 13.5 ("Admin packet monitor"),
 `docs/design/admin.md` ("Packet monitor (OBSPKT1)", the routes table) and `docs/api/openapi-admin.yaml` (`PktMonRow`, `PacketSnapshot`, the two routes), read at that commit.
 Files: `cases/test_obspkt1_monitor.py`, helpers `dvtest/obspkt1.py`, snippet `rig/config/dv-router/obspkt1-hidden.toml`, unit tests `cases/unit/test_obspkt1_support.py`.
 
@@ -30,24 +30,24 @@ Sources of the injected frames are synthetic: `N0OBA-1` (status, gated), `N0OBB-
 
 | Case | Rule (source) | Steps | Assert | Record |
 |------|---------------|-------|--------|--------|
-| OBSPKT1-a1 | viewer and operator get 403 `forbidden` on both routes (admin.md) | each role (with a step-up window, so the window is not the reason) calls `GET /api/v1/admin/packets` and opens `/packets/stream` | HTTP 403 and code `forbidden` on the snapshot, HTTP 403 on the stream | |
-| OBSPKT1-a2 | admin with a step-up window: the documented snapshot and stream (openapi-admin.yaml) | snapshot with `limit=1000`, `limit=1`, `limit=5000`, `dir=rx`, `port=rf-a`, bad `dir`, a 200-character `port`; open the stream | 200, `Cache-Control: no-store`, `{rows, ports, producers}` with the PktMonRow keys, stages and bounds, newest first, `limit` honoured (5000 clamps or is a 400), filters honoured, bad parameters 400; the stream is 200 `text/event-stream` and its first frame is `hello` with `producers[{id, boot (16 bytes)}]` | the keys seen, the hello producers, `retry` |
-| OBSPKT1-b1 | RF rx rows with the gate decision (data 13.5: worker parse / RF policy / route; edge modem / raw) | a status packet (gated), a NOGATE packet, a general query heard on rf-a | worker rx row on rf-a with the TNC2 line and route outcome `forwarded` / `no_gate` / `filtered` (the counter label sets of `dv_pkt_path_total`); an edge rx row of the same source with a `header`, no `line`, the same `ref`; the APRS-IS edge tx row of the gated frame has a `write` outcome and no line | the outcomes and refs |
+| OBSPKT1-a1 | viewer and operator get 403 `forbidden`, no session gets 401 `unauthorized` (admin.md) | each role (with a step-up window, so the window is not the reason) and a logged-out client call `GET /api/v1/admin/packets` and open `/packets/stream` | 403 `forbidden` for viewer and operator, 401 `unauthorized` without a session, on the snapshot and on the stream | |
+| OBSPKT1-a2 | admin with a step-up window: the documented snapshot and stream (openapi-admin.yaml) | snapshots with `limit` 1000, 1, 0, 5000, default, `dir` rx / tx / both / empty, `port` rf-a / is / 64 characters, and bad `dir`, 65-character or `a/b` or `a b` `port`, `limit` `abc` or `-1`; open the stream | 200, `Cache-Control: no-store`, `{rows, ports, producers}` with the PktMonRow keys, stages and bounds, newest first; `limit` 5000 is CLAMPED to 1000, the default is 100, 0 becomes 1; the bad values are 400 `bad_request`; the stream is 200 `text/event-stream`, `retry: 3000` and a first frame `hello` with `producers[{id, boot (16 integers)}]` | the keys seen, the hello producers |
+| OBSPKT1-b1 | RF rx rows with the gate decision (data 13.5: worker parse / RF policy / route; edge modem / raw) | a status packet (gated), a NOGATE packet, a general query heard on rf-a | worker rx row on rf-a with the TNC2 line and route outcome `forwarded` / `no_gate` / `filtered` (the counter label sets of `dv_pkt_path_total`); an edge rx row of the same source with a `header` (equal to the worker line's header: `SRC>DST,DIGI,DIGI*`, no colon), no `line`, the same `ref` (the raw unit seq), and the delivery outcome stage `client` result `sent` while a KISS client is attached; the APRS-IS edge tx row of the gated frame has a `write` outcome and no line | the outcomes and refs |
 | OBSPKT1-b2 | APRS-IS rx and RF tx rows | a message to the room name from the tester's login through the aprsc; a web room text to module B (leaves over rf-a) | `is` rx: worker row with the line holding the message body (directed bodies are available in the privileged monitor), edge row header only; rf-a tx: edge row header only with `txcore` / `sched` outcomes, the worker row of the same `ref` has the line | outcomes |
-| OBSPKT1-b3 | a local KISS client row keeps its line except a position (data 13.5) | the client sends a message and a position through `apps` | edge tx row with the message line in full and a `client` (or `txcore`) outcome; the position row has an empty information field after the header and `redacted: "position_policy"`; its coordinates appear in no row | |
+| OBSPKT1-b3 | a local KISS client row keeps its line except a position (data 13.5) | the client sends a message, a position and a frame with a source that is not in `allow_src` through `apps` | edge tx rows with NO row-level stage and NO `ref`: the message line in full with outcome stage `client` result `queued`; the position row ends at the colon (empty information field) with `redacted: "position_policy"` and its coordinates are in no row; the refused frame has stage `client` result `src` and no `sched` outcome | |
 | OBSPKT1-c1 | a hidden station's position is blank in every row (data 13.4 / 13.5) | position from `N0HID-7` and a visible control from `N0OBD-1` | `N0HID-7` worker row: empty information field, `redacted: "position_policy"`; its coordinates and comment marker appear in NO row; the visible row shows its coordinates, no `redacted` | the two lines |
-| OBSPKT1-c2 | Mic-E destinations (data 13.5) | Mic-E packets from the hidden `N0HID-9` and the visible `N0OBE-1` | the hidden worker row is `SRC>(mic-e),PATH:` with an empty information field, `redacted`; every edge row of both shows `(mic-e)` in the header and not the real destination | the visible worker row |
+| OBSPKT1-c2 | Mic-E destinations (data 13.5) | Mic-E packets from the hidden `N0HID-9` and the visible `N0OBE-1` | the hidden worker row is `SRC>(mic-e),PATH:` with an empty information field, `redacted`; every edge row of both shows `(mic-e)` in the header and not the real destination; the visible station's worker line shows the REAL destination (a worker line shows `(mic-e)` only when redacted) | |
 | OBSPKT1-c3 | edge rows of worker-decided packets carry no line (data 13.5) | all rows | no edge row has a `line` unless it has a `client` outcome; edge rows do carry headers | |
 | OBSPKT1-c4 | retained rows are re-checked against the CURRENT policy (data 13.5) | a visible position from the web account `N0OBH` is retained; the operator sets `hide_position` | after the policy push the retained row is blank and `redacted`, and its coordinates are in no row | the row before and after |
 | OBSPKT1-e | no packet body anywhere else (data 13.5; openapi) | markers of packets that never become room items (RF status, NOGATE status, the client message) | each appears in the monitor (control) and in none of: the SUT logs of the run, the public state, `/api/v1/admin/{status,clients,events,lastheard}`, the hub metrics | the scanned sources and sizes |
 | OBSPKT1-f | admin without a fresh step-up: 403 `step_up_required` (admin.md) | a second admin login made at the start of the module; the case waits until its window (a login opens one) has closed, 5 minutes plus 15 s | 403 `step_up_required` on the snapshot, 403 on the stream; after `step_up()` the snapshot is 200 | the wait |
-| OBSPKT1-d | a process restart clears the rings (data 13.5: "a new process boot starts empty") | kill `dv-data-worker` (allowed kill-proc); then restart `dv-edge-ax25` through the admin API (as DP15-6g) with the stream open | after the kill the worker boot changed, no worker row with a marker survives, the edge rows stay and the edge boot is unchanged; after the restart the AX.25 boot changed and its old rows are gone; the stream carried a `gap` event | the boots, the stream events |
+| OBSPKT1-d | a process restart clears the rings (data 13.5: "a new process boot starts empty"); worker id stays, edge id changes | with the stream open: kill `dv-data-worker` (allowed kill-proc); then restart `dv-edge-ax25` through the admin API (as DP15-6g) | worker: same id, new boot, no worker row with a marker survives, edge rows and edge boots unchanged; AX.25 edge: a NEW id (`ax25-<edge_inc>`), no row of the old id survives; the stream carried `gap` {id} for the worker and for the OLD AX.25 id, none for the new id, and the new id was not in `hello` | the boots, the stream events |
 
 ## GAPs and limits
 
 | GAP | Why | Covered by |
 |-----|-----|------------|
-| A whole-container restart | the rings live in the child processes, so the two process restarts of OBSPKT1-d prove the lifetime; a container restart (`restart xlxd-sut`) would end the admin sessions and need a new enrolment | the same rule |
+| A whole-container restart | NOT REQUIRED (DV-Router): the rings live in the child processes, so the worker kill and the AX.25 child restart of OBSPKT1-d prove the lifetime | - |
 | The APRS-IS edge ring after a restart of `dv-edge-aprsis` | the child is not restarted by the case | OBSPKT1-d covers the AX.25 edge and the worker |
 | Ring bounds (256 rows, 128 KiB, 30 minutes, eviction, `dv_*_monitor_evicted_total`) | needs hundreds of packets or half an hour of waiting | DV-Router's `dv_lib_pkt::monitor` tests |
 | The stream limits (four per service, one per session, 30 minutes, `resync` after 512 rows, `bye`) | needs several sessions and long runs | DV-Router's admin tests |
@@ -56,15 +56,24 @@ Sources of the injected frames are synthetic: `N0OBA-1` (status, gated), `N0OBB-
 | Raw TNC2 modem adapters give no header on receive rows | the rig has no raw TNC2 port | DV-Router's tests |
 | Retired port rings after a configuration reload | needs a config change | DV-Router's tests |
 
-## Shapes read from the documents and not confirmed (check on the first run, as in DP11e-h; a deviation fails with what was seen)
+## Confirmed shapes (DV-Router, checked against the code at b9a6839e; the unit tests pin them)
 
-* The snapshot envelope `{rows, ports, producers}`, the row keys (`seq`, `t_ms`, `port`, `dir`, optional `ref`, `of`, `line`, `header`, `redacted`, `out[]`, `more`) plus `id` and `boot` on
-  every snapshot row (openapi `PacketSnapshotRow`).
-* The producer ids: the case tells edge rows from worker rows by the id prefix `ax25-` / `aprsis-` (the edge id form of the DV-Router tests); a worker id is anything else.
-* The header text: it is assumed to start with `SRC>DST` (data 13.5: the already validated AX.25/TNC2 header); `ref` equal between an edge row and its worker row.
-* The exact `result` of the route outcome (`forwarded`, `no_gate`, `filtered`) is derived from the counter label sets of the worker path (`router/transit.rs`); the stage names are the fixed
-  list of the schema. The `client` stage name for the KISS client row is also from the schema; the case accepts `txcore` as well.
-* The APRS-IS edge tx row: port name `is` (data 13.5), a `write` outcome.
-* The error codes `forbidden` and `step_up_required` in the problem+json body (admin.md).
-* `limit=5000` is clamped (200 with at most 1000 rows) or refused with 400: both are accepted.
-* The SSE `gap` event name and `{id}` data for a producer restart (admin.md).
+* **Producer ids.** An edge id is `<name>-<edge_inc as 16 lower case hex digits>` (`ax25-0000000000000007`, `aprsis-...`); `edge_inc` is new per process start, so an edge restart CHANGES the id.
+  The worker id is the configured `[[data.worker]]` id, default `pkt`, without a prefix. Every row carries its producer as `id`; `boot` is a JSON array of 16 integers.
+* **`ref`.** For worker-rendered TX the edge start and outcome rows and the worker TX row share `ref`; for RX both rows use the raw unit seq. Exceptions: KISS client TX rows have no `ref`; worker refusal
+  rows use the item ordinal; late rows add `of`.
+* **`header`** is `SRC>DST,DIGI,DIGI*` with no colon, and `line` = header + ":" + info. Mic-E edge headers always show `SRC>(mic-e),PATH`; a worker line shows `(mic-e)` only when redacted.
+* **Port name** of APRS-IS rows: `is`.
+* **KISS rows.** There is no row-level stage. A client TX row has `dir` `tx` and `out[].stage` `client` with result `queued`; refusal results are tx_off, tx_addr, channel, bad_frame, not_ui, src, path,
+  too_long, third_party, rate, command; delivery to clients is `dir` `rx`, stage `client`, result `sent` or `slow`. All stages: modem, raw, parse, rf, route, item, render, txcore, sched, write, client.
+* **Errors** (problem+json): 403 `forbidden` for non-admin, 403 `step_up_required`, 401 `unauthorized` without a session, 400 `bad_request`, 503 `unavailable` with `Retry-After: 1` only when a boot changes during
+  the snapshot's own pagination.
+* **Query.** `limit` is clamped to 1000 (default 100, 0 becomes 1; non-numeric or negative is 400); `port` up to 64 characters of `[A-Za-z0-9_.-]`; `dir` rx, tx, both or empty.
+* **SSE.** First line `retry: 3000`; events `hello` {producers:[{id,boot}]}, `rows` {id, boot, rows:[...]} (the inner rows carry no id / boot), `gap` {id}, `resync` {reason} (then the stream closes), `bye`
+  {reason: "session ended" | "stream lifetime" | "replaced"}; the heartbeat is the comment `: hb`.
+* **Restarts.** Worker: the id stays, the boot is new; `gap` {id}, then rows with the new boot. Edge: a `gap` for the OLD id; the new id then appears in rows without a gap and was not in `hello`.
+* **Row fields.** Always `seq`, `t_ms`, `port`, `dir`, `out[{stage,result,route?,class?}]`; optional `ref`, `of`, `line`, `header`, `redacted`, `more`. The only redaction marker is `redacted` = `position_policy`;
+  a redacted line ends at ":" with an empty information field. Snapshot: `{"rows":[row + id, boot], "ports":[{id,port,first_seq,last_seq}], "producers":[{id,boot}]}`, newest first.
+
+Still derived rather than confirmed: the exact route `result` strings (`forwarded`, `no_gate`, `filtered`), taken from the counter label sets of the worker path (`router/transit.rs`), and the outcome `write` on the APRS-IS
+tx row (the stage list is confirmed, the result is only recorded).

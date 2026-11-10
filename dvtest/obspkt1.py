@@ -33,9 +33,35 @@ STEP_UP_MARGIN_S = 15.0
 
 # ---------------------------------------------------------------- shapes
 
+EDGE_ID = re.compile(r"^[a-z][a-z0-9]*-[0-9a-f]{16}$")
+PORT_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+BYE_REASONS = ("session ended", "stream lifetime", "replaced")
+CLIENT_REFUSALS = ("tx_off", "tx_addr", "channel", "bad_frame", "not_ui", "src", "path", "too_long", "third_party", "rate", "command")
+
+
 def producer_kind(producer_id):
-    """`edge` for the AX.25 and APRS-IS edges (ids like `ax25-0000000000000007`, `aprsis-...`), else `worker`."""
-    return "edge" if str(producer_id).startswith(("ax25-", "aprsis-", "ax25", "aprsis")) else "worker"
+    """`edge` for an edge id `<name>-<edge_inc as 16 hex digits>` (`ax25-0000000000000007`, `aprsis-...`; edge_inc is new per process start, so an
+    edge restart CHANGES the id), else `worker` (the configured [[data.worker]] id, default `pkt`, no prefix). Confirmed by DV-Router at b9a6839e."""
+    return "edge" if EDGE_ID.match(str(producer_id)) else "worker"
+
+
+def edge_name(producer_id):
+    """`ax25` / `aprsis` of an edge id, else None."""
+    return str(producer_id).rsplit("-", 1)[0] if producer_kind(producer_id) == "edge" else None
+
+
+def header_problems(header):
+    """Problems of a `header`: `SRC>DST,DIGI,DIGI*` with NO colon and no information field (data.md 13.5; confirmed)."""
+    if not isinstance(header, str) or ">" not in header:
+        return ["header %r has no SRC>DST" % (header,)]
+    if ":" in header:
+        return ["header %r contains a colon: it must end before the information field" % header]
+    return []
+
+
+def line_header(line):
+    """The header part of a worker `line` (= header + ":" + info)."""
+    return line.partition(":")[0]
 
 
 def row_problems(row, where="row"):
@@ -66,6 +92,15 @@ def row_problems(row, where="row"):
             problems.append("%s %s is not a bounded string" % (where, key))
     if "redacted" in row and row["redacted"] != REDACTED:
         problems.append("%s redacted %r" % (where, row["redacted"]))
+    if "stage" in row:
+        problems.append("%s has a row-level stage: the stage lives in out[]" % where)
+    for key in ("ref", "of", "more"):
+        if key in row and (not isinstance(row[key], int) or isinstance(row[key], bool) or row[key] < 0):
+            problems.append("%s %s is %r" % (where, key, row[key]))
+    if "header" in row:
+        problems += ["%s: %s" % (where, p) for p in header_problems(row["header"])]
+    if "redacted" in row and "line" in row and not row["line"].endswith(":"):
+        problems.append("%s: a redacted line must end at the colon with an empty information field" % where)
     if "line" in row and "header" in row:
         problems.append("%s has both line and header" % where)
     return problems
@@ -100,6 +135,23 @@ def snapshot_problems(body, limit=None):
 
 def _boot_ok(boot):
     return isinstance(boot, list) and len(boot) == 16 and all(isinstance(b, int) and 0 <= b <= 255 for b in boot)
+
+
+def query_ok(name, value):
+    """Whether DV-Router accepts a query parameter value (confirmed): `port` 1-64 characters of [A-Za-z0-9_.-]; `dir` rx, tx, both or empty;
+    `limit` an integer (clamped to 1-1000, default 100, 0 becomes 1); a non-numeric or negative limit is a 400 `bad_request`."""
+    if name == "port":
+        return bool(PORT_RE.match(value))
+    if name == "dir":
+        return value in ("rx", "tx", "both", "")
+    if name == "limit":
+        return bool(re.fullmatch(r"\d+", value))
+    return False
+
+
+def clamped_limit(value):
+    """The number of rows a `limit` is clamped to (1-1000)."""
+    return max(1, min(MAX_ROWS, int(value)))
 
 
 def newest_first(rows):
@@ -170,8 +222,10 @@ def mentions(rows, needle):
 
 def parse_stream(frames):
     """An SSE frame list (dvtest.web.WebClient.sse: {"event","data","retry"} dicts) -> SimpleNamespace(hello (producers), rows [(id, boot, row)],
-    gaps [id], byes [data], resync, other [event names]). Data is JSON; a frame whose data is not JSON is listed in `bad`."""
-    out = types.SimpleNamespace(hello=None, rows=[], gaps=[], byes=[], resync=False, other=[], bad=[])
+    gaps [id], byes [data], resync (the reason string of the `resync` event, else None), other [event names]). Events (confirmed): `hello`
+    {producers:[{id,boot}]}, `rows` {id, boot, rows:[...]} (the inner rows have no id / boot), `gap` {id}, `resync` {reason} (the stream closes), `bye`
+    {reason: BYE_REASONS}. Data is JSON; a frame whose data is not JSON is listed in `bad`."""
+    out = types.SimpleNamespace(hello=None, rows=[], gaps=[], byes=[], resync=None, other=[], bad=[])
     for frame in frames:
         event = frame.get("event", "message")
         try:
@@ -189,7 +243,7 @@ def parse_stream(frames):
         elif event == "bye":
             out.byes.append(data)
         elif event == "resync":
-            out.resync = True
+            out.resync = (data or {}).get("reason", "") if isinstance(data, dict) else ""
         else:
             out.other.append(event)
     return out

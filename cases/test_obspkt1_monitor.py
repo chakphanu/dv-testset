@@ -12,7 +12,8 @@ command, runtime, GAPs and the shapes that are not confirmed: docs/obspkt1-cases
              line; a station hidden LATER loses its position from the rows still retained
   OBSPKT1-e  no packet body anywhere else: container logs, public state, other admin routes, telemetry labels
   OBSPKT1-f  admin without a fresh step-up window gets 403 step_up_required on both routes (waits until the login's window has closed)
-  OBSPKT1-d  (LAST) a process restart clears the rings: kill dv-data-worker (worker rows go, a new boot, a `gap` on the stream), restart dv-edge-ax25 (edge rows go)
+  OBSPKT1-d  (LAST) a process restart clears the rings: kill dv-data-worker (same id, a new boot, worker rows go, `gap` {id}), restart dv-edge-ax25 (the edge id
+             CHANGES with the process: a `gap` for the old id, the new id appears in rows without a gap and was not in `hello`)
 
 Shape: dp11e-kiss.toml + dp11e-kiss-igate.toml + dp15-aprsis.toml + dp15-rf-out.toml + obspkt1-hidden.toml, profile web,aprs. Skips with a reason on an image
 without the packets routes (404), without the shape, or without a prerequisite. NOT RUN ON A RIG. Observations: stdout and out/<run>/obspkt1.txt.
@@ -122,7 +123,7 @@ def wait_rows(ctx, pred, timeout=APPEAR_S, **query):
 def traffic(ctx, hub, web_ctx, target):
     """Inject the module's packets once and return the snapshot in which they all appear."""
     tnc = ctx.tnc
-    m = {k: ob.new_marker(k) for k in ("S", "N", "H", "V", "M", "W", "A", "I", "R", "C", "P")}
+    m = {k: ob.new_marker(k) for k in ("S", "N", "H", "V", "M", "W", "A", "I", "R", "C", "P", "X")}
     tnc.tx_guard("OBSPKT1")
     sent = {}
     sent["status"] = ob.rf_frame(ob.SRC_STATUS, ">" + m["S"])
@@ -134,6 +135,9 @@ def traffic(ctx, hub, web_ctx, target):
     sent["hidden_mice"], mice_dest_hidden = ob.mice_frame(ob.SRC_HIDDEN_MICE, 37.62, -122.4, m["M"])
     sent["visible_mice"], mice_dest_visible = ob.mice_frame(ob.SRC_VISIBLE_MICE, 41.2, -87.6, m["W"])
     web_ctx.user(ob.ACCOUNT, may_tx=False)
+    # a KISS client is attached while the RF frames are heard, so that the rx rows get the delivery outcome (stage client, result sent)
+    client = kiss_app.AppKissClient(ctx.shape.listeners["apps"].host, ctx.shape.listeners["apps"].port, name="obspkt1")
+    assert client.connect(), "cannot connect to listener apps: %s" % client.error
     t0 = time.monotonic()
     for frame in sent.values():
         assert tnc.a.inject(frame), "the fake modem rf-a has no connection to inject into"
@@ -145,17 +149,17 @@ def traffic(ctx, hub, web_ctx, target):
     # a web room text leaves over RF (rf-out)
     resp = web.post_room_text(web_ctx.poster.client, "B", "OBS %s" % m["R"], expect=None)
     assert resp.status == 202, "the room text POST answered HTTP %d" % resp.status
-    # a local KISS client transmits a message and a position
-    client = kiss_app.AppKissClient(ctx.shape.listeners["apps"].host, ctx.shape.listeners["apps"].port, name="obspkt1")
-    assert client.connect(), "cannot connect to listener apps: %s" % client.error
+    # the local KISS client transmits a message, a position and a frame the gate refuses (a source that is not in allow_src)
     try:
         client.send_frame(dp11e.good_frame(kiss_tnc.aprs_message_info("N0OBC", m["C"]).decode("latin-1")))
         time.sleep(1.0)
         client.send_frame(dp11e.good_frame(ob.position_info(ob.POS_CLIENT, m["P"]), src=dp11e.SRC))
         time.sleep(1.0)
+        client.send_frame(dp11e.good_frame(kiss_tnc.aprs_message_info("N0OBC", m["X"]).decode("latin-1"), src="N0TEST-9"))
+        time.sleep(1.0)
     finally:
         client.close()
-    want = (m["S"], m["V"], m["I"], m["R"], m["C"])
+    want = (m["S"], m["V"], m["I"], m["R"], m["C"], m["X"])
     body = wait_rows(ctx, lambda rows: all(ob.mentions(rows, x) for x in want))
     note(target, "traffic", "RECORD", "markers %s; %d rows after %.0f s; missing: %s" % (
         sorted(m), len(body["rows"]), time.monotonic() - t0, [k for k in want if not ob.mentions(body["rows"], k)]))
@@ -166,7 +170,14 @@ def traffic(ctx, hub, web_ctx, target):
 # ================================================================ OBSPKT1-a: access
 
 def test_obspkt1_a_viewer_and_operator_get_403_on_both_routes(ctx):
-    """admin.md: the snapshot and the stream are admin-only sensitive reads; viewer and operator receive 403 `forbidden`."""
+    """admin.md: the snapshot and the stream are admin-only sensitive reads; viewer and operator receive 403 `forbidden`; a request with no session is
+    401 `unauthorized` (problem+json, confirmed by DV-Router)."""
+    anonymous = ctx.admin.clone()
+    resp, _ = snapshot(anonymous)
+    assert resp.status == 401 and code_of(resp) == "unauthorized", "no session, GET packets: HTTP %d code %r" % (resp.status, code_of(resp))
+    with pytest.raises(web.WebError) as err401:
+        anonymous.sse(anonymous.path(STREAM), max_events=1, timeout=8.0)
+    assert err401.value.status == 401, "no session, GET packets/stream: HTTP %s" % err401.value.status
     for role in ("viewer", "operator"):
         admin = ctx.admin_session(role)
         if getattr(admin, "authenticator", None):
@@ -191,21 +202,26 @@ def test_obspkt1_a_admin_with_a_step_up_gets_the_documented_snapshot_and_stream(
     assert not problems, "; ".join(problems[:6])
     assert ob.newest_first(body["rows"]), "rows are not newest first"
     one_resp, one = snapshot(admin, limit=1)
-    assert one_resp.status == 200 and len(one["rows"]) <= 1
-    big_resp, big = snapshot(admin, limit=5000)
-    assert big_resp.status in (200, 400), "limit=5000 answered HTTP %d" % big_resp.status
-    if big_resp.status == 200:
-        assert len(big["rows"]) <= ob.MAX_ROWS
-    for query in ({"dir": "sideways"}, {"port": "x" * 200}):
+    assert one_resp.status == 200 and len(one["rows"]) == min(1, len(body["rows"]))
+    zero_resp, zero = snapshot(admin, limit=0)                         # 0 becomes 1
+    assert zero_resp.status == 200 and len(zero["rows"]) <= 1
+    big_resp, big = snapshot(admin, limit=5000)                        # clamped to 1000
+    assert big_resp.status == 200 and len(big["rows"]) <= ob.MAX_ROWS, "limit=5000: HTTP %d" % big_resp.status
+    default_resp, default = snapshot(admin)                            # the default limit is 100
+    assert default_resp.status == 200 and len(default["rows"]) <= 100
+    for query in ({"dir": "sideways"}, {"port": "x" * 65}, {"port": "a/b"}, {"port": "a b"}, {"limit": "abc"}, {"limit": "-1"}):
         bad, _ = snapshot(admin, **query)
-        assert bad.status == 400, "%s answered HTTP %d, expected 400" % (query, bad.status)
+        assert bad.status == 400 and code_of(bad) == "bad_request", "%s answered HTTP %d code %r, expected 400 bad_request" % (query, bad.status, code_of(bad))
+    for query in ({"dir": "both"}, {"dir": "tx"}, {"dir": ""}, {"port": "x" * 64}, {"port": "is"}):
+        good, _ = snapshot(admin, **query)
+        assert good.status == 200, "%s answered HTTP %d, expected 200" % (query, good.status)
     rx_resp, rx = snapshot(admin, dir="rx")
     assert rx_resp.status == 200 and all(r["dir"] == "rx" for r in rx["rows"])
     port_resp, only = snapshot(admin, port="rf-a")
     assert port_resp.status == 200 and all(r["port"] == "rf-a" for r in only["rows"])
     status, ctype, frames = admin.sse(admin.path(STREAM), max_events=1, timeout=15.0)
     assert status == 200 and "text/event-stream" in ctype, "stream: HTTP %s %s" % (status, ctype)
-    assert frames and frames[0].get("event") == "hello", "first stream frame: %s" % frames[:1]
+    assert frames and frames[0].get("event") == "hello" and frames[0].get("retry") == "3000", "first stream frame: %s" % frames[:1]
     hello = ob.parse_stream(frames).hello
     assert hello and all(isinstance(p, dict) and p.get("id") and ob._boot_ok(p.get("boot")) for p in hello), "hello producers: %s" % hello
     note(target, "OBSPKT1-a", "RECORD", "snapshot keys %s, ports %s, hello producers %s, retry %s" % (
@@ -232,6 +248,11 @@ def test_obspkt1_b_rf_rx_rows_carry_the_gate_decision_and_edge_rows_only_the_hea
         assert all(text not in (r.get("header") or "") for r in edge if text != "?APRS?"), "an edge header carries the information field"
         assert any(r.get("ref") is not None and r.get("ref") == row.get("ref") for r in edge), "no edge row shares ref %s with the worker row: %s" % (
             row.get("ref"), [r.get("ref") for r in edge])
+        assert any(r.get("header") == ob.line_header(row["line"]) for r in edge), "no edge header equals the worker line header %r: %s" % (
+            ob.line_header(row["line"]), [r.get("header") for r in edge])
+    attached = [r for r in ob.rows_from(ob.edge_rows(rows), ob.SRC_STATUS, port="rf-a", dir="rx") if ob.has_outcome(r, "client", "sent")]
+    assert attached, "no delivery outcome (stage client, result sent) on the edge rx row of the status packet while a KISS client was attached: %s" % [
+        ob.outcomes(r) for r in ob.rows_from(ob.edge_rows(rows), ob.SRC_STATUS, port="rf-a", dir="rx")]
     gated = [r for r in ob.rows_from(ob.edge_rows(rows), ob.SRC_STATUS, dir="tx") if r.get("port") == "is"]
     assert gated, "no APRS-IS edge tx row for the gated frame of %s (ports seen: %s)" % (ob.SRC_STATUS, sorted({r["port"] for r in rows}))
     assert all("line" not in r and traffic.markers["S"] not in json.dumps(r) for r in gated), "the APRS-IS edge tx row carries the information field"
@@ -257,16 +278,22 @@ def test_obspkt1_b_aprs_is_rx_and_rf_tx_rows(ctx, traffic, target):
 
 
 def test_obspkt1_b_a_local_kiss_client_row_keeps_its_line_but_not_a_position(ctx, traffic, target):
-    """data.md 13.5: a local KISS client frame never passes the worker; its AX.25 edge transmit row keeps the line, except that a spatial information field is
-    blanked after the header and marked `redacted` (message and other nonspatial lines are shown in full)."""
-    rows = [r for r in ob.edge_rows(traffic.rows) if r["port"] == "rf-a" and r["dir"] == "tx" and ob.row_src(r) == dp11e.SRC]
+    """data.md 13.5: a local KISS client frame never passes the worker; its AX.25 edge transmit row (dir tx, NO row-level stage, no `ref`) keeps the
+    line, except that a spatial information field is blanked after the header and marked `redacted`. The outcome is stage `client` result `queued`; a frame
+    the gate refuses carries the refusal as the result (here `src`)."""
+    rows = [r for r in ob.edge_rows(traffic.rows) if r["port"] == "rf-a" and r["dir"] == "tx"]
     message = [r for r in rows if traffic.markers["C"] in (r.get("line") or "")]
     assert message, "no client tx row with the message body; client rows: %s" % [r.get("line") or r.get("header") for r in rows][:4]
-    assert ob.has_outcome(message[0], "client") or ob.has_outcome(message[0], "txcore"), "client row outcomes: %s" % ob.outcomes(message[0])
+    assert ob.has_outcome(message[0], "client", "queued"), "client row outcomes: %s" % ob.outcomes(message[0])
+    assert "ref" not in message[0] and "stage" not in message[0], "a KISS client tx row has no ref and no row-level stage: %s" % sorted(message[0])
     position = [r for r in rows if r.get("redacted") and r.get("line", "").startswith(dp11e.SRC + ">")]
     assert position, "no redacted client position row; rows: %s" % [(r.get("line"), r.get("redacted")) for r in rows][:4]
     assert ob.info_of(position[0]) == "" and ob.POS_CLIENT[0] not in json.dumps(traffic.rows), "the client position leaked: %s" % position[0]
     assert position[0]["redacted"] == ob.REDACTED
+    refused = [r for r in rows if traffic.markers["X"] in (r.get("line") or "")]
+    assert refused, "no client tx row for the refused frame (source N0TEST-9 is not in allow_src)"
+    assert ob.has_outcome(refused[0], "client", "src") and "src" in ob.CLIENT_REFUSALS, "refused client row outcomes: %s" % ob.outcomes(refused[0])
+    assert not ob.has_outcome(refused[0], "client", "queued") and not ob.has_outcome(refused[0], "sched"), "a refused frame must not be queued or released: %s" % ob.outcomes(refused[0])
 
 
 # ================================================================ OBSPKT1-c: privacy
@@ -301,6 +328,9 @@ def test_obspkt1_c_mic_e_destinations_show_the_placeholder(ctx, traffic, target)
         assert edge and all(ob.MIC_E in (r.get("header") or "") and dest not in (r.get("header") or "") for r in edge), (
             "edge rows of %s: %s" % (src, [r.get("header") for r in edge]))
     visible = ob.rows_from(ob.worker_rows(rows), ob.SRC_VISIBLE_MICE, dir="rx")
+    assert visible and "redacted" not in visible[0], "the visible Mic-E worker row: %s" % visible[:1]
+    assert ob.split_tnc2(visible[0]["line"])[1] == traffic.mice_dest_visible, (
+        "a worker line shows (mic-e) only when redacted; the visible station's destination is %r, the row says %r" % (traffic.mice_dest_visible, visible[0]["line"]))
     note(target, "OBSPKT1-c", "RECORD", "visible Mic-E worker row: %s" % [(r.get("line"), r.get("redacted")) for r in visible])
 
 
@@ -413,53 +443,58 @@ def boots(body):
 
 
 def test_obspkt1_d_a_process_restart_clears_its_rings(ctx, traffic, rig_control, target):
-    """data.md 13.5: each producer keeps an always-on memory-only ring; a new process boot starts empty. The data worker is killed with the allowed kill-proc
-    (the launcher respawns it): its rows are gone, its boot is new and the stream says `gap`; the edge rows stay. Then the AX.25 child is restarted through
-    the admin API (as DP15-6g): its rows are gone and its boot changed. (The rings live in the child processes, so a container restart is not needed.)"""
+    """data.md 13.5: each producer keeps an always-on memory-only ring; a new process boot starts empty. Confirmed by DV-Router: a WORKER restart keeps the
+    id and gives a new boot (stream: `gap` {id}, then rows with the new boot); an EDGE restart gives a new id (`<name>-<edge_inc>`): a `gap` for the OLD id,
+    and the new id appears in rows without a gap (it was not in `hello`). The data worker is killed with the allowed kill-proc (the launcher respawns it);
+    then the AX.25 child is restarted through the admin API (as DP15-6g). The rings live in the child processes, so no container restart is needed."""
     case = "OBSPKT1-d"
     markers = [traffic.markers["S"], traffic.markers["C"], traffic.markers["I"]]
     resp, before = snapshot(ctx.admin, limit=1000)
     worker_ids = [p["id"] for p in before["producers"] if ob.producer_kind(p["id"]) == "worker"]
     edge_ids = [p["id"] for p in before["producers"] if ob.producer_kind(p["id"]) == "edge"]
-    assert worker_ids and edge_ids, "producers seen: %s" % [p["id"] for p in before["producers"]]
+    old_ax = [e for e in edge_ids if ob.edge_name(e) == "ax25"]
+    assert worker_ids and old_ax, "producers seen: %s" % [p["id"] for p in before["producers"]]
     assert any(ob.mentions(ob.worker_rows(before["rows"]), m) for m in markers) and ob.edge_rows(before["rows"]), "nothing to clear"
     boot0 = boots(before)
     with Streamer(ctx.admin) as stream:
         time.sleep(5.0)
         rig_control.kill_proc("xlxd-sut", "dv-data-worker", "KILL")
-        end, after = time.monotonic() + 90.0, before
-        while time.monotonic() < end:
+        end, after = time.monotonic() + 90.0, None
+        while time.monotonic() < end and after is None:
             time.sleep(3.0)
             ctx.admin.step_up()
             r, body = snapshot(ctx.admin, limit=1000)
             if r.status == 200 and any(boots(body).get(w) not in (None, boot0[w]) for w in worker_ids):
                 after = body
-                break
-        assert after is not before, "the worker boot did not change within 90 s of the kill"
+        assert after is not None, "the worker boot did not change within 90 s of the kill"
         new_boot = boots(after)
-        note(target, case, "RECORD", "boots: %s -> %s" % ({k: v[:2] for k, v in boot0.items()}, {k: v[:2] for k, v in new_boot.items()}))
-        for m in markers[:1] + markers[2:]:
+        note(target, case, "RECORD", "worker boots: %s -> %s" % ({k: v[:2] for k, v in boot0.items() if k in worker_ids}, {k: v[:2] for k, v in new_boot.items() if k in worker_ids}))
+        assert all(w in new_boot for w in worker_ids), "the worker id changed with the restart (it must stay): %s -> %s" % (worker_ids, sorted(new_boot))
+        for m in markers:
             assert not ob.mentions(ob.worker_rows(after["rows"]), m), "a worker row survived the worker restart: %s" % ob.mentions(ob.worker_rows(after["rows"]), m)[:1]
-        assert ob.edge_rows(after["rows"]), "the edge rows disappeared with the worker restart"
-        assert any(boot0[e] == new_boot.get(e) for e in edge_ids), "the edge boot changed with the worker restart"
+        assert ob.edge_rows(after["rows"]) and all(new_boot.get(e) == boot0[e] for e in edge_ids), "the edge rings or boots changed with the worker restart"
         admin = ctx.admin_session("admin")
         admin.step_up()
         child = admin.post(admin.path("/children/%s/restart" % txguard.AX25_CHILD), {}, expect=None)
         assert child.status == 200, "restart of %s answered HTTP %d" % (txguard.AX25_CHILD, child.status)
-        end, final = time.monotonic() + 90.0, after
-        while time.monotonic() < end:
+        end, final, new_ax = time.monotonic() + 90.0, None, []
+        while time.monotonic() < end and final is None:
             time.sleep(3.0)
             ctx.admin.step_up()
             r, body = snapshot(ctx.admin, limit=1000)
-            if r.status == 200 and any(boots(body).get(e) not in (None, boot0[e]) for e in edge_ids):
+            ids = [p["id"] for p in body["producers"]] if r.status == 200 else []
+            new_ax = [i for i in ids if ob.edge_name(i) == "ax25" and i not in old_ax]
+            if new_ax:
                 final = body
-                break
-        assert final is not after, "the AX.25 edge boot did not change within 90 s of the restart"
-        ax = [e for e in edge_ids if e.startswith("ax25") and boots(final).get(e) not in (None, boot0[e])]
-        assert ax, "the AX.25 producer %s kept its boot" % [e for e in edge_ids if e.startswith("ax25")]
-        assert not [r for r in final["rows"] if r.get("id") in ax and traffic.markers["S"] in json.dumps(r)], "old AX.25 edge rows survived the restart"
+        assert final is not None, "no new AX.25 producer id appeared within 90 s of the restart (the edge id changes with the process)"
+        assert not [r for r in final["rows"] if r.get("id") in old_ax], "rows of the old AX.25 id survived the restart"
+        assert not any(ob.mentions([r for r in final["rows"] if ob.producer_kind(r.get("id")) == "edge"], m) for m in (traffic.markers["S"], traffic.markers["C"])), (
+            "old AX.25 edge rows survived the restart")
         time.sleep(3.0)
     events = ob.parse_stream(stream.frames)
-    note(target, case, "RECORD", "stream: hello %s, gaps %s, rows %d, byes %s, resync %s" % (
-        [p.get("id") for p in events.hello or []], events.gaps, len(events.rows), events.byes, events.resync))
-    assert events.gaps, "the stream reported no `gap` for a producer that restarted"
+    note(target, case, "RECORD", "stream: hello %s, gaps %s, rows for %s, byes %s, resync %s; new AX.25 id %s" % (
+        [p.get("id") for p in events.hello or []], events.gaps, sorted({r[0] for r in events.rows}), events.byes, events.resync, new_ax))
+    assert any(w in events.gaps for w in worker_ids), "no `gap` {id} for the restarted worker: gaps %s" % events.gaps
+    assert any(e in events.gaps for e in old_ax), "no `gap` for the OLD AX.25 id %s: gaps %s" % (old_ax, events.gaps)
+    assert not any(n in events.gaps for n in new_ax), "a gap was reported for the NEW AX.25 id: %s" % events.gaps
+    assert not any(n in [p.get("id") for p in events.hello or []] for n in new_ax), "the new AX.25 id was already in hello"
