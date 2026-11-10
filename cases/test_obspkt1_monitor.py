@@ -13,7 +13,9 @@ command, runtime, GAPs and the shapes that are not confirmed: docs/obspkt1-cases
   OBSPKT1-e  no packet body anywhere else: container logs, public state, other admin routes, telemetry labels
   OBSPKT1-f  admin without a fresh step-up window gets 403 step_up_required on both routes (waits until the login's window has closed)
   OBSPKT1-d  (LAST) a process restart clears the rings: kill dv-data-worker (same id, a new boot, worker rows go, `gap` {id}), restart dv-edge-ax25 (the edge id
-             CHANGES with the process: a `gap` for the old id, the new id appears in rows without a gap and was not in `hello`)
+             CHANGES with the process: a `gap` for the old id (a recorded FINDING on wip-16e8e6c, OBSPKT1b), the new id appears in rows with its boot; `hello` is
+             not complete by design); the stream runs on its OWN session because a step-up rotates the cookie and ends a stream opened with the old one
+  OBSPKT1-d2 (LAST) records, as a FINDING, whether a step-up on the session that holds an open packet stream ends that stream
 
 Shape: dp11e-kiss.toml + dp11e-kiss-igate.toml + dp15-aprsis.toml + dp15-rf-out.toml + obspkt1-hidden.toml, profile web,aprs. Skips with a reason on an image
 without the packets routes (404), without the shape, or without a prerequisite. NOT RUN ON A RIG. Observations: stdout and out/<run>/obspkt1.txt.
@@ -510,6 +512,27 @@ class Streamer:
         self.thread.join(5.0)
 
 
+def snapshot_stepping(admin, **query):
+    """A snapshot that opens a step-up window only when the server asks for one (403 `step_up_required`). A step-up costs up to 30 s here (the TOTP code of
+    every step-up must be a new one), and it ROTATES the session cookie, which ends a packet stream open on that session."""
+    resp, body = snapshot(admin, **query)
+    if resp.status == 403 and code_of(resp) == "step_up_required":
+        admin.step_up()
+        resp, body = snapshot(admin, **query)
+    return resp, body
+
+
+def second_login(ctx):
+    """A NEW admin login (own session, own step-up window of 5 minutes from the login), made like ctx.stale. admin_session() would return ctx.admin again."""
+    user, password = ctx.admin_session.credentials("admin")
+    other = ctx.admin.clone()
+    other.authenticator = ctx.admin.authenticator
+    other.hide(password)
+    other.login(user, password, ctx.admin.authenticator.next_code())
+    other.session()
+    return other
+
+
 def evicted_total(hub):
     """(dv_pkt_monitor_evicted_total, dv_edge_monitor_evicted_total) of the hub metrics, or None for a family that cannot be read."""
     out = []
@@ -551,16 +574,20 @@ def test_obspkt1_d_a_process_restart_clears_its_rings(ctx, traffic, rig_control,
         if ids != producers_seen[-1][1]:
             producers_seen.append((time.monotonic() - t_zero, ids))
 
-    admin = ctx.admin_session("admin")                          # a second login for the restart call, made BEFORE the stream opens
-    with Streamer(ctx.admin) as stream:
+    # The stream runs on its OWN session and nothing steps up on it: a step-up ROTATES the session cookie and ends the id the stream was opened with (dv-router
+    # app_packets.rs:87-95), which closed the first runs' stream with `bye session ended` 9 s after it opened (the case stepped up on ctx.admin, the stream's
+    # session, before every snapshot). The snapshots and the restart use ctx.admin. (ctx.admin_session("admin") returns ctx.admin, not a second login.)
+    stream_admin = second_login(ctx)
+    admin = ctx.admin
+    note(target, case, "RECORD", "the stream runs on a dedicated session (user agent %s, the login's); snapshots and the restart on ctx.admin" % stream_admin.user_agent)
+    with Streamer(stream_admin) as stream:
         time.sleep(5.0)
         t_stream = stream.t0
         rig_control.kill_proc("xlxd-sut", "dv-data-worker", "KILL")
         end, after = time.monotonic() + 90.0, None
         while time.monotonic() < end and after is None:
             time.sleep(3.0)
-            ctx.admin.step_up()
-            r, body = snapshot(ctx.admin, limit=1000)
+            r, body = snapshot_stepping(ctx.admin, limit=1000)
             if r.status == 200:
                 see(body, t_stream)
             if r.status == 200 and any(boots(body).get(w) not in (None, boot0[w]) for w in worker_ids):
@@ -579,8 +606,7 @@ def test_obspkt1_d_a_process_restart_clears_its_rings(ctx, traffic, rig_control,
         end, final, new_ax = time.monotonic() + 90.0, None, []
         while time.monotonic() < end and final is None:
             time.sleep(3.0)
-            ctx.admin.step_up()
-            r, body = snapshot(ctx.admin, limit=1000)
+            r, body = snapshot_stepping(ctx.admin, limit=1000)
             ids = [p["id"] for p in body["producers"]] if r.status == 200 else []
             if r.status == 200:
                 see(body, t_stream)
@@ -592,8 +618,7 @@ def test_obspkt1_d_a_process_restart_clears_its_rings(ctx, traffic, rig_control,
         # id comes then, so the stream is kept open until it arrives (or ends, or 40 s pass).
         end = time.monotonic() + 40.0
         while time.monotonic() < end and not stream.gap_seen(old_ax) and not stream.ended():
-            ctx.admin.step_up()
-            r, body = snapshot(ctx.admin, limit=1000)
+            r, body = snapshot_stepping(ctx.admin, limit=1000)
             if r.status == 200:
                 see(body, t_stream)
             time.sleep(1.0)
@@ -629,7 +654,42 @@ def test_obspkt1_d_a_process_restart_clears_its_rings(ctx, traffic, rig_control,
     else:
         note(target, case, "FINDING", "OBSPKT1b: no `gap` for the OLD AX.25 id %s after its restart (gaps %s; stream ended with %s; the hub process table may still list "
               "the id, or the poller re-bootstrapped instead); timeline %s" % (old_ax, events.gaps, stream.ended(), stream.timeline()))
+    assert not stream.ended() or stream.ended()[0][0] != "bye" or stream.ended()[0][1] != "session ended", (
+        "the stream ended with bye `session ended` although nothing stepped up on its session: %s" % stream.timeline())
+    id_problems = ob.stream_id_problems(stream.frames)
+    assert not id_problems, "a producer id appears in the stream without hello or a rows batch with its boot: %s" % id_problems
     if any(n in events.gaps for n in new_ax):
         note(target, case, "FINDING", "OBSPKT1b: a gap was reported for the NEW AX.25 id %s: gaps %s (the poller re-bootstraps every producer with a cursor when discovery fails)" % (
             new_ax, events.gaps))
-    assert not any(n in [p.get("id") for p in events.hello or []] for n in new_ax), "the new AX.25 id was already in hello"
+    note(target, case, "RECORD", "hello is not complete by design (it lists the producers the feed already holds a cursor for): new AX.25 id in hello: %s" % (
+        any(n in [p.get("id") for p in events.hello or []] for n in new_ax)))
+
+
+def test_obspkt1_d2_a_step_up_on_the_streams_own_session_is_recorded(ctx, target):
+    """dv-router (app_packets.rs:87-95): the stream checks every 100 ms that the session id it was opened with is alive, and an explicit step-up ROTATES the
+    session cookie and ends the old id. So a step-up on the session that holds an open packet stream ends the stream with `bye` `session ended`: the
+    administrator's own step-up kills their stream. That is recorded here as a FINDING (OBSPKT1b), not a failure: a dedicated login opens a stream, waits
+    for `hello`, steps up on the same session and watches for the `bye` for up to 10 s."""
+    case = "OBSPKT1-d2"
+    session = second_login(ctx)
+    with Streamer(session) as stream:
+        end = time.monotonic() + 15.0
+        while time.monotonic() < end and not any(event == "hello" for _t, event, _tag in stream.times):
+            time.sleep(0.2)
+        assert any(event == "hello" for _t, event, _tag in stream.times), "the dedicated stream did not open: %s" % stream.timeline()
+        time.sleep(1.0)
+        assert not stream.ended(), "the stream ended before the step-up: %s" % stream.timeline()
+        t_step = time.monotonic() - stream.t0
+        session.step_up()                                             # up to 30 s: the TOTP code of a step-up must be a new one
+        t_done = time.monotonic() - stream.t0
+        end = time.monotonic() + 10.0
+        while time.monotonic() < end and not stream.ended():
+            time.sleep(0.2)
+    ended = stream.ended()
+    note(target, case, "RECORD", "step-up started %.1f s and finished %.1f s after the stream opened; stream ended with %s; timeline %s" % (
+        t_step, t_done, ended, stream.timeline()))
+    if ended and ended[0][0] == "bye":
+        note(target, case, "FINDING", "OBSPKT1b: a step-up on the session that holds an open packet stream ended the stream with bye %r (the step-up rotates the cookie and "
+              "the stream follows the old session id): the administrator's own step-up kills their stream" % (ended[0][1],))
+    else:
+        note(target, case, "RECORD", "the stream survived a step-up on its own session")

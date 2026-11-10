@@ -263,6 +263,29 @@ def parse_stream(frames):
     return out
 
 
+def stream_id_problems(frames):
+    """Problems ([] = fine) of the producer ids of a packet stream (SSE frames in arrival order). `hello` lists only the producers the feed already holds a
+    cursor for, so it is NOT complete: an id in `rows` or `gap` must be in `hello`, or first appear in a `rows` batch that carries its boot (16 integers)."""
+    hello_ids, introduced, problems = set(), set(), []
+    for frame in frames:
+        event = frame.get("event", "message")
+        try:
+            data = json.loads(frame.get("data") or "null")
+        except ValueError:
+            continue
+        if event == "hello" and isinstance(data, dict):
+            hello_ids |= {p.get("id") for p in data.get("producers") or [] if isinstance(p, dict)}
+        elif event in ("rows", "gap") and isinstance(data, dict):
+            pid = data.get("id")
+            if pid in hello_ids or pid in introduced:
+                continue
+            if event == "rows" and _boot_ok(data.get("boot")):
+                introduced.add(pid)
+            else:
+                problems.append("%s for %r: not in hello and not introduced by a rows batch with its boot" % (event, pid))
+    return problems
+
+
 def split_retry(frames):
     """(retry, frames without the leading retry-only blocks). `retry: 3000` is the first line of the stream; the parser may yield that bare block as a frame
     of its own (only the key `retry`) before `hello`, or attach it to the first event. `retry` is the value of the last one seen in the leading blocks or on the

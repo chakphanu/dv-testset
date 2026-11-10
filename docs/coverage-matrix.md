@@ -43,8 +43,8 @@ unit test `cases/unit/test_coverage_matrix.py` runs it).
 | Built-in echo (ECHO1) | 27 | 19 | 2 | 6 | 0 |
 | Echo return integrity E9 (D-STAR kinds) | 14 | 13 | 1 | 0 | 0 |
 | Real-transcoder cross-mode audio into YSF (related to ECHO1) | 3 | 3 | 0 | 0 | 0 |
-| DP15 (APRS / AX.25 / KISS data path) | 99 | 70 | 6 | 23 | 0 |
-| **Total** | **1257** | **794** | **276** | **179** | **8** |
+| DP15 (APRS / AX.25 / KISS data path) | 99 | 69 | 7 | 23 | 0 |
+| **Total** | **1257** | **793** | **277** | **179** | **8** |
 <!-- summary:end -->
 
 ## Top 15 gaps (ranked by how much real-world traffic they touch)
@@ -1491,7 +1491,7 @@ Sources: dp15-cases.md.
 | OBSPKT1 RF rx / tx and APRS-IS rx / tx rows with the gate decision; worker rows carry the line, edge rows the header and outcomes | obspkt1-cases.md "OBSPKT1-b" | `test_obspkt1_monitor::test_obspkt1_b_rf_rx_rows_carry_the_gate_decision_and_edge_rows_only_the_header`, `test_obspkt1_monitor::test_obspkt1_b_aprs_is_rx_and_rf_tx_rows`, `test_obspkt1_monitor::test_obspkt1_b_a_local_kiss_client_row_keeps_its_line_but_not_a_position` | rig | a | OK |
 | OBSPKT1 a hidden station's position is blank in every row; Mic-E destinations show (mic-e); edge rows have no line; a station hidden later loses its position | obspkt1-cases.md "OBSPKT1-c" | `test_obspkt1_monitor::test_obspkt1_c_a_hidden_stations_position_is_blank_in_every_row`, `test_obspkt1_monitor::test_obspkt1_c_mic_e_destinations_show_the_placeholder`, `test_obspkt1_monitor::test_obspkt1_c_edge_rows_of_worker_decided_packets_have_no_line`, `test_obspkt1_monitor::test_obspkt1_c_a_station_hidden_later_loses_its_position_from_retained_rows` | rig | a | OK |
 | OBSPKT1 no packet body in logs, public state, other admin routes or telemetry | obspkt1-cases.md "OBSPKT1-e" | `test_obspkt1_monitor::test_obspkt1_e_no_packet_body_in_logs_public_state_other_routes_or_telemetry` | rig | a | OK |
-| OBSPKT1 a process restart clears the rings (worker kill, AX.25 child restart), the stream reports a gap | obspkt1-cases.md "OBSPKT1-d" | `test_obspkt1_monitor::test_obspkt1_d_a_process_restart_clears_its_rings` | rig | a | OK |
+| OBSPKT1 a process restart clears the rings (worker kill, AX.25 child restart), the stream reports a gap (PARTIAL: the worker's gap is asserted; the old edge id's gap is a recorded finding OBSPKT1b on wip-16e8e6c, and a step-up on the stream's own session is recorded by OBSPKT1-d2) | obspkt1-cases.md "OBSPKT1-d" | `test_obspkt1_monitor::test_obspkt1_d_a_process_restart_clears_its_rings` | rig | a | PARTIAL |
 | OBSPKT1 ring bounds, stream limits, audit rows, cursor loss, retired port rings, raw TNC2 header (long runs or SUT races; DV-Router's tests) | obspkt1-cases.md "GAPs" | - | - | - | GAP |
 | DP15-8w RF-heard positionless weather is gated to the private aprsc once, `qAR` + igate call, path as heard, information byte-identical (`qAO` receive-only) | dp15-cases.md "RF to APRS-IS igate" | `test_dp15_igate::test_dp15_8w_rf_weather_is_gated_with_qar` | rig | b:aprsc | OK |
 | DP15-8t RF-heard telemetry `T#` is gated the same way | dp15-cases.md "RF to APRS-IS igate" | `test_dp15_igate::test_dp15_8t_rf_telemetry_is_gated_with_qar` | rig | b:aprsc | OK |

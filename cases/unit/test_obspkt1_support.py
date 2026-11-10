@@ -403,9 +403,23 @@ def test_the_stream_check_accepts_a_leading_retry_block_and_requires_retry_3000_
 class Scripted:
     """Admin double for the restart case: snapshots follow `script` (a list of (rows, producers)), then repeat the last; the stream replays `frames`."""
 
+    user_agent = "dvt-web/1"
+
     def __init__(self, script, frames):
         self.script, self.frames, self.calls, self.step_ups, self.restarts = script, frames, 0, 0, 0
-        self.authenticator = None
+        self.authenticator = SimpleNamespace(next_code=lambda: "000000")
+
+    def clone(self):
+        return self
+
+    def hide(self, *a):
+        pass
+
+    def login(self, *a, **k):
+        return {}
+
+    def session(self):
+        return {}
 
     def path(self, suffix):
         return "/api/v1/admin" + suffix
@@ -429,7 +443,7 @@ class Scripted:
         return 200, "text/event-stream", []
 
 
-def restart_flow(monkeypatch, new_ax="ax25-0000000000000009", gaps=True, keep_old_rows=False, worker_boot_changes=True, old_edge_gap=True):
+def restart_flow(monkeypatch, new_ax="ax25-0000000000000009", gaps=True, keep_old_rows=False, worker_boot_changes=True, old_edge_gap=True, bye=False):
     new_boot = [9] * 16
     worker0 = {"id": W, "boot": BOOT}
     edge0, edge_is = {"id": E_AX, "boot": BOOT}, {"id": E_IS, "boot": BOOT}
@@ -447,11 +461,15 @@ def restart_flow(monkeypatch, new_ax="ax25-0000000000000009", gaps=True, keep_ol
         if old_edge_gap:
             frames += [{"event": "gap", "data": json.dumps({"id": E_AX})}]
     frames += [{"event": "rows", "data": json.dumps({"id": new_ax, "boot": [7] * 16, "rows": [{"seq": 1}]})}]
+    if bye:
+        frames += [{"event": "bye", "data": json.dumps({"reason": "session ended"})}]
     admin = Scripted(script, frames)
     ticks = iter(range(0, 10 ** 6))
     monkeypatch.setattr(tm, "time", SimpleNamespace(sleep=lambda s: None, monotonic=lambda: next(ticks)))
     monkeypatch.setattr(tm.ds, "write_note", lambda *a, **k: None)
-    ctx = SimpleNamespace(admin=admin, admin_session=lambda role: admin)
+    factory = lambda role: admin  # noqa: E731
+    factory.credentials = lambda role: ("u", "p")
+    ctx = SimpleNamespace(admin=admin, admin_session=factory)
     control = SimpleNamespace(kill_proc=lambda *a, **k: SimpleNamespace(pids=[1]))
     hub = SimpleNamespace(total=lambda family, **labels: 0)
     notes = []
@@ -468,6 +486,8 @@ def test_the_restart_case_expects_the_worker_id_to_stay_and_the_edge_id_to_chang
     assert any("producer ids seen" in t for _tag, t in admin.notes) and any("rows around the gap" in t for _tag, t in admin.notes)
     with pytest.raises(AssertionError, match="no `gap` .id. for the restarted worker"):
         restart_flow(monkeypatch, gaps=False)                                            # the worker gap stays a hard assertion
+    with pytest.raises(AssertionError, match="although nothing stepped up on its session"):
+        restart_flow(monkeypatch, bye=True)
     no_old = restart_flow(monkeypatch, old_edge_gap=False)                               # the old edge id's gap is a recorded FINDING (OBSPKT1b)
     assert [t for tag, t in no_old.notes if tag == "FINDING" and "OBSPKT1b" in t and "OLD AX.25 id" in t]
     with pytest.raises(AssertionError, match="rows of the old AX.25 id survived"):
@@ -498,3 +518,53 @@ def test_replay_after_gap_separates_a_new_boot_from_a_replay_of_old_sequences():
     assert ob.replay_after_gap([rows([1], [5])], W)["gap"] is False and ob.replay_after_gap([], W)["after"] == []
     other = {"event": "rows", "data": json.dumps({"id": "ax25-1", "boot": [1], "rows": [{"seq": 5}]})}
     assert ob.replay_after_gap([other, {"event": "gap", "data": "not json"}], W) == {"gap": False, "before": [], "after": [], "replayed": []}
+
+
+class StreamSession:
+    """A dedicated admin session for OBSPKT1-d2: the stream replays `frames` at once, a step-up on it (after which `bye_after_step_up`) ends the stream."""
+
+    def __init__(self, bye_after_step_up):
+        self.bye, self.step_ups, self.frames_sent = bye_after_step_up, 0, []
+        self.authenticator = SimpleNamespace(next_code=lambda: "000000")
+        self.on_frame = None
+
+    def path(self, suffix):
+        return "/api/v1/admin" + suffix
+
+    def sse(self, path, max_events=1, timeout=1.0, on_frame=None, stop=None, **kw):
+        self.on_frame = on_frame
+        on_frame({"retry": "3000"})
+        on_frame({"event": "hello", "data": json.dumps({"producers": []})})
+        stop.wait(30.0)
+        return 200, "text/event-stream", []
+
+    def step_up(self):
+        self.step_ups += 1
+        if self.bye and self.on_frame:
+            self.on_frame({"event": "bye", "data": json.dumps({"reason": "session ended"})})
+
+
+def test_the_step_up_probe_records_a_finding_when_the_stream_dies_and_a_record_when_it_survives(monkeypatch):
+    for bye in (True, False):
+        notes = []
+        monkeypatch.setattr(tm.ds, "write_note", lambda target, case, tag, text, **kw: notes.append((tag, text)))
+        session = StreamSession(bye)
+        monkeypatch.setattr(tm, "second_login", lambda ctx, session=session: session)
+        ticks = iter(x * 0.5 for x in range(0, 10 ** 6))
+        monkeypatch.setattr(tm, "time", SimpleNamespace(sleep=lambda s: None, monotonic=lambda: next(ticks)))
+        tm.test_obspkt1_d2_a_step_up_on_the_streams_own_session_is_recorded(SimpleNamespace(), None)
+        assert session.step_ups == 1
+        assert bool([t for tag, t in notes if tag == "FINDING" and "OBSPKT1b" in t]) is bye
+        assert any("survived" in t for tag, t in notes) is (not bye)
+
+
+def test_stream_id_problems_accept_an_id_introduced_by_its_boot_and_name_the_others():
+    def f(event, **data):
+        return {"event": event, "data": json.dumps(data)}
+    boot = [1] * 16
+    good = [f("hello", producers=[{"id": W, "boot": boot}]), f("rows", id=E_AX, boot=boot, rows=[]), f("gap", id=E_AX), f("gap", id=W)]
+    assert ob.stream_id_problems(good) == []
+    bad = [f("hello", producers=[]), f("gap", id=E_AX), f("rows", id=E_IS, boot=[1, 2], rows=[])]
+    problems = ob.stream_id_problems(bad)
+    assert len(problems) == 2 and "gap" in problems[0] and "rows" in problems[1]
+    assert ob.stream_id_problems([{"event": "gap", "data": "x"}]) == []
