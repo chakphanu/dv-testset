@@ -355,7 +355,8 @@ class PacketServer:
     """GET /packets with the confirmed rules: limit clamped to 1-1000 (default 100), a non-numeric or negative limit, a bad port and a bad dir are 400
     bad_request; /packets/stream gives hello first. `leak` makes it accept what it must refuse."""
 
-    def __init__(self, many=1500, leak=False):
+    def __init__(self, many=1500, leak=False, bare_retry=False, retry="3000"):
+        self.bare_retry, self.retry = bare_retry, retry
         self.rows = [row(W, n, "rf-a", "rx", "N0OBA-1>APDVT1:>x%d" % n) for n in range(many, 0, -1)]
         self.leak, self.step_ups, self.authenticator = leak, 0, None
 
@@ -376,7 +377,10 @@ class PacketServer:
         return FakeResp(200, pk_body(rows[:limit if not self.leak else None], [{"id": W, "boot": BOOT}]), {"Cache-Control": "no-store"})
 
     def sse(self, path, max_events=1, timeout=1.0, **kw):
-        return 200, "text/event-stream", [{"event": "hello", "retry": "3000", "data": json.dumps({"producers": [{"id": W, "boot": BOOT}]})}]
+        hello = {"event": "hello", "data": json.dumps({"producers": [{"id": W, "boot": BOOT}]})}
+        if self.bare_retry:                                             # the parser yields `retry: 3000` as a frame of its own before the first event
+            return 200, "text/event-stream", [{"retry": self.retry}, hello]
+        return 200, "text/event-stream", [dict(hello, retry=self.retry)]
 
 
 def test_the_snapshot_case_follows_the_confirmed_rules_and_catches_a_server_that_does_not(quiet):
@@ -384,6 +388,16 @@ def test_the_snapshot_case_follows_the_confirmed_rules_and_catches_a_server_that
     tm.test_obspkt1_a_admin_with_a_step_up_gets_the_documented_snapshot_and_stream(ctx, None)
     with pytest.raises(AssertionError):
         tm.test_obspkt1_a_admin_with_a_step_up_gets_the_documented_snapshot_and_stream(SimpleNamespace(admin=PacketServer(leak=True), target=None), None)
+
+
+def test_the_stream_check_accepts_a_leading_retry_block_and_requires_retry_3000_and_hello_first(quiet):
+    for server in (PacketServer(), PacketServer(bare_retry=True)):
+        tm.test_obspkt1_a_admin_with_a_step_up_gets_the_documented_snapshot_and_stream(SimpleNamespace(admin=server, target=None), None)
+    with pytest.raises(AssertionError, match="retry is '5000'"):
+        tm.test_obspkt1_a_admin_with_a_step_up_gets_the_documented_snapshot_and_stream(SimpleNamespace(admin=PacketServer(bare_retry=True, retry="5000"), target=None), None)
+    assert ob.split_retry([{"retry": "3000"}, {"event": "hello"}]) == ("3000", [{"event": "hello"}])
+    assert ob.split_retry([{"event": "hello", "retry": "3000"}]) == ("3000", [{"event": "hello", "retry": "3000"}])
+    assert ob.split_retry([{"event": "hello"}]) == (None, [{"event": "hello"}]) and ob.split_retry([]) == (None, [])
 
 
 class Scripted:

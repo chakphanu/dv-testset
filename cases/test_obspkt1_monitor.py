@@ -227,13 +227,15 @@ def test_obspkt1_a_admin_with_a_step_up_gets_the_documented_snapshot_and_stream(
     assert rx_resp.status == 200 and all(r["dir"] == "rx" for r in rx["rows"])
     port_resp, only = snapshot(admin, port="rf-a")
     assert port_resp.status == 200 and all(r["port"] == "rf-a" for r in only["rows"])
-    status, ctype, frames = admin.sse(admin.path(STREAM), max_events=1, timeout=15.0)
+    status, ctype, frames = admin.sse(admin.path(STREAM), max_events=3, timeout=15.0, until="hello")
     assert status == 200 and "text/event-stream" in ctype, "stream: HTTP %s %s" % (status, ctype)
-    assert frames and frames[0].get("event") == "hello" and frames[0].get("retry") == "3000", "first stream frame: %s" % frames[:1]
+    retry, frames = ob.split_retry(frames)                               # `retry: 3000` may arrive as a bare block before the first event
+    assert retry == "3000", "the stream's retry is %r, expected 3000" % (retry,)
+    assert frames and frames[0].get("event") == "hello", "first stream event: %s" % frames[:1]
     hello = ob.parse_stream(frames).hello
     assert hello and all(isinstance(p, dict) and p.get("id") and ob._boot_ok(p.get("boot")) for p in hello), "hello producers: %s" % hello
     note(target, "OBSPKT1-a", "RECORD", "snapshot keys %s, ports %s, hello producers %s, retry %s" % (
-        sorted(body), body["ports"][:4], [p["id"] for p in hello], frames[0].get("retry")))
+        sorted(body), body["ports"][:4], [p["id"] for p in hello], retry))
 
 
 # ================================================================ OBSPKT1-b: the rows

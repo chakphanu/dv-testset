@@ -263,6 +263,18 @@ def parse_stream(frames):
     return out
 
 
+def split_retry(frames):
+    """(retry, frames without the leading retry-only blocks). `retry: 3000` is the first line of the stream; the parser may yield that bare block as a frame
+    of its own (only the key `retry`) before `hello`, or attach it to the first event. `retry` is the value of the last one seen in the leading blocks or on the
+    first event frame, else None."""
+    retry, rest = None, list(frames)
+    while rest and set(rest[0]) == {"retry"}:
+        retry = rest.pop(0)["retry"]
+    if rest and rest[0].get("retry") is not None:
+        retry = rest[0]["retry"]
+    return retry, rest
+
+
 def replay_after_gap(frames, producer_id):
     """What a producer's `rows` frames look like around its first `gap` (SSE frames in arrival order): {"gap": bool, "before": [(boot, min seq, max seq)],
     "after": [(boot, min seq, max seq)], "replayed": [(boot, seq)]}, `replayed` being the (boot, seq) pairs delivered after the gap that were already
