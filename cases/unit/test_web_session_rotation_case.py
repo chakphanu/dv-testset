@@ -119,6 +119,13 @@ def test_the_probe_fixture_is_the_one_the_cases_use():
 
 
 @pytest.mark.parametrize("value,want", [("", False), ("on", True), ("1", True), ("off", False)])
-def test_strict_switch(monkeypatch, value, want):
+def test_strict_switches(monkeypatch, value, want):
     monkeypatch.setenv("DVT_WEBSID1", value)
-    assert case.strict() is want
+    monkeypatch.setenv("DVT_WEBSID1B", value)
+    assert case.strict() is want and case.strict_1b() is want
+
+
+def test_the_websid1b_positive_control_exists():
+    assert "make_login" in case.test_step_up_in_the_same_tab_keeps_the_circuit.__code__.co_varnames
+    assert case.card_text(types.SimpleNamespace(status=lambda: "Listening on module V")) == "Listening on module V"
+    assert case.card_text(types.SimpleNamespace(status=lambda: 1 / 0)) == "(no card)"

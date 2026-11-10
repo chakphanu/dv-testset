@@ -15,9 +15,13 @@ has the run command, the runtime and the GAPs. Source: DV-Router web.md "Built (
                                                           heartbeat), the RTC circuit (within the 5 s sweep) and the WAV transfer (cut)
   4  test_denials_coalesce_across_a_step_up               a repeated reload denial across a step-up: one audit record per 10 s, the next carries
                                                           `suppressed` (admin service, the SECRELOAD2 route)
-GAPs: idle and absolute expiry (operator 30 min / 12 h, no setting shortens them), TOTP enable / replace / disable variants, the 100 ms WAV bound
-(the browser sees the end only after its own buffers drain: the case shows the body is CUT). Skips on an image without WEBSID1 (probe: an
-operator stream that dies at a step-up); DVT_WEBSID1=on turns that into a failure.
+GAPs: idle and absolute expiry (hard-coded: users 12 h / 7 d, operators 30 min / 12 h, crates/svc/web/src/auth/mod.rs:72-77), TOTP enable / replace /
+disable variants, the 100 ms WAV bound (the browser sees the end only after its own buffers drain: the case shows the body is CUT). Skips on an image
+without WEBSID1 (probe: an operator stream that dies at a step-up); DVT_WEBSID1=on turns that into a failure.
+FINDING WEBSID1b (dv-router, a product defect fixed in unit WEBSID1b): the CSRF token rotates with a step-up but reaches a page only in JSON replies, so the
+OTHER tab's next write is 403 `csrf` and its RTC keepalive treats that as lost ownership and drops the circuit ("Connection ownership expired"), although
+the server lease is alive. Case 1 therefore records a lost circuit as a FINDING (web.finding) and keeps asserting the rest; DVT_WEBSID1B=on makes the circuit
+staying up past two keepalive periods an assertion. A step-up in the SAME tab is the positive control (test_step_up_in_the_same_tab_keeps_the_circuit).
 """
 import os
 import threading
@@ -47,6 +51,12 @@ CAUSES = ["logout", "revoke", "role", "disable"]
 
 def strict():
     return os.environ.get("DVT_WEBSID1", "").lower() in ("on", "1", "true", "yes")
+
+
+def strict_1b():
+    """DVT_WEBSID1B=on: the image has the WEBSID1b fix (the rotated CSRF token reaches every tab), so a circuit that does not survive a step-up in
+    ANOTHER tab fails the case instead of being a FINDING."""
+    return os.environ.get("DVT_WEBSID1B", "").lower() in ("on", "1", "true", "yes")
 
 
 def note(text):
@@ -234,6 +244,13 @@ def make_login(engine, engine_browsers, web_base_url, request, websid1):
         login.finish(request)
 
 
+def card_text(rtc):
+    try:
+        return rtc.status()
+    except Exception:                                               # noqa: BLE001 - the card is gone with the page state
+        return "(no card)"
+
+
 def rate_for(length, seconds=SLOW_S):
     """Bytes per second that make a body of `length` bytes take about `seconds`."""
     return max(1.0, length / seconds)
@@ -267,17 +284,37 @@ def test_step_up_keeps_sse_circuit_and_wav(engine, make_login, sid_operator, sid
     finally:
         other.finish(False)
 
-    # the handles live on across a heartbeat and a lease
-    end = time.monotonic() + OBSERVE_S
+    # the new cookie renews the ORIGINAL circuit (a second tab with the rotated cookie and the current CSRF token), at once
+    sess_id = rtc.offers[-1] if rtc.offers else None
+    assert sess_id, "the page never saw its /rtc/offer answer"
+    tab = login.second_tab()
+    try:
+        renewed = tab.evaluate(ws.JS_RTC_POST, {"path": "/api/v1/rtc/alive", "id": sess_id})
+    finally:
+        tab.close()
+    assert renewed == 204, "POST /rtc/alive with the rotated cookie on the original circuit answered %s, want 204" % renewed
+
+    # the handles live on across a heartbeat and two keepalive periods (the circuit: see FINDING WEBSID1b)
+    observe = OBSERVE_S + (12.0 if strict_1b() else 0.0)
+    end = time.monotonic() + observe
+    circuit_lost_at = None
     while time.monotonic() < end:
         sse = login.sse()
         problems = ws.sse_alive_problems(sse)
         assert not problems, "SSE after the step-up: %s (state %s)" % ("; ".join(problems), sse)
-        bad = ws.circuit_problems(rtc.state(), rtc.panel_state())
-        assert not bad, "the Listen circuit after the step-up: %s" % "; ".join(bad)
+        if circuit_lost_at is None and ws.circuit_problems(rtc.state(), rtc.panel_state()):
+            circuit_lost_at = time.monotonic() - (end - observe)
         time.sleep(1.0)
-    posts = [(r["status"]) for r in login.bp.log.requests if r["path"].endswith("/rtc/alive")]
-    note("%s: /rtc/alive statuses over the whole case: %s" % (engine, sorted(set(posts))))
+    posts = [r["status"] for r in login.bp.log.requests if r["path"].endswith("/rtc/alive")]
+    note("%s: /rtc/alive statuses of the page: %s" % (engine, sorted(set(posts))))
+    if circuit_lost_at is not None:
+        msg = ("WEBSID1b: the Listen circuit of tab 1 was lost %.0f s after a step-up in tab 2 (page /rtc/alive statuses %s, card %r): the rotated CSRF token "
+               "does not reach the other tab, its keepalive gets 403 csrf and drops the circuit although the server lease is alive"
+               % (circuit_lost_at, sorted(set(posts)), card_text(rtc)))
+        if strict_1b():
+            pytest.fail(msg)
+        web.finding(msg)
+        note(msg)
 
     # the WAV body arrives whole
     end = time.monotonic() + SLOW_S + 30.0
@@ -287,12 +324,34 @@ def test_step_up_keeps_sse_circuit_and_wav(engine, make_login, sid_operator, sid
     problems = ws.wav_progress_problems(final, expect_complete=True)
     assert not problems, "the slow WAV download across the step-up: %s (state %s)" % ("; ".join(problems), final)
 
-    # the new cookie renews the original circuit and closes it
-    rtc.disconnect()
-    assert rtc.wait_idle(10.0), "Disconnect with the rotated cookie did not close the circuit (card %r)" % rtc.panel_state()
-    closes = [r["status"] for r in login.bp.log.requests if r["path"].endswith("/rtc/close")]
-    note("%s: /rtc/close statuses: %s" % (engine, closes))
-    assert closes and closes[-1] == 204, "POST /rtc/close with the rotated cookie answered %s, want 204" % (closes[-1] if closes else None)
+    # the new cookie closes the original circuit (from a tab that has the current CSRF token); a lease that expired because the page dropped it
+    # (WEBSID1b) is recorded
+    tab = login.second_tab()
+    try:
+        still = tab.evaluate(ws.JS_RTC_POST, {"path": "/api/v1/rtc/alive", "id": sess_id})
+        closed = tab.evaluate(ws.JS_RTC_POST, {"path": "/api/v1/rtc/close", "id": sess_id}) if still == 204 else None
+    finally:
+        tab.close()
+    note("%s: alive %s, close %s with the rotated cookie" % (engine, still, closed))
+    if still == 204:
+        assert closed == 204, "POST /rtc/close with the rotated cookie answered %s, want 204" % closed
+    else:
+        assert circuit_lost_at is not None, "the circuit was up in the page but POST /rtc/alive answered %s" % still
+
+
+def test_step_up_in_the_same_tab_keeps_the_circuit(engine, make_login, sid_operator):
+    """The positive control of WEBSID1b: a step-up in the tab that owns the circuit updates its CSRF token, so the keepalive goes on."""
+    login = make_login(sid_operator)
+    rtc = login.listen()
+    code = login.account.client.authenticator.next_code()
+    login.account.client.hide(code)
+    got = login.page.evaluate(ws.JS_STEP_UP, {"code": code})
+    assert got["status"] == 200, "the step-up in the same tab answered %s" % got["status"]
+    end = time.monotonic() + 25.0
+    while time.monotonic() < end:
+        bad = ws.circuit_problems(rtc.state(), rtc.panel_state())
+        assert not bad, "the Listen circuit after a step-up in its own tab: %s" % "; ".join(bad)
+        time.sleep(1.0)
 
 
 # ---------------------------------------------------------------- 2: caps across a rotation
@@ -305,17 +364,21 @@ def test_step_up_does_not_multiply_the_caps(engine, make_login, sid_operator, si
     for _ in range(9):
         got = login.page.evaluate(ws.JS_OFFER_ONLY, {"room": ROOM, "csrf": csrf})
         statuses.append(got["status"])
+        if got["status"] != 200:
+            shape = ws.refusal_shape_problems("the ninth circuit", got, ws.CIRCUIT_REFUSED, "unavailable", 5)
+            assert not shape, "; ".join(shape)
         if got["status"] == 200 and got["sess_id"]:
             ids.append(got["sess_id"])
         time.sleep(0.7)                                            # the join buckets
-    problems = ws.cap_refusal(statuses, 8)
+    problems = ws.cap_refusal(statuses, ws.CIRCUIT_CAP)
     assert not problems, "circuits of one login before the step-up: %s (statuses %s)" % ("; ".join(problems), statuses)
     login.page.evaluate(ws.JS_ALIVE_START, {"ids": ids, "csrf": csrf})
     a = login.wav_start("one", sid_wav, hold=True)
     b = login.wav_start("two", sid_wav, hold=True)
     c = login.wav_start("three", sid_wav, hold=True)
     assert a["status"] == 200 and b["status"] == 200, "the first two WAV bodies answered %s / %s" % (a["status"], b["status"])
-    assert c["status"] != 200, "a third concurrent WAV body was accepted before the step-up"
+    shape = ws.refusal_shape_problems("the third WAV body", c, ws.WAV_REFUSED, "rate_limited", 1)
+    assert not shape, "before the step-up: %s" % "; ".join(shape)
     note("%s: circuits %s; WAV statuses %s / %s / %s" % (engine, statuses, a["status"], b["status"], c["status"]))
     ice_before = ice_probe(login, ids[0])
 
@@ -324,9 +387,11 @@ def test_step_up_does_not_multiply_the_caps(engine, make_login, sid_operator, si
     login.page.evaluate(ws.JS_ALIVE_SET_CSRF, login.csrf())
     csrf = login.csrf()
     ninth = login.page.evaluate(ws.JS_OFFER_ONLY, {"room": ROOM, "csrf": csrf})
-    assert ninth["status"] != 200, "a ninth circuit was accepted after the step-up (the cap counted per cookie again)"
+    shape = ws.refusal_shape_problems("a ninth circuit after the step-up", ninth, ws.CIRCUIT_REFUSED, "unavailable", 5)
+    assert not shape, "the cap counted per cookie again? %s" % "; ".join(shape)
     d = login.wav_start("four", sid_wav, hold=True)
-    assert d["status"] != 200, "a third WAV body was accepted after the step-up"
+    shape = ws.refusal_shape_problems("a third WAV body after the step-up", d, ws.WAV_REFUSED, "rate_limited", 1)
+    assert not shape, "%s" % "; ".join(shape)
     assert ws.wav_progress_problems(login.wav("one"), expect_complete=False) == [], "the held body one died at the step-up"
     note("%s: after the step-up a ninth circuit is %s and a third body %s" % (engine, ninth["status"], d["status"]))
     if ice_before is not None:
@@ -380,15 +445,12 @@ def trigger(cause, login, web_operator):
     if cause == "revoke":
         tab = login.second_tab()
         try:
-            t = tab.evaluate("async () => { const s = await (await fetch('/api/v1/auth/session', {credentials: 'same-origin'})).json(); "
-                             "const list = await (await fetch('/api/v1/user/me/sessions', {credentials: 'same-origin'})).json(); "
-                             "const items = Array.isArray(list) ? list : (list.items || list.sessions || []); "
-                             "const mine = items.find((x) => x.current) || items[0]; const t = Date.now(); "
-                             "await fetch('/api/v1/user/me/sessions/' + mine.id, {method: 'DELETE', credentials: 'same-origin', "
-                             "headers: {'content-type': 'application/json', 'X-DV-CSRF': s.csrf}, body: '{}'}); return t; }")
+            got = tab.evaluate(ws.JS_REVOKE_OWN)
         finally:
             tab.close()
-        return t
+        assert got["found"], "GET /user/me/sessions lists no current login (total %s)" % got.get("total")
+        assert got["status"] == 200 and got["ok"], "DELETE /user/me/sessions/{id} answered %s, want 200 {ok:true}" % got["status"]
+        return got["t"]
     t = page.evaluate("() => Date.now()")
     body = {"role": "user"} if cause == "role" else {"status": "disabled"}
     resp = web_operator.request("PATCH", "/api/v1/operator/accounts/%s" % login.account.callsign, json_body=body, expect=None)

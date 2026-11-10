@@ -23,7 +23,7 @@ unit test `cases/unit/test_coverage_matrix.py` runs it).
 | Stream registry (LEAK2) | 10 | 6 | 2 | 2 | 0 |
 | Config load (COMPAT1) | 19 | 18 | 0 | 1 | 0 |
 | Secret-file reload (SECRELOAD1) | 18 | 15 | 1 | 2 | 0 |
-| Session rotation (WEBSID1) | 7 | 3 | 2 | 2 | 0 |
+| Session rotation (WEBSID1) | 8 | 3 | 3 | 2 | 0 |
 | M17 | 86 | 65 | 20 | 1 | 0 |
 | M17 v3 | 29 | 0 | 25 | 4 | 0 |
 | IMRS | 24 | 18 | 5 | 1 | 0 |
@@ -46,7 +46,7 @@ unit test `cases/unit/test_coverage_matrix.py` runs it).
 | Real-transcoder cross-mode audio into YSF (related to ECHO1) | 3 | 3 | 0 | 0 | 0 |
 | DP15 (APRS / AX.25 / KISS data path) | 99 | 70 | 6 | 23 | 0 |
 | DP6c / DP19 (weather, telemetry, locator status) | 22 | 17 | 0 | 5 | 0 |
-| **Total** | **1286** | **814** | **278** | **186** | **8** |
+| **Total** | **1287** | **814** | **279** | **186** | **8** |
 <!-- summary:end -->
 
 ## Top 15 gaps (ranked by how much real-world traffic they touch)
@@ -488,7 +488,8 @@ Sources: websid1-cases.md (web.md "Built (WEBSID1)", review-248). Written offlin
 |---|---|---|---|---|---|
 | A step-up rotates the cookie and the CSRF token; the old cookie answers 401 at once | websid1-cases.md "Cases" 1 | `test_web_session_rotation::test_step_up_keeps_sse_circuit_and_wav` | rig | browser | OK |
 | An open operator SSE stream, a Listen circuit and a WAV transfer survive the rotation (no `bye`, no RTC loss, no truncation); the new cookie renews and closes the circuit | websid1-cases.md "Cases" 1 | `test_web_session_rotation::test_step_up_keeps_sse_circuit_and_wav` | rig | browser | OK |
-| Caps count across rotations: a ninth circuit and a third WAV body are refused after a step-up, the TURN issue budget does not refill | websid1-cases.md "Cases" 2 | `test_web_session_rotation::test_step_up_does_not_multiply_the_caps` | rig | browser | PARTIAL |
+| Caps count across rotations: a ninth circuit (503) and a third WAV body (429) are refused after a step-up, the TURN issue budget does not refill | websid1-cases.md "Cases" 2 | `test_web_session_rotation::test_step_up_does_not_multiply_the_caps` | rig | browser | PARTIAL |
+| A step-up in the SAME tab keeps its circuit; in ANOTHER tab it is a FINDING until WEBSID1b (the rotated CSRF token reaches the page only in JSON replies) | websid1-cases.md "Cases" 1b | `test_web_session_rotation::test_step_up_in_the_same_tab_keeps_the_circuit`, `test_web_session_rotation::test_step_up_keeps_sse_circuit_and_wav` | rig | browser | PARTIAL |
 | Logout, own-session revoke, role change and account disable end the stream (one heartbeat), the circuit (the 5 s sweep) and the WAV body (cut) | websid1-cases.md "Cases" 3 | `test_web_session_rotation::test_session_end_ends_the_handles` | rig | browser | PARTIAL |
 | A repeated reload denial across a step-up is one record per 10 s with `suppressed` on the next | websid1-cases.md "Cases" 4 | `test_web_session_rotation::test_denials_coalesce_across_a_step_up`, `test_web_session_rotation_case::test_denials_coalesce_across_the_step_up_with_a_stable_session_key` | rig | a:admin | OK |
 | Idle and absolute expiry end the handles; TOTP enable / replace / disable keep current handles and end siblings | websid1-cases.md "GAPs" | - | - | - | GAP |

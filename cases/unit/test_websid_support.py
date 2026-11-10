@@ -60,8 +60,9 @@ def test_within_and_rotation_and_caps():
     assert ws.rotation_problems("a", "a", "c", "d") == ["the session cookie did not rotate"]
     assert ws.rotation_problems("a", "b", "c", "c") == ["the CSRF token did not rotate"]
     assert len(ws.rotation_problems(None, "b", "", "d")) == 2
-    assert ws.cap_refusal([200] * 8 + [429], 8) == []
-    assert ws.cap_refusal([200] * 7 + [503, 503], 8) != [] and ws.cap_refusal([200] * 9, 8) != []
+    assert ws.cap_refusal([200] * 8 + [503], 8) == []                          # the ninth circuit is 503 (dv-router, a1ff890c)
+    assert ws.cap_refusal([200] * 8 + [429], 8) != [] and ws.cap_refusal([200] * 7 + [503, 503], 8) != [] and ws.cap_refusal([200] * 9, 8) != []
+    assert (ws.CIRCUIT_CAP, ws.CIRCUIT_REFUSED, ws.WAV_BODY_CAP, ws.WAV_REFUSED) == (8, 503, 2, 429)
     assert ws.circuit_problems({"connection": "connected"}, "connected") == []
     assert len(ws.circuit_problems({"connection": "failed"}, "failed")) == 2 and ws.circuit_problems(None, "connected")
 
@@ -78,7 +79,7 @@ def test_coalescing_problems():
 
 def test_javascript_snippets_are_self_consistent():
     for name in ("JS_SSE_START", "JS_SSE_STATE", "JS_WAV_START", "JS_WAV_STATE", "JS_WAV_RELEASE", "JS_STEP_UP", "JS_SESSION", "JS_OFFER_ONLY",
-                 "JS_ALIVE_START", "JS_ALIVE_SET_CSRF", "JS_ALIVE_STATE", "JS_ICE", "JS_GET_STATUS"):
+                 "JS_ALIVE_START", "JS_ALIVE_SET_CSRF", "JS_ALIVE_STATE", "JS_ICE", "JS_GET_STATUS", "JS_RTC_POST", "JS_REVOKE_OWN"):
         text = getattr(ws, name)
         assert text.count("{") == text.count("}") and text.count("(") == text.count(")"), name
     assert "'bye'" in ws.JS_SSE_START and "hello" in ws.JS_SSE_START
@@ -86,3 +87,16 @@ def test_javascript_snippets_are_self_consistent():
     assert "/api/v1/auth/session/step-up" in ws.JS_STEP_UP and "X-DV-CSRF" in ws.JS_STEP_UP
     assert "X-DV-RTC-Session" in ws.JS_ICE and "/api/v1/rtc/offer" in ws.JS_OFFER_ONLY
     assert ws.HEARTBEAT_S == 15.0 and ws.RTC_SWEEP_S == 5.0
+
+
+def test_refusal_shapes():
+    assert ws.refusal_shape_problems("x", {"status": 503, "code": "unavailable", "retry_after": "5"}, 503, "unavailable", 5) == []
+    assert ws.refusal_shape_problems("x", {"status": 503}, 503, "unavailable", 5) == []                      # a missing code / header is not judged
+    assert len(ws.refusal_shape_problems("x", {"status": 429, "code": "rate_limited", "retry_after": "1"}, 503, "unavailable", 5)) == 3
+    assert ws.refusal_shape_problems("x", {"status": 429, "code": "rate_limited", "retry_after": "1"}, 429, "rate_limited", 1) == []
+    assert any("Retry-After" in p for p in ws.refusal_shape_problems("x", {"status": 429, "retry_after": "9"}, 429, None, 1))
+
+
+def test_revoke_and_post_snippets_use_the_documented_shapes():
+    assert "list.items" in ws.JS_REVOKE_OWN and "x.current" in ws.JS_REVOKE_OWN and "/api/v1/user/me/sessions/" in ws.JS_REVOKE_OWN
+    assert "body.ok === true" in ws.JS_REVOKE_OWN and "retry-after" in ws.JS_WAV_START and "retry-after" in ws.JS_OFFER_ONLY

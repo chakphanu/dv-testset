@@ -8,6 +8,13 @@ the handles (SSE within one heartbeat, RTC within the 5 s sweep, a WAV body with
 JavaScript the cases run in the page; stdlib only. Source: DV-Router web.md "Built (WEBSID1)", review-248.
 """
 
+# refusal shapes pinned by dv-router from the code at a1ff890c: the ninth circuit of a login is 503 `unavailable` ("WebRTC capacity reached",
+# Retry-After 5; the cap of 8 counts across rotations); the third concurrent WAV body of a (role, session) is 429 `rate_limited` ("recording rate
+# limit", Retry-After 1, at once, no queue). Other limits on the same paths: 20 audio requests per 10 s, global browse 2 / play 4 slots with a 5 s wait.
+CIRCUIT_CAP = 8
+CIRCUIT_REFUSED = 503
+WAV_BODY_CAP = 2
+WAV_REFUSED = 429
 HEARTBEAT_S = 15.0              # the default SSE heartbeat of the web service (hub sse.rs): the session is checked at each one
 RTC_SWEEP_S = 5.0               # the RTC owner sweep tick (rtc/shell.rs)
 WAV_CHECK_S = 0.1               # recordings: the owner is checked every 100 ms (plus the time to see the connection end)
@@ -49,7 +56,11 @@ JS_WAV_START = """async ({name, url, rate, hold}) => {
   st.status = response.status;
   const length = response.headers.get('content-length');
   st.length = length === null ? null : Number(length);
-  if (response.status !== 200) { st.done = true; st.t_end = Date.now(); return Object.assign({}, st); }
+  st.retry_after = response.headers.get('retry-after');
+  if (response.status !== 200) {
+    try { const body = await response.json(); st.code = body.code || null; } catch (e) { st.code = null; }
+    st.done = true; st.t_end = Date.now(); return Object.assign({}, st);
+  }
   const reader = response.body.getReader();
   (async () => {
     try {
@@ -106,7 +117,8 @@ JS_OFFER_ONLY = """async ({room, csrf}) => {
   let body = null;
   try { body = await r.json(); } catch (e) { body = null; }
   (window.__sidPcs = window.__sidPcs || []).push(pc);
-  return {status: r.status, sess_id: body && body.sess_id ? body.sess_id : null};
+  return {status: r.status, sess_id: body && body.sess_id ? body.sess_id : null, code: body && body.code ? body.code : null,
+          retry_after: r.headers.get('retry-after')};
 }"""
 
 JS_ALIVE_START = """({ids, csrf}) => {
@@ -123,6 +135,28 @@ JS_ALIVE_START = """({ids, csrf}) => {
 
 JS_ALIVE_SET_CSRF = """(csrf) => { if (window.__sidAlive) window.__sidAlive.csrf = csrf; return !!window.__sidAlive; }"""
 JS_ALIVE_STATE = """() => window.__sidAlive ? {ok: window.__sidAlive.ok, bad: window.__sidAlive.bad.slice(-6)} : null"""
+
+# POST /rtc/alive or /rtc/close from a tab with the CURRENT csrf token (the stale one of another tab is the WEBSID1b defect)
+JS_RTC_POST = """async ({path, id}) => {
+  const s = await (await fetch('/api/v1/auth/session', {credentials: 'same-origin'})).json();
+  const r = await fetch(path, {method: 'POST', credentials: 'same-origin',
+    headers: {'content-type': 'application/json', 'X-DV-CSRF': s.csrf}, body: JSON.stringify({sess_id: id})});
+  return r.status;
+}"""
+
+# revoke the current login by its public id (GET /user/me/sessions: {total, items:[{id, current, age_s, idle_s}]}, DELETE .../{id}: 200 {ok:true})
+JS_REVOKE_OWN = """async () => {
+  const s = await (await fetch('/api/v1/auth/session', {credentials: 'same-origin'})).json();
+  const list = await (await fetch('/api/v1/user/me/sessions', {credentials: 'same-origin'})).json();
+  const mine = (list.items || []).find((x) => x.current);
+  if (!mine) return {t: Date.now(), status: null, found: false, total: list.total};
+  const t = Date.now();
+  const r = await fetch('/api/v1/user/me/sessions/' + mine.id, {method: 'DELETE', credentials: 'same-origin',
+    headers: {'content-type': 'application/json', 'X-DV-CSRF': s.csrf}, body: '{}'});
+  let body = null;
+  try { body = await r.json(); } catch (e) { body = null; }
+  return {t, status: r.status, found: true, ok: body && body.ok === true};
+}"""
 
 JS_ICE = """async (id) => { const r = await fetch('/api/v1/rtc/ice', {credentials: 'same-origin', headers: {'X-DV-RTC-Session': id}}); return r.status; }"""
 
@@ -225,6 +259,18 @@ def circuit_problems(peer_state, panel_state):
     return out
 
 
+def refusal_shape_problems(what, got, status, code=None, retry_after=None):
+    """The pinned shape of a refusal: `got` is the dict the page returned (status, optional code, retry_after as the header string)."""
+    out = []
+    if got.get("status") != status:
+        out.append("%s answered %s, want %s" % (what, got.get("status"), status))
+    if code is not None and got.get("code") not in (None, code):
+        out.append("%s code %r, want %r" % (what, got.get("code"), code))
+    if retry_after is not None and got.get("retry_after") not in (None, str(retry_after)):
+        out.append("%s Retry-After %r, want %s" % (what, got.get("retry_after"), retry_after))
+    return out
+
+
 def cap_refusal(statuses, cap):
     """(accepted count, refused list) of the offer statuses of one login: the first `cap` must be 200, every one after must not be."""
     ok = [s for s in statuses[:cap]]
@@ -232,8 +278,8 @@ def cap_refusal(statuses, cap):
     problems = []
     if any(s != 200 for s in ok):
         problems.append("the first %d offers were not all accepted: %s" % (cap, ok))
-    if any(s == 200 for s in over):
-        problems.append("an offer beyond the cap of %d was accepted: %s" % (cap, over))
+    if any(s != CIRCUIT_REFUSED for s in over):
+        problems.append("an offer beyond the cap of %d was not refused with %d: %s" % (cap, CIRCUIT_REFUSED, over))
     return problems
 
 
