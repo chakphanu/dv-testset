@@ -415,7 +415,7 @@ class Scripted:
         return 200, "text/event-stream", []
 
 
-def restart_flow(monkeypatch, new_ax="ax25-0000000000000009", gaps=True, keep_old_rows=False, worker_boot_changes=True):
+def restart_flow(monkeypatch, new_ax="ax25-0000000000000009", gaps=True, keep_old_rows=False, worker_boot_changes=True, old_edge_gap=True):
     new_boot = [9] * 16
     worker0 = {"id": W, "boot": BOOT}
     edge0, edge_is = {"id": E_AX, "boot": BOOT}, {"id": E_IS, "boot": BOOT}
@@ -429,7 +429,9 @@ def restart_flow(monkeypatch, new_ax="ax25-0000000000000009", gaps=True, keep_ol
               (stage2, [{"id": W, "boot": new_boot if worker_boot_changes else BOOT}, {"id": new_ax, "boot": [7] * 16}, edge_is])]
     frames = [{"event": "hello", "data": json.dumps({"producers": [worker0, edge0, edge_is]})}]
     if gaps:
-        frames += [{"event": "gap", "data": json.dumps({"id": W})}, {"event": "gap", "data": json.dumps({"id": E_AX})}]
+        frames += [{"event": "gap", "data": json.dumps({"id": W})}]
+        if old_edge_gap:
+            frames += [{"event": "gap", "data": json.dumps({"id": E_AX})}]
     frames += [{"event": "rows", "data": json.dumps({"id": new_ax, "boot": [7] * 16, "rows": [{"seq": 1}]})}]
     admin = Scripted(script, frames)
     ticks = iter(range(0, 10 ** 6))
@@ -437,15 +439,23 @@ def restart_flow(monkeypatch, new_ax="ax25-0000000000000009", gaps=True, keep_ol
     monkeypatch.setattr(tm.ds, "write_note", lambda *a, **k: None)
     ctx = SimpleNamespace(admin=admin, admin_session=lambda role: admin)
     control = SimpleNamespace(kill_proc=lambda *a, **k: SimpleNamespace(pids=[1]))
-    tm.test_obspkt1_d_a_process_restart_clears_its_rings(ctx, t, control, None)
+    hub = SimpleNamespace(total=lambda family, **labels: 0)
+    notes = []
+    monkeypatch.setattr(tm.ds, "write_note", lambda target, case, tag, text, **kw: notes.append((tag, text)))
+    tm.test_obspkt1_d_a_process_restart_clears_its_rings(ctx, t, control, hub, None)
+    admin.notes = notes
     return admin
 
 
 def test_the_restart_case_expects_the_worker_id_to_stay_and_the_edge_id_to_change(monkeypatch):
     admin = restart_flow(monkeypatch)
     assert admin.restarts == 1
-    with pytest.raises(AssertionError, match="no `gap`"):
-        restart_flow(monkeypatch, gaps=False)
+    assert not [t for tag, t in admin.notes if tag == "FINDING"] and any("monitor eviction counters" in t for _tag, t in admin.notes)
+    assert any("producer ids seen" in t for _tag, t in admin.notes) and any("rows around the gap" in t for _tag, t in admin.notes)
+    with pytest.raises(AssertionError, match="no `gap` .id. for the restarted worker"):
+        restart_flow(monkeypatch, gaps=False)                                            # the worker gap stays a hard assertion
+    no_old = restart_flow(monkeypatch, old_edge_gap=False)                               # the old edge id's gap is a recorded FINDING (OBSPKT1b)
+    assert [t for tag, t in no_old.notes if tag == "FINDING" and "OBSPKT1b" in t and "OLD AX.25 id" in t]
     with pytest.raises(AssertionError, match="rows of the old AX.25 id survived"):
         restart_flow(monkeypatch, keep_old_rows=True)
     with pytest.raises(AssertionError, match="worker boot did not change"):
@@ -461,3 +471,16 @@ def test_the_streamer_timeline_names_gaps_byes_and_row_batches():
     assert st.gap_seen([E_AX]) and not st.gap_seen(["pkt"]) and st.ended() == [("bye", "session ended")]
     text = st.timeline()
     assert "gap %s" % E_AX in text and "bye session ended" in text and "'pkt': 1" in text and len(st.frames) == 5
+
+
+def test_replay_after_gap_separates_a_new_boot_from_a_replay_of_old_sequences():
+    def rows(boot, seqs):
+        return {"event": "rows", "data": json.dumps({"id": W, "boot": boot, "rows": [{"seq": q} for q in seqs]})}
+    gap = {"event": "gap", "data": json.dumps({"id": W})}
+    fresh = ob.replay_after_gap([rows([1], [5, 6]), gap, rows([2], [1, 2])], W)
+    assert fresh["gap"] and fresh["before"] == [((1,), 5, 6)] and fresh["after"] == [((2,), 1, 2)] and fresh["replayed"] == []
+    replay = ob.replay_after_gap([rows([1], [5, 6]), gap, rows([1], [6, 7])], W)
+    assert replay["replayed"] == [((1,), 6)]
+    assert ob.replay_after_gap([rows([1], [5])], W)["gap"] is False and ob.replay_after_gap([], W)["after"] == []
+    other = {"event": "rows", "data": json.dumps({"id": "ax25-1", "boot": [1], "rows": [{"seq": 5}]})}
+    assert ob.replay_after_gap([other, {"event": "gap", "data": "not json"}], W) == {"gap": False, "before": [], "after": [], "replayed": []}

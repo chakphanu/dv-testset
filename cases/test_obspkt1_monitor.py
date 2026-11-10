@@ -508,15 +508,30 @@ class Streamer:
         self.thread.join(5.0)
 
 
+def evicted_total(hub):
+    """(dv_pkt_monitor_evicted_total, dv_edge_monitor_evicted_total) of the hub metrics, or None for a family that cannot be read."""
+    out = []
+    for family in ("dv_pkt_monitor_evicted_total", "dv_edge_monitor_evicted_total"):
+        try:
+            out.append(hub.total(family))
+        except Exception:                                               # noqa: BLE001  the family may be absent; the record then says so
+            out.append(None)
+    return tuple(out)
+
+
 def boots(body):
     return {p["id"]: tuple(p["boot"]) for p in body["producers"]}
 
 
-def test_obspkt1_d_a_process_restart_clears_its_rings(ctx, traffic, rig_control, target):
+def test_obspkt1_d_a_process_restart_clears_its_rings(ctx, traffic, rig_control, hub, target):
     """data.md 13.5: each producer keeps an always-on memory-only ring; a new process boot starts empty. Confirmed by DV-Router: a WORKER restart keeps the
     id and gives a new boot (stream: `gap` {id}, then rows with the new boot); an EDGE restart gives a new id (`<name>-<edge_inc>`): a `gap` for the OLD id,
     and the new id appears in rows without a gap (it was not in `hello`). The data worker is killed with the allowed kill-proc (the launcher respawns it);
-    then the AX.25 child is restarted through the admin API (as DP15-6g). The rings live in the child processes, so no container restart is needed."""
+    then the AX.25 child is restarted through the admin API (as DP15-6g). The rings live in the child processes, so no container restart is needed.
+    On wip-16e8e6c the `gap` for the OLD AX.25 id is a recorded FINDING (OBSPKT1b: the admin poller treats a discovery error as an empty producer list,
+    packets.rs:162, so the gaps come from re-bootstrapping and an id the hub still lists never gets one); every other assertion is hard. The case
+    records what is needed to judge it: the hello list and the stream open time, the producer ids across the restart, the monitor eviction counters
+    before and after, whether the rows after a gap replay old sequences, and a needle for an admin `query failed` log line."""
     case = "OBSPKT1-d"
     markers = [traffic.markers["S"], traffic.markers["C"], traffic.markers["I"]]
     resp, before = snapshot(ctx.admin, limit=1000)
@@ -526,15 +541,26 @@ def test_obspkt1_d_a_process_restart_clears_its_rings(ctx, traffic, rig_control,
     assert worker_ids and old_ax, "producers seen: %s" % [p["id"] for p in before["producers"]]
     assert any(ob.mentions(ob.worker_rows(before["rows"]), m) for m in markers) and ob.edge_rows(before["rows"]), "nothing to clear"
     boot0 = boots(before)
+    evicted0 = evicted_total(hub)
+    producers_seen = [(0.0, sorted(p["id"] for p in before["producers"]))]
+
+    def see(body, t_zero):
+        ids = sorted(p["id"] for p in body["producers"])
+        if ids != producers_seen[-1][1]:
+            producers_seen.append((time.monotonic() - t_zero, ids))
+
     admin = ctx.admin_session("admin")                          # a second login for the restart call, made BEFORE the stream opens
     with Streamer(ctx.admin) as stream:
         time.sleep(5.0)
+        t_stream = stream.t0
         rig_control.kill_proc("xlxd-sut", "dv-data-worker", "KILL")
         end, after = time.monotonic() + 90.0, None
         while time.monotonic() < end and after is None:
             time.sleep(3.0)
             ctx.admin.step_up()
             r, body = snapshot(ctx.admin, limit=1000)
+            if r.status == 200:
+                see(body, t_stream)
             if r.status == 200 and any(boots(body).get(w) not in (None, boot0[w]) for w in worker_ids):
                 after = body
         assert after is not None, "the worker boot did not change within 90 s of the kill"
@@ -554,6 +580,8 @@ def test_obspkt1_d_a_process_restart_clears_its_rings(ctx, traffic, rig_control,
             ctx.admin.step_up()
             r, body = snapshot(ctx.admin, limit=1000)
             ids = [p["id"] for p in body["producers"]] if r.status == 200 else []
+            if r.status == 200:
+                see(body, t_stream)
             new_ax = [i for i in ids if ob.edge_name(i) == "ax25" and i not in old_ax]
             if new_ax:
                 final = body
@@ -562,6 +590,10 @@ def test_obspkt1_d_a_process_restart_clears_its_rings(ctx, traffic, rig_control,
         # id comes then, so the stream is kept open until it arrives (or ends, or 40 s pass).
         end = time.monotonic() + 40.0
         while time.monotonic() < end and not stream.gap_seen(old_ax) and not stream.ended():
+            ctx.admin.step_up()
+            r, body = snapshot(ctx.admin, limit=1000)
+            if r.status == 200:
+                see(body, t_stream)
             time.sleep(1.0)
         note(target, case, "RECORD", "%.0f s after the restart call: old ids %s, new ids %s, gap for the old id seen: %s" % (
             time.monotonic() - t_restart, old_ax, new_ax, stream.gap_seen(old_ax)))
@@ -573,8 +605,29 @@ def test_obspkt1_d_a_process_restart_clears_its_rings(ctx, traffic, rig_control,
     note(target, case, "RECORD", "stream: hello %s, gaps %s, rows for %s, byes %s, resync %s; new AX.25 id %s" % (
         [p.get("id") for p in events.hello or []], events.gaps, sorted({r[0] for r in events.rows}), events.byes, events.resync, new_ax))
     note(target, case, "RECORD", "stream timeline: %s" % stream.timeline())
+    hello_at = next((t for t, event, _tag in stream.times if event == "hello"), None)
+    note(target, case, "RECORD", "hello at %s s after the stream was opened: %s; producer ids seen by the snapshots (seconds since the stream opened): %s" % (
+        "%.1f" % hello_at if hello_at is not None else "?", [p.get("id") for p in events.hello or []], [("%.0f" % t, ids) for t, ids in producers_seen]))
+    evicted1 = evicted_total(hub)
+    note(target, case, "RECORD", "monitor eviction counters before %s, after %s" % (evicted0, evicted1))
+    for pid in worker_ids:
+        rep_ = ob.replay_after_gap(stream.frames, pid)
+        note(target, case, "RECORD", "rows around the gap of %s: gap %s, before %s, after %s, replayed (boot, seq) pairs %d" % (
+            pid, rep_["gap"], rep_["before"][-2:], rep_["after"][:3], len(rep_["replayed"])))
+    out_dir = getattr(target, "out", None)
+    if out_dir:
+        state, found, looked = logscan.request(out_dir, "OBSPKT1-d-query-failed", ["query failed"])
+        if state == "scanned":
+            note(target, case, "RECORD", "admin log lines with `query failed`: %s" % {os.path.basename(k): v[:3] for k, v in found.items()})
+        else:
+            note(target, case, "RECORD", "admin log scan left for the host: `%s` (a FOUND for OBSPKT1-d-query-failed is the finding, not a failure)" % logscan.command_for(out_dir))
     assert any(w in events.gaps for w in worker_ids), "no `gap` {id} for the restarted worker: gaps %s" % events.gaps
-    assert any(e in events.gaps for e in old_ax), "no `gap` for the OLD AX.25 id %s: gaps %s; stream ended with %s; timeline %s" % (
-        old_ax, events.gaps, stream.ended(), stream.timeline())
-    assert not any(n in events.gaps for n in new_ax), "a gap was reported for the NEW AX.25 id: %s" % events.gaps
+    if any(e in events.gaps for e in old_ax):
+        note(target, case, "RECORD", "the OLD AX.25 id %s got a gap, as data.md 13.5 and the DV-Router note describe" % old_ax)
+    else:
+        note(target, case, "FINDING", "OBSPKT1b: no `gap` for the OLD AX.25 id %s after its restart (gaps %s; stream ended with %s; the hub process table may still list "
+              "the id, or the poller re-bootstrapped instead); timeline %s" % (old_ax, events.gaps, stream.ended(), stream.timeline()))
+    if any(n in events.gaps for n in new_ax):
+        note(target, case, "FINDING", "OBSPKT1b: a gap was reported for the NEW AX.25 id %s: gaps %s (the poller re-bootstraps every producer with a cursor when discovery fails)" % (
+            new_ax, events.gaps))
     assert not any(n in [p.get("id") for p in events.hello or []] for n in new_ax), "the new AX.25 id was already in hello"

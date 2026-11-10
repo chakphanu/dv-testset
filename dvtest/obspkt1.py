@@ -263,6 +263,35 @@ def parse_stream(frames):
     return out
 
 
+def replay_after_gap(frames, producer_id):
+    """What a producer's `rows` frames look like around its first `gap` (SSE frames in arrival order): {"gap": bool, "before": [(boot, min seq, max seq)],
+    "after": [(boot, min seq, max seq)], "replayed": [(boot, seq)]}, `replayed` being the (boot, seq) pairs delivered after the gap that were already
+    delivered before it. A gap followed by old rows again means the producer was re-bootstrapped, not restarted."""
+    out = {"gap": False, "before": [], "after": [], "replayed": []}
+    seen = set()
+    for frame in frames:
+        event = frame.get("event", "message")
+        try:
+            data = json.loads(frame.get("data") or "null")
+        except ValueError:
+            continue
+        if not isinstance(data, dict) or data.get("id") != producer_id:
+            continue
+        if event == "gap":
+            out["gap"] = True
+        elif event == "rows":
+            boot = tuple(data.get("boot") or ())
+            seqs = [r.get("seq") for r in data.get("rows") or [] if isinstance(r.get("seq"), int)]
+            if not seqs:
+                continue
+            out["after" if out["gap"] else "before"].append((boot, min(seqs), max(seqs)))
+            if out["gap"]:
+                out["replayed"] += [(boot, q) for q in seqs if (boot, q) in seen]
+            else:
+                seen.update((boot, q) for q in seqs)
+    return out
+
+
 # ---------------------------------------------------------------- leaks
 
 def new_marker(tag, size=6):
