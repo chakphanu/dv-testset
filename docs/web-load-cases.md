@@ -161,3 +161,21 @@ About 13 minutes (nine registrations, calibration 1 / 10 / 50, the 208 s connect
 parts with `-k calibration`, `-k w8` or `-k flood`. Result: `out/<run>/web/load.json` (one file, rewritten after each case: aggregates, the
 gate table, the generator and edge numbers, one compact row per listener). Check the disk before every run; the case writes nothing else.
 The image `dvt-webload:local` is built from `rig/Dockerfile.webload` (pip on the daemon's network, the only internet use).
+
+## RFWD1 false-kill guard (`dv_launcher_child_stall_kills_total`)
+
+DV-Router RFWD1 (image `wip-8891cc7` and later): the launcher SIGKILLs an RF child whose heartbeat stalls for 2 s and counts it in
+`dv_launcher_child_stall_kills_total{child}` (hub metrics). this file (W8, calibration, flood) drives load and stalls no RF child on purpose, so DV-Router asks that the counter
+stays 0 for every child: any other value is a false kill and is reported.
+
+* `cases/stall_kills_support.py` (pure logic, unit tests `cases/unit/test_stall_kills_support.py`): an autouse module fixture reads the counter through the
+  control channel (`metrics xlxd-sut`) before the first test of the module, and the last test of the module, `test_zz_rfwd1_no_stall_kills`, reads it
+  again after one hub publication (12 s; the hub publishes every 10 s). Both reads are outside every measured window and add no load; the timing
+  behaviour and the gates of the cases are unchanged.
+* Result file `out/<run>/web/stall-kills.json` (merged per module): per child `start`, `end`, `delta`, `series_present`, `series_at_start`,
+  `readable_at_end`, `verdict` (`ok`, `false_kill`, `absent`, `unreadable`) and the message.
+* Judged: the test FAILS (a failed test in the pytest summary, not a teardown error) when any child's end value or delta is above 0; the message names
+  every such child with start, end and delta, and a `web.finding()` line (`out/<run>/web-findings.txt`) repeats it. It FAILS too when the end read does not
+  answer (a false kill cannot be excluded). An image whose hub has no series (no RFWD1) is recorded as `absent` and the test SKIPS with the reason; without
+  the control channel it skips as well. A start read that failed but an all-zero end is a pass with a `[RECORD]` line (a counter starts at 0).
+* Select it alone: `-k test_zz_rfwd1_no_stall_kills` (the start read still happens in the fixture).

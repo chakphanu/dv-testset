@@ -329,3 +329,21 @@ Rulings of the DV-Router owner session (2026-11-02, later):
 8. Settle: `SETTLE_S` is 170 s after the last client left (imrs link timeout 150 s + sweep tick; other timeouts xlx/dplus/m17/nxdn/p25 30 s, dextra/dcs/ysf 60 s, mmdvm 100 s, usrp dynamic never expires, table in "Settle before the idle window"). The idle window starts there and no reason of `dv_edge_drops_total` may grow in it. Done.
 9. Threads and fds are judged by the median of the last 10 minutes against the median of the first 10 minutes after warmup, FAIL only above max(10 percent, 3 threads) resp. max(10 percent, 4 fds); a single end sample above the old limit is only flagged; the window is scaled proportionally in the short run; the idle fds check (+5 over `idle0`) stays. Done (`soak.window_medians`).
 10. Next to the RSS the case records the smaps_rollup values (Rss, Anonymous, Private_Dirty, Pss_Anon) of every process whose `proc-stat` reply carries them: first, last, slope per minute, not asserted. Tester side done; the host side is a patch of `scripts/lib/procstat.sh` that the main session applies after the live run.
+
+## RFWD1 false-kill guard (`dv_launcher_child_stall_kills_total`)
+
+DV-Router RFWD1 (image `wip-8891cc7` and later): the launcher SIGKILLs an RF child whose heartbeat stalls for 2 s and counts it in
+`dv_launcher_child_stall_kills_total{child}` (hub metrics). this file (the soak) drives load and stalls no RF child on purpose, so DV-Router asks that the counter
+stays 0 for every child: any other value is a false kill and is reported.
+
+* `cases/stall_kills_support.py` (pure logic, unit tests `cases/unit/test_stall_kills_support.py`): an autouse module fixture reads the counter through the
+  control channel (`metrics xlxd-sut`) before the first test of the module, and the last test of the module, `test_zz_rfwd1_no_stall_kills`, reads it
+  again after one hub publication (12 s; the hub publishes every 10 s). Both reads are outside every measured window and add no load; the timing
+  behaviour and the gates of the cases are unchanged.
+* Result file `out/<run>/web/stall-kills.json` (merged per module): per child `start`, `end`, `delta`, `series_present`, `series_at_start`,
+  `readable_at_end`, `verdict` (`ok`, `false_kill`, `absent`, `unreadable`) and the message.
+* Judged: the test FAILS (a failed test in the pytest summary, not a teardown error) when any child's end value or delta is above 0; the message names
+  every such child with start, end and delta, and a `web.finding()` line (`out/<run>/web-findings.txt`) repeats it. It FAILS too when the end read does not
+  answer (a false kill cannot be excluded). An image whose hub has no series (no RFWD1) is recorded as `absent` and the test SKIPS with the reason; without
+  the control channel it skips as well. A start read that failed but an all-zero end is a pass with a `[RECORD]` line (a counter starts at 0).
+* Select it alone: `-k test_zz_rfwd1_no_stall_kills` (the start read still happens in the fixture).

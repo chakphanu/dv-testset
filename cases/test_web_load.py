@@ -30,6 +30,7 @@ import pytest
 from dvtest import metrics, web
 from dvtest import webload as wl
 from webload_support import LoadGen, LoadGenError, Sampler, Source, generator_cpu
+from stall_kills_support import check_end, stall_kills_start  # noqa: F401  (RFWD1 false-kill guard: autouse start read, last test)
 
 pytestmark = [pytest.mark.rig, pytest.mark.web, pytest.mark.slow]
 
@@ -495,3 +496,10 @@ def _via_proxy(base_url, ca, count):
         for c in conns:
             c.close()
     return _status_count(results)
+
+
+def test_zz_rfwd1_no_stall_kills(stall_kills_start):
+    """RFWD1 (dv-router wip-8891cc7): dv_launcher_child_stall_kills_total{child} stays 0 for every child across this module; any other
+    value is a false kill (this module stalls no RF child on purpose). Runs last; start read before the first test, end read after one hub
+    publication, both outside the measured windows; out/<run>/web/stall-kills.json (cases/stall_kills_support.py)."""
+    check_end("test_web_load", stall_kills_start)

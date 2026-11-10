@@ -41,6 +41,7 @@ import soak_support as ss
 from dvtest import k22, soak, web
 from dvtest import webload as wl
 from test_web_load import load_accounts, load_gen, load_ready, loadavg  # noqa: F401  (fixtures of the stage 5 file)
+from stall_kills_support import check_end, stall_kills_start  # noqa: F401  (RFWD1 false-kill guard: autouse start read, last test)
 
 pytestmark = [pytest.mark.rig, pytest.mark.web, pytest.mark.slow]
 
@@ -336,3 +337,10 @@ def test_soak_sixty_minutes(soak_on, load_gen, load_ready, rig_control, target, 
     failed = [c for c in list(result.checks) + extra if not c.ok]
     assert not failed, "SOAK1 failed: %s" % "; ".join("%s (%s)" % (c.name, c.detail) for c in failed[:6])
 
+
+
+def test_zz_rfwd1_no_stall_kills(stall_kills_start):
+    """RFWD1 (dv-router wip-8891cc7): dv_launcher_child_stall_kills_total{child} stays 0 for every child across this module; any other
+    value is a false kill (this module stalls no RF child on purpose). Runs last; start read before the first test, end read after one hub
+    publication, both outside the measured windows; out/<run>/web/stall-kills.json (cases/stall_kills_support.py)."""
+    check_end("test_web_soak", stall_kills_start)
