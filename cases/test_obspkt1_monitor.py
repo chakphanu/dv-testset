@@ -24,6 +24,7 @@ import sys
 import threading
 import time
 import types
+import urllib.parse
 from pathlib import Path
 
 import pytest
@@ -62,9 +63,14 @@ def web_ctx(web_operator, web_user, web_client):
     return types.SimpleNamespace(op=web_operator, anon=web_client, user=web_user, poster=web_user("N0OBP", may_tx=True))
 
 
+def refused_rows(rows):
+    """The edge tx rows on rf-a of a client frame the gate refused for its source: stage client, result src (data.md 13.5; kiss_server.rs monitor_refused)."""
+    return [r for r in ob.edge_rows(rows) if r.get("port") == "rf-a" and r.get("dir") == "tx" and ob.has_outcome(r, "client", "src")]
+
+
 def snapshot(admin, **query):
     """GET /api/v1/admin/packets with the query as given; (Response, body or None)."""
-    qs = "&".join("%s=%s" % (k, v) for k, v in query.items())
+    qs = "&".join("%s=%s" % (k, urllib.parse.quote(str(v), safe="")) for k, v in query.items())       # a space or a slash in a value is percent-encoded
     resp = admin.get(admin.path(PACKETS) + ("?" + qs if qs else ""), expect=None)
     return resp, (resp.json() if resp.status == 200 else None)
 
@@ -160,10 +166,11 @@ def traffic(ctx, hub, web_ctx, target):
         time.sleep(1.0)
     finally:
         client.close()
-    want = (m["S"], m["V"], m["I"], m["R"], m["C"], m["X"])
-    body = wait_rows(ctx, lambda rows: all(ob.mentions(rows, x) for x in want))
-    note(target, "traffic", "RECORD", "markers %s; %d rows after %.0f s; missing: %s" % (
-        sorted(m), len(body["rows"]), time.monotonic() - t0, [k for k in want if not ob.mentions(body["rows"], k)]))
+    # the refused frame (X) leaves a BODY-FREE row (stage client, result src; the gate refuses before the line is built): its marker is in no row
+    want = (m["S"], m["V"], m["I"], m["R"], m["C"])
+    body = wait_rows(ctx, lambda rows: all(ob.mentions(rows, x) for x in want) and refused_rows(rows))
+    note(target, "traffic", "RECORD", "markers %s; %d rows after %.0f s; missing: %s; refused client rows: %d" % (
+        sorted(m), len(body["rows"]), time.monotonic() - t0, [k for k in want if not ob.mentions(body["rows"], k)], len(refused_rows(body["rows"]))))
     return types.SimpleNamespace(markers=m, body=body, rows=body["rows"], frames=sent, mice_dest_hidden=mice_dest_hidden,
                                  mice_dest_visible=mice_dest_visible, t0=t0)
 
@@ -253,9 +260,13 @@ def test_obspkt1_b_rf_rx_rows_carry_the_gate_decision_and_edge_rows_only_the_hea
             row.get("ref"), [r.get("ref") for r in edge])
         assert any(r.get("header") == ob.line_header(row["line"]) for r in edge), "no edge header equals the worker line header %r: %s" % (
             ob.line_header(row["line"]), [r.get("header") for r in edge])
-    attached = [r for r in ob.rows_from(ob.edge_rows(rows), ob.SRC_STATUS, port="rf-a", dir="rx") if ob.has_outcome(r, "client", "sent")]
-    assert attached, "no delivery outcome (stage client, result sent) on the edge rx row of the status packet while a KISS client was attached: %s" % [
-        ob.outcomes(r) for r in ob.rows_from(ob.edge_rows(rows), ob.SRC_STATUS, port="rf-a", dir="rx")]
+    # the delivery to a KISS client is a LATER, body-free row (dir rx, same port, `of` = the seq of the edge rx row, the same `ref`, stage client result
+    # sent; kiss_server.rs output_sent_observed), not an outcome of the rx row itself
+    status_rx = ob.rows_from(ob.edge_rows(rows), ob.SRC_STATUS, port="rf-a", dir="rx")
+    delivered = [w for r in status_rx for w in ob.late_rows(rows, r) if ob.has_outcome(w, "client", "sent")]
+    assert delivered, "no later row with a client / sent outcome for the edge rx row of the status packet while a KISS client was attached: rx rows %s; late rows %s" % (
+        [(r.get("seq"), r.get("ref"), ob.outcomes(r)) for r in status_rx], [(w.get("of"), ob.outcomes(w)) for r in status_rx for w in ob.late_rows(rows, r)])
+    assert all(w.get("port") == "rf-a" and w.get("dir") == "rx" and "line" not in w and "header" not in w for w in delivered), "a delivery row: %s" % delivered[:1]
     # APRS-IS tx comes in two rows (confirmed): the start row (dir tx, port is, ref, header, stage render result received) and a later row with `of` =
     # the start row's seq and the same ref that carries stage write with a result of the fixed set (framed for a gated packet on a verified login)
     starts = [r for r in ob.rows_from(ob.edge_rows(rows), ob.SRC_STATUS, dir="tx") if r.get("port") == "is" and ob.has_outcome(r, "render", "received")]
@@ -290,9 +301,15 @@ def test_obspkt1_b_aprs_is_rx_and_rf_tx_rows(ctx, traffic, target):
     assert tx_worker, "no worker tx row on rf-a with the room text; tx rows seen: %s" % [(r["port"], ob.row_src(r)) for r in rows if r["dir"] == "tx"][:8]
     tx_edge = [r for r in ob.edge_rows(rows) if r["port"] == "rf-a" and r["dir"] == "tx" and ob.row_src(r) == dp11e.STATION]
     assert tx_edge and all("line" not in r for r in tx_edge), "RF edge tx rows of the worker-rendered text: %s" % tx_edge[:2]
-    assert any(ob.has_outcome(r, stage) for r in tx_edge for stage in ("txcore", "sched")), "no txcore / sched outcome: %s" % [ob.outcomes(r) for r in tx_edge]
+    # the edge tx start row has the header and the ref and no outcome; txcore / sched / modem outcomes come as LATER body-free rows (`of` = its seq, the
+    # same `ref`; tx.rs finish_monitor, shell.rs release_monitor)
+    late_tx = [w for r in tx_edge for w in ob.late_rows(rows, r)]
+    assert any(ob.has_outcome(w, stage) for w in late_tx for stage in ("txcore", "sched")), "no txcore / sched outcome in a later row: start rows %s, late rows %s" % (
+        [(r.get("seq"), r.get("ref"), ob.outcomes(r)) for r in tx_edge], [(w.get("of"), ob.outcomes(w)) for w in late_tx])
+    assert all("line" not in w and "header" not in w for w in late_tx), "a late tx row carries a line or header: %s" % late_tx[:1]
     assert any(r.get("ref") == tx_worker[0].get("ref") for r in tx_edge), "the edge tx row does not share the ref %s of the worker row" % tx_worker[0].get("ref")
-    note(target, "OBSPKT1-b", "RECORD", "rf tx worker outcomes %s; edge outcomes %s" % (ob.outcomes(tx_worker[0]), [ob.outcomes(r) for r in tx_edge][:3]))
+    note(target, "OBSPKT1-b", "RECORD", "rf tx worker outcomes %s; edge start rows %s; late outcomes %s" % (
+        ob.outcomes(tx_worker[0]), [ob.outcomes(r) for r in tx_edge][:3], [ob.outcomes(w) for w in late_tx][:4]))
 
 
 def test_obspkt1_b_a_local_kiss_client_row_keeps_its_line_but_not_a_position(ctx, traffic, target):
@@ -308,8 +325,13 @@ def test_obspkt1_b_a_local_kiss_client_row_keeps_its_line_but_not_a_position(ctx
     assert position, "no redacted client position row; rows: %s" % [(r.get("line"), r.get("redacted")) for r in rows][:4]
     assert ob.info_of(position[0]) == "" and ob.POS_CLIENT[0] not in json.dumps(traffic.rows), "the client position leaked: %s" % position[0]
     assert position[0]["redacted"] == ob.REDACTED
-    refused = [r for r in rows if traffic.markers["X"] in (r.get("line") or "")]
-    assert refused, "no client tx row for the refused frame (source N0TEST-9 is not in allow_src)"
+    # a frame the gate refuses never gets a line: kiss_server.rs monitor_refused makes a body-free tx row (port, dir tx, one client outcome, the refusal
+    # as the result); the line is built only after the admission checks (kiss_server_gate.rs)
+    refused = refused_rows(traffic.rows)
+    assert refused, "no client tx row with the refusal `src` (source N0TEST-9 is not in allow_src); client rows: %s" % [
+        (r.get("port"), r.get("line") or r.get("header"), ob.outcomes(r)) for r in rows][:6]
+    assert all("line" not in r and "header" not in r and "ref" not in r for r in refused), "a refusal row carries a line, header or ref: %s" % refused[:1]
+    assert not ob.mentions(traffic.rows, traffic.markers["X"]), "the payload of the refused frame appears in a row"
     assert ob.has_outcome(refused[0], "client", "src") and "src" in ob.CLIENT_REFUSALS, "refused client row outcomes: %s" % ob.outcomes(refused[0])
     assert not ob.has_outcome(refused[0], "client", "queued") and not ob.has_outcome(refused[0], "sched"), "a refused frame must not be queued or released: %s" % ob.outcomes(refused[0])
 
@@ -397,7 +419,7 @@ def test_obspkt1_e_no_packet_body_in_logs_public_state_other_routes_or_telemetry
     for m in markers:
         assert ob.mentions(traffic.rows, m), "the control: %s is not in the monitor" % m
     texts = {}
-    texts["public state"] = web_ctx.anon.get("/api/v1/public/state", expect=200).text()
+    texts["public state"] = web_ctx.anon().get("/api/v1/public/state", expect=200).text()
     for route in ("/status", "/clients", "/events", "/lastheard"):
         ctx.admin.step_up()
         resp = ctx.admin.get(ctx.admin.path(route), expect=None)
@@ -442,11 +464,38 @@ class Streamer:
 
     def __init__(self, admin):
         self.admin, self.frames, self.stop = admin, [], threading.Event()
+        self.times = []                                                 # [(monotonic, event, id or reason)] one entry per frame, for the timeline
+        self.t0 = time.monotonic()
         self.thread = threading.Thread(target=self.run, daemon=True)
+
+    def on_frame(self, frame):
+        self.frames.append(frame)
+        try:
+            data = json.loads(frame.get("data") or "null")
+        except ValueError:
+            data = None
+        tag = (data.get("id") or data.get("reason")) if isinstance(data, dict) else None
+        self.times.append((time.monotonic() - self.t0, frame.get("event", "message"), tag))
+
+    def timeline(self):
+        """A compact text of the frames that are not row batches (hello, gap, bye, resync), with the seconds since the stream was opened, and the row
+        batch counts per producer id."""
+        rows = {}
+        for _t, event, tag in self.times:
+            if event == "rows":
+                rows[tag] = rows.get(tag, 0) + 1
+        other = ["%.0fs %s %s" % (t, event, tag) for t, event, tag in self.times if event != "rows"]
+        return "%s; row batches %s" % (other, rows)
+
+    def gap_seen(self, ids):
+        return any(event == "gap" and tag in ids for _t, event, tag in self.times)
+
+    def ended(self):
+        return [(event, tag) for _t, event, tag in self.times if event in ("bye", "resync")]
 
     def run(self):
         try:
-            self.admin.sse(self.admin.path(STREAM), max_events=100000, timeout=900.0, on_frame=self.frames.append, stop=self.stop)
+            self.admin.sse(self.admin.path(STREAM), max_events=100000, timeout=900.0, on_frame=self.on_frame, stop=self.stop)
         except Exception:                                               # noqa: BLE001  the stream ending is not a failure of the reader
             pass
 
@@ -477,6 +526,7 @@ def test_obspkt1_d_a_process_restart_clears_its_rings(ctx, traffic, rig_control,
     assert worker_ids and old_ax, "producers seen: %s" % [p["id"] for p in before["producers"]]
     assert any(ob.mentions(ob.worker_rows(before["rows"]), m) for m in markers) and ob.edge_rows(before["rows"]), "nothing to clear"
     boot0 = boots(before)
+    admin = ctx.admin_session("admin")                          # a second login for the restart call, made BEFORE the stream opens
     with Streamer(ctx.admin) as stream:
         time.sleep(5.0)
         rig_control.kill_proc("xlxd-sut", "dv-data-worker", "KILL")
@@ -494,10 +544,10 @@ def test_obspkt1_d_a_process_restart_clears_its_rings(ctx, traffic, rig_control,
         for m in markers:
             assert not ob.mentions(ob.worker_rows(after["rows"]), m), "a worker row survived the worker restart: %s" % ob.mentions(ob.worker_rows(after["rows"]), m)[:1]
         assert ob.edge_rows(after["rows"]) and all(new_boot.get(e) == boot0[e] for e in edge_ids), "the edge rings or boots changed with the worker restart"
-        admin = ctx.admin_session("admin")
         admin.step_up()
         child = admin.post(admin.path("/children/%s/restart" % txguard.AX25_CHILD), {}, expect=None)
         assert child.status == 200, "restart of %s answered HTTP %d" % (txguard.AX25_CHILD, child.status)
+        t_restart = time.monotonic()
         end, final, new_ax = time.monotonic() + 90.0, None, []
         while time.monotonic() < end and final is None:
             time.sleep(3.0)
@@ -508,6 +558,13 @@ def test_obspkt1_d_a_process_restart_clears_its_rings(ctx, traffic, rig_control,
             if new_ax:
                 final = body
         assert final is not None, "no new AX.25 producer id appeared within 90 s of the restart (the edge id changes with the process)"
+        # The poller retires a producer only when the producer list (the hub process table, which lags about 10 s) stops naming it: the `gap` of the OLD
+        # id comes then, so the stream is kept open until it arrives (or ends, or 40 s pass).
+        end = time.monotonic() + 40.0
+        while time.monotonic() < end and not stream.gap_seen(old_ax) and not stream.ended():
+            time.sleep(1.0)
+        note(target, case, "RECORD", "%.0f s after the restart call: old ids %s, new ids %s, gap for the old id seen: %s" % (
+            time.monotonic() - t_restart, old_ax, new_ax, stream.gap_seen(old_ax)))
         assert not [r for r in final["rows"] if r.get("id") in old_ax], "rows of the old AX.25 id survived the restart"
         assert not any(ob.mentions([r for r in final["rows"] if ob.producer_kind(r.get("id")) == "edge"], m) for m in (traffic.markers["S"], traffic.markers["C"])), (
             "old AX.25 edge rows survived the restart")
@@ -515,7 +572,9 @@ def test_obspkt1_d_a_process_restart_clears_its_rings(ctx, traffic, rig_control,
     events = ob.parse_stream(stream.frames)
     note(target, case, "RECORD", "stream: hello %s, gaps %s, rows for %s, byes %s, resync %s; new AX.25 id %s" % (
         [p.get("id") for p in events.hello or []], events.gaps, sorted({r[0] for r in events.rows}), events.byes, events.resync, new_ax))
+    note(target, case, "RECORD", "stream timeline: %s" % stream.timeline())
     assert any(w in events.gaps for w in worker_ids), "no `gap` {id} for the restarted worker: gaps %s" % events.gaps
-    assert any(e in events.gaps for e in old_ax), "no `gap` for the OLD AX.25 id %s: gaps %s" % (old_ax, events.gaps)
+    assert any(e in events.gaps for e in old_ax), "no `gap` for the OLD AX.25 id %s: gaps %s; stream ended with %s; timeline %s" % (
+        old_ax, events.gaps, stream.ended(), stream.timeline())
     assert not any(n in events.gaps for n in new_ax), "a gap was reported for the NEW AX.25 id: %s" % events.gaps
     assert not any(n in [p.get("id") for p in events.hello or []] for n in new_ax), "the new AX.25 id was already in hello"

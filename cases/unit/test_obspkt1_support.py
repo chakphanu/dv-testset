@@ -32,7 +32,7 @@ MK = {k: "OBSPKT1X%s0A1B2C" % k for k in "SNHVMWAIRCPX"}
 def synthetic():
     rows = [
         row(W, 20, "rf-a", "rx", "N0OBA-1>APDVT1,WIDE1-1*:>" + MK["S"], (("rf", "heard"), ("route", "forwarded")), ref=5),
-        row(E_AX, 9, "rf-a", "rx", "N0OBA-1>APDVT1,WIDE1-1*", (("modem", "rx"), ("raw", "sent"), ("client", "sent")), key="header", ref=5),
+        row(E_AX, 9, "rf-a", "rx", "N0OBA-1>APDVT1,WIDE1-1*", (("modem", "rx"), ("raw", "sent")), key="header", ref=5),
         row(W, 21, "rf-a", "rx", "N0OBB-1>APDVT1,WIDE1-1*,NOGATE:>" + MK["N"], (("route", "no_gate"),), ref=6),
         row(E_AX, 10, "rf-a", "rx", "N0OBB-1>APDVT1,WIDE1-1*,NOGATE", (("modem", "rx"),), key="header", ref=6),
         row(W, 22, "rf-a", "rx", "N0OBC-1>APDVT1,WIDE1-1*:?APRS?", (("route", "filtered"),), ref=7),
@@ -48,10 +48,16 @@ def synthetic():
         row(W, 28, "is", "rx", "N0TEST-7>APDVT1,TCPIP*,qAC,SRV::XLX999B  :OBS " + MK["I"] + "{81", ref=2),
         row(E_IS, 4, "is", "rx", "N0TEST-7>APDVT1,TCPIP*,qAC,SRV", (("raw", "sent"),), key="header", ref=2),
         row(W, 29, "rf-a", "tx", "N0TEST-1>APZDVR::XLX999B  :OBS " + MK["R"], (("render", "sent"),), ref=3),
-        row(E_AX, 14, "rf-a", "tx", "N0TEST-1>APZDVR", (("txcore", "queued"), ("sched", "sent")), key="header", ref=3),
-        row(E_AX, 15, "rf-a", "tx", "N0TEST-7>APDR16,WIDE1-1::N0OBC    :" + MK["C"], (("client", "queued"), ("sched", "sent"))),
+        row(E_AX, 14, "rf-a", "tx", "N0TEST-1>APZDVR", (), key="header", ref=3),       # the start row of a tx: header and ref, no outcome yet
+        row(E_AX, 15, "rf-a", "tx", "N0TEST-7>APDR16,WIDE1-1::N0OBC    :" + MK["C"], (("client", "queued"),)),
         row(E_AX, 16, "rf-a", "tx", "N0TEST-7>APDR16,WIDE1-1:", (("client", "queued"),), redacted="position_policy"),
-        row(E_AX, 17, "rf-a", "tx", "N0TEST-9>APDR16,WIDE1-1::N0OBC    :" + MK["X"], (("client", "src"),)),
+        {"id": E_AX, "boot": BOOT, "seq": 17, "t_ms": 1700000000017, "port": "rf-a", "dir": "tx", "out": [{"stage": "client", "result": "src"}]},   # refused: body-free
+        # the later rows: the KISS client delivery of the status rx row (seq 9), the scheduler / modem outcomes of the rf tx start row (seq 14) and of the
+        # client message (seq 15, no ref)
+        {"id": E_AX, "boot": BOOT, "seq": 18, "t_ms": 1700000000018, "port": "rf-a", "dir": "rx", "ref": 5, "of": 9, "out": [{"stage": "client", "result": "sent"}]},
+        {"id": E_AX, "boot": BOOT, "seq": 19, "t_ms": 1700000000019, "port": "rf-a", "dir": "tx", "ref": 3, "of": 14, "out": [{"stage": "sched", "result": "sent"}]},
+        {"id": E_AX, "boot": BOOT, "seq": 20, "t_ms": 1700000000020, "port": "rf-a", "dir": "tx", "ref": 3, "of": 14, "out": [{"stage": "modem", "result": "tx"}]},
+        {"id": E_AX, "boot": BOOT, "seq": 21, "t_ms": 1700000000021, "port": "rf-a", "dir": "tx", "of": 15, "out": [{"stage": "sched", "result": "sent"}]},
         {"id": E_IS, "boot": BOOT, "seq": 5, "t_ms": 1700000000005, "port": "is", "dir": "tx", "ref": 40, "of": 3, "out": [{"stage": "write", "result": "framed"}]},
     ]
     return rows
@@ -192,6 +198,19 @@ def test_row_and_privacy_cases_pass_on_the_expected_rows_and_fail_on_each_defect
     bad[-1]["out"] = [{"stage": "write", "result": "sent"}]                                # outside the fixed write set
     with pytest.raises(AssertionError, match="outside"):
         tm.test_obspkt1_b_rf_rx_rows_carry_the_gate_decision_and_edge_rows_only_the_header(ctx, traffic(bad), None)
+    bad = [r for r in synthetic() if not (r.get("of") == 9)]                                # the late client / sent row is missing
+    with pytest.raises(AssertionError, match="no later row with a client / sent outcome"):
+        tm.test_obspkt1_b_rf_rx_rows_carry_the_gate_decision_and_edge_rows_only_the_header(ctx, traffic(bad), None)
+    bad = [r for r in synthetic() if not (r.get("of") == 14)]                               # the late sched / modem rows are missing
+    with pytest.raises(AssertionError, match="no txcore / sched outcome in a later row"):
+        tm.test_obspkt1_b_aprs_is_rx_and_rf_tx_rows(ctx, traffic(bad), None)
+    bad = [r for r in synthetic() if not (r.get("out") and r["out"][0].get("result") == "src")]       # no refusal row
+    with pytest.raises(AssertionError, match="no client tx row with the refusal"):
+        tm.test_obspkt1_b_a_local_kiss_client_row_keeps_its_line_but_not_a_position(ctx, traffic(bad), None)
+    bad = synthetic()
+    bad[20]["line"] = "N0TEST-9>APDR16,WIDE1-1::N0OBC    :" + MK["X"]                       # a refusal row that carries the payload
+    with pytest.raises(AssertionError, match="carries a line"):
+        tm.test_obspkt1_b_a_local_kiss_client_row_keeps_its_line_but_not_a_position(ctx, traffic(bad), None)
     bad = synthetic()
     bad.pop()                                                                              # the late write row is missing
     with pytest.raises(AssertionError, match="no later row with of=3 and ref=40"):
@@ -281,7 +300,7 @@ def test_the_leak_case_scans_logs_public_state_admin_routes_and_metrics(quiet, t
     logs.mkdir()
     (logs / "xlxd-sut.log").write_text("clean line\n")
     ctx = SimpleNamespace(target=SimpleNamespace(out=str(tmp_path)), admin=FakeAdmin(status=200, body={"items": []}))
-    web_ctx = SimpleNamespace(anon=SimpleNamespace(get=lambda path, expect=None: FakeResp(200, {"rooms": []})))
+    web_ctx = SimpleNamespace(anon=lambda: SimpleNamespace(get=lambda path, expect=None: FakeResp(200, {"rooms": []})))      # anon is a factory, as in the fixture
     hub = SimpleNamespace(text=lambda: 'dv_pkt_items_total{kind="text"} 3')
     tm.test_obspkt1_e_no_packet_body_in_logs_public_state_other_routes_or_telemetry(ctx, t, web_ctx, hub, None)
     (logs / "xlxd-sut.log").write_text("debug: rx N0OBA-1>APDVT1:>%s\n" % MK["S"])
@@ -431,3 +450,14 @@ def test_the_restart_case_expects_the_worker_id_to_stay_and_the_edge_id_to_chang
         restart_flow(monkeypatch, keep_old_rows=True)
     with pytest.raises(AssertionError, match="worker boot did not change"):
         restart_flow(monkeypatch, worker_boot_changes=False)
+
+
+def test_the_streamer_timeline_names_gaps_byes_and_row_batches():
+    admin = SimpleNamespace(path=lambda s: s, sse=lambda *a, **k: (200, "text/event-stream", []))
+    st = tm.Streamer(admin)
+    for frame in ({"event": "hello", "data": json.dumps({"producers": []})}, {"event": "rows", "data": json.dumps({"id": "pkt", "boot": [1], "rows": []})},
+                  {"event": "gap", "data": json.dumps({"id": E_AX})}, {"event": "bye", "data": json.dumps({"reason": "session ended"})}, {"event": "rows"}):
+        st.on_frame(frame)
+    assert st.gap_seen([E_AX]) and not st.gap_seen(["pkt"]) and st.ended() == [("bye", "session ended")]
+    text = st.timeline()
+    assert "gap %s" % E_AX in text and "bye session ended" in text and "'pkt': 1" in text and len(st.frames) == 5
