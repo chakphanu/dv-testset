@@ -16,8 +16,8 @@ command, runtime, GAPs and the shapes that are not confirmed: docs/obspkt1-cases
              restart dv-edge-ax25 (the edge id CHANGES with the process: EXACTLY ONE `gap` for the old id within 20 s after the restart call, none for any other
              id, no bye, nothing replayed; the new id appears in rows with its boot; `hello` is not complete by design); the stream runs on its OWN session
              because a step-up rotates the cookie and ends a stream opened with the old one
-  OBSPKT1-d2 (LAST) a step-up on the session that holds an open packet stream: a FINDING (OBSPKT1b) by default; with DVT_OBSPKT1B=on the stream must survive
-             it and a logout on its session must end it with a bye within 1 s
+  OBSPKT1-d2 (LAST) OBSPKT1b: a step-up on the session that holds an open packet stream: a FINDING by default; with DVT_OBSPKT1B=on the old cookie gets
+             401, the stream continues, a second stream replaces the first (`bye` replaced), a logout ends it within 1 s, an X-DV-TOTP step-up does not rotate
 
 Shape: dp11e-kiss.toml + dp11e-kiss-igate.toml + dp15-aprsis.toml + dp15-rf-out.toml + obspkt1-hidden.toml, profile web,aprs. Skips with a reason on an image
 without the packets routes (404), without the shape, or without a prerequisite. NOT RUN ON A RIG. Observations: stdout and out/<run>/obspkt1.txt.
@@ -233,6 +233,8 @@ def test_obspkt1_a_admin_with_a_step_up_gets_the_documented_snapshot_and_stream(
     assert port_resp.status == 200 and all(r["port"] == "rf-a" for r in only["rows"])
     status, ctype, frames = admin.sse(admin.path(STREAM), max_events=3, timeout=15.0, until="hello")
     assert status == 200 and "text/event-stream" in ctype, "stream: HTTP %s %s" % (status, ctype)
+    if ob.obspkt1b_on():                                                 # OBSPKT1b: the first frame is a bare `retry: 3000`
+        assert frames and set(frames[0]) == {"retry"}, "the first frame is %r, expected a bare `retry: 3000` (DVT_OBSPKT1B=on)" % (frames[:1],)
     retry, frames = ob.split_retry(frames)                               # `retry: 3000` may arrive as a bare block before the first event
     assert retry == "3000", "the stream's retry is %r, expected 3000" % (retry,)
     assert frames and frames[0].get("event") == "hello", "first stream event: %s" % frames[:1]
@@ -657,68 +659,114 @@ def test_obspkt1_d_a_process_restart_clears_its_rings(ctx, traffic, rig_control,
     t_kill_rel, t_call_rel = t_kill - stream.t0, t_call - stream.t0
     gap_times = [("%.1f" % t, tag) for t, event, tag in stream.times if event == "gap"]
     note(target, case, "RECORD", "gap frames (seconds since the stream opened): %s; worker kill at %.1f s, AX.25 restart call at %.1f s" % (gap_times, t_kill_rel, t_call_rel))
-    problems = ob.gap_problems(stream.times, old_ax, worker_ids, t_kill_rel, t_call_rel)
+    strict = ob.obspkt1b_on()
+    window = ob.GAP_WINDOW_STRICT_S if strict else ob.GAP_WINDOW_S      # OBSPKT1b: the third failed query gives the gap, at most about 9 s after the last success
+    problems = ob.gap_problems(stream.times, old_ax, worker_ids, t_kill_rel, t_call_rel, window=window)
     assert not problems, "the stream's gap, bye and resync frames: %s; timeline %s" % (problems, stream.timeline())
     for pid in worker_ids:
         replayed = ob.replay_after_gap(stream.frames, pid)["replayed"]
         assert not replayed, "rows after the gap of %s replay %d old (boot, seq) pairs: %s" % (pid, len(replayed), replayed[:3])
     id_problems = ob.stream_id_problems(stream.frames)
-    assert not id_problems, "a producer id appears in the stream without hello or a rows batch with its boot: %s" % id_problems
+    assert strict or not id_problems, "a producer id appears in the stream without hello or a rows batch with its boot: %s" % id_problems
+    wire = ob.wire_problems(stream.frames)
+    note(target, case, "RECORD" if not wire or not strict else "FINDING", "OBSPKT1b wire contract (bare retry, hello before rows, gap before a new boot): %s" % (wire or "met"))
+    assert not (strict and wire), "the stream breaks the OBSPKT1b wire contract (DVT_OBSPKT1B=on): %s" % wire
     note(target, case, "RECORD", "hello is not complete by design (it lists the producers the feed already holds a cursor for): new AX.25 id in hello: %s" % (
         any(n in [p.get("id") for p in events.hello or []] for n in new_ax)))
 
 
+def wait_hello(stream, timeout=15.0):
+    end = time.monotonic() + timeout
+    while time.monotonic() < end and not any(event == "hello" for _t, event, _tag in stream.times):
+        time.sleep(0.2)
+    return any(event == "hello" for _t, event, _tag in stream.times)
+
+
+def wait_ended(stream, timeout):
+    end = time.monotonic() + timeout
+    while time.monotonic() < end and not stream.ended():
+        time.sleep(0.05)
+    return stream.ended()
+
+
+def status_with_cookies(session, cookies, path="/session"):
+    """The HTTP status of GET <path> sent with `cookies` (a copy of an earlier cookie jar) instead of the session's own."""
+    probe = session.clone()
+    probe.cookies = dict(cookies)
+    return probe.get(session.path(path), expect=None).status
+
+
 def test_obspkt1_d2_a_step_up_on_the_streams_own_session_is_recorded(ctx, target):
-    """dv-router (app_packets.rs:87-95): the stream checks every 100 ms that the session id it was opened with is alive, and an explicit step-up ROTATES the
-    session cookie and ends the old id. So a step-up on the session that holds an open packet stream ends the stream with `bye` `session ended`: the
-    administrator's own step-up kills their stream. A dedicated login opens a stream, waits for `hello`, steps up on the same session and watches for the
-    `bye` for up to 10 s.
-    Default (an image before the OBSPKT1b fixes): a `bye` is a FINDING (OBSPKT1b), a surviving stream a RECORD; the case never fails on that outcome.
-    DVT_OBSPKT1B=on (the fixed image): the stream must SURVIVE the step-up, and a second dedicated stream must END with a `bye` within 1 s of a logout on
-    its session (the logout probe)."""
+    """OBSPKT1b (dv-router review 245, merged 432cecc8): a step-up through POST /session/step-up ROTATES the session cookie: the OLD cookie gets 401 at once, but
+    the session's open packet stream CONTINUES (the stream follows a stable session key, not the cookie). Before it, the stream followed the cookie id and
+    ended with `bye` `session ended` (the administrator's own step-up killed their stream).
+    Default (an image before OBSPKT1b): a dedicated login opens a stream, waits for `hello`, steps up on the same session and watches for the `bye` for up
+    to 10 s: a `bye` is a FINDING (OBSPKT1b), a surviving stream a RECORD; the case never fails on that outcome.
+    DVT_OBSPKT1B=on (the fixed image), all asserted:
+    * the stream starts with a bare `retry: 3000`, then `hello`;
+    * after a step-up the old cookie gets 401 and the stream gets no `bye` for 10 s;
+    * a second packet stream on the same session sends `bye` {reason: "replaced"} to the first (one per session, also across the rotation) and carries on;
+    * a logout ends the remaining stream with `bye` {reason: "session ended"} within 1 s (dv-router: within 100 ms; the time is recorded);
+    * a step-up through the X-DV-TOTP header does NOT rotate the cookie: the cookie jar is unchanged and the old cookie still works."""
     case = "OBSPKT1-d2"
     strict = ob.obspkt1b_on()
     session = second_login(ctx)
+    old_cookies = dict(session.cookies)
     with Streamer(session) as stream:
-        end = time.monotonic() + 15.0
-        while time.monotonic() < end and not any(event == "hello" for _t, event, _tag in stream.times):
-            time.sleep(0.2)
-        assert any(event == "hello" for _t, event, _tag in stream.times), "the dedicated stream did not open: %s" % stream.timeline()
+        assert wait_hello(stream), "the dedicated stream did not open: %s" % stream.timeline()
         time.sleep(1.0)
         assert not stream.ended(), "the stream ended before the step-up: %s" % stream.timeline()
         t_step = time.monotonic() - stream.t0
         session.step_up()                                             # up to 30 s: the TOTP code of a step-up must be a new one
         t_done = time.monotonic() - stream.t0
-        end = time.monotonic() + 10.0
-        while time.monotonic() < end and not stream.ended():
-            time.sleep(0.2)
-    ended = stream.ended()
-    note(target, case, "RECORD", "step-up started %.1f s and finished %.1f s after the stream opened; stream ended with %s; timeline %s; strict %s" % (
-        t_step, t_done, ended, stream.timeline(), strict))
-    if strict:
-        assert not ended, "a step-up on the stream's own session ended the stream (DVT_OBSPKT1B=on): %s" % (ended,)
-    elif ended and ended[0][0] == "bye":
-        note(target, case, "FINDING", "OBSPKT1b: a step-up on the session that holds an open packet stream ended the stream with bye %r (the step-up rotates the cookie and "
-              "the stream follows the old session id): the administrator's own step-up kills their stream" % (ended[0][1],))
-    else:
-        note(target, case, "RECORD", "the stream survived a step-up on its own session")
-    if not strict:
-        return
-    # the logout probe: a logout on the session that holds the stream ends the stream within 1 s
-    session = second_login(ctx)
-    with Streamer(session) as stream:
-        end = time.monotonic() + 15.0
-        while time.monotonic() < end and not any(event == "hello" for _t, event, _tag in stream.times):
-            time.sleep(0.2)
-        assert any(event == "hello" for _t, event, _tag in stream.times), "the logout-probe stream did not open: %s" % stream.timeline()
-        time.sleep(1.0)
-        assert not stream.ended(), "the logout-probe stream ended before the logout: %s" % stream.timeline()
-        t_out = time.monotonic() - stream.t0
-        session.logout()
-        end = time.monotonic() + 5.0
-        while time.monotonic() < end and not stream.ended():
-            time.sleep(0.05)
-    byes = [(t, tag) for t, event, tag in stream.times if event == "bye"]
-    note(target, case, "RECORD", "logout at %.2f s after the stream opened; bye frames %s; timeline %s" % (t_out, byes, stream.timeline()))
-    assert byes, "the stream did not end with a bye after the logout (5 s): %s" % stream.timeline()
-    assert byes[0][0] - t_out <= ob.LOGOUT_BYE_S, "the bye came %.2f s after the logout, expected within %.0f s" % (byes[0][0] - t_out, ob.LOGOUT_BYE_S)
+        if strict:
+            rotated = dict(session.cookies)
+            stale_status = status_with_cookies(session, old_cookies)
+            note(target, case, "RECORD", "step-up %.1f-%.1f s after the stream opened; cookie rotated: %s; GET /session with the old cookie: HTTP %s" % (
+                t_step, t_done, rotated != old_cookies, stale_status))
+            assert rotated != old_cookies, "a step-up through POST /session/step-up did not rotate the session cookie"
+            assert stale_status == 401, "the OLD cookie answered HTTP %s after the step-up, expected 401 at once" % stale_status
+            ended = wait_ended(stream, 10.0)
+        else:
+            ended = wait_ended(stream, 10.0)
+        note(target, case, "RECORD", "step-up started %.1f s and finished %.1f s after the stream opened; stream ended with %s; timeline %s; strict %s" % (
+            t_step, t_done, ended, stream.timeline(), strict))
+        if not strict:
+            if ended and ended[0][0] == "bye":
+                note(target, case, "FINDING", "OBSPKT1b: a step-up on the session that holds an open packet stream ended the stream with bye %r (the step-up rotates the cookie "
+                      "and the stream follows the old session id): the administrator's own step-up kills their stream" % (ended[0][1],))
+            else:
+                note(target, case, "RECORD", "the stream survived a step-up on its own session")
+            return
+        assert not ended, "a step-up on the stream's own session ended the stream (DVT_OBSPKT1B=on): %s; timeline %s" % (ended, stream.timeline())
+        # a second packet stream of the same session replaces the first (across the rotation)
+        with Streamer(session) as second:
+            assert wait_hello(second), "the second stream did not open: %s" % second.timeline()
+            first_ended = wait_ended(stream, 5.0)
+            note(target, case, "RECORD", "second stream opened; first stream ended with %s; second timeline %s" % (first_ended, second.timeline()))
+            assert first_ended == [("bye", "replaced")], "the first stream ended with %s, expected bye `replaced`" % (first_ended,)
+            assert not second.ended(), "the second stream ended too: %s" % second.timeline()
+            # a logout ends the remaining stream within 1 s
+            t_out = time.monotonic() - second.t0
+            t_wall = time.monotonic()
+            session.logout()
+            logout_ended = wait_ended(second, 5.0)
+            byes = [(t, tag) for t, event, tag in second.times if event == "bye"]
+            took = byes[0][0] - t_out if byes else None
+            note(target, case, "RECORD", "logout at %.2f s; the stream ended with %s after %s s (the call took %.2f s); timeline %s" % (
+                t_out, logout_ended, "%.2f" % took if took is not None else "?", time.monotonic() - t_wall, second.timeline()))
+    assert logout_ended == [("bye", "session ended")], "after the logout the stream ended with %s, expected bye `session ended`" % (logout_ended,)
+    assert took <= ob.LOGOUT_BYE_S, "the bye came %.2f s after the logout, expected within %.0f s" % (took, ob.LOGOUT_BYE_S)
+    # the X-DV-TOTP header step-up does not rotate the cookie; ctx.stale has had its window closed since OBSPKT1-f
+    stale = ctx.stale
+    before = dict(stale.cookies)
+    without = stale.get(stale.path(PACKETS) + "?limit=1", expect=None).status         # 403 `step_up_required` while its window is closed
+    resp = stale.get(stale.path(PACKETS) + "?limit=1", headers=stale.step_up_headers(), expect=None)
+    after = dict(stale.cookies)
+    still = status_with_cookies(stale, before)
+    note(target, case, "RECORD", "X-DV-TOTP step-up (the request without the header answered HTTP %s%s): with the header HTTP %s, cookie jar unchanged: %s, GET /session "
+         "with the old jar: HTTP %s" % (without, "" if without == 403 else ", so the window was still open and the header only refreshes it", resp.status,
+                                       after == before, still))
+    assert resp.status == 200, "a request with a fresh X-DV-TOTP code answered HTTP %s, expected 200 (it satisfies the step-up gate)" % resp.status
+    assert after == before, "a step-up through the X-DV-TOTP header rotated the session cookie"
+    assert still == 200, "the old cookie answered HTTP %s after the X-DV-TOTP step-up, expected 200 (no rotation)" % still

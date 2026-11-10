@@ -390,11 +390,16 @@ def test_the_snapshot_case_follows_the_confirmed_rules_and_catches_a_server_that
         tm.test_obspkt1_a_admin_with_a_step_up_gets_the_documented_snapshot_and_stream(SimpleNamespace(admin=PacketServer(leak=True), target=None), None)
 
 
-def test_the_stream_check_accepts_a_leading_retry_block_and_requires_retry_3000_and_hello_first(quiet):
+def test_the_stream_check_accepts_a_leading_retry_block_and_requires_retry_3000_and_hello_first(quiet, monkeypatch):
     for server in (PacketServer(), PacketServer(bare_retry=True)):
         tm.test_obspkt1_a_admin_with_a_step_up_gets_the_documented_snapshot_and_stream(SimpleNamespace(admin=server, target=None), None)
     with pytest.raises(AssertionError, match="retry is '5000'"):
         tm.test_obspkt1_a_admin_with_a_step_up_gets_the_documented_snapshot_and_stream(SimpleNamespace(admin=PacketServer(bare_retry=True, retry="5000"), target=None), None)
+    monkeypatch.setenv("DVT_OBSPKT1B", "on")                           # the OBSPKT1b image: the first frame is a bare `retry: 3000`
+    tm.test_obspkt1_a_admin_with_a_step_up_gets_the_documented_snapshot_and_stream(SimpleNamespace(admin=PacketServer(bare_retry=True), target=None), None)
+    with pytest.raises(AssertionError, match="expected a bare `retry: 3000`"):
+        tm.test_obspkt1_a_admin_with_a_step_up_gets_the_documented_snapshot_and_stream(SimpleNamespace(admin=PacketServer(), target=None), None)
+    monkeypatch.delenv("DVT_OBSPKT1B")
     assert ob.split_retry([{"retry": "3000"}, {"event": "hello"}]) == ("3000", [{"event": "hello"}])
     assert ob.split_retry([{"event": "hello", "retry": "3000"}]) == ("3000", [{"event": "hello", "retry": "3000"}])
     assert ob.split_retry([{"event": "hello"}]) == (None, [{"event": "hello"}]) and ob.split_retry([]) == (None, [])
@@ -449,7 +454,7 @@ class Scripted:
         return 200, "text/event-stream", []
 
 
-def restart_flow(monkeypatch, new_ax="ax25-0000000000000009", gaps=True, keep_old_rows=False, worker_boot_changes=True, old_edge_gap=True, bye=False, extra_gap=None, double_old_gap=False):
+def restart_flow(monkeypatch, new_ax="ax25-0000000000000009", gaps=True, keep_old_rows=False, worker_boot_changes=True, old_edge_gap=True, bye=False, extra_gap=None, double_old_gap=False, contract=False):
     new_boot = [9] * 16
     worker0 = {"id": W, "boot": BOOT}
     edge0, edge_is = {"id": E_AX, "boot": BOOT}, {"id": E_IS, "boot": BOOT}
@@ -465,6 +470,9 @@ def restart_flow(monkeypatch, new_ax="ax25-0000000000000009", gaps=True, keep_ol
     frames = [{"event": "hello", "data": json.dumps({"producers": [worker0, edge0, edge_is]})}]
     on_kill = [gap(W)] if gaps else []                                  # the worker's gap comes after the kill
     on_restart = ([gap(E_AX)] * (2 if double_old_gap else 1) if gaps and old_edge_gap else []) + ([gap(extra_gap)] if extra_gap else [])
+    if contract:                                                        # the OBSPKT1b wire contract: a bare retry first, a hello upserts a producer before its rows
+        frames = [{"retry": "3000"}] + frames
+        on_restart += [{"event": "hello", "data": json.dumps({"producers": [{"id": new_ax, "boot": [7] * 16}]})}]
     on_restart += [{"event": "rows", "data": json.dumps({"id": new_ax, "boot": [7] * 16, "rows": [{"seq": 1}]})}]
     if bye:
         on_restart += [{"event": "bye", "data": json.dumps({"reason": "session ended"})}]
@@ -537,6 +545,7 @@ class StreamSession:
         self.bye_after_logout, self.logouts, self.slow_logout_ticks, self.clock = bye_after_logout, 0, slow_logout_ticks, None
         self.authenticator = SimpleNamespace(next_code=lambda: "000000")
         self.on_frame = None
+        self.cookies = {"sid": "1"}
 
     def path(self, suffix):
         return "/api/v1/admin" + suffix
@@ -602,27 +611,147 @@ def test_gap_problems_judge_counts_phases_window_other_ids_and_byes():
     assert ob.obspkt1b_on({"DVT_OBSPKT1B": "on"}) and not ob.obspkt1b_on({}) and not ob.obspkt1b_on({"DVT_OBSPKT1B": "off"})
 
 
-def test_the_step_up_probe_asserts_on_the_obspkt1b_image_and_probes_the_logout(monkeypatch):
-    def run(sessions, strict=True):
-        monkeypatch.setattr(tm.ds, "write_note", lambda *a, **k: None)
-        monkeypatch.setenv("DVT_OBSPKT1B", "on" if strict else "")
-        queue = iter(sessions)
-        monkeypatch.setattr(tm, "second_login", lambda ctx: next(queue))
-        ticks = iter(x * 0.5 for x in range(0, 10 ** 6))
-        clock = lambda: next(ticks)  # noqa: E731
-        for sess in sessions:
-            sess.clock = clock
-        monkeypatch.setattr(tm, "time", SimpleNamespace(sleep=lambda s: None, monotonic=clock))
-        tm.test_obspkt1_d2_a_step_up_on_the_streams_own_session_is_recorded(SimpleNamespace(), None)
-    first, second = StreamSession(False), StreamSession(False, bye_after_logout=True)
-    run([first, second])
-    assert first.step_ups == 1 and second.logouts == 1 and second.step_ups == 0
-    with pytest.raises(AssertionError, match="a step-up on the stream's own session ended the stream"):
-        run([StreamSession(True), StreamSession(False)])
-    with pytest.raises(AssertionError, match="did not end with a bye after the logout"):
-        run([StreamSession(False), StreamSession(False, bye_after_logout=False)])
-    with pytest.raises(AssertionError, match="the bye came .* s after the logout"):
-        run([StreamSession(False), StreamSession(False, slow_logout_ticks=6)])
-    lone = StreamSession(False)
-    run([lone], strict=False)                                           # the default: no logout probe, nothing asserted
-    assert lone.step_ups == 1 and lone.logouts == 0
+class FakeTime:
+    """A clock that advances only through sleep(), and yields to the stream threads for a real millisecond each time."""
+
+    def __init__(self):
+        import time as real
+        self.now, self._real = 1000.0, real
+
+    def sleep(self, s):
+        self.now += s
+        self._real.sleep(0.001)
+
+    def monotonic(self):
+        return self.now
+
+
+class Probe:
+    def __init__(self, owner):
+        self.owner, self.cookies = owner, {}
+
+    def path(self, suffix):
+        return self.owner.path(suffix)
+
+    def get(self, path, expect=None, headers=None):
+        ok = self.owner.old_cookie_ok or self.cookies == self.owner.cookies
+        return SimpleNamespace(status=200 if ok else 401)
+
+
+class RotSession:
+    """A session double for OBSPKT1-d2 on the OBSPKT1b image: a step-up rotates the cookie (the old one gets 401) and the open streams continue, a second
+    stream replaces the first, a logout ends the open stream. The flags reproduce each defect."""
+
+    user_agent = "dvt-web/1"
+
+    def __init__(self, clock, rotate=True, old_cookie_ok=False, kill_on_step_up=False, replace=True, logout_delay=0.0, header_rotates=False, window_open=False):
+        self.clock, self.rotate, self.old_cookie_ok, self.kill, self.replace = clock, rotate, old_cookie_ok, kill_on_step_up, replace
+        self.logout_delay, self.header_rotates, self.window_open = logout_delay, header_rotates, window_open
+        self.cookies, self.n, self.streams, self.step_ups = {"sid": "1"}, 1, [], 0
+        self.authenticator = SimpleNamespace(next_code=lambda: "000000")
+
+    def path(self, suffix):
+        return "/api/v1/admin" + suffix
+
+    def hide(self, *a):
+        pass
+
+    def clone(self):
+        return Probe(self)
+
+    def _bye(self, entry, reason):
+        if entry["open"]:
+            entry["open"] = False
+            entry["on"]({"event": "bye", "data": json.dumps({"reason": reason})})
+
+    def _rotate(self):
+        self.n += 1
+        self.cookies = {"sid": str(self.n)}
+
+    def step_up(self):
+        self.step_ups += 1
+        if self.rotate:
+            self._rotate()
+        if self.kill:
+            for entry in self.streams:
+                self._bye(entry, "session ended")
+
+    def step_up_headers(self):
+        return {"X-DV-TOTP": "000000"}
+
+    def get(self, path, expect=None, headers=None):
+        if headers:
+            if self.header_rotates:
+                self._rotate()
+            return SimpleNamespace(status=200)
+        return SimpleNamespace(status=200 if self.window_open else 403)
+
+    def sse(self, path, max_events=1, timeout=1.0, on_frame=None, stop=None, **kw):
+        if self.replace:
+            for entry in self.streams:
+                self._bye(entry, "replaced")
+        entry = {"on": on_frame, "open": True}
+        self.streams.append(entry)
+        on_frame({"retry": "3000"})
+        on_frame({"event": "hello", "data": json.dumps({"producers": []})})
+        stop.wait(30.0)
+        return 200, "text/event-stream", []
+
+    def logout(self):
+        self.clock.now += self.logout_delay
+        for entry in self.streams:
+            self._bye(entry, "session ended")
+
+
+def d2_strict(monkeypatch, **flags):
+    notes = []
+    monkeypatch.setattr(tm.ds, "write_note", lambda target, case, tag, text, **kw: notes.append((tag, text)))
+    monkeypatch.setenv("DVT_OBSPKT1B", "on")
+    clock = FakeTime()
+    session, stale = RotSession(clock, **flags), RotSession(clock, header_rotates=flags.get("header_rotates", False), window_open=flags.get("window_open", False))
+    monkeypatch.setattr(tm, "second_login", lambda ctx: session)
+    monkeypatch.setattr(tm, "time", clock)
+    tm.test_obspkt1_d2_a_step_up_on_the_streams_own_session_is_recorded(SimpleNamespace(stale=stale), None)
+    return notes, session, stale
+
+
+def test_d2_strict_passes_on_the_obspkt1b_contract_and_names_each_defect(monkeypatch):
+    notes, session, stale = d2_strict(monkeypatch)
+    text = " ".join(t for _tag, t in notes)
+    assert session.step_ups == 1 and "cookie rotated: True" in text and "GET /session with the old cookie: HTTP 401" in text
+    assert "second stream opened; first stream ended with [('bye', 'replaced')]" in text and "the stream ended with [('bye', 'session ended')]" in text
+    assert "cookie jar unchanged: True" in text and "HTTP 403" in text
+    d2_strict(monkeypatch, window_open=True)                                                    # a still open window: the note says the header only refreshes it
+    cases = [(dict(rotate=False), "did not rotate the session cookie"), (dict(old_cookie_ok=True), "OLD cookie answered HTTP 200"),
+             (dict(kill_on_step_up=True), "a step-up on the stream's own session ended the stream"), (dict(replace=False), "expected bye `replaced`"),
+             (dict(logout_delay=1.5), "the bye came 1.50 s after the logout"), (dict(header_rotates=True), "rotated the session cookie")]
+    for flags, message in cases:
+        with pytest.raises(AssertionError, match=message):
+            d2_strict(monkeypatch, **flags)
+
+
+def test_wire_problems_judge_the_obspkt1b_stream_contract():
+    def f(event, **data):
+        return {"event": event, "data": json.dumps(data)}
+    b1, b2 = [1] * 16, [2] * 16
+    retry = {"retry": "3000"}
+    good = [retry, f("hello", producers=[{"id": W, "boot": b1}]), f("rows", id=W, boot=b1, rows=[]), f("gap", id=W), f("hello", producers=[{"id": W, "boot": b2}]),
+            f("rows", id=W, boot=b2, rows=[]), f("hello", producers=[{"id": E_AX, "boot": b1}]), f("rows", id=E_AX, boot=b1, rows=[]), f("bye", reason="session ended")]
+    assert ob.wire_problems(good) == []
+    assert any("bare `retry: 3000`" in p for p in ob.wire_problems([dict(good[1], retry="3000")] + good[2:]))             # retry attached to the first event
+    assert any("expected `hello`" in p for p in ob.wire_problems([retry, f("rows", id=W, boot=b1, rows=[])] + good[3:]))
+    assert any("no hello announced" in p for p in ob.wire_problems(good[:2] + [f("rows", id=E_AX, boot=b1, rows=[])]))      # rows before the id's hello
+    assert any("without a gap before them" in p for p in ob.wire_problems([retry, f("hello", producers=[{"id": W, "boot": b1}, {"id": W, "boot": b2}]),
+                                                                         f("rows", id=W, boot=b1, rows=[]), f("rows", id=W, boot=b2, rows=[])]))
+    assert any("gap for" in p for p in ob.wire_problems(good[:2] + [f("gap", id=E_AX)]))                                  # a gap for an id no hello announced
+    assert any("follows the terminal bye" in p for p in ob.wire_problems(good + [f("rows", id=W, boot=b2, rows=[])]))
+    assert ob.wire_problems([]) == ["no frame at all"] and ob.GAP_WINDOW_STRICT_S == 12.0
+
+
+def test_the_restart_case_asserts_the_obspkt1b_wire_contract_and_the_12_s_window_with_the_switch(monkeypatch):
+    restart_flow(monkeypatch)                                           # lenient: the contract is only recorded
+    monkeypatch.setenv("DVT_OBSPKT1B", "on")
+    admin = restart_flow(monkeypatch, contract=True)
+    assert any("OBSPKT1b wire contract" in t and "met" in t for _tag, t in admin.notes)
+    with pytest.raises(AssertionError, match="breaks the OBSPKT1b wire contract"):
+        restart_flow(monkeypatch)                                       # no bare retry first, no hello for the new edge id before its rows

@@ -321,6 +321,55 @@ def gap_problems(times, old_edge, worker_ids, t_kill, t_restart_call, window=GAP
     return problems
 
 
+GAP_WINDOW_STRICT_S = 12.0              # OBSPKT1b: the third failed query gives the gap, at most about 9 s after the last success
+
+
+def wire_problems(frames):
+    """Problems ([] = fine) of the OBSPKT1b wire contract of a packet stream (SSE frames in arrival order; review 245 "Wire contract and bounds for the rig"):
+    the first frame is a bare `retry: 3000` and the next event is `hello`; every (id, boot) of a `rows` frame was announced by a `hello` that carried that
+    boot (a later hello upserts one producer BEFORE its first rows, also for an empty ring, a recovery and a new boot after its gap); a `gap` names a producer
+    that was announced; the rows of a new boot of an id come after its `gap`; nothing follows a terminal `resync` or `bye`."""
+    problems = []
+    if not frames:
+        return ["no frame at all"]
+    first = frames[0]
+    if set(first) != {"retry"} or first.get("retry") != "3000":
+        problems.append("the first frame is %r, expected a bare `retry: 3000`" % (first,))
+    events = [f for f in frames if set(f) != {"retry"}]
+    if not events or events[0].get("event") != "hello":
+        problems.append("the first event is %r, expected `hello`" % ((events[0].get("event") if events else None),))
+    announced, last_boot, gapped, terminal = set(), {}, set(), None
+    for frame in events:
+        event = frame.get("event", "message")
+        if terminal is not None:
+            problems.append("a %s frame follows the terminal %s" % (event, terminal))
+            break
+        try:
+            data = json.loads(frame.get("data") or "null")
+        except ValueError:
+            continue
+        if event == "hello" and isinstance(data, dict):
+            for p in data.get("producers") or []:
+                if isinstance(p, dict):
+                    announced.add((p.get("id"), tuple(p.get("boot") or ())))
+        elif event == "rows" and isinstance(data, dict):
+            pid, boot = data.get("id"), tuple(data.get("boot") or ())
+            if (pid, boot) not in announced:
+                problems.append("rows for %s boot %s that no hello announced" % (pid, list(boot)[:2]))
+            if pid in last_boot and last_boot[pid] != boot and pid not in gapped:
+                problems.append("rows of a new boot of %s without a gap before them" % pid)
+            last_boot[pid] = boot
+            gapped.discard(pid)
+        elif event == "gap" and isinstance(data, dict):
+            pid = data.get("id")
+            if pid not in {i for i, _b in announced}:
+                problems.append("gap for %s, which no hello announced" % pid)
+            gapped.add(pid)
+        elif event in ("resync", "bye"):
+            terminal = event
+    return problems
+
+
 def split_retry(frames):
     """(retry, frames without the leading retry-only blocks). `retry: 3000` is the first line of the stream; the parser may yield that bare block as a frame
     of its own (only the key `retry`) before `hello`, or attach it to the first event. `retry` is the value of the last one seen in the leading blocks or on the
