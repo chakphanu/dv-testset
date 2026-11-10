@@ -57,7 +57,7 @@ WEBSID1 ends the stream with a `bye`, and every case skips with that reason. `DV
 
 ## GAPs and shapes not confirmed
 
-* Idle and absolute expiry: hard-coded (users idle 12 h, absolute 7 d; operators idle 30 min, absolute 12 h; `crates/svc/web/src/auth/mod.rs:72-77`; the line in `web.md` that says otherwise is fixed in WEBSID1b) and no setting shortens them, so they are not driven.
+* Idle and absolute expiry: hard-coded (users idle 12 h, absolute 7 d; operators idle 30 min, absolute 12 h; `crates/svc/web/src/auth/mod.rs:72-77`; the 15 min idle / 4 h absolute / at most 3 per account of `web.md` line 623 belong to the ADMIN host sessions of dv-svc-admin, not to dv-svc-web accounts, and are not wrong) and no setting shortens them, so they are not driven.
 * TOTP enable, replace and disable ("current handles survive, sibling logins end", review-248 item 1): not written; they need a second authenticator and a sibling login.
 * The 100 ms WAV bound and "under 49 KiB buffered": the browser sees the end of a body only after its own buffers drain, so the case shows that the body is CUT, not when; the
   timing is covered by dv-router's own tests (`recordings_review`).
