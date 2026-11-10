@@ -291,6 +291,28 @@ def test_install_tree_can_stage_another_index_without_touching_the_source(tmp_pa
     assert (state / "basemap" / "regions" / "INDEX").read_bytes() == before
 
 
+def test_install_tree_stage_hook_damages_only_the_staged_copy(tmp_path):
+    src, _m = make_tree(tmp_path / "product")
+    state = tmp_path / "state"
+    state.mkdir()
+    seen = []
+
+    def hook(staging):
+        seen.append(staging.name)
+        target = staging / "base" / "glyphs" / "OFL.txt"
+        target.write_bytes(b"damaged\n")
+
+    before = (src / "base" / "glyphs" / "OFL.txt").read_bytes()
+    m2.install_tree(state, src, stage_hook=hook)
+    assert seen == ["basemap.dvt-staging"]                                           # the hook sees the staging directory, before the rename
+    assert (state / "basemap" / "base" / "glyphs" / "OFL.txt").read_bytes() == b"damaged\n"
+    assert (src / "base" / "glyphs" / "OFL.txt").read_bytes() == before              # the source is intact
+    assert m2.remove_tree(state) is True
+    with pytest.raises(RuntimeError):
+        m2.install_tree(state, src, stage_hook=lambda staging: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert not (state / "basemap").exists() and not (state / "basemap.dvt-staging").exists()      # a failing hook leaves nothing behind
+
+
 def test_install_tree_refuses_what_is_not_a_complete_v2_tree(tmp_path):
     state = tmp_path / "state"
     state.mkdir()

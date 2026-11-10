@@ -429,3 +429,83 @@ def test_the_map2h_case_names_only_documented_reasons():
     used = set(re.findall(r'"(old_index|writer_active|no_install|[a-z]+_[a-z]+_[a-z]+)"', text)) & {"old_index", "writer_active", "no_install"}
     assert used == set(map2d.UNAVAILABLE_REASONS)
     assert "python3 -m pytest" not in text
+
+
+# ---------------------------------------------------------------- MAP2h contrast: pre-MAP2d INDEX versus a corrupt current-format tree
+
+def test_corrupt_index_keeps_the_map2d_shape_and_adds_one_unknown_key():
+    index = good_index()
+    corrupt = json.loads(map2d.corrupt_index_bytes(index))
+    assert corrupt["dvt_corrupt"] == 1 and {k: v for k, v in corrupt.items() if k != "dvt_corrupt"} == index
+    assert map2d.is_map2d_index(corrupt) and not map2d.is_pre_worker_index(corrupt)      # NOT the pre-MAP2d refusal
+    assert any("unknown keys" in p for p in map2d.index_problems(corrupt))              # the strict schema would reject it
+    assert map2d.corrupt_index_bytes(json.dumps(index).encode()) == map2d.corrupt_index_bytes(index)
+    assert good_index() == index
+
+
+def test_flip_byte_changes_one_bit_keeps_the_size_and_the_utf8_of_a_notice(tmp_path):
+    path = tmp_path / "OFL.txt"
+    path.write_bytes(fx.NOTICE)
+    digest = map2d.flip_byte(path)
+    changed = path.read_bytes()
+    assert len(changed) == len(fx.NOTICE) and changed != fx.NOTICE and changed[1:] == fx.NOTICE[1:]
+    assert bin(changed[0] ^ fx.NOTICE[0]).count("1") == 1 and len(digest) == 16
+    changed.decode("utf-8")                                                                # the notice still validates as text
+    assert fx.sha256_hex(changed).startswith(digest) and fx.sha256_hex(changed) != fx.sha256_hex(fx.NOTICE)
+    empty = tmp_path / "empty"
+    empty.write_bytes(b"")
+    with pytest.raises(ValueError):
+        map2d.flip_byte(empty)
+    map2d.flip_byte(path, offset=len(fx.NOTICE) + 3)                                       # the offset wraps
+    assert path.read_bytes() != changed
+
+
+def snap_of(old_index=0.0, failures=0.0, writer_active=0.0, no_install=0.0):
+    return {"reasons": {"old_index": old_index, "writer_active": writer_active, "no_install": no_install}, "failures": failures, "fetches": 0.0}
+
+
+def test_a_pre_map2d_index_must_move_only_the_reason():
+    assert map2d.contrast_problems(snap_of(old_index=1.0, failures=4.0), 4.0, "unavailable") == []
+    rose = map2d.contrast_problems(snap_of(old_index=1.0, failures=6.0), 4.0, "unavailable")
+    assert len(rose) == 1 and "rose from 4.0 to 6.0" in rose[0] and "PRODUCT FINDING per dv-router" in rose[0]
+    no_reason = map2d.contrast_problems(snap_of(old_index=0.0, failures=4.0), 4.0, "unavailable")
+    assert len(no_reason) == 1 and "reason=old_index" in no_reason[0] and "PRODUCT FINDING" in no_reason[0]
+    both = map2d.contrast_problems(snap_of(old_index=0.0, failures=9.0), 4.0, "unavailable")
+    assert len(both) == 2
+    assert map2d.contrast_problems(snap_of(old_index=1.0, failures=None), 4.0, "unavailable") == []      # no counter exported: judged on the reason
+
+
+def test_a_corrupt_current_tree_must_move_only_the_failure_counter():
+    assert map2d.contrast_problems(snap_of(failures=5.0), 4.0, "failure") == []
+    assert map2d.contrast_problems(snap_of(failures=9.0), 4.0, "failure") == []                 # a retry per tick: more than +1 is fine
+    as_reason = map2d.contrast_problems(snap_of(old_index=1.0, failures=5.0), 4.0, "failure")
+    assert len(as_reason) == 1 and "corrupt tree of the current format" in as_reason[0] and "PRODUCT FINDING per dv-router" in as_reason[0]
+    flat = map2d.contrast_problems(snap_of(failures=4.0), 4.0, "failure")
+    assert len(flat) == 1 and "counted no failure" in flat[0] and "PRODUCT FINDING" in flat[0]
+    missing = map2d.contrast_problems(snap_of(failures=None), 4.0, "failure")
+    assert len(missing) == 1
+    assert len(map2d.contrast_problems(snap_of(old_index=1.0, failures=4.0), 4.0, "failure")) == 2
+    with pytest.raises(ValueError):
+        map2d.contrast_problems(snap_of(), 0.0, "either")
+    assert "deployment.md 1092-1101" in map2d.PRODUCT_FINDING and "status.md 376-384" in map2d.PRODUCT_FINDING
+
+
+def test_settled_value_waits_until_the_counter_stops_moving():
+    fake = FakeClock()
+    reads = iter([3.0, 5.0, 6.0, 6.0, 9.0])
+    assert map2d.settled_value(lambda: next(reads), poll=12.0, timeout=90.0, sleep=fake.sleep, clock=fake.clock) == 6.0
+    assert fake.now == 36.0
+    fake = FakeClock()
+    assert map2d.settled_value(lambda: 2.0, sleep=fake.sleep, clock=fake.clock) == 2.0 and fake.now == 12.0
+    fake = FakeClock()
+    counter = iter(range(100))
+    last = map2d.settled_value(lambda: float(next(counter)), poll=12.0, timeout=30.0, sleep=fake.sleep, clock=fake.clock)
+    assert last == 3.0 and fake.now == 36.0                                                  # never settles: gives up after the timeout
+    fake = FakeClock()
+    assert map2d.settled_value(lambda: None, sleep=fake.sleep, clock=fake.clock) is None
+
+
+def test_the_map2h_case_has_the_contrast_variants():
+    text = (ROOT / "cases" / "test_map2h_unavailable.py").read_text()
+    for name in ("index_unknown_key", "glyph_hash_mismatch", "PRODUCT_FINDING", "contrast_problems", "remove_tree"):
+        assert name in text, name

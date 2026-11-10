@@ -112,14 +112,21 @@ DV-Router MAP2h (6ef82fd9, on main d20532de) makes `dv_basemap_failures_total` c
 |------|-------|----------|---------------|
 | no_install | no tree in the state dir | `no_install` is 1 and only it (45 s allowed: tick 5 s + publish 10 s + ingest 10 s); `failures_total` never above its baseline for 25 s more; the source saw no request | values, seconds, tiles.json |
 | old_index | a tree installed as a whole (rename of `basemap/`) whose `regions/INDEX` is the saved MAP2d INDEX without `fetch_enabled`, `preparing`, `too_large` | `old_index` is 1 and only it; `failures_total` flat over 25 s; the worker did not rewrite the old INDEX; when tiles.json says installed, `fetch_enabled` false and `preparing` []; no source request. Then the INDEX is restored by an atomic replace: the gauge returns to all 0, tiles.json is installed again, the INDEX is in the MAP2d shape (the worker rewrites it), `failures_total` flat | the `installed` flag while the INDEX is old |
+| corrupt current tree (two variants: `index_unknown_key`, `glyph_hash_mismatch`) | a tree of the CURRENT format, installed whole, whose MAP2d INDEX has one unknown key (the INDEX is strict) or whose `glyphs/OFL.txt` has one flipped bit (hash mismatch found by the verification) | `dv_basemap_failures_total` rises by at least 1 (the rise at first sight and after 25 s is recorded: the worker retries each tick); `old_index` stays 0 throughout; the tree is removed afterwards | all three reason values, the source summary |
 | writer_active | the tester holds `flock(LOCK_EX \| LOCK_NB)` on `<state>/.basemap-install.lock` (one inode on both sides of the sut-state bind mount; BSD flock, as `publish.rs`) | `writer_active` is 1 and only it; `failures_total` flat 25 s; tiles.json `fetch_enabled` false and `preparing` [] (the worker dropped its lease); no source request. Lock released: gauge all 0 again | whether `fetch_enabled` is true again (a finding if not) |
+
+The contrast (dv-router, deployment.md 1092-1101, status.md 376-384): an INDEX in the pre-MAP2d format is refused BEFORE any job and moves only
+`unavailable{reason=old_index}`; a verification JOB that finds an invalid or corrupt tree of the current format is a real failure and moves only
+`dv_basemap_failures_total`. This settles the earlier note that one place of the sources seemed to count a verify error as a failure and another as `old_index`: both are
+right, for different inputs. If a run shows the opposite the case fails with the message `PRODUCT FINDING per dv-router`. A baseline for "did it rise" is taken
+only once `failures_total` stopped moving (two equal reads 12 s apart: the ingest lags and an earlier case may still be counting).
 
 The INDEX is swapped only while the worker has no base: its `open` re-reads the INDEX each tick, while a RUNNING worker re-reads it only when the MANIFEST identity changes,
 so an in-place swap under a running worker would not be noticed. An INDEX of another version, with unknown keys, or a missing INDEX next to a MANIFEST is a counted failure
 by design (not `old_index`); the generation is never compared. The tester must keep the lock descriptor open: `fcntl.lockf` would not conflict with the worker's `flock`.
 The tree, the lock and the INDEX are restored in `finally` blocks and a module fixture. The case skips with the reason without `dv_basemap_unavailable` in the hub metrics.
 
-Run (about 5 minutes; the same environment as the MAP2d case, alone or together with it, the MAP2d file first): `... scripts/run.sh -m rig --capture --profile web,mapsrc -- cases/test_map2d_regions.py cases/test_map2h_unavailable.py`.
+Run (about 10 minutes with the corrupt-tree variants and the settled baselines; the same environment as the MAP2d case, alone or together with it, the MAP2d file first): `... scripts/run.sh -m rig --capture --profile web,mapsrc -- cases/test_map2d_regions.py cases/test_map2h_unavailable.py`.
 Do not restart `xlxd-sut` in the run.
 
 ## UNVERIFIED

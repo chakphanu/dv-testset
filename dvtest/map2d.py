@@ -379,3 +379,73 @@ class HeldLock:
 
     def __exit__(self, *exc):
         self.release()
+
+
+# ---------------------------------------------------------------- MAP2h contrast: a pre-MAP2d INDEX versus a corrupt tree of the current format
+
+PRODUCT_FINDING = ("PRODUCT FINDING per dv-router (deployment.md 1092-1101, status.md 376-384): an INDEX in the pre-MAP2d format is refused "
+                   "before any job and moves only dv_basemap_unavailable{reason=old_index}; a verification job that finds an invalid or "
+                   "corrupt tree of the CURRENT format is a real failure and moves only dv_basemap_failures_total")
+
+
+def corrupt_index_bytes(index):
+    """A MAP2d INDEX of the current format with one key the schema does not know (the INDEX is strict, `deny_unknown_fields`): "invalid
+    JSON document", a counted failure and NOT the pre-MAP2d refusal, because the three worker fields are all there."""
+    doc = json.loads(index) if isinstance(index, (bytes, str)) else dict(index)
+    doc["dvt_corrupt"] = 1
+    return (json.dumps(doc, indent=2, sort_keys=True) + "\n").encode("ascii")
+
+
+def flip_byte(path, offset=0):
+    """Flips one bit of the byte at `offset` of a regular file in place: same size, other SHA-256 (a hashed file of an installed base
+    then fails `verify` with a payload SHA-256 mismatch). Returns the file's new bytes' first 16 hex digits of sha256, for the log."""
+    import hashlib
+    path = Path(path)
+    data = bytearray(path.read_bytes())
+    if not data:
+        raise ValueError("%s is empty" % path)
+    data[offset % len(data)] ^= 0x01
+    path.write_bytes(bytes(data))
+    return hashlib.sha256(bytes(data)).hexdigest()[:16]
+
+
+def contrast_problems(snap, baseline, expect):
+    """The verdict on one snapshot after a tree was installed, `baseline` being failures_total read just before.
+    expect "unavailable": a pre-MAP2d INDEX: old_index must be the one series at 1 and failures_total must not exceed the baseline.
+    expect "failure": a corrupt tree of the current format: failures_total must be above the baseline and old_index must be 0
+    (any other reason is recorded by the caller, not judged). Every problem carries PRODUCT_FINDING: the product disagrees with dv-router."""
+    reasons = (snap or {}).get("reasons") or {}
+    failures = (snap or {}).get("failures")
+    out = []
+    if expect == "unavailable":
+        if failures is not None and failures > baseline:
+            out.append("dv_basemap_failures_total rose from %s to %s for a pre-MAP2d INDEX. %s" % (baseline, failures, PRODUCT_FINDING))
+        if reasons.get("old_index") != 1.0:
+            out.append("dv_basemap_unavailable{reason=old_index} is %r for a pre-MAP2d INDEX. %s" % (reasons.get("old_index"), PRODUCT_FINDING))
+    elif expect == "failure":
+        if reasons.get("old_index") == 1.0:
+            out.append("dv_basemap_unavailable{reason=old_index} is 1 for a corrupt tree of the current format (failures_total %s, baseline %s). %s" % (failures, baseline, PRODUCT_FINDING))
+        if failures is None or failures < baseline + 1:
+            out.append("dv_basemap_failures_total is %r, baseline %s: a corrupt tree of the current format counted no failure. %s" % (failures, baseline, PRODUCT_FINDING))
+    else:
+        raise ValueError("expect is 'unavailable' or 'failure'")
+    return out
+
+
+def settled_value(read, poll=12.0, timeout=90.0, sleep=None, clock=None):
+    """Polls `read()` (a number, or None) until two consecutive reads are equal and returns that value (None if it never settles in
+    `timeout` seconds: the last read is returned then). A counter read right after an event still lags by the 10 s ingest, so a
+    baseline for "did it rise" is only trustworthy once it stopped moving."""
+    import time
+    sleep = sleep or time.sleep
+    clock = clock or time.monotonic
+    start = clock()
+    previous = read()
+    while True:
+        sleep(poll)
+        current = read()
+        if current == previous:
+            return current
+        previous = current
+        if clock() - start >= timeout:
+            return current

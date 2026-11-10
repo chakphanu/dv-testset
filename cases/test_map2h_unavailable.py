@@ -22,6 +22,15 @@ image without `dv_basemap_unavailable` (before MAP2h). NOT RUN on a rig yet: wri
                                           1 (and only it), failures_total stays put, fetch_enabled false; the lock is released: all 0
                                           again and fetch_enabled true
 
+  test_a_corrupt_tree_of_the_current_format_is_a_failure_not_a_reason   [index_unknown_key, glyph_hash_mismatch] the CONTRAST
+                                          (dv-router, deployment.md 1092-1101, status.md 376-384): a tree of the current format that a
+                                          verification job finds corrupt is a real failure. A MAP2d INDEX with one unknown key (the
+                                          INDEX is strict: "invalid JSON document") and a hashed glyph file with one flipped bit
+                                          ("payload SHA-256 mismatch") each: dv_basemap_failures_total rises by at least 1 (the rise is
+                                          recorded; the worker retries each tick), reason old_index stays 0 throughout; the tree is
+                                          removed at the end. If the product disagrees (a corrupt current tree reads old_index, or the
+                                          pre-MAP2d INDEX counts a failure) the case fails with "PRODUCT FINDING per dv-router".
+
 Recorded, not asserted: the values and the seconds each transition took, the descriptor `installed` flag while the INDEX is old, the
 source's request summary. The INDEX swap works on a tree that is installed as a whole (rename of basemap/) while the worker has no
 base: its `open` re-reads the INDEX every 5 s tick. Swapping an INDEX under a RUNNING worker is not noticed (the worker re-reads it
@@ -143,18 +152,25 @@ def wait_reason(control, reason):
     return map2d.wait_for_series(lambda: read_snapshot(control), lambda s: map2d.reason_is(s, reason), timeout=TRANSITION_S, poll=3.0)
 
 
+def settled_baseline(control):
+    """failures_total once it stopped moving (the ingest lags 10 s, an earlier case may still be counting): the baseline of "did it rise"."""
+    value = map2d.settled_value(lambda: read_snapshot(control)["failures"])
+    return value or 0.0
+
+
 def assert_reached(snap, waited, reached, reason, label):
     assert reached, "%s: after %.0f s the gauge is %s (failures_total %s), want %s" % (
         label, waited, snap["reasons"], snap["failures"], "only %s at 1" % reason if reason else "all three at 0")
 
 
-def failures_stay(control, baseline, label, seconds=HOLD_S):
+def failures_stay(control, baseline, label, seconds=HOLD_S, finding=False):
     """Reads the gauge snapshot for `seconds` and asserts failures_total never rose above `baseline`. Returns the last snapshot."""
     end = time.monotonic() + seconds
     snap = read_snapshot(control)
     while True:
         if snap["failures"] is not None:
-            assert snap["failures"] <= baseline, "%s: dv_basemap_failures_total rose from %s to %s while the worker was only unavailable" % (label, baseline, snap["failures"])
+            assert snap["failures"] <= baseline, "%s: dv_basemap_failures_total rose from %s to %s while the worker was only unavailable%s" % (
+                label, baseline, snap["failures"], (". " + map2d.PRODUCT_FINDING) if finding else "")
         if time.monotonic() >= end:
             return snap
         time.sleep(5.0)
@@ -179,7 +195,7 @@ def test_no_install_is_a_reason_not_a_failure(gauge, control, state_dir, web_cli
         pytest.skip("%s exists already: the cases do not replace an installed tree" % (state_dir / "basemap"))
     snap, waited, reached = wait_reason(control, "no_install")
     assert_reached(snap, waited, reached, "no_install", "no tree installed")
-    baseline = snap["failures"] or 0.0
+    baseline = settled_baseline(control)
     snap = failures_stay(control, baseline, "no tree installed")
     assert map2d.reason_is(snap, "no_install"), "no_install did not hold for %.0f s: %s" % (HOLD_S, snap["reasons"])
     summary = source_quiet(stats_url, "no tree installed")
@@ -188,19 +204,59 @@ def test_no_install_is_a_reason_not_a_failure(gauge, control, state_dir, web_cli
         waited, HOLD_S, snap["failures"], snap["fetches"], resp.status, body, summary))
 
 
+CORRUPTIONS = {
+    # a MAP2d INDEX (all three worker fields present) with a key the strict schema does not know: parse fails, a counted failure
+    "index_unknown_key": lambda basemap: {"index_bytes": map2d.corrupt_index_bytes(basemap.index_bytes)},
+    # a hashed file of the base with one flipped bit: the verification job fails with a payload SHA-256 mismatch
+    "glyph_hash_mismatch": lambda basemap: {"stage_hook": lambda staging: map2d.flip_byte(staging / "base" / "glyphs" / "OFL.txt")},
+}
+
+
+@pytest.mark.parametrize("kind", sorted(CORRUPTIONS))
+def test_a_corrupt_tree_of_the_current_format_is_a_failure_not_a_reason(kind, gauge, control, basemap, state_dir, stats_url):
+    if (state_dir / "basemap").exists():
+        pytest.skip("%s exists already: the cases do not replace an installed tree" % (state_dir / "basemap"))
+    baseline = settled_baseline(control)
+    m2.install_tree(state_dir, basemap.path, **CORRUPTIONS[kind](basemap))
+    try:
+        snap, waited, _reached = map2d.wait_for_series(
+            lambda: read_snapshot(control),
+            lambda s: s["failures"] is not None and s["failures"] >= baseline + 1 or map2d.reason_is(s, "old_index"),
+            timeout=TRANSITION_S, poll=3.0)
+        problems = map2d.contrast_problems(snap, baseline, "failure")
+        assert not problems, "corrupt tree (%s): %s" % (kind, "; ".join(problems))
+        first_rise = snap["failures"] - baseline
+        end = time.monotonic() + HOLD_S
+        while time.monotonic() < end:                    # old_index stays 0 for as long as the corruption stays in place
+            time.sleep(5.0)
+            later = read_snapshot(control)
+            assert later["reasons"].get("old_index") != 1.0, "corrupt tree (%s): old_index became 1. %s" % (kind, map2d.PRODUCT_FINDING)
+        problems = map2d.contrast_problems(later, baseline, "failure")
+        assert not problems, "corrupt tree (%s), after %.0f s: %s" % (kind, HOLD_S, "; ".join(problems))
+        summary = source_quiet(stats_url, "corrupt tree (%s)" % kind)
+        record("%s: failures_total %s -> %s after %.0f s (+%d at first sight, +%d after %.0f s: the worker retries each tick); reasons %s; source %s" % (
+            kind, baseline, snap["failures"], waited, first_rise, later["failures"] - baseline, HOLD_S, later["reasons"], summary))
+    finally:
+        m2.remove_tree(state_dir)                          # restored: no tree, the next case starts from no_install
+
+
 def test_an_old_index_is_a_reason_not_a_failure(gauge, control, basemap, state_dir, web_client, stats_url):
     anon = web_client()
     if (state_dir / "basemap").exists():
         pytest.skip("%s exists already: the cases do not replace an installed tree" % (state_dir / "basemap"))
     old = map2d.old_index_bytes(basemap.index_bytes)
     assert map2d.is_pre_worker_index(json.loads(old)), "the synthetic old INDEX is not in the pre-MAP2d shape"
-    baseline = read_snapshot(control)["failures"] or 0.0
+    baseline = settled_baseline(control)
     m2.install_tree(state_dir, basemap.path, index_bytes=old)
     index_path = state_dir / "basemap" / "regions" / "INDEX"
     try:
         snap, waited, reached = wait_reason(control, "old_index")
+        problems = map2d.contrast_problems(snap, baseline, "unavailable")
+        assert not problems, "INDEX written before MAP2d: %s" % "; ".join(problems)
         assert_reached(snap, waited, reached, "old_index", "INDEX written before MAP2d")
-        held = failures_stay(control, baseline, "INDEX written before MAP2d")
+        held = failures_stay(control, baseline, "INDEX written before MAP2d", finding=True)
+        problems = map2d.contrast_problems(held, baseline, "unavailable")
+        assert not problems, "INDEX written before MAP2d, after %.0f s: %s" % (HOLD_S, "; ".join(problems))
         assert map2d.reason_is(held, "old_index"), "old_index did not hold for %.0f s: %s" % (HOLD_S, held["reasons"])
         assert map2d.is_pre_worker_index(map2d.read_index(state_dir / "basemap")), "the worker rewrote the old INDEX: it must stay refused until `install` is re-run"
         resp, body = descriptor(anon)
@@ -235,7 +291,7 @@ def test_a_held_install_lock_is_a_reason_not_a_failure(gauge, control, state_dir
         pytest.skip("no installed tree is served (the old-INDEX case did not leave one): tiles.json %d %s" % (resp.status, body))
     snap, waited, reached = wait_reason(control, None)
     assert_reached(snap, waited, reached, None, "before the lock is taken")
-    baseline = snap["failures"] or 0.0
+    baseline = settled_baseline(control)
     lock = map2d.HeldLock(state_dir)
     cleanup.append(lock)
     lock.acquire_retry(timeout=30.0)

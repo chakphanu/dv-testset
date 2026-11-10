@@ -322,7 +322,7 @@ def tree_problems(root, manifest):
 INSTALLED_MARK = ".dvt-installed"
 
 
-def install_tree(state_dir, source, index_bytes=None):
+def install_tree(state_dir, source, index_bytes=None, stage_hook=None):
     """Installs a tree made by `dv-svc-basemap install --state <dir>` (it holds base/ and regions/) as <state_dir>/basemap/ by one
     rename from a staging directory next to it (never over an existing basemap/), with a marker INSIDE (remove_tree deletes only
     what this made). The product's own tool made the bytes; this copies and re-checks them. Returns the MANIFEST dict.
@@ -345,6 +345,8 @@ def install_tree(state_dir, source, index_bytes=None):
         shutil.copytree(source, staging, symlinks=False)
         if index_bytes is not None:
             (staging / "regions" / "INDEX").write_bytes(index_bytes)
+        if stage_hook is not None:
+            stage_hook(staging)
         (staging / INSTALLED_MARK).write_text("installed by dv-testset\n", encoding="ascii")
         os.rename(staging, final)
     except Exception:
