@@ -182,22 +182,28 @@ ROW_KEYS = {"type", "id", "item_type", "room", "callsign", "protocol", "ts_ms", 
 COORDINATE_KEYS = ("lat_e7", "lon_e7")
 
 
+def identity_key(value):
+    """The page's station key of a callsign: upper case, cut at the first space, SSID and suffix kept (positions-station.js stationKey; the same rule as
+    cases/position_support.py identity_matches)."""
+    return str(value).strip().upper().split(" ")[0]
+
+
 def annex_rows(rows, callsign=None, kind=None):
     """The weather / telemetry rows of a list, optionally of one EXACT guard identity (upper case, SSID kept) and one kind."""
     return [r for r in rows if isinstance(r, dict) and r.get("item_type") in ANNEX_TYPES and (kind is None or r.get("item_type") == kind)
-            and (callsign is None or str(r.get("callsign", "")).upper() == callsign.upper())]
+            and (callsign is None or identity_key(r.get("callsign", "")) == identity_key(callsign))]
 
 
 def station_rows(rows, callsign=None, kind=None):
     """Position, object, weather and telemetry rows of a list (the public map rows), optionally of an exact guard identity and one kind."""
     return [r for r in rows if isinstance(r, dict) and r.get("item_type") in ("position", "object") + ANNEX_TYPES and (kind is None or r.get("item_type") == kind)
-            and (callsign is None or str(r.get("callsign", "")).upper() == callsign.upper())]
+            and (callsign is None or identity_key(r.get("callsign", "")) == identity_key(callsign))]
 
 
 def base_rows(rows, base):
     """Every public map row of the BASE callsign (any SSID): what a hide_position or an opt-out must remove."""
     base = base.upper()
-    return [r for r in station_rows(rows) if str(r.get("callsign", "")).upper().split("-")[0].split("/")[0].split(" ")[0] == base]
+    return [r for r in station_rows(rows) if identity_key(r.get("callsign", "")).split("-")[0].split("/")[0] == base]
 
 
 def row_problems(row):

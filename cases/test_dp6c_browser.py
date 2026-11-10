@@ -9,7 +9,8 @@ only, in English and Thai, and the operator event view shows none of them. Needs
           whose telemetry table has the names, calibrated values, units and raw values; received names and the project (`<b>`, `<i>`) stay literal text (no element is created);
           the page asks only its own origin and raises no CSP report beyond the documented CSP2/CSP3 WebKit signatures
   DP6c-9  the operator events page (#/events) shows no weather or telemetry row: the weather-only station has no row at all, the stations with a position show their position
-          event only; the operator API still carries the typed items (data.md 13.2)
+          event only. The case is about the RENDERED event display (event-display.js keeps only text, status and position data rows); the API and the SSE feed DO carry
+          the typed items (status.md, web.md), which the case only records
 GAPs: the marker click that focuses the details (a WebGL marker has no DOM element; docs/dp6c-cases.md) and the admin SPA event view (admin host sign-in with TOTP).
 """
 import sys

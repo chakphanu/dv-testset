@@ -10,6 +10,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import dp6c_support as sp  # noqa: E402
+import position_support as ps  # noqa: E402
 import test_dp19_locator as t19  # noqa: E402
 import test_dp6c_aprsis as tis  # noqa: E402
 import test_dp6c_rf as trf  # noqa: E402
@@ -303,3 +304,12 @@ def test_the_locator_case_helpers():
     words = [t19.word_of(v) for v in list(aprs.LOCATOR_LOOKALIKES.values()) + [">On the air plainword"]]
     assert len(set(words)) == len(words), words                                                  # every status is told apart by its last word
     assert t19.PUBLIC_BASE not in ("N0OPT", "N0LOC")
+
+
+def test_the_identity_rules_agree_with_the_position_helpers():
+    assert dp6c.ANNEX_TYPES == ps.ANNEX_TYPES
+    for kind in ("position", "object", "weather", "telemetry", "text"):
+        assert (kind in dp6c.ANNEX_TYPES) == ps.is_annex({"item_type": kind})
+    for shown, want in (("N0WXA-13", "N0WXA-13"), ("n0wxa-13 ", "N0WXA-13"), ("N0WXA-13 extra", "N0WXA-13"), ("N0WXA", "N0WXA-13"), ("N0WXA-9", "N0WXA-13")):
+        assert (dp6c.identity_key(shown) == dp6c.identity_key(want)) == ps.identity_matches(shown, want), (shown, want)
+    assert [r["item_type"] for r in dp6c.annex_rows([row("N0WXA-13 x", "weather"), row("N0WXA", "weather")], "N0WXA-13")] == ["weather"]
