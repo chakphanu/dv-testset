@@ -37,7 +37,7 @@ def synthetic():
         row(E_AX, 10, "rf-a", "rx", "N0OBB-1>APDVT1,WIDE1-1*,NOGATE", (("modem", "rx"),), key="header", ref=6),
         row(W, 22, "rf-a", "rx", "N0OBC-1>APDVT1,WIDE1-1*:?APRS?", (("route", "filtered"),), ref=7),
         row(E_AX, 11, "rf-a", "rx", "N0OBC-1>APDVT1,WIDE1-1*", (("modem", "rx"),), key="header", ref=7),
-        row(E_IS, 3, "is", "tx", "N0OBA-1>APDVT1,WIDE1-1*,qAO,N0TEST-1", (("write", "sent"),), key="header", ref=40),
+        row(E_IS, 3, "is", "tx", "N0OBA-1>APDVT1,WIDE1-1*,qAO,N0TEST-1", (("render", "received"),), key="header", ref=40),
         row(W, 23, "rf-a", "rx", "N0HID-7>APDVT1,WIDE1-1*:", (("rf", "heard"),), ref=8, redacted="position_policy"),
         row(W, 24, "rf-a", "rx", "N0OBD-1>APDVT1,WIDE1-1*:=1030.42N/02015.17E>" + MK["V"], ref=9),
         row(W, 25, "rf-a", "rx", "N0HID-9>(mic-e),WIDE1-1*:", ref=10, redacted="position_policy"),
@@ -52,6 +52,7 @@ def synthetic():
         row(E_AX, 15, "rf-a", "tx", "N0TEST-7>APDR16,WIDE1-1::N0OBC    :" + MK["C"], (("client", "queued"), ("sched", "sent"))),
         row(E_AX, 16, "rf-a", "tx", "N0TEST-7>APDR16,WIDE1-1:", (("client", "queued"),), redacted="position_policy"),
         row(E_AX, 17, "rf-a", "tx", "N0TEST-9>APDR16,WIDE1-1::N0OBC    :" + MK["X"], (("client", "src"),)),
+        {"id": E_IS, "boot": BOOT, "seq": 5, "t_ms": 1700000000005, "port": "is", "dir": "tx", "ref": 40, "of": 3, "out": [{"stage": "write", "result": "framed"}]},
     ]
     return rows
 
@@ -95,6 +96,13 @@ def test_ids_headers_query_rules_and_the_row_fields_follow_the_confirmed_shapes(
     assert [ob.query_ok("dir", v) for v in ("rx", "tx", "both", "", "up")] == [True, True, True, True, False]
     assert [ob.query_ok("limit", v) for v in ("0", "100", "5000", "-1", "abc", "")] == [True, True, True, False, False, False]
     assert [ob.clamped_limit(v) for v in ("0", "1", "100", "5000")] == [1, 1, 100, 1000]
+    assert ob.ROUTE_RESULTS == ("forwarded", "seen", "hops", "rate", "filtered", "no_gate", "not_heard", "unreachable", "dedupe", "overflow", "unknown_origin")
+    assert len(ob.WRITE_RESULTS) == 12 and "framed" in ob.WRITE_RESULTS and "sent" not in ob.WRITE_RESULTS
+    assert any("route result" in p for p in ob.row_problems(dict(synthetic()[0], out=[{"stage": "route", "result": "heard"}])))
+    assert any("write result" in p for p in ob.row_problems(dict(synthetic()[0], out=[{"stage": "write", "result": "sent"}])))
+    assert ob.row_problems(synthetic()[-1]) == []                                  # the late write row: of, ref, no header, no line
+    start = synthetic()[6]
+    assert [r["seq"] for r in ob.late_rows(synthetic(), start)] == [5] and ob.late_rows(synthetic(), synthetic()[0]) == []
     assert ob.BYE_REASONS == ("session ended", "stream lifetime", "replaced") and "rate" in ob.CLIENT_REFUSALS and len(ob.CLIENT_REFUSALS) == 11
     good = synthetic()[0]
     assert ob.row_problems(good) == []
@@ -179,6 +187,21 @@ def test_row_and_privacy_cases_pass_on_the_expected_rows_and_fail_on_each_defect
     bad[12]["line"] = "N0OBE-1>(mic-e),WIDE1-1*:`abc" + MK["W"]                             # a visible station's worker line must show the real destination
     with pytest.raises(AssertionError, match="shows .mic-e. only when redacted"):
         tm.test_obspkt1_c_mic_e_destinations_show_the_placeholder(ctx, traffic(bad), None)
+    notes = []
+    bad = synthetic()
+    bad[-1]["out"] = [{"stage": "write", "result": "sent"}]                                # outside the fixed write set
+    with pytest.raises(AssertionError, match="outside"):
+        tm.test_obspkt1_b_rf_rx_rows_carry_the_gate_decision_and_edge_rows_only_the_header(ctx, traffic(bad), None)
+    bad = synthetic()
+    bad.pop()                                                                              # the late write row is missing
+    with pytest.raises(AssertionError, match="no later row with of=3 and ref=40"):
+        tm.test_obspkt1_b_rf_rx_rows_carry_the_gate_decision_and_edge_rows_only_the_header(ctx, traffic(bad), None)
+    bad = synthetic()
+    bad[-1]["out"] = [{"stage": "write", "result": "expired"}]                             # in the set but not the expected `framed`: a finding, not a failure
+    quiet_notes = []
+    tm.ds.write_note = lambda target, case, tag, text, **kw: quiet_notes.append((tag, text))
+    tm.test_obspkt1_b_rf_rx_rows_carry_the_gate_decision_and_edge_rows_only_the_header(ctx, traffic(bad), None)
+    assert any(tag == "FINDING" and "expired" in text for tag, text in quiet_notes)
     bad = synthetic()
     bad[11]["header"] = "N0OBE-1>TQTQ30,WIDE1-1*"                                         # the edge shows the real Mic-E destination
     with pytest.raises(AssertionError, match="edge rows of N0OBE-1"):

@@ -36,6 +36,11 @@ STEP_UP_MARGIN_S = 15.0
 EDGE_ID = re.compile(r"^[a-z][a-z0-9]*-[0-9a-f]{16}$")
 PORT_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 BYE_REASONS = ("session ended", "stream lifetime", "replaced")
+# the route outcome results are exactly the dv_pkt_path_total result set (crates/lib/pkt/src/router/types.rs:20); confirmed by DV-Router at b9a6839e
+ROUTE_RESULTS = ("forwarded", "seen", "hops", "rate", "filtered", "no_gate", "not_heard", "unreachable", "dedupe", "overflow", "unknown_origin")
+# the APRS-IS `write` results (crates/lib/pkt/src/monitor/codes.rs:265-277); the start row of an APRS-IS tx carries render / received
+WRITE_RESULTS = ("framed", "bad_line", "banner_garbage", "stale", "regression", "gap", "unsupported", "unverified", "expired", "no_gate", "overflow",
+                 "disconnected")
 CLIENT_REFUSALS = ("tx_off", "tx_addr", "channel", "bad_frame", "not_ui", "src", "path", "too_long", "third_party", "rate", "command")
 
 
@@ -87,6 +92,10 @@ def row_problems(row, where="row"):
         for n, o in enumerate(row["out"]):
             if not isinstance(o, dict) or o.get("stage") not in STAGES or not isinstance(o.get("result"), str) or not o.get("result"):
                 problems.append("%s outcome %d is %r" % (where, n, o))
+            elif o["stage"] == "route" and o["result"] not in ROUTE_RESULTS:
+                problems.append("%s route result %r is not in the dv_pkt_path_total set %s" % (where, o["result"], ROUTE_RESULTS))
+            elif o["stage"] == "write" and o["result"] not in WRITE_RESULTS:
+                problems.append("%s write result %r is not in %s" % (where, o["result"], WRITE_RESULTS))
     for key in ("line", "header"):
         if key in row and (not isinstance(row[key], str) or len(row[key]) > LINE_MAX * 2):
             problems.append("%s %s is not a bounded string" % (where, key))
@@ -211,6 +220,11 @@ def has_outcome(row, stage=None, result=None):
 def info_of(row):
     parsed = split_tnc2(row["line"]) if row.get("line") else None
     return None if parsed is None else parsed[3]
+
+
+def late_rows(rows, start):
+    """The body-free rows that complete `start`: the same producer, `of` = start's monitor sequence, the same `ref` (a late outcome row)."""
+    return [r for r in rows if r.get("of") == start.get("seq") and r.get("id") == start.get("id") and r.get("ref") == start.get("ref")]
 
 
 def mentions(rows, needle):

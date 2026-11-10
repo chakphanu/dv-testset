@@ -242,6 +242,8 @@ def test_obspkt1_b_rf_rx_rows_carry_the_gate_decision_and_edge_rows_only_the_hea
         row = worker[0]
         note(target, "OBSPKT1-b", "RECORD", "%s: line %r, outcomes %s, ref %s" % (src, row["line"], ob.outcomes(row), row.get("ref")))
         assert ob.has_outcome(row, "route", result), "%s: route outcome %s, expected result %r" % (src, ob.outcomes(row), result)
+        assert result in ob.ROUTE_RESULTS and all(res in ob.ROUTE_RESULTS for stage, res in ob.outcomes(row) if stage == "route"), (
+            "%s: a route result is outside the dv_pkt_path_total set %s: %s" % (src, ob.ROUTE_RESULTS, ob.outcomes(row)))
         edge = [r for r in ob.rows_from(ob.edge_rows(rows), src, port="rf-a", dir="rx")]
         assert edge, "no edge rx row for %s on rf-a" % src
         assert all("line" not in r for r in edge), "an edge rx row carries a line: %s" % [r for r in edge if "line" in r][:1]
@@ -253,10 +255,25 @@ def test_obspkt1_b_rf_rx_rows_carry_the_gate_decision_and_edge_rows_only_the_hea
     attached = [r for r in ob.rows_from(ob.edge_rows(rows), ob.SRC_STATUS, port="rf-a", dir="rx") if ob.has_outcome(r, "client", "sent")]
     assert attached, "no delivery outcome (stage client, result sent) on the edge rx row of the status packet while a KISS client was attached: %s" % [
         ob.outcomes(r) for r in ob.rows_from(ob.edge_rows(rows), ob.SRC_STATUS, port="rf-a", dir="rx")]
-    gated = [r for r in ob.rows_from(ob.edge_rows(rows), ob.SRC_STATUS, dir="tx") if r.get("port") == "is"]
-    assert gated, "no APRS-IS edge tx row for the gated frame of %s (ports seen: %s)" % (ob.SRC_STATUS, sorted({r["port"] for r in rows}))
-    assert all("line" not in r and traffic.markers["S"] not in json.dumps(r) for r in gated), "the APRS-IS edge tx row carries the information field"
-    assert any(ob.has_outcome(r, "write") for r in gated), "no write outcome on the APRS-IS tx row: %s" % [ob.outcomes(r) for r in gated]
+    # APRS-IS tx comes in two rows (confirmed): the start row (dir tx, port is, ref, header, stage render result received) and a later row with `of` =
+    # the start row's seq and the same ref that carries stage write with a result of the fixed set (framed for a gated packet on a verified login)
+    starts = [r for r in ob.rows_from(ob.edge_rows(rows), ob.SRC_STATUS, dir="tx") if r.get("port") == "is" and ob.has_outcome(r, "render", "received")]
+    assert starts, "no APRS-IS edge start row (render / received) for the gated frame of %s; tx rows on is: %s" % (
+        ob.SRC_STATUS, [(r.get("header"), ob.outcomes(r)) for r in ob.edge_rows(rows) if r["port"] == "is" and r["dir"] == "tx"][:4])
+    start = starts[0]
+    assert start.get("ref") is not None and start.get("header") and "line" not in start, "the APRS-IS start row: %s" % start
+    assert traffic.markers["S"] not in json.dumps(start), "the APRS-IS edge tx row carries the information field"
+    writes = ob.late_rows(rows, start)
+    assert writes, "no later row with of=%s and ref=%s carries the write outcome; rows of that producer: %s" % (
+        start.get("seq"), start.get("ref"), [(r["seq"], r.get("of"), ob.outcomes(r)) for r in rows if r.get("id") == start.get("id")][:6])
+    results = [res for w in writes for stage, res in ob.outcomes(w) if stage == "write"]
+    assert results, "the late row has no write outcome: %s" % [ob.outcomes(w) for w in writes]
+    assert all(res in ob.WRITE_RESULTS for res in results), "write result %s is outside %s" % (results, ob.WRITE_RESULTS)
+    assert all("line" not in w for w in writes), "a late write row carries the information field"
+    if "framed" not in results:
+        note(target, "OBSPKT1-b", "FINDING", "the gated packet on a verified login has write result %s, DV-Router expected 'framed' (read from constants, not a run)" % results)
+    else:
+        note(target, "OBSPKT1-b", "RECORD", "APRS-IS tx: start row seq %s ref %s, write result %s" % (start.get("seq"), start.get("ref"), results))
 
 
 def test_obspkt1_b_aprs_is_rx_and_rf_tx_rows(ctx, traffic, target):
