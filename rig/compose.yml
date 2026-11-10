@@ -581,6 +581,42 @@ services:
       DVT_SUT_USRP: ${DVT_SUT_USRP:-off}
       # on for an image with the OBSPKT1b fixes: OBSPKT1-d2 asserts that a step-up does not end the stream and a logout does (cases/test_obspkt1_monitor.py)
       DVT_OBSPKT1B: ${DVT_OBSPKT1B:-}
+      # SECRELOAD1 / SECRELOAD2 (cases/test_secret_reload.py): on = the APRS-IS edge and the image rule are EXPECTED, so a missing series or route
+      # fails instead of skipping. Not passing them made the strict mode inert in every rig run (cases/unit/test_tester_env.py guards the class).
+      DVT_SECRELOAD1: ${DVT_SECRELOAD1:-}
+      DVT_SECRELOAD2: ${DVT_SECRELOAD2:-}
+      # optional switches and timing knobs that rig cases read from os.environ (cases/unit/test_tester_env.py lists what stays on the host);
+      # a number carries the default of the code, so that an unset knob is not an empty string
+      DVT_ASL_EXT_HOLD: ${DVT_ASL_EXT_HOLD:-60}
+      DVT_BASELINE: ${DVT_BASELINE:-}
+      DVT_UPDATE_BASELINE: ${DVT_UPDATE_BASELINE:-}
+      DVT_DP18_CYCLES: ${DVT_DP18_CYCLES:-2}
+      DVT_K22_IDLE_S: ${DVT_K22_IDLE_S:-600}
+      DVT_RELINK_SETTLE_S: ${DVT_RELINK_SETTLE_S:-}
+      DVT_MAP_ROUTE_FALLBACK: ${DVT_MAP_ROUTE_FALLBACK:-}
+      DVT_MMDVM_HANDSHAKE_S: ${DVT_MMDVM_HANDSHAKE_S:-240}
+      DVT_MMDVM_LINK_WAIT_S: ${DVT_MMDVM_LINK_WAIT_S:-90}
+      DVT_MMDVM_KEEPALIVE_S: ${DVT_MMDVM_KEEPALIVE_S:-65}
+      DVT_MMDVM_UNLINK_WAIT_S: ${DVT_MMDVM_UNLINK_WAIT_S:-25}
+      DVT_MMDVM_MODE_HANG_S: ${DVT_MMDVM_MODE_HANG_S:-12}
+      DVT_MMDVM_P25_SWITCHED_S: ${DVT_MMDVM_P25_SWITCHED_S:-50}
+      DVT_MMDVM_TIMEOUT_GONE_S: ${DVT_MMDVM_TIMEOUT_GONE_S:-180}
+      DVT_MMDVM_MODEM_BIND: ${DVT_MMDVM_MODEM_BIND:-}
+      DVT_MMDVM_SLACK_DSTAR: ${DVT_MMDVM_SLACK_DSTAR:-0}
+      DVT_MMDVM_SLACK_DMR: ${DVT_MMDVM_SLACK_DMR:-0}
+      DVT_MMDVM_SLACK_YSF: ${DVT_MMDVM_SLACK_YSF:-0}
+      DVT_MMDVM_SLACK_P25: ${DVT_MMDVM_SLACK_P25:-0}
+      DVT_MMDVM_SLACK_NXDN: ${DVT_MMDVM_SLACK_NXDN:-0}
+      DVT_YSF_AUTOLINK_MODULE: ${DVT_YSF_AUTOLINK_MODULE:-B}
+      DVT_P25_PEER_SUT: ${DVT_P25_PEER_SUT:-}
+      DVT_SUT_PRE_P26K: ${DVT_SUT_PRE_P26K:-}
+      DVT_SUT_MAP2D: ${DVT_SUT_MAP2D:-}
+      DVT_SUT_CONFIG_EXTRA: ${DVT_SUT_CONFIG_EXTRA:-}
+      DVT_USRP_DYNAMIC_HUB: ${DVT_USRP_DYNAMIC_HUB:-}
+      DVT_USRP_DYNAMIC_FAST: ${DVT_USRP_DYNAMIC_FAST:-}
+      DVT_FAKE_HUB_IDLE_S: ${DVT_FAKE_HUB_IDLE_S:-5}
+      DVT_LONG_TIMEOUTS: ${DVT_LONG_TIMEOUTS:-}
+      DVT_WEB_CA: ${DVT_WEB_CA:-}
       DVT_OUT: /dvt/out/${DVT_RUN_ID:-manual}
       HOME: /tmp
     env_file:

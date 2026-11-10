@@ -839,6 +839,22 @@ tester.
   `DVT_MMDVM_STACK`, `DVT_MMDVM_MODEM_PORT` and the module / talk group variables. Free host numbers used: `.100` (`.98` to `.127` are free; `.128/25` is the load nodes).
 * The wire checker knows `.100` as a rig host (`CHECK_HOST_OFFSETS`); the modem traffic (tester <-> `.100`, UDP 3334 / 3335) is not on any captured service.
 
+## Environment of the tester
+
+The tester container gets a FIXED environment: the `environment:` list of the `tester` service in `rig/compose.yml`, `.local/rig.env` (`DVT_IAX_SECRET`) and the two
+variables `run.sh` adds with `exec -e` (`DVT_OUT`, `DVT_RIG_CONTROL`). A `DVT_*` variable you set in your shell for `scripts/run.sh` reaches a case only if it is
+in that list; `run.sh` itself, `contained.sh` and the host-side cases (netns, wire, cfgload) read the shell directly. A switch a rig case reads and the
+tester does not get is silently inert: `DVT_SECRELOAD1` / `DVT_SECRELOAD2` (strict mode, fail instead of skip) were not in the list, so the strict mode never applied
+in the first rig runs (found by dp15-qar, 2026-11-10).
+
+Rule: a rig case or a `dvtest` module it imports that reads `os.environ["DVT_X"]` (or `.get`, `getenv`, `env.get`) gets `DVT_X: ${DVT_X:-}` in the tester list; a number
+carries the default of the code (`DVT_K22_IDLE_S: ${DVT_K22_IDLE_S:-600}`), so that an unset knob is not an empty string for `int()`. A name that stays on the host is
+listed with its reason in `HOST_ONLY_NAMES` of `cases/unit/test_tester_env.py`, which fails when a tester-side Python file reads a `DVT_*` name that is neither in the
+tester environment nor in that list (and when the list holds a name nothing reads or the tester gets). Files that only run on the host (`dvtest/tools/`, `dvtest/check/`,
+`dvtest/limits.py`, `dvtest/netns_runs.py`, `dvtest/fuzz_run.py`, `dvtest/nat.py`, test files marked only `netns`, `wire` or `cfgload`) are excluded. Names built in code
+(`DVT_MMDVM_SLACK_<MODE>`, `DVT_NXDN_<REF|SUT>`, `DVT_NXDN_PROBE_PORT_<REF|SUT>`) are checked by name in the same file. The RSS isolation case does not use the list: its
+`DVT_ISOLATION*` settings come from pytest options (`--isolation`, `--isolation-short`, `--isolation-env`, `dvtest/isolation_plugin.py`).
+
 ## Control channel
 
 The tester has no docker socket. Cases that stop a backend write a request
