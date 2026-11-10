@@ -328,11 +328,23 @@ def audit_items(body):
     return [i for i in items if isinstance(i, dict)] if isinstance(items, list) else []
 
 
+def audit_chronological(body):
+    """The records of an audit tail oldest first. GET /api/v1/admin/audit serves NEWEST FIRST (crates/lib/web/src/audit.rs `tail` reverses
+    the last n lines; admin.md says "newest last" only for /audit/logins; the first rig run of SECRELOAD2, out/20261110T112609Z, found the
+    order the hard way). The served order is read from ts_ms when the first and last record differ; records of one request share a ts_ms
+    (requested and its completion), so ties keep the documented newest-first assumption and the list is reversed."""
+    items = audit_items(body)
+    stamps = [i.get("ts_ms") for i in items]
+    if len(items) > 1 and isinstance(stamps[0], int) and isinstance(stamps[-1], int) and stamps[0] < stamps[-1]:
+        return items                    # served oldest first
+    return list(reversed(items))
+
+
 def reload_audit(body, user=None, actions=("config.reload", "config.reload.preview")):
-    """[(action, user, result, changed key names)] of the reload records of an audit tail (oldest first as served), optionally of
-    one user."""
+    """[(action, user, result, changed key names)] of the reload records of an audit tail, OLDEST FIRST (the tail is served newest first;
+    see audit_chronological), optionally of one user."""
     out = []
-    for item in audit_items(body):
+    for item in audit_chronological(body):
         if item.get("action") not in actions or (user is not None and item.get("user") != user):
             continue
         diff = item.get("diff")

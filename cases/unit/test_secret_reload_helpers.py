@@ -311,20 +311,43 @@ def test_problem_code():
     assert sr.problem_code({"code": "etag_mismatch"}) == "etag_mismatch" and sr.problem_code([]) is None and sr.problem_code({}) is None
 
 
-AUDIT = {"total": 4, "items": [
-    {"action": "login", "user": "ada", "result": "ok"},
-    {"action": "config.reload.preview", "user": "otto", "result": "denied"},
-    {"action": "config.reload", "user": "ada", "result": "requested", "diff": {"changed": []}},
-    {"action": "config.reload", "user": "ada", "result": "applied", "diff": {"changed": ["edges.aprsis.passcode_file"]}},
-]}
+AUDIT_OLDEST_FIRST = [
+    {"action": "login", "user": "ada", "result": "ok", "ts_ms": 1},
+    {"action": "config.reload.preview", "user": "otto", "result": "denied", "ts_ms": 2},
+    {"action": "config.reload", "user": "ada", "result": "requested", "diff": {"changed": []}, "ts_ms": 3},
+    {"action": "config.reload", "user": "ada", "result": "applied", "diff": {"changed": ["edges.aprsis.passcode_file"]}, "ts_ms": 3},
+]
+# as GET /audit serves it: newest first (Audit::tail reverses)
+AUDIT = {"total": 4, "items": list(reversed(AUDIT_OLDEST_FIRST))}
+EXPECTED = [("config.reload.preview", "otto", "denied", None), ("config.reload", "ada", "requested", []),
+            ("config.reload", "ada", "applied", ["edges.aprsis.passcode_file"])]
 
 
-def test_reload_audit_selects_the_reload_records():
-    assert sr.reload_audit(AUDIT) == [("config.reload.preview", "otto", "denied", None), ("config.reload", "ada", "requested", []),
-                                      ("config.reload", "ada", "applied", ["edges.aprsis.passcode_file"])]
+def test_reload_audit_selects_the_reload_records_oldest_first():
+    assert sr.reload_audit(AUDIT) == EXPECTED
     assert sr.reload_audit(AUDIT, user="otto") == [("config.reload.preview", "otto", "denied", None)]
     assert sr.reload_audit(AUDIT, actions=("login",)) == [("login", "ada", "ok", None)]
     assert sr.reload_audit({}) == [] and sr.reload_audit(None) == []
+
+
+def test_audit_chronological_handles_both_served_orders_and_ties():
+    assert [i["ts_ms"] for i in sr.audit_chronological(AUDIT)] == [1, 2, 3, 3]
+    assert [i["result"] for i in sr.audit_chronological(AUDIT) if i["ts_ms"] == 3] == ["requested", "applied"]     # ties keep the pair order
+    oldest = {"items": AUDIT_OLDEST_FIRST}
+    assert sr.reload_audit(oldest) == EXPECTED                       # a service that serves oldest first is read the same way
+    ties = {"items": [{"action": "config.reload", "result": "invalid", "ts_ms": 5}, {"action": "config.reload", "result": "requested", "ts_ms": 5}]}
+    assert [i["result"] for i in sr.audit_chronological(ties)] == ["requested", "invalid"]
+    assert sr.audit_chronological({"items": []}) == [] and sr.audit_chronological(None) == []
+
+
+def test_the_failure_of_the_first_rig_run_is_gone():
+    # served newest first, as in out/20261110T112609Z: invalid, requested, applied, ..., then the five `ok` reloads of the SECRELOAD1 PUTs
+    served = {"items": [{"action": "config.reload", "user": "admin", "result": r, "diff": {"changed": c}, "ts_ms": t} for r, c, t in [
+        ("invalid", ["edges.aprsis.passcode_file"], 9), ("requested", [], 9), ("applied", ["edges.aprsis.passcode_file"], 8),
+        ("requested", [], 8), ("unchanged", [], 7), ("requested", [], 7), ("applied", ["edges.aprsis.passcode_file"], 6),
+        ("requested", [], 6), ("ok", None, 2), ("ok", None, 1)]]}
+    results = [(r, c) for _a, _u, r, c in sr.reload_audit(served, user="admin", actions=("config.reload",))]
+    assert results[0] == ("ok", None) and results[-2:] == [("requested", []), ("invalid", ["edges.aprsis.passcode_file"])]
 
 
 def test_history_count():

@@ -56,7 +56,8 @@ class Sut:
         return self.running == self.fixture
 
     def audit(self, action, user, result, changed=None):
-        item = {"action": action, "user": user, "result": result, "role": "admin", "target": "x", "remote": "r", "ts_ms": 0}
+        self.requests = getattr(self, "requests", 0) + (1 if result == "requested" or action != "config.reload" else 0)
+        item = {"action": action, "user": user, "result": result, "role": "admin", "target": "x", "remote": "r", "ts_ms": 1000 + self.requests}
         if changed is not None:
             item["diff"] = {"changed": changed}
         self.audit_items.append(item)
@@ -126,7 +127,8 @@ class Client:
         if route == "/config/history":
             return self.guard("history") or Resp(200, {"total": len(sut.history), "items": sut.history})
         if route == "/audit":
-            return self.guard("audit") or Resp(200, {"total": len(sut.audit_items), "items": sut.audit_items})
+            # newest first, as Audit::tail serves it; the records of one request share a ts_ms
+            return self.guard("audit") or Resp(200, {"total": len(sut.audit_items), "items": list(reversed(sut.audit_items))})
         if route == "/config/reload":
             if not sut.has_route:
                 return problem(404, "not_found")
@@ -219,7 +221,8 @@ def test_main_case_follows_the_documented_reload_routes(monkeypatch, tmp_path):
     assert ctx.path.read_text() == "4242\n" and oct(ctx.path.stat().st_mode & 0o777) == "0o600"
     notes = (ctx.out / case.LOG).read_text()
     assert "31337" not in notes and "4242" not in notes and "R6" in notes and "R7" in notes
-    seq = [(r) for _a, _u, r, _c in sr.reload_audit({"items": sut.audit_items}, user="ada")]
+    served = {"items": list(reversed(sut.audit_items))}              # GET /audit serves the tail newest first
+    seq = [(r) for _a, _u, r, _c in sr.reload_audit(served, user="ada")]
     assert seq == ["requested", "applied", "requested", "unchanged", "requested", "applied", "requested", "invalid"]
 
 

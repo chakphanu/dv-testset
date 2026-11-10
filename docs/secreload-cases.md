@@ -93,7 +93,7 @@ Both routes need an admin session with step-up.
 A missing `If-Match` is 428, not 412 (the openapi lists 428 for the POST and `admin.md` says "missing is 428 `precondition_required`, stale is 412"); the case asserts
 428 for missing and 412 for stale and weak.
 
-Audit (`GET /api/v1/admin/audit`): `config.reload` records `requested` (before the launcher is asked, fail closed) and then `applied`, `unchanged`, `invalid` (`diff.changed` =
+Audit (`GET /api/v1/admin/audit`, served NEWEST FIRST: `Audit::tail` reverses the last n lines; `admin.md` says "newest last" only for `/audit/logins`, so the order of `/audit` is undocumented and the first rig run found it; the case reads the tail oldest first, `dvtest.secret_reload.audit_chronological`; the records of one request share a `ts_ms`): `config.reload` records `requested` (before the launcher is asked, fail closed) and then `applied`, `unchanged`, `invalid` (`diff.changed` =
 the key names), or `denied` for a missing / stale / weak `If-Match`; a session below admin is `config.reload` / `config.reload.preview` `denied`. Repeated denials of one kind
 inside the denial interval are collapsed (`suppressed`), so the case asserts that a denied record exists, not how many.
 
@@ -112,7 +112,7 @@ accepted" is shown by the aprsc's verdict on the edge's login (`dv_edge_aprsis_v
 | | R3 second `POST` | 200, `no_change` true, `changed` and `actions` empty, `(inc, gen)` unchanged, nothing restarted; the preview agrees |
 | | R4 fixture value back by rename, preview, `POST` | `changed` the key, restart again, verified 0 -> 1 |
 | | R5 file mode 000, preview and `POST` | both 422 `validation`: `errors[]` of `{path, pointer, msg}` with `path` = the key, the file path in `msg`, `current_etag` unquoted, no `actions[]`; process, counters and the verified login unchanged; mode restored |
-| | R6 audit tail | (a successful preview writes no record) the admin's `config.reload` records contain, in order: requested, applied (`changed` = the key), requested, unchanged (`[]`), requested, applied, requested, invalid (key and path names) |
+| | R6 audit tail | (a successful preview and a failing preview write no record; the PUT applies of the first case leave `config.reload` `ok` rows, which the subsequence ignores) the admin's `config.reload` records, oldest first, contain in order: requested, applied (`changed` = the key), requested, unchanged (`[]`), requested, applied, requested, invalid (key and path names) |
 | | R7 secrecy | no value (old or new) in any reply, the audit tail, a note or any file of `out/<run>` visible now (the audit file is `sut-state/admin/audit.jsonl`); `run.sh` scans the collected logs |
 | `test_secreload2_guards_and_preconditions` | G1 | no session: GET and POST 401 |
 | | G2 | viewer and operator: GET and POST 403 `forbidden` |
