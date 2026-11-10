@@ -41,7 +41,7 @@ def problem(status, code, **extra):
 class Sut:
     """The fake admin service plus the launcher and the APRS-IS edge behind it."""
 
-    def __init__(self, path, fixture, has_route=True, password_login=True):
+    def __init__(self, path, fixture, has_route=True, password_login=False):
         self.path, self.fixture, self.has_route, self.password_login = path, fixture, has_route, password_login
         self.running = path.read_text()
         self.pid, self.edge_restarts, self.other_restarts = 100, 0.0, 2.0
@@ -86,11 +86,13 @@ class Client:
     def hide(self, *values):
         pass
 
+    cookies = {}
+
     def login(self, user, password, totp_code=None, expect=200):
         if not self.sut.password_login:
-            return Resp(401, {"code": "totp_required"})
+            return problem(401, "totp_required")
         self.has_session, self.role, self.user = True, "admin", user
-        self.stepped_at = None
+        self.cookies = {"s": "x"}
         return self.identity
 
     def session(self):
@@ -253,14 +255,20 @@ def test_guards_case_follows_the_documented_refusals(monkeypatch, tmp_path):
         assert ("config.reload.preview", user) in denied and ("config.reload", user) in denied
     assert [i["result"] for i in sut.audit_items if i["user"] == "ada" and i["action"] == "config.reload"] == ["denied"] * 5
     assert ("step_up", "ada") in [(i["action"], i["user"]) for i in sut.audit_items if i["result"] == "denied"]
-    assert sut.clock[0] < 120.0           # a password-only login has no step-up window: no 5 minute wait
+    assert sut.clock[0] >= 305.0          # no session without a step-up window exists: the case waited out the 5 minutes
 
 
-def test_guards_case_waits_out_the_window_when_the_password_only_login_is_refused(monkeypatch, tmp_path):
-    ctx, sut = build(monkeypatch, tmp_path, password_login=False)
-    case.test_secreload2_guards_and_preconditions(ctx.target, None, ctx, Sessions(sut))
-    assert sut.clock[0] >= 305.0 and sut.posts == []
-    assert ("step_up", "ada") in [(i["action"], i["user"]) for i in sut.audit_items if i["result"] == "denied"]
+def test_guards_case_fails_when_a_password_only_login_of_an_enrolled_account_is_accepted(monkeypatch, tmp_path):
+    ctx, sut = build(monkeypatch, tmp_path, password_login=True)
+    with pytest.raises(AssertionError, match="created a session"):
+        case.test_secreload2_guards_and_preconditions(ctx.target, None, ctx, Sessions(sut))
+
+
+def test_guards_case_fails_when_the_refusal_is_not_totp_required(monkeypatch, tmp_path):
+    ctx, sut = build(monkeypatch, tmp_path)
+    monkeypatch.setattr(Client, "login", lambda self, *a, **k: problem(403, "forbidden"))
+    with pytest.raises(AssertionError, match="want 401 totp_required"):
+        case.test_secreload2_guards_and_preconditions(ctx.target, None, ctx, Sessions(sut))
 
 
 def test_guards_case_fails_when_a_weak_etag_is_accepted(monkeypatch, tmp_path):

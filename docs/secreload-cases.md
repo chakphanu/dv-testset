@@ -118,10 +118,10 @@ accepted" is shown by the aprsc's verdict on the edge's login (`dv_edge_aprsis_v
 | | G2 | viewer and operator: GET and POST 403 `forbidden` |
 | | G3 | admin POST without `If-Match` 428 `precondition_required`; a stale, a weak, a `*` and a malformed `If-Match` 412 `etag_mismatch`, each with `current_etag` = the file's ETag; the edge is not restarted |
 | | G4 | audit: `config.reload` `denied` for the admin's refusals; at least one `config.reload` or `config.reload.preview` `denied` record for each of the viewer and the operator accounts; every `config.reload.preview` record is `denied`; no secret value in the tail |
-| | G5 | a session without step-up (a fresh password-only login when the rig lets the TOTP-enrolled admin account log in that way, else the stepped-up session after its 5 minute window, kept alive by a read every minute): GET and POST 403 `step_up_required`, nothing restarted; the audit has `step_up` `denied` |
+| | G5 | a password-only login of the TOTP-enrolled admin account is refused: 401 `totp_required`, no session, no cookie (a login with a valid code counts as a step-up, so no session without a window can be made); then the 5 minute window of the stepped-up session is waited out (strictly more than 300 s, the session kept alive by a read every minute): GET and POST 403 `step_up_required`, nothing restarted; the audit has `step_up` `denied` |
 
-Skips: the route answers 404 (an image without SECRELOAD2; `DVT_SECRELOAD2=on` turns that into a failure); the edge is not running; no aprs profile. Run (about 7 to 12 minutes: the first
-case about 4 minutes, the second 5 minutes longer only when the password-only login is refused; `DVT_SUT_CONFIG_RW` is NOT needed, the routes do not write the file):
+Skips: the route answers 404 (an image without SECRELOAD2; `DVT_SECRELOAD2=on` turns that into a failure); the edge is not running; no aprs profile. Run (about 12 minutes: the first
+case about 4 minutes, the second dominated by the 5 minute step-up wait; `DVT_SUT_CONFIG_RW` is NOT needed, the routes do not write the file):
 
 ```sh
 DVT_SECRELOAD2=on DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/admin.toml:rig/config/dv-router/totp-required.toml:rig/config/dv-router/data-ident.toml:rig/config/dv-router/dp15-aprsis.toml \
@@ -144,8 +144,7 @@ window, a password-only login does not. Audit: a successful preview writes NO re
 a missing step-up is the action `step_up`, result `denied`; denials are coalesced per session (the case asserts that a record exists, not how many). Two product text defects
 are NOT asserted (the 428 `detail` mentions `base_etag`; the unreadable-file `msg` says mode 0600).
 
-Not confirmed on an image: the exact `msg` text of the 422. G5: the case first tries a fresh password-only login of the admin account; the rig accounts are TOTP-enrolled, so
-the login may be refused, and then the 5 minute window is waited out (the case says which path it took in its note).
+Not confirmed on an image: the exact `msg` text of the 422.
 
 ## Run it
 

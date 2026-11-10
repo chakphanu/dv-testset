@@ -764,45 +764,34 @@ def test_secreload2_guards_and_preconditions(target, rig_control, sr_ctx, admin_
     say(ctx, "G4", "audit: config.reload denied for the refused If-Match values (admin), config.reload(.preview) denied for viewer and operator; "
         "no record for a successful preview")
 
-    # ---- G5 step_up_required: a session that has not stepped up. A fresh password-only login does not open the window (admin.md: only a
-    # login with a valid TOTP code does), so try that first; the rig accounts are TOTP-enrolled and the login may be refused, in which
-    # case the window of the stepped-up session is waited out (5 minutes, the session kept alive by a read every minute).
+    # ---- G5 step_up_required. A password-only login of a TOTP-enrolled account is refused (401 totp_required, no session; dv-router
+    # confirmed, app.rs login at 11e19ace) and a login with a valid code counts as a step-up, so there is no session without a window to
+    # try at once: wait strictly more than 300 s after the last step-up of this session (kept alive by a read every minute).
     user, password = admin_session.credentials("admin")
-    fresh = ctx.client.clone()
-    fresh.hide(password)
-    proven = False
-    try:
-        login = fresh.login(user, password, expect=None)
-        if not isinstance(login, dict) and getattr(login, "status", None) != 200:
-            login = None
-    except Exception:
-        login = None
-    if login is not None:
-        r_get, r_post = reload_get(ctx, fresh, stepped=False), reload_post(ctx, file_etag, fresh, stepped=False)
-        codes = [(r.status, sr.problem_code(jbody(r))) for r in (r_get, r_post)]
-        if codes == [(403, "step_up_required")] * 2:
-            proven = True
-        else:
-            say(ctx, "G5", "a password-only login already has a step-up window here (GET %s, POST %s): waiting the window out instead" % tuple(
-                c[0] for c in codes))
-    if not proven:
-        left = t_step + STEP_UP_WINDOW_S + 5.0 - time.monotonic()
-        if left > 0:
-            say(ctx, "G5", "waiting %.0f s for the step-up window of the session to pass" % left)
-            while left > 0:
-                time.sleep(min(60.0, left))
-                left = t_step + STEP_UP_WINDOW_S + 5.0 - time.monotonic()
-                if left > 0:
-                    ctx.client.session()        # keeps the session from idling out; a read is not a step-up
-        ctx.stepped = None
-        for method, r in (("GET", reload_get(ctx, stepped=False)), ("POST", reload_post(ctx, file_etag, stepped=False))):
-            body = jbody(r)
-            assert r.status == 403 and sr.problem_code(body) == "step_up_required", \
-                "%s config/reload after the step-up window answered %d %s, want 403 step_up_required" % (method, r.status, sr.problem_code(body))
+    refused = ctx.client.clone()
+    refused.hide(password)
+    attempt = refused.login(user, password, expect=None)
+    assert not isinstance(attempt, dict), "a password-only login of the TOTP-enrolled admin account created a session"
+    assert attempt.status == 401 and sr.problem_code(jbody(attempt)) == "totp_required", \
+        "password-only login answered %s %s, want 401 totp_required" % (attempt.status, sr.problem_code(jbody(attempt)))
+    assert not refused.cookies, "the refused password-only login set a cookie"
+    say(ctx, "G5", "password-only login of the TOTP-enrolled admin account: 401 totp_required, no session")
+    left = t_step + STEP_UP_WINDOW_S + 5.0 - time.monotonic()
+    if left > 0:
+        say(ctx, "G5", "waiting %.0f s for the step-up window of the session to pass" % left)
+        while left > 0:
+            time.sleep(min(60.0, left))
+            left = t_step + STEP_UP_WINDOW_S + 5.0 - time.monotonic()
+            if left > 0:
+                ctx.client.session()        # keeps the session from idling out; a read is not a step-up
+    ctx.stepped = None
+    for method, r in (("GET", reload_get(ctx, stepped=False)), ("POST", reload_post(ctx, file_etag, stepped=False))):
+        body = jbody(r)
+        assert r.status == 403 and sr.problem_code(body) == "step_up_required", \
+            "%s config/reload after the step-up window answered %d %s, want 403 step_up_required" % (method, r.status, sr.problem_code(body))
     assert pid_of_edge(ctx) == base.pid, "a POST without step-up restarted dv-edge-aprsis"
     audit = audit_tail(ctx)         # steps up again when the window of this session was waited out
     assert any(i.get("action") == "step_up" and i.get("result") == "denied" for i in sr.audit_items(audit)), \
         "a missing step-up is recorded as action step_up, result denied; none in the tail"
-    say(ctx, "G5", "%s: GET and POST are 403 step_up_required, nothing restarted; the audit has step_up denied" % (
-        "fresh password-only login" if proven else "after the 5 minute window"))
+    say(ctx, "G5", "after the 5 minute window: GET and POST are 403 step_up_required, nothing restarted; the audit has step_up denied")
     assert not ctx.leaks.found, "a secret value appeared in: %s" % ctx.leaks.report()
