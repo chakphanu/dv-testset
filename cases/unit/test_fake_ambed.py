@@ -97,6 +97,21 @@ def wait_for(cond, timeout=2.0):
     return cond()
 
 
+def silent_stream(stream, quiet_probes=3, timeout=5.0, wait=0.1):
+    """True once `quiet_probes` consecutive data requests of the stream got no reply (its data socket is closed on the server side); False after `timeout` s."""
+    end = time.monotonic() + timeout
+    quiet = 0
+    while time.monotonic() < end:
+        stream.request(1)
+        if stream.reply(wait) is None:
+            quiet += 1
+            if quiet >= quiet_probes:
+                return True
+        else:
+            quiet = 0
+    return False
+
+
 @pytest.fixture
 def server():
     srv = FakeAmbedServer(HOST, port=0, control_port=0)
@@ -676,9 +691,9 @@ def test_reset_restores_defaults_and_closes_streams(worker, server):
     stats = server.stats()
     assert stats["streams_live"] == 0 and stats["counters"] == {} and stats["log_size"] == 0
     assert stats["modes"]["open"] == "std" and stats["modes"]["data"] == "echo"
-    time.sleep(0.15)
-    st.request(1)
-    assert st.reply(0.15) is None                         # its data socket is closed
+    # reset() only SETS the stop flag of the stream threads; each closes its data socket when it next looks, which on a loaded host can take longer than any fixed sleep.
+    # So probe until the socket has answered nothing three times in a row (bounded), instead of sleeping and asking once.
+    assert silent_stream(st), "the data socket of the reset stream still answers 5 s after reset()"
     assert worker.rpc(ext.ping("A")) == b"AMBEDPONG"
 
 
