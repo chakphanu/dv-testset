@@ -763,10 +763,6 @@ scripts/contained.sh --name build -- docker build -f rig/Dockerfile.aprsc --buil
   packets whose SOURCE starts with `N0CALL`, `NOCALL` or `SERVER`, so every source here is `N0TEST-n` or `XLX999..`. The DV-Router passcode file is
   written by `run.sh` to `out/<run>/aprs-secrets/passcode` (mode 600; nothing secret, a function of a synthetic callsign) and mounted read-only at
   `/etc/dv-router/aprs-secrets`; the SUT then runs as the host user, like with the web and asl-edge profiles.
-* `DVT_SUT_CONFIG_RW=1` (native launch, off by default): the rendered config is copied to `out/<run>/xlxd-config/xlxd-sut/rw/dv-router.toml` and that
-  directory is mounted read-write at `/etc/dv-router-rw` (the image starts with `--config /etc/dv-router-rw/dv-router.toml`), so that dv-svc-admin can
-  replace the file (it writes a temporary file and renames it; the usual single-file read-only mount refuses). For the cases that apply a configuration
-  through the admin API, [secreload-cases.md](secreload-cases.md). The rendered file next to it is then not the live one.
 * DV-Router side: the snippet `rig/config/dv-router/dp15-aprsis.toml` (`[edges.aprsis]` pointing at `<NET>.47:14580`, and the path row `aprsis-down`
   `edge:aprsis -> room:B`, addressee `XLX999B`) is added by `run.sh` when `--profile aprs` is given and it is not listed in `DVT_SUT_CONFIG_EXTRA`. The
   profile needs `DVT_SUT_LAUNCH=native`. The tester gets `DVT_APRS=on` and `DVT_APRSC=<net>.47`.
