@@ -7,6 +7,10 @@ server-side SessionKey instead of the cookie and survive; caps count across rota
 the handles (SSE within one heartbeat, RTC within the 5 s sweep, a WAV body within 100 ms). Pure logic (verdicts on the page states) and the
 JavaScript the cases run in the page; stdlib only. Source: DV-Router web.md "Built (WEBSID1)", review-248.
 """
+import socket
+import ssl
+import threading
+import time
 
 # refusal shapes pinned by dv-router from the code at a1ff890c: the ninth circuit of a login is 503 `unavailable` ("WebRTC capacity reached",
 # Retry-After 5; the cap of 8 counts across rotations); the third concurrent WAV body of a (role, session) is 429 `rate_limited` ("recording rate
@@ -20,6 +24,142 @@ RTC_SWEEP_S = 5.0               # the RTC owner sweep tick (rtc/shell.rs)
 WAV_CHECK_S = 0.1               # recordings: the owner is checked every 100 ms (plus the time to see the connection end)
 WAV_RESIDUAL_BYTES = 49 * 1024  # "under 49 KiB buffered" after the end (review-248, 3)
 SSE_EVENT_NAMES = ("hello", "bye", "session", "room", "status", "data", "config", "ids", "lag")
+
+# ---------------------------------------------------------------- the WAV reader (a raw socket, not the browser)
+#
+# First rig run (wip-a31709a, out/20261110T220224Z): a browser fetch reader cannot hold a WAV body back. The 2.4 MB body (a 150 s over) arrived in
+# about 130 ms at the proxy whatever the page did, because the browser's network stack and the autotuned TCP buffers swallow it (Chromium handed the page
+# 2 MiB in ONE chunk at 3 s); the server-side transfer was over, its slot free, so a "third concurrent body" was accepted (429 only when the requests
+# overlapped within that 130 ms). The bodies are therefore read by the tester over a TLS socket with a tiny receive buffer and its own throttle / hold,
+# with the cookie and User-Agent of the browser login (the session is bound to the UA); nothing is buffered on the way beyond a few hundred KB.
+
+
+class RawWav(threading.Thread):
+    """GET a path on host:port over TLS (or plain when ca is None) with the given Cookie and User-Agent and read the body slowly. After the
+    response headers: `hold` true reads nothing until release(); `rate` > 0 sleeps len/rate seconds after each read (bytes per second); release()
+    drains the rest at full speed. snapshot() gives the dict the verdict functions read: status, length, got, done, err, code (a refusal's problem
+    code), retry_after, t_start / t_end (time.time() ms)."""
+
+    def __init__(self, host, port, path, cookie, user_agent, ca=None, rate=0.0, hold=False, rcvbuf=4096, timeout=30.0, extra_headers=None):
+        super().__init__(daemon=True)
+        self.host, self.port, self.path, self.cookie, self.ua = host, port, path, cookie, user_agent
+        self.ca, self.rate, self.hold, self.rcvbuf, self.timeout = ca, float(rate), bool(hold), rcvbuf, timeout
+        self.extra = dict(extra_headers or {})
+        self.lock = threading.Lock()
+        self.state = {"status": None, "length": None, "got": 0, "done": False, "err": None, "code": None, "retry_after": None,
+                      "t_start": None, "t_end": None, "headers_at": None}
+        self.headers_seen = threading.Event()
+
+    def snapshot(self):
+        with self.lock:
+            return dict(self.state, hold=self.hold, rate=self.rate)
+
+    def release(self):
+        with self.lock:
+            self.hold, self.rate = False, 0.0
+
+    def _set(self, **kw):
+        with self.lock:
+            self.state.update(kw)
+
+    def _request(self):
+        lines = ["GET %s HTTP/1.1" % self.path, "Host: %s" % self.host, "User-Agent: %s" % self.ua, "Accept: */*",
+                 "Sec-Fetch-Site: same-origin", "Connection: close"]
+        if self.cookie:
+            lines.append("Cookie: %s" % self.cookie)
+        lines += ["%s: %s" % kv for kv in self.extra.items()]
+        return ("\r\n".join(lines) + "\r\n\r\n").encode("ascii")
+
+    def run(self):
+        sock = None
+        self._set(t_start=time.time() * 1000.0)
+        try:
+            raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            raw.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, self.rcvbuf)          # before connect: the window the server sees
+            raw.settimeout(self.timeout)
+            raw.connect((self.host, self.port))
+            if self.ca is not None:
+                ctx = ssl.create_default_context(cafile=self.ca)
+                sock = ctx.wrap_socket(raw, server_hostname=self.host)
+            else:
+                sock = raw
+            sock.sendall(self._request())
+            buf = b""
+            while b"\r\n\r\n" not in buf:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    raise ConnectionError("closed before the response headers")
+                buf += chunk
+            head, _, body = buf.partition(b"\r\n\r\n")
+            status, headers = parse_head(head)
+            length = headers.get("content-length")
+            self._set(status=status, length=int(length) if length is not None and length.isdigit() else None,
+                      retry_after=headers.get("retry-after"), headers_at=time.time() * 1000.0)
+            self.headers_seen.set()
+            got = len(body)
+            self._set(got=got)
+            if status != 200:
+                rest = body
+                sock.settimeout(2.0)
+                try:
+                    while True:
+                        more = sock.recv(4096)
+                        if not more:
+                            break
+                        rest += more
+                except (socket.timeout, OSError):
+                    pass
+                self._set(code=problem_code_of(rest), done=True, t_end=time.time() * 1000.0)
+                return
+            sock.settimeout(self.timeout)
+            while True:
+                while self.hold:
+                    time.sleep(0.02)
+                data = sock.recv(8192)
+                if not data:
+                    break
+                got += len(data)
+                self._set(got=got)
+                if self.rate > 0:
+                    time.sleep(len(data) / self.rate)
+            self._set(done=True, t_end=time.time() * 1000.0)
+        except (OSError, ConnectionError, ssl.SSLError) as exc:
+            self._set(err="%s: %s" % (type(exc).__name__, str(exc)[:120]), done=True, t_end=time.time() * 1000.0)
+            self.headers_seen.set()
+        finally:
+            if sock is not None:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+
+    def wait_headers(self, timeout=15.0):
+        """The snapshot once the response headers (or a failure) are in; None after `timeout`."""
+        return self.snapshot() if self.headers_seen.wait(timeout) else None
+
+
+def parse_head(head):
+    """(status, {lower-case header: value}) of a response head (bytes)."""
+    lines = head.decode("latin-1").split("\r\n")
+    parts = lines[0].split(" ", 2)
+    status = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+    headers = {}
+    for line in lines[1:]:
+        if ":" in line:
+            key, _, value = line.partition(":")
+            headers[key.strip().lower()] = value.strip()
+    return status, headers
+
+
+def problem_code_of(body):
+    """The `code` of a problem+json body (bytes), None when it has none."""
+    import json
+    try:
+        value = json.loads(body.decode("utf-8", "replace"))
+    except ValueError:
+        return None
+    return value.get("code") if isinstance(value, dict) else None
+
 
 # ---------------------------------------------------------------- JavaScript run in the page
 
@@ -41,47 +181,6 @@ JS_SSE_STATE = """() => {
   if (!s) return null;
   return Object.assign({}, s.st, {ready: s.es.readyState, now: Date.now()});
 }"""
-
-# A WAV download read slowly: after each chunk the reader sleeps value.length / rate seconds (rate in bytes/s), so the body stays in
-# progress for about length / rate seconds whatever the chunk sizes are. `hold` true reads nothing until JS_WAV_RELEASE (which also removes the throttle, to drain what is left).
-JS_WAV_START = """async ({name, url, rate, hold}) => {
-  window.__sidWav = window.__sidWav || {};
-  const st = {name, status: null, length: null, got: 0, done: false, err: null, t_start: Date.now(), t_end: null, t_err: null, chunks: 0};
-  const ctl = {hold: !!hold, rate};
-  window.__sidWav[name] = {st, ctl};
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  let response;
-  try { response = await fetch(url, {credentials: 'same-origin', headers: {'Accept': '*/*'}}); }
-  catch (e) { st.err = String(e); st.t_err = Date.now(); st.done = true; return Object.assign({}, st); }
-  st.status = response.status;
-  const length = response.headers.get('content-length');
-  st.length = length === null ? null : Number(length);
-  st.retry_after = response.headers.get('retry-after');
-  if (response.status !== 200) {
-    try { const body = await response.json(); st.code = body.code || null; } catch (e) { st.code = null; }
-    st.done = true; st.t_end = Date.now(); return Object.assign({}, st);
-  }
-  const reader = response.body.getReader();
-  (async () => {
-    try {
-      for (;;) {
-        while (ctl.hold) await sleep(20);
-        const {done, value} = await reader.read();
-        if (done) { st.done = true; st.t_end = Date.now(); return; }
-        st.got += value.length; st.chunks += 1;
-        if (ctl.rate > 0) await sleep(value.length * 1000 / ctl.rate);
-      }
-    } catch (e) { st.err = String(e); st.t_err = Date.now(); st.done = true; }
-  })();
-  return Object.assign({}, st);
-}"""
-
-JS_WAV_STATE = """(name) => {
-  const w = window.__sidWav && window.__sidWav[name];
-  return w ? Object.assign({}, w.st, {hold: w.ctl.hold, now: Date.now()}) : null;
-}"""
-
-JS_WAV_RELEASE = """(name) => { const w = window.__sidWav && window.__sidWav[name]; if (w) { w.ctl.hold = false; w.ctl.rate = 0; } return !!w; }"""
 
 JS_STEP_UP = """async (body) => {
   const s = await fetch('/api/v1/auth/session', {credentials: 'same-origin'});

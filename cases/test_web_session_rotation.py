@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 """Web unit, WEBSID1: open streams, RTC leases and WAV transfers follow the login across a step-up and end with it, in real browsers
 (Playwright Chromium, Firefox and Playwright WebKit). WRITTEN OFFLINE for the image after wip-7bd0082 (DV-Router merge a1ff890c); NOT RUN.
+WAV bodies are read by the tester over a raw TLS socket (websid_support.RawWav; a browser fetch cannot hold a body back, run 20261110T220224Z).
 Needs `scripts/run.sh --profile web,browser` with rig/config/dv-router/recorder.toml and a USRP dynamic hub (DVT_USRP_DYNAMIC=1); docs/websid1-cases.md
 has the run command, the runtime and the GAPs. Source: DV-Router web.md "Built (WEBSID1)" and review-248 "dv-testset browser case to request".
 
@@ -26,6 +27,7 @@ staying up past two keepalive periods an assertion. A step-up in the SAME tab is
 import os
 import threading
 import time
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -156,10 +158,11 @@ def websid1(sid_operator, web_base_url, web_ca):
 class Login:
     """One browser login: the page, its Rtc panel, the cookie / CSRF facts and the handles started in it."""
 
-    def __init__(self, engine, engine_browsers, web_base_url, account, name):
+    def __init__(self, engine, engine_browsers, web_base_url, account, name, ca=None):
         ctx = {"permissions": ["microphone"]} if engine in ("chromium", "webkit") else None
         self.bp = BrowserPage(engine, engine_browsers(engine), web_base_url, name, context_options=ctx)
-        self.engine, self.account, self.base = engine, account, web_base_url
+        self.engine, self.account, self.base, self.ca = engine, account, web_base_url, ca
+        self.wavs = {}
         self.bp.install_rtc_probe()
         code = account.client.authenticator.next_code()
         account.client.hide(code)
@@ -199,12 +202,29 @@ class Login:
     def sse(self):
         return self.page.evaluate(ws.JS_SSE_STATE)
 
+    def user_agent(self):
+        return self.page.evaluate("() => navigator.userAgent")
+
     def wav_start(self, name, wav, rate=0.0, hold=False):
-        rec_id, length = wav
-        return self.page.evaluate(ws.JS_WAV_START, {"name": name, "url": AUDIO % rec_id, "rate": rate, "hold": hold})
+        """Start a WAV download read by the TESTER over a raw TLS socket with a tiny receive buffer (a browser reader cannot hold a body back, see
+        websid_support.RawWav), with this login's cookie and User-Agent. Returns the snapshot once the response headers are in."""
+        rec_id, _length = wav
+        cookie = self.bp.session_cookie()
+        assert cookie, "the login has no session cookie to give the WAV reader"
+        parts = urlsplit(self.base)
+        reader = ws.RawWav(parts.hostname, parts.port or 443, AUDIO % rec_id, "%s=%s" % (cookie["name"], cookie["value"]), self.user_agent(),
+                           ca=self.ca, rate=rate, hold=hold)
+        self.wavs[name] = reader
+        reader.start()
+        got = reader.wait_headers(15.0)
+        assert got is not None, "the WAV request %s got no response headers in 15 s" % name
+        return got
 
     def wav(self, name):
-        return self.page.evaluate(ws.JS_WAV_STATE, name)
+        return self.wavs[name].snapshot()
+
+    def wav_release(self, name):
+        self.wavs[name].release()
 
     def second_tab(self):
         tab = self.bp.context.new_page()
@@ -223,6 +243,8 @@ class Login:
         return got["status"], got["csrf_before"]
 
     def finish(self, request):
+        for reader in self.wavs.values():
+            reader.release()
         try:
             self.bp.api_logout()
         except Exception:                                   # noqa: BLE001 - the session may be gone already
@@ -231,11 +253,11 @@ class Login:
 
 
 @pytest.fixture
-def make_login(engine, engine_browsers, web_base_url, request, websid1):
+def make_login(engine, engine_browsers, web_base_url, web_ca, request, websid1):
     made = []
 
     def make(account, name=None):
-        login = Login(engine, engine_browsers, web_base_url, account, name or request.node.name.replace("[", "-").rstrip("]"))
+        login = Login(engine, engine_browsers, web_base_url, account, name or request.node.name.replace("[", "-").rstrip("]"), ca=web_ca)
         made.append(login)
         return login
 
@@ -496,7 +518,8 @@ def test_session_end_ends_the_handles(engine, cause, make_login, sid_operator, s
 
     # WAV: the bodies are CUT. The paused reader is released only now; what the server had already queued is below 49 KiB past the buffers,
     # so a body that arrives whole was fully buffered (the over is too short for this case) and is reported instead of passing.
-    login.page.evaluate(ws.JS_WAV_RELEASE, "held")
+    login.wav_release("held")
+    login.wav_release("slow")
     end = time.monotonic() + 20.0
     while time.monotonic() < end and not (login.wav("held")["done"] and login.wav("slow")["done"]):
         time.sleep(0.5)

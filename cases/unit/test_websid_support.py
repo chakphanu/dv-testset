@@ -78,12 +78,11 @@ def test_coalescing_problems():
 
 
 def test_javascript_snippets_are_self_consistent():
-    for name in ("JS_SSE_START", "JS_SSE_STATE", "JS_WAV_START", "JS_WAV_STATE", "JS_WAV_RELEASE", "JS_STEP_UP", "JS_SESSION", "JS_OFFER_ONLY",
+    for name in ("JS_SSE_START", "JS_SSE_STATE", "JS_STEP_UP", "JS_SESSION", "JS_OFFER_ONLY",
                  "JS_ALIVE_START", "JS_ALIVE_SET_CSRF", "JS_ALIVE_STATE", "JS_ICE", "JS_GET_STATUS", "JS_RTC_POST", "JS_REVOKE_OWN"):
         text = getattr(ws, name)
         assert text.count("{") == text.count("}") and text.count("(") == text.count(")"), name
     assert "'bye'" in ws.JS_SSE_START and "hello" in ws.JS_SSE_START
-    assert "ctl.rate" in ws.JS_WAV_START and "w.ctl.rate = 0" in ws.JS_WAV_RELEASE
     assert "/api/v1/auth/session/step-up" in ws.JS_STEP_UP and "X-DV-CSRF" in ws.JS_STEP_UP
     assert "X-DV-RTC-Session" in ws.JS_ICE and "/api/v1/rtc/offer" in ws.JS_OFFER_ONLY
     assert ws.HEARTBEAT_S == 15.0 and ws.RTC_SWEEP_S == 5.0
@@ -99,4 +98,145 @@ def test_refusal_shapes():
 
 def test_revoke_and_post_snippets_use_the_documented_shapes():
     assert "list.items" in ws.JS_REVOKE_OWN and "x.current" in ws.JS_REVOKE_OWN and "/api/v1/user/me/sessions/" in ws.JS_REVOKE_OWN
-    assert "body.ok === true" in ws.JS_REVOKE_OWN and "retry-after" in ws.JS_WAV_START and "retry-after" in ws.JS_OFFER_ONLY
+    assert "body.ok === true" in ws.JS_REVOKE_OWN and "retry-after" in ws.JS_OFFER_ONLY
+
+
+# ---------------------------------------------------------------- RawWav against a local server (plain TCP)
+
+import json  # noqa: E402
+import socket  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
+
+
+class Server:
+    """One-shot HTTP server on loopback: serves `respond(conn, request_bytes)` to the first connection."""
+
+    def __init__(self, respond):
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(1)
+        self.port = self.sock.getsockname()[1]
+        self.request = b""
+        self.finished = threading.Event()
+        self.thread = threading.Thread(target=self.run, args=(respond,), daemon=True)
+        self.thread.start()
+
+    def run(self, respond):
+        conn, _ = self.sock.accept()
+        try:
+            data = b""
+            while b"\r\n\r\n" not in data:
+                data += conn.recv(4096)
+            self.request = data
+            respond(conn)
+        except OSError:
+            pass
+        finally:
+            self.finished.set()
+            try:
+                conn.close()
+            except OSError:
+                pass
+
+    def close(self):
+        self.sock.close()
+
+
+def ok_body(size, cut_at=None):
+    def respond(conn):
+        conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\nContent-Length: %d\r\nConnection: close\r\n\r\n" % size)
+        data = b"x" * (size if cut_at is None else cut_at)
+        conn.sendall(data)
+    return respond
+
+
+def reader(server, **kw):
+    r = ws.RawWav("127.0.0.1", server.port, "/api/v1/user/recordings/ab/audio.wav", "dv_web=cookie-value", "TestAgent/1.0", **kw)
+    r.start()
+    return r
+
+
+def wait_done(r, seconds=10.0):
+    end = time.monotonic() + seconds
+    while time.monotonic() < end and not r.snapshot()["done"]:
+        time.sleep(0.02)
+    return r.snapshot()
+
+
+def test_rawwav_sends_the_cookie_and_the_agent_and_reads_the_whole_body():
+    server = Server(ok_body(50000))
+    r = reader(server)
+    got = wait_done(r)
+    assert got["status"] == 200 and got["length"] == 50000 and got["got"] == 50000 and got["err"] is None
+    assert ws.wav_progress_problems(got, True) == [] and not ws.wav_cut(got)
+    assert b"Cookie: dv_web=cookie-value" in server.request and b"User-Agent: TestAgent/1.0" in server.request
+    assert b"Sec-Fetch-Site: same-origin" in server.request and server.request.startswith(b"GET /api/v1/user/recordings/ab/audio.wav HTTP/1.1")
+    server.close()
+
+
+def test_rawwav_shows_a_body_cut_short():
+    server = Server(ok_body(50000, cut_at=12000))
+    got = wait_done(reader(server))
+    assert got["got"] == 12000 and got["done"] and ws.wav_cut(got) and not ws.wav_fits_buffers(got)
+    assert any("truncated" in p for p in ws.wav_progress_problems(got, True))
+    server.close()
+
+
+def test_rawwav_reads_a_refusal_with_its_code_and_retry_after():
+    body = json.dumps({"code": "rate_limited", "detail": "recording rate limit"}).encode()
+
+    def respond(conn):
+        conn.sendall(b"HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/problem+json\r\nRetry-After: 1\r\nContent-Length: %d\r\n"
+                     b"Connection: close\r\n\r\n%s" % (len(body), body))
+    server = Server(respond)
+    r = reader(server)
+    first = r.wait_headers(5.0)
+    got = wait_done(r)
+    assert first["status"] == 429 and got["code"] == "rate_limited" and got["retry_after"] == "1"
+    assert ws.refusal_shape_problems("the third WAV body", got, ws.WAV_REFUSED, "rate_limited", 1) == []
+    server.close()
+
+
+def test_rawwav_hold_keeps_the_server_busy_until_release():
+    size = 32 * 1024 * 1024
+    server = Server(ok_body(size))
+    r = reader(server, hold=True)
+    first = r.wait_headers(5.0)
+    assert first["status"] == 200 and first["hold"] is True
+    time.sleep(0.6)
+    assert not server.finished.is_set(), "a 32 MiB body fit the socket buffers: the held reader does not hold the server back"
+    assert r.snapshot()["got"] < 100000                                  # nothing but the first bytes behind the headers
+    r.release()
+    got = wait_done(r, 20.0)
+    assert got["got"] == size and server.finished.wait(5.0)
+    server.close()
+
+
+def test_rawwav_rate_throttles_the_reader():
+    server = Server(ok_body(200000))
+    r = reader(server, rate=400000.0)                                    # 200 KB at 400 KB/s: about 0.5 s
+    r.wait_headers(5.0)
+    time.sleep(0.15)
+    assert r.snapshot()["got"] < 150000 and not r.snapshot()["done"]
+    got = wait_done(r)
+    assert got["got"] == 200000
+    server.close()
+
+
+def test_rawwav_reports_a_refused_connection_as_an_error():
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    r = ws.RawWav("127.0.0.1", port, "/x", "", "A", timeout=2.0)
+    r.start()
+    got = wait_done(r, 5.0)
+    assert got["err"] and got["done"] and got["status"] is None and ws.wav_cut(got) is False
+    assert r.wait_headers(1.0) is not None
+
+
+def test_parse_head_and_problem_code():
+    status, headers = ws.parse_head(b"HTTP/1.1 503 Service Unavailable\r\nRetry-After: 5\r\nContent-Type: application/problem+json")
+    assert status == 503 and headers["retry-after"] == "5"
+    assert ws.problem_code_of(b'{"code": "unavailable"}') == "unavailable" and ws.problem_code_of(b"not json") is None and ws.problem_code_of(b"[]") is None
