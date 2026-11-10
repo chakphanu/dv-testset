@@ -84,3 +84,88 @@ def test_the_frames_the_igate_case_injects_are_accepted_by_the_edge_rules():
         parsed = ax25.parse_frame(frame)
         assert parsed["info"].decode("ascii") == info
         assert ax25.to_tnc2(frame) == "N0IGW-3>APDVT1%s:%s" % ("".join("," + d for d in digis), info)
+
+
+# ---------------------------------------------------------------- DP6c / DP19 (golden frames of DV-Router's WXTLM.md)
+
+G5 = "!4903.50N/07201.75W_220/004g005t077r000p000P000h50b09900wRSW"
+G6 = "@092345z4903.50N/07201.75W_220/004g005t-07r000p000P000h50b09900wRSW"
+G7 = "=/5L!!<*e7_7P[g005t077r000p000P000h50b09900wRSW"
+G7Z = "=/5L!!<*e7_7z[g005t077r000p000P000h50b09900wRSW"
+WX_VALUES = dict(rain_1h=0, rain_24h=0, rain_midnight=0, humidity=50, pressure=9900)
+LAT_E7, LON_E7 = 490583333, -720291667            # 49 deg 03.50' N, 72 deg 01.75' W
+
+
+def test_g5_and_g6_weather_with_an_uncompressed_position():
+    assert aprs.weather_position_info(LAT_E7, LON_E7, 220, 4, 5, 77, **WX_VALUES) == G5
+    assert aprs.weather_position_info(LAT_E7, LON_E7, 220, 4, 5, -7, dti="@", timestamp="092345z", **WX_VALUES) == G6
+    got = aprs.parse_weather_position(G6)
+    assert (got["dti"], got["timestamp"], got["lat"], got["lon"], got["wind_dir"], got["wind_speed"]) == ("@", "092345z", "4903.50N", "07201.75W", 220, 4)
+    assert got["tail"] == "g005t-07r000p000P000h50b09900wRSW" and aprs.parse_weather_position(G5)["timestamp"] is None
+    with pytest.raises(ValueError):
+        aprs.weather_position_info(LAT_E7, LON_E7, 220, 4, 5, 77, dti="@")                    # @ needs the timestamp
+    with pytest.raises(ValueError):
+        aprs.weather_position_info(LAT_E7, LON_E7, 220, 4, 5, 77, timestamp="092345z")        # ! has none
+    with pytest.raises(ValueError):
+        aprs.parse_weather_position("!4903.50N/07201.75W>Sunny")
+
+
+def test_g7_compressed_weather_and_the_out_of_range_speed_byte():
+    assert aprs.compressed_position(495000000, -727500000) == ("5L!!", "<*e7")
+    assert aprs.weather_compressed_info(495000000, -727500000, "7", "P", 5, 77, **WX_VALUES) == G7
+    assert aprs.weather_compressed_info(495000000, -727500000, "7", "z", 5, 77, **WX_VALUES) == G7Z
+    ok, bad = aprs.parse_weather_compressed(G7), aprs.parse_weather_compressed(G7Z)
+    assert (ok["wind_dir"], ok["wind_mph"]) == (88, 42)                                        # APRS101: c = 22 x 4 degrees, s = 1.08^47 - 1 knots
+    assert bad["wind_dir"] == 88 and bad["wind_mph"] is None and bad["tail"] == ok["tail"]      # z is out of range: no wind speed, the weather stays
+    assert aprs.compressed_course_speed(88, 36) == "7P" and aprs.unbase91("5L!!") == 380926 * (90 - 49.5)
+    assert aprs.base91(0) == "!!!!" and aprs.unbase91(aprs.base91(123456)) == 123456
+    with pytest.raises(ValueError):
+        aprs.base91(91 ** 4)
+
+
+def test_g9_g10_telemetry_report_and_definitions():
+    seq, analog, bits = aprs.G9_REPORT
+    assert aprs.telemetry_info(seq, analog, bits) == TLM_SPEC
+    assert aprs.telemetry_definitions("N0CALL-11") == [
+        ":N0CALL-11:PARM.Battery,Btemp,ATemp,Pres,Alt,Camra,Chut,Sun,10m,ATV",
+        ":N0CALL-11:UNIT.v/100,deg.F,deg.F,Mbar,Kft,Click,OPEN,on,on,hi",
+        ":N0CALL-11:EQNS.0,5.2,0,0,.53,-32,3,4.39,49,-32,3,18,1,2,3",
+        ":N0CALL-11:BITS.10110000,N0CALL Balloon"]
+    assert aprs.parse_definition(":N0CALL-11:EQNS.0,5.2,0") == ("N0CALL-11", "EQNS", ["0", "5.2", "0"])
+    assert aprs.parse_definition(aprs.definition_info("N0CALL-11", "BITS", "10110000", "N0CALL Balloon")) == ("N0CALL-11", "BITS", ("10110000", "N0CALL Balloon"))
+    for bad in (lambda: aprs.definition_info("N0CALL-11", "NAME", ["a"]), lambda: aprs.definition_info("N0CALL-11", "EQNS", ["1", "2"]),
+                lambda: aprs.definition_info("N0CALL-11", "PARM", ["a,b"]), lambda: aprs.definition_info("N0CALL-11", "BITS", "1011", "p"),
+                lambda: aprs.definition_info("N0CALL-11", "PARM", ["x"] * 14), lambda: aprs.parse_definition(":N0CALL-11:hello")):
+        with pytest.raises(ValueError):
+            bad()
+    # hand arithmetic of WXTLM.md: a x^2 + b x + c for the five analog values 199, 0, 255, 73, 123
+    from decimal import Decimal as D
+    eq = [D(v) for v in aprs.G10_EQNS]
+    got = [eq[3 * i] * x * x + eq[3 * i + 1] * x + eq[3 * i + 2] for i, x in enumerate(analog)]
+    assert [D(v) for v in aprs.G9_CALIBRATED] == got == [D("1034.8"), D("-32.00"), D("196243.45"), D("-170291"), D("15378")]
+    # the definition messages are valid AX.25 frames from the same base callsign as the telemetering station
+    for info in aprs.telemetry_definitions("N0CALL-11"):
+        assert ax25.dvrouter_accepts_frame(kiss_tnc.ui_frame("N0CALL-1", "APDVT1", info, digis=("WIDE1-1",)))
+
+
+def test_dp19_locator_statuses_and_look_alikes():
+    assert aprs.locator_status("IO91", "/-", "locator4") == aprs.LOCATOR_VALID["four"]
+    assert aprs.locator_status("IO91SX", "/-", "locator6") == aprs.LOCATOR_VALID["six"]
+    assert aprs.locator_status("io91sx", "\\-", "lower6") == aprs.LOCATOR_VALID["six_lower"]
+    assert aprs.locator_status("JN58", "/-") == aprs.LOCATOR_VALID["four_no_text"]
+    assert all(aprs.is_locator_status(v) for v in aprs.LOCATOR_VALID.values())
+    assert not any(aprs.is_locator_status(v) for v in aprs.LOCATOR_LOOKALIKES.values()), [k for k, v in aprs.LOCATOR_LOOKALIKES.items() if aprs.is_locator_status(v)]
+    assert not aprs.is_locator_status(">On the air from the hill") and not aprs.is_locator_status(">Test status")
+    for bad in (lambda: aprs.locator_status("IO9", "/-"), lambda: aprs.locator_status("ZZ91", "/-"), lambda: aprs.locator_status("IO91SX", "/"),
+                lambda: aprs.locator_status("IO91SX", " -"), lambda: aprs.locator_status("IO91SX12", "/-")):
+        with pytest.raises(ValueError):
+            bad()
+    for info in list(aprs.LOCATOR_VALID.values()) + list(aprs.LOCATOR_LOOKALIKES.values()):
+        assert ax25.dvrouter_accepts_frame(kiss_tnc.ui_frame("N0LOC-3", "APDVT1", info, digis=("WIDE1-1",)))
+
+
+def test_the_dp6c_frames_are_accepted_by_the_edge_rules():
+    for info in (G5, G6, G7, G7Z, aprs.telemetry_info(*aprs.G9_REPORT)):
+        frame = kiss_tnc.ui_frame("N0WXA-13", "APDVT1", info, digis=("WIDE1-1",))
+        assert ax25.dvrouter_accepts_frame(frame)
+        assert ax25.parse_frame(frame)["info"].decode("ascii") == info

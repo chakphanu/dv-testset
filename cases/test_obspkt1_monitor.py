@@ -12,6 +12,8 @@ command, runtime, GAPs and the shapes that are not confirmed: docs/obspkt1-cases
              line; a station hidden LATER loses its position from the rows still retained
   OBSPKT1-e  no packet body anywhere else: container logs, public state, other admin routes, telemetry labels
   OBSPKT1-f  admin without a fresh step-up window gets 403 step_up_required on both routes (waits until the login's window has closed)
+  OBSPKT1-g  (DP19) a locator status (`>` + a 4 or 6 character locator + a symbol pair) is spatial for the monitor: blanked and `redacted` in the worker row of a hidden base
+             and in the local KISS client's transmit row, header-only at the edge, shown in full for a visible base; look-alikes and plain statuses unchanged
   OBSPKT1-d  (LAST) a process restart clears the rings: kill dv-data-worker (same id, a new boot, worker rows go, EXACTLY ONE `gap` {id} in the kill phase),
              restart dv-edge-ax25 (the edge id CHANGES with the process: EXACTLY ONE `gap` for the old id within 20 s after the restart call, none for any other
              id, no bye, nothing replayed; the new id appears in rows with its boot; `hello` is not complete by design); the stream runs on its OWN session
@@ -412,6 +414,85 @@ def test_obspkt1_c_a_station_hidden_later_loses_its_position_from_retained_rows(
         note(target, "OBSPKT1-c", "RECORD", "after hide_position: %s" % [(r.get("line"), r.get("redacted")) for r in rows])
         assert rows and ob.info_of(rows[0]) == "" and rows[0].get("redacted") == ob.REDACTED, "the retained row still shows the position: %s" % rows[:1]
         assert not ob.mentions(body["rows"], ob.POS_ACCOUNT[0]) and not ob.mentions(body["rows"], ob.POS_ACCOUNT[1]), "the coordinates are still in a row"
+    finally:
+        p1.set_hide_position(web_ctx, ob.ACCOUNT, False)
+
+
+# ================================================================ OBSPKT1-g (DP19): locator status in the packet monitor
+
+LOC_HIDDEN, LOC_HIDDEN_PLAIN, LOC_HIDDEN_LOOK = "N0HID-5", "N0HID-4", "N0HID-6"
+LOC_VISIBLE, LOC_LATER = "N0OBF-1", ob.ACCOUNT + "-6"
+LOC_CLIENT, LOC_CLIENT_PLAIN, LOC_CLIENT_LOOK = "N0TEST-8", dp11e.SRC, "N0TEST-8"
+
+
+@pytest.fixture(scope="module")
+def locator_traffic(ctx, traffic, target):
+    """DP19: RF locator statuses of a hidden base, a visible base and the account that is hidden later, a look-alike and a plain status of the hidden base, and the same
+    forms sent by the local KISS client; returns the markers and the snapshot in which they all appear."""
+    m = {k: ob.new_marker(k) for k in ("L", "V", "K", "P", "A", "C", "D", "E")}
+    frames = [ob.rf_frame(LOC_HIDDEN, ">IO91SX/- %s" % m["L"]), ob.rf_frame(LOC_VISIBLE, ">IO91SX/- %s" % m["V"]), ob.rf_frame(LOC_HIDDEN_LOOK, "> IO91SX/- %s" % m["K"]),
+              ob.rf_frame(LOC_HIDDEN_PLAIN, ">plain %s" % m["P"]), ob.rf_frame(LOC_LATER, ">IO91SX/- %s" % m["A"])]
+    ctx.tnc.tx_guard("OBSPKT1-g")
+    for frame in frames:
+        assert ctx.tnc.a.inject(frame), "the fake modem rf-a has no connection to inject into"
+        time.sleep(0.5)
+    client = kiss_app.AppKissClient(ctx.shape.listeners["apps"].host, ctx.shape.listeners["apps"].port, name="obspkt1-g")
+    assert client.connect(), "cannot connect to listener apps: %s" % client.error
+    try:
+        client.send_frame(dp11e.good_frame(">IO91SX/- %s" % m["C"], src=LOC_CLIENT))
+        time.sleep(1.0)
+        client.send_frame(dp11e.good_frame("> IO91SX/- %s" % m["D"], src=LOC_CLIENT_LOOK))
+        time.sleep(1.0)
+        client.send_frame(dp11e.good_frame(">plain %s" % m["E"], src=LOC_CLIENT_PLAIN))
+        time.sleep(1.0)
+    finally:
+        client.close()
+    shown = (m["V"], m["K"], m["P"], m["D"], m["E"])
+    body = wait_rows(ctx, lambda rows: all(ob.mentions(rows, x) for x in shown) and ob.rows_from(ob.worker_rows(rows), LOC_HIDDEN, dir="rx"))
+    note(target, "locator", "RECORD", "markers %s; %d rows; missing: %s" % (sorted(m), len(body["rows"]), [k for k in shown if not ob.mentions(body["rows"], k)]))
+    return types.SimpleNamespace(markers=m, rows=body["rows"])
+
+
+def test_obspkt1_g_locator_status_is_redacted_like_a_position(ctx, locator_traffic, web_ctx, target):
+    """data.md 13.5 and 13.4 (DP19): a status whose `>` is followed by a four or six character locator and a symbol pair is spatial for the monitor too. Worker rows blank its
+    text after `SRC>DST,PATH:` and mark `redacted: position_policy` for a hidden base; a visible base shows it in full; a look-alike and a plain status of the hidden base are
+    ordinary statuses and stay in full; edge RX rows are header only; the local KISS client's transmit rows (unknown hidden set) blank the locator status and mark it, and
+    keep the look-alike and the plain status in full. Retained worker rows recheck the CURRENT policy: hiding the account of LOC_LATER blanks its retained row."""
+    rows, m = locator_traffic.rows, locator_traffic.markers
+    worker = ob.worker_rows(rows)
+    hidden = ob.rows_from(worker, LOC_HIDDEN, port="rf-a", dir="rx")
+    assert hidden, "no worker rx row for the locator status of the hidden base %s" % LOC_HIDDEN
+    assert ob.info_of(hidden[0]) == "" and hidden[0].get("redacted") == ob.REDACTED, "worker row of the hidden base's locator status: %s" % hidden[0]
+    assert not ob.mentions(rows, m["L"]), "the text of the hidden base's locator status is in a row: %s" % ob.mentions(rows, m["L"])[:1]
+    for src, key in ((LOC_VISIBLE, "V"), (LOC_HIDDEN_LOOK, "K"), (LOC_HIDDEN_PLAIN, "P")):
+        full = [r for r in ob.rows_from(worker, src, port="rf-a", dir="rx") if m[key] in (r.get("line") or "")]
+        assert full and "redacted" not in full[0], "worker row of %s (%s) is not shown in full: %s" % (src, key, ob.rows_from(worker, src, dir="rx")[:1])
+    edge = [r for r in ob.edge_rows(rows) if r.get("port") == "rf-a" and r.get("dir") == "rx" and ob.row_src(r) in (LOC_HIDDEN, LOC_VISIBLE, LOC_HIDDEN_LOOK, LOC_HIDDEN_PLAIN)]
+    assert edge and all("line" not in r for r in edge), "edge rx rows of the locator statuses carry a line: %s" % [r for r in edge if "line" in r][:1]
+    # the local KISS client transmit rows
+    client = [r for r in ob.edge_rows(rows) if r.get("port") == "rf-a" and r.get("dir") == "tx" and ob.has_outcome(r, "client", "queued")]
+    blank = [r for r in ob.rows_from(client, LOC_CLIENT) if r.get("redacted") and ob.info_of(r) == ""]
+    assert blank and blank[0]["redacted"] == ob.REDACTED, "no blanked client row for the locator status of %s: %s" % (LOC_CLIENT, ob.rows_from(client, LOC_CLIENT)[:2])
+    assert not ob.mentions(rows, m["C"]), "the text of the client's locator status is in a row"
+    for key in ("D", "E"):
+        full = [r for r in client if m[key] in (r.get("line") or "")]
+        assert full and "redacted" not in full[0], "client row %s is not shown in full: %s" % (key, full[:1])
+    note(target, "OBSPKT1-g", "RECORD", "worker rows: hidden %r, client rows: %s" % (hidden[0].get("line"), [(r.get("line"), r.get("redacted")) for r in client][-3:]))
+    # retained rows follow the current policy: the visible-now account is hidden later
+    later = [r for r in ob.rows_from(worker, LOC_LATER, port="rf-a", dir="rx") if m["A"] in (r.get("line") or "")]
+    assert later, "the locator status of %s was not shown in full before the account was hidden: %s" % (LOC_LATER, ob.rows_from(worker, LOC_LATER, dir="rx")[:1])
+    p1.set_hide_position(web_ctx, ob.ACCOUNT, True)
+    try:
+        time.sleep(POLICY_PUSH_S)
+        end, now = time.monotonic() + 40.0, []
+        while time.monotonic() < end:
+            _resp, body = snapshot(ctx.admin, limit=1000)
+            now = ob.rows_from(ob.worker_rows(body["rows"]), LOC_LATER, dir="rx")
+            if now and ob.info_of(now[0]) == "" and not ob.mentions(body["rows"], m["A"]):
+                break
+            time.sleep(3.0)
+        note(target, "OBSPKT1-g", "RECORD", "after hide_position of %s: %s" % (ob.ACCOUNT, [(r.get("line"), r.get("redacted")) for r in now]))
+        assert now and ob.info_of(now[0]) == "" and now[0].get("redacted") == ob.REDACTED, "the retained locator status of %s still shows its text: %s" % (LOC_LATER, now[:1])
     finally:
         p1.set_hide_position(web_ctx, ob.ACCOUNT, False)
 

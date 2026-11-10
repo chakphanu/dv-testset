@@ -327,7 +327,7 @@ class WebClient:
     def post(self, path, json_body=None, **kw):
         return self.request("POST", path, json_body=json_body if json_body is not None else {}, **kw)
 
-    def sse(self, path, max_events=1, timeout=15.0, until=None, on_frame=None, stop=None):
+    def sse(self, path, max_events=1, timeout=15.0, until=None, on_frame=None, stop=None, headers=None):
         """Open an SSE stream and read frames until `max_events` frames, a frame
         whose event name is `until`, the stream's end, or `timeout` seconds in all
         (comment lines and heartbeats do not extend it). Returns
@@ -343,7 +343,7 @@ class WebClient:
         finished = threading.Event()
         deadline = time.monotonic() + timeout
         try:
-            conn.request("GET", path, headers=self._headers("GET", {"Accept": "text/event-stream"}, False))
+            conn.request("GET", path, headers=self._headers("GET", dict({"Accept": "text/event-stream"}, **(headers or {})), False))
             resp = conn.getresponse()
             ctype = resp.getheader("Content-Type", "")
             self.last_sse_headers = {k.lower(): v for k, v in resp.getheaders()}

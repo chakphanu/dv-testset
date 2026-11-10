@@ -44,7 +44,8 @@ unit test `cases/unit/test_coverage_matrix.py` runs it).
 | Echo return integrity E9 (D-STAR kinds) | 14 | 13 | 1 | 0 | 0 |
 | Real-transcoder cross-mode audio into YSF (related to ECHO1) | 3 | 3 | 0 | 0 | 0 |
 | DP15 (APRS / AX.25 / KISS data path) | 99 | 70 | 6 | 23 | 0 |
-| **Total** | **1257** | **794** | **276** | **179** | **8** |
+| DP6c / DP19 (weather, telemetry, locator status) | 16 | 13 | 0 | 3 | 0 |
+| **Total** | **1273** | **807** | **276** | **182** | **8** |
 <!-- summary:end -->
 
 ## Top 15 gaps (ranked by how much real-world traffic they touch)
@@ -1535,3 +1536,25 @@ Sources: dp15-cases.md.
 | APRS-IS client and passcode scheme (login, q construct check, ack line shape) | dp15-cases.md:327 | `test_aprs_passcode::test_public_vector_n0call`, `test_aprsis_client::test_login_message_round_trip_and_filter`, `test_dp15_aprsis_config::test_check_ack_line_accepts_the_documented_shape` | unit | a | OK |
 | Snippets and rig wiring of tier A, tier B, aprsc and two-node runs are valid and consistent | dp15-cases.md:181 | `test_dp15_rf_helpers::test_read_rf_config_in_both_run_shapes`, `test_dp15_rf_dw_config::test_snippet_with_the_token_true_and_the_out_path_transmits_on_rf_a_only`, `test_dp15_aprsis_config::test_snippet_carries_the_path_row_with_the_edge_enable`, `test_dp15_peer_config::test_node_two_has_its_own_callsign_address_and_recorder_dir` | unit | a | OK |
 
+
+## DP6c / DP19 (weather, telemetry, locator status)
+Sources: dp6c-cases.md.
+
+| Obligation | Source | Case ids | Marker | Client | Status |
+|---|---|---|---|---|---|
+| DP6c RF: separate stations per SSID with position + weather (G5), position + telemetry (G9 under G10), a separate position, positionless weather (G1); rows carry hops and forwarded, none for the bare base, none in the message history | dp6c-cases.md "DP6c-1" | `test_dp6c_rf::test_dp6c_1_stations_weather_and_telemetry_over_rf` | rig | a | OK |
+| DP6c a compressed weather position with speed byte z keeps its marker and shows the weather without wind speed | dp6c-cases.md "DP6c-8" | `test_dp6c_rf::test_dp6c_8_compressed_weather_with_an_out_of_range_speed_byte` | rig | a | OK |
+| DP6c hide_position of a base removes every SSID and kind on the state refresh, from the SSE and its replay; new items are denied/13 | dp6c-cases.md "DP6c-3" | `test_dp6c_rf::test_dp6c_3_hide_position_removes_every_ssid_and_every_kind` | rig | a | OK |
+| DP6c position_optout and positions = false deny weather and telemetry as 13 | dp6c-cases.md "DP6c-3" | `test_dp6c_rf::test_dp6c_3_position_optout_denies_weather_and_telemetry`, `test_dp6c_rf::test_dp6c_3_positions_false_denies_weather_and_telemetry` | rig | a | OK |
+| DP6c APRS-IS weather and telemetry through a typed path give rows without a position or marker; IS positions stay refused | dp6c-cases.md "DP6c-2" | `test_dp6c_aprsis::test_dp6c_2_is_weather_and_telemetry_without_a_position` | rig | a | OK |
+| DP6c without the weather types no annex row appears (the edge counted the packets) | dp6c-cases.md "DP6c-2" | `test_dp6c_aprsis::test_dp6c_2_is_without_weather_types_gives_no_rows` | rig | a | OK |
+| DP6c an APRS-IS -> room path with weather and telemetry loads, an unknown type and the forbidden pairs are refused at load | dp6c-cases.md "Configuration" | `test_dp6c_config::test_dp6c_config` | cfgload | a | OK |
+| DP6c browsers, EN and TH: Weather column, details, "No position received", literal markup, own origin only, no CSP report | dp6c-cases.md "DP6c-4" | `test_dp6c_browser::test_dp6c_4_station_details_are_text_only_in_both_languages` | rig | a | OK |
+| DP6c the operator events view shows no weather or telemetry row | dp6c-cases.md "DP6c-9" | `test_dp6c_browser::test_dp6c_9_operator_event_view_shows_no_weather_or_telemetry` | rig | a | OK |
+| DP6c golden frames G1, G5, G6, G7, G7z, G9, G10 and the DP19 locator vectors are what the builders emit | dp6c-cases.md "Frames" | `test_proto_aprs::test_g5_and_g6_weather_with_an_uncompressed_position`, `test_proto_aprs::test_g7_compressed_weather_and_the_out_of_range_speed_byte`, `test_proto_aprs::test_g9_g10_telemetry_report_and_definitions`, `test_proto_aprs::test_dp19_locator_statuses_and_look_alikes` | unit | a | OK |
+| DP19 a valid locator status of a private base is denied/13, look-alikes and a plain status are ordinary statuses, a public base's is public | dp6c-cases.md "DP19-a" | `test_dp19_locator::test_dp19_a_locator_status_is_dropped_for_a_private_base` | rig | a | OK |
+| DP19 a private base's valid locator status is not gated to APRS-IS by RF transit; look-alikes and plain statuses are | dp6c-cases.md "DP19-b" | `test_dp19_locator::test_dp19_b_locator_status_is_not_gated_to_aprsis_for_a_private_base` | rig | a | OK |
+| DP19 the packet monitor blanks a locator status like a position (worker row of a hidden base, local KISS client TX row, retained rows follow the current policy); edge RX is header only | dp6c-cases.md "OBSPKT1-g" | `test_obspkt1_monitor::test_obspkt1_g_locator_status_is_redacted_like_a_position` | rig | a | OK |
+| DP6c the marker click that opens and focuses the station details (a WebGL marker has no DOM element) | dp6c-cases.md "GAPs" | - | - | - | GAP |
+| DP6c the admin SPA event view (admin host sign-in with TOTP) | dp6c-cases.md "GAPs" | - | - | - | GAP |
+| DP19 embedded M17 locator status and an APRS-IS locator status (IS positions and statuses never enter a room; no room-bound seam on the rig for M17 statuses of a private base) | dp6c-cases.md "GAPs" | - | - | - | GAP |

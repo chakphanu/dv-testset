@@ -178,6 +178,15 @@ class Fake(http.server.BaseHTTPRequestHandler):
                 self.wfile.flush()
             time.sleep(1)
             return
+        if self.path.startswith("/api/v1/public/events?echo"):
+            # the Last-Event-ID request header comes back in a data frame (replay cursor of a reconnect)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            frame = ("event: data\ndata: " + json.dumps({"leid": self.headers.get("Last-Event-ID")}) + "\n\n").encode()
+            self.wfile.write(b"%x\r\n" % len(frame) + frame + b"\r\n0\r\n\r\n")
+            return
         if self.path.startswith("/api/v1/public/events"):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -292,6 +301,14 @@ def test_sse_reader(fake):
     # `until` stops at the named event
     _, _, got = web.WebClient(url, ca, pacer=fast_pacer()).sse("/api/v1/public/events", max_events=9, until="hello")
     assert [f.get("event") for f in got] == ["hello"]
+
+
+def test_sse_reader_sends_extra_request_headers(fake):
+    url, ca = fake
+    client = web.WebClient(url, ca, pacer=fast_pacer())
+    _, _, plain = client.sse("/api/v1/public/events?echo", max_events=1)
+    _, _, replay = client.sse("/api/v1/public/events?echo", max_events=1, headers={"Last-Event-ID": "7-3"})
+    assert json.loads(plain[0]["data"]) == {"leid": None} and json.loads(replay[0]["data"]) == {"leid": "7-3"}
 
 
 def test_base_url_must_be_https():

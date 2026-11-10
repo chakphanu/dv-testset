@@ -226,3 +226,202 @@ def parse_position_report(info):
     if not m:
         raise ValueError("not an uncompressed `!` position: %r" % (info,))
     return {"lat": m.group(1), "symbol_table": m.group(2), "lon": m.group(3), "symbol_code": m.group(4), "comment": m.group(5)}
+
+
+# ---------------------------------------------------------------- DP6c / DP19: weather with a position, compressed weather, telemetry definitions, locator status
+# Hand-built from APRS101 1.0.1 (chapter 12 pp.63-66 weather with a position, compressed positions p.38, chapter 13 pp.68-70 telemetry
+# definitions, chapter 16 pp.81-82 Maidenhead locator status). The vectors G1-G19 of DV-Router's WXTLM.md are these literals; the unit tests
+# (cases/unit/test_proto_aprs.py) pin each builder to its literal and round-trip it through the matching parser.
+
+import math  # noqa: E402
+
+KNOTS_TO_MPH = 1.15078
+
+
+def base91(value, width=4):
+    """`value` as `width` base-91 characters (chr(33 + digit)), most significant first (APRS101 p.38)."""
+    if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value < 91 ** width:
+        raise ValueError("base91 value %r does not fit %d characters" % (value, width))
+    out = []
+    for _ in range(width):
+        value, digit = divmod(value, 91)
+        out.append(chr(33 + digit))
+    return "".join(reversed(out))
+
+
+def unbase91(text):
+    value = 0
+    for ch in text:
+        if not 33 <= ord(ch) <= 123:
+            raise ValueError("not a base-91 character: %r" % (ch,))
+        value = value * 91 + ord(ch) - 33
+    return value
+
+
+def compressed_position(lat_e7, lon_e7):
+    """(lat, lon) as the four base-91 characters each of a compressed position: 380926 x (90 - lat) and 190463 x (180 + lon), truncated."""
+    lat = 380926 * (900000000 - lat_e7) // 10000000
+    lon = 190463 * (1800000000 + lon_e7) // 10000000
+    return base91(lat), base91(lon)
+
+
+def compressed_course_speed(course_deg, speed_knots):
+    """The two characters `cs` of a compressed position: course in 4 degree steps and speed as 1.08^(s - 33) - 1 knots."""
+    if not 0 <= course_deg <= 360 or speed_knots < 0:
+        raise ValueError("course 0..360 and speed >= 0: %r %r" % (course_deg, speed_knots))
+    return chr(33 + course_deg // 4) + chr(33 + int(round(math.log(speed_knots + 1) / math.log(1.08))))
+
+
+def decode_compressed_cs(c, s):
+    """(course degrees, speed mph rounded) of a compressed `cs` pair, the wind direction and speed of a compressed weather position."""
+    course = (ord(c) - 33) * 4
+    knots = 1.08 ** (ord(s) - 33) - 1
+    return course, int(round(knots * KNOTS_TO_MPH))
+
+
+def weather_tail(gust, temp_f, *, rain_1h=None, rain_24h=None, rain_midnight=None, humidity=None, pressure=None, software="w", unit="RSW"):
+    """`g005t077r000p000P000h50b09900wRSW`: the weather values after the wind of a complete weather report."""
+    body = weather_info(1, 1, 0, 0, 0, 0, gust, temp_f, rain_1h=rain_1h, rain_24h=rain_24h, rain_midnight=rain_midnight, humidity=humidity,
+                        pressure=pressure, software=software, unit=unit)
+    return body[body.index("g"):]
+
+
+def weather_position_info(lat_e7, lon_e7, wind_dir, wind_speed, gust, temp_f, *, dti="!", timestamp=None, table="/", **values):
+    """Complete weather on an uncompressed position (G5, G6): `<dti>[DHMz]ddmm.hhN<table>dddmm.hhE_DDD/SSSg...`. `dti` `!` or `=` has no timestamp;
+    `/` and `@` carry the `DDHHMMz` timestamp. The symbol code is `_` (the weather symbol)."""
+    if (dti in "/@") != (timestamp is not None):
+        raise ValueError("a `/` or `@` report has a DDHHMMz timestamp, `!` and `=` have none")
+    if timestamp is not None and not re.fullmatch(r"\d{6}z", timestamp):
+        raise ValueError("timestamp is DDHHMMz: %r" % (timestamp,))
+    wind = "%s/%s" % (_num(wind_dir, 3, "wind_dir", 0, 360), _num(wind_speed, 3, "wind_speed", 0, 999))
+    return dti + (timestamp or "") + lat_text_e7(lat_e7) + table + lon_text_e7(lon_e7) + "_" + wind + weather_tail(gust, temp_f, **values)
+
+
+def weather_compressed_info(lat_e7, lon_e7, c, s, gust, temp_f, *, dti="=", table="/", t_type="[", **values):
+    """Complete weather on a compressed position (G7): `<dti><table>YYYYXXXX_cs<T>g005t077...`. `c` and `s` are the two characters of the compressed
+    course/speed pair, which carry the wind direction and speed; `s` = `z` is out of range (G7 variant: the marker and the weather stay, the wind
+    speed is dropped)."""
+    lat, lon = compressed_position(lat_e7, lon_e7)
+    if len(c) != 1 or len(s) != 1 or len(t_type) != 1:
+        raise ValueError("c, s and t_type are one character each")
+    return dti + table + lat + lon + "_" + c + s + t_type + weather_tail(gust, temp_f, **values)
+
+
+_WXPOS_RE = re.compile(r"^([!=/@])(?:(\d{6}z))?(\d{4}\.\d{2}[NS])(.)(\d{5}\.\d{2}[EW])_(\d{3})/(\d{3})(g.*)$", re.S)
+_WXCMP_RE = re.compile(r"^([!=/@])(.)([!-{]{4})([!-{]{4})_(.)(.)(.)(g.*)$", re.S)
+
+
+def parse_weather_position(info):
+    """{dti, timestamp, lat, table, lon, wind_dir, wind_speed, tail} of a G5/G6 report, else ValueError."""
+    m = _WXPOS_RE.match(info)
+    if not m:
+        raise ValueError("not a weather report on an uncompressed position: %r" % (info,))
+    return {"dti": m.group(1), "timestamp": m.group(2), "lat": m.group(3), "table": m.group(4), "lon": m.group(5),
+            "wind_dir": int(m.group(6)), "wind_speed": int(m.group(7)), "tail": m.group(8)}
+
+
+def parse_weather_compressed(info):
+    """{dti, table, lat, lon, c, s, t_type, tail, wind_dir, wind_mph} of a G7 report (wind_* from `cs`, None when `s` is out of range), else ValueError."""
+    m = _WXCMP_RE.match(info)
+    if not m:
+        raise ValueError("not a weather report on a compressed position: %r" % (info,))
+    c, s = m.group(5), m.group(6)
+    course, mph = decode_compressed_cs(c, s)
+    return {"dti": m.group(1), "table": m.group(2), "lat": unbase91(m.group(3)), "lon": unbase91(m.group(4)), "c": c, "s": s, "t_type": m.group(7),
+            "tail": m.group(8), "wind_dir": course, "wind_mph": mph if mph <= 999 else None}
+
+
+DEFINITION_KINDS = ("PARM", "UNIT", "EQNS", "BITS")
+
+
+def message_info(addressee, text):
+    """`:ADDRESSEE:text` with the addressee padded to nine characters (no message id, so it is never acked)."""
+    if not 1 <= len(addressee) <= 9:
+        raise ValueError("an APRS addressee is 1 to 9 characters: %r" % (addressee,))
+    return ":%-9s:%s" % (addressee, text)
+
+
+def definition_info(target, kind, fields, project=None):
+    """A telemetry definition message to the telemetering station `target` (APRS101 pp.68-70): `:N0CALL-11:PARM.a,b,...`, `UNIT.`, `EQNS.` (15 coefficients a,b,c
+    per analog channel, kept as written) or `BITS.<8 bits>,<project>`. It must be sent by the same BASE callsign as `target` (DV-Router: other senders are
+    ignored); it never becomes a room item."""
+    if kind not in DEFINITION_KINDS:
+        raise ValueError("definition kind %r is not one of %s" % (kind, DEFINITION_KINDS))
+    if kind == "BITS":
+        if not re.fullmatch(r"[01]{8}", str(fields)):
+            raise ValueError("BITS sense is eight characters 0 or 1: %r" % (fields,))
+        if project is None or not 1 <= len(project) <= 23:
+            raise ValueError("BITS carries a project name of 1..23 characters: %r" % (project,))
+        return message_info(target, "BITS.%s,%s" % (fields, project))
+    values = list(fields)
+    limit = {"PARM": 13, "UNIT": 13, "EQNS": 15}[kind]
+    if not 1 <= len(values) <= limit:
+        raise ValueError("%s has 1..%d fields: %r" % (kind, limit, values))
+    if kind == "EQNS" and len(values) % 3:
+        raise ValueError("EQNS has a, b, c per channel (a multiple of three fields): %r" % (values,))
+    if any(("," in str(v)) or ("|" in str(v)) or ("~" in str(v)) for v in values):
+        raise ValueError("a field has no comma, bar or tilde: %r" % (values,))
+    return message_info(target, "%s.%s" % (kind, ",".join(str(v) for v in values)))
+
+
+def parse_definition(info):
+    """(target, kind, fields list or (bits, project)) of a definition message built like `definition_info`, else ValueError."""
+    m = re.fullmatch(r":(.{9}):(PARM|UNIT|EQNS|BITS)\.(.*)", info, re.S)
+    if not m:
+        raise ValueError("not a telemetry definition message: %r" % (info,))
+    if m.group(2) == "BITS":
+        bits, _comma, project = m.group(3).partition(",")
+        return m.group(1).rstrip(" "), "BITS", (bits, project)
+    return m.group(1).rstrip(" "), m.group(2), m.group(3).split(",")
+
+
+# APRS101 pp.68-70 example, with synthetic names: five analog channels A1..A5 then B1..B8 (B6..B8 unnamed)
+G10_PARM = ["Battery", "Btemp", "ATemp", "Pres", "Alt", "Camra", "Chut", "Sun", "10m", "ATV"]
+G10_UNIT = ["v/100", "deg.F", "deg.F", "Mbar", "Kft", "Click", "OPEN", "on", "on", "hi"]
+G10_EQNS = ["0", "5.2", "0", "0", ".53", "-32", "3", "4.39", "49", "-32", "3", "18", "1", "2", "3"]
+G10_BITS = "10110000"
+G10_PROJECT = "N0CALL Balloon"
+G9_REPORT = (5, (199, 0, 255, 73, 123), "01101001")
+# the calibrated values a * x^2 + b * x + c of G9 under G10, computed by hand (WXTLM.md)
+G9_CALIBRATED = ("1034.8", "-32.00", "196243.45", "-170291", "15378")
+
+
+def telemetry_definitions(target):
+    """The four G10 messages for `target` in the order PARM, UNIT, EQNS, BITS."""
+    return [definition_info(target, "PARM", G10_PARM), definition_info(target, "UNIT", G10_UNIT), definition_info(target, "EQNS", G10_EQNS),
+            definition_info(target, "BITS", G10_BITS, G10_PROJECT)]
+
+
+_GRID_FIELD = "ABCDEFGHIJKLMNOPQR"
+_GRID_SUB = "ABCDEFGHIJKLMNOPQRSTUVWX"
+
+
+def locator_status(locator, symbol="/-", text=""):
+    """A chapter 16 locator status `>IO91SX/- text`: a four or six character Maidenhead locator (field letters A-R, square digits, optional subsquare letters
+    A-X, any case), the symbol table and code, and optional text that starts with a space. DV-Router treats it as a POSITION (DP19)."""
+    if not re.fullmatch(r"[A-Ra-r]{2}\d\d(?:[A-Xa-x]{2})?", locator):
+        raise ValueError("not a four or six character Maidenhead locator: %r" % (locator,))
+    if len(symbol) != 2 or not 33 <= ord(symbol[1]) <= 126 or not (symbol[0] in "/\\" or symbol[0].isalnum()):
+        raise ValueError("a symbol is the table byte (/, \\, A-Z, 0-9) and the code byte: %r" % (symbol,))
+    return ">" + locator + symbol + ((" " + text) if text else "")
+
+
+def is_locator_status(info):
+    """True when `info` is a locator status by the chapter 16 rules above (the classifier DV-Router calls spatial)."""
+    m = re.fullmatch(r">([A-Ra-r]{2}\d\d(?:[A-Xa-x]{2})?)([/\\A-Za-z0-9])([!-~])(?: .*)?", info, re.S)
+    return bool(m)
+
+
+# valid forms and look-alikes of DP19 (data.md 13.4): every look-alike stays an ordinary status
+LOCATOR_VALID = {"four": ">IO91/- locator4", "six": ">IO91SX/- locator6", "six_lower": ">io91sx\\- lower6", "four_no_text": ">JN58/-"}
+LOCATOR_LOOKALIKES = {
+    "leading_space": "> IO91SX/- space",          # a leading space
+    "no_symbol": ">KN07",                          # no symbol pair (">IO91SX" would read as IO91 plus the symbol pair S X)
+    "no_symbol_text": ">IO91 text",                # a space where the symbol table byte belongs
+    "bad_field": ">ZZ91SX/- field",                # field letters beyond R
+    "bad_square": ">IOA1SX/- square",              # a letter where a digit belongs
+    "bad_subsquare": ">IO91YZ/- sub",              # subsquare letters beyond X
+    "five_chars": ">IO91S/- five",                 # five characters
+    "eight_chars": ">IO91SX12/- eight",            # eight characters (a longer locator is not chapter 16)
+    "no_space": ">IO91SX/-nospace",                # the text does not start with a space
+}

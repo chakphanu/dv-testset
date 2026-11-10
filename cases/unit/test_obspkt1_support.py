@@ -755,3 +755,50 @@ def test_the_restart_case_asserts_the_obspkt1b_wire_contract_and_the_12_s_window
     assert any("OBSPKT1b wire contract" in t and "met" in t for _tag, t in admin.notes)
     with pytest.raises(AssertionError, match="breaks the OBSPKT1b wire contract"):
         restart_flow(monkeypatch)                                       # no bare retry first, no hello for the new edge id before its rows
+
+
+# ---------------------------------------------------------------- OBSPKT1-g (DP19)
+
+LM = {k: "OBSPKT1X%s0A1B2C" % k for k in "LVKPACDE"}
+
+
+def locator_rows(later_blank=False, hidden_leak=False, client_leak=False):
+    A = ">IO91SX/- "
+    rows = [
+        row(W, 40, "rf-a", "rx", "N0HID-5>APDVT1,WIDE1-1*:" + (A + LM["L"] if hidden_leak else ""), (("rf", "heard"),), ref=20, redacted=None if hidden_leak else "position_policy"),
+        row(W, 41, "rf-a", "rx", "N0OBF-1>APDVT1,WIDE1-1*:" + A + LM["V"], ref=21),
+        row(W, 42, "rf-a", "rx", "N0HID-6>APDVT1,WIDE1-1*:> IO91SX/- " + LM["K"], ref=22),
+        row(W, 43, "rf-a", "rx", "N0HID-4>APDVT1,WIDE1-1*:>plain " + LM["P"], ref=23),
+        row(W, 44, "rf-a", "rx", "N0OBH-6>APDVT1,WIDE1-1*:" + ("" if later_blank else A + LM["A"]), ref=24, **({"redacted": "position_policy"} if later_blank else {})),
+        row(E_AX, 40, "rf-a", "rx", "N0HID-5>APDVT1,WIDE1-1*", (("modem", "rx"),), key="header", ref=20),
+        row(E_AX, 41, "rf-a", "rx", "N0OBF-1>APDVT1,WIDE1-1*", (("modem", "rx"),), key="header", ref=21),
+        row(E_AX, 42, "rf-a", "rx", "N0HID-6>APDVT1,WIDE1-1*", (("modem", "rx"),), key="header", ref=22),
+        row(E_AX, 43, "rf-a", "rx", "N0HID-4>APDVT1,WIDE1-1*", (("modem", "rx"),), key="header", ref=23),
+        row(E_AX, 50, "rf-a", "tx", "N0TEST-8>APDR16,WIDE1-1:" + (A + LM["C"] if client_leak else ""), (("client", "queued"),), **({} if client_leak else {"redacted": "position_policy"})),
+        row(E_AX, 51, "rf-a", "tx", "N0TEST-8>APDR16,WIDE1-1:> IO91SX/- " + LM["D"], (("client", "queued"),)),
+        row(E_AX, 52, "rf-a", "tx", "N0TEST-7>APDR16,WIDE1-1:>plain " + LM["E"], (("client", "queued"),)),
+    ]
+    return [{k: v for k, v in r.items() if v is not None} for r in rows]
+
+
+def run_locator_case(monkeypatch, **flags):
+    before = locator_rows(**{k: v for k, v in flags.items() if k != "later_stays"})
+    after = locator_rows(later_blank=not flags.get("later_stays", False), **{k: v for k, v in flags.items() if k not in ("later_stays", "later_blank")})
+    admin = Scripted([(after, [{"id": W, "boot": BOOT}, {"id": E_AX, "boot": BOOT}])], [])
+    ticks = iter(range(0, 10 ** 6))
+    monkeypatch.setattr(tm, "time", SimpleNamespace(sleep=lambda s: None, monotonic=lambda: next(ticks)))
+    hides = []
+    monkeypatch.setattr(tm.p1, "set_hide_position", lambda web_ctx, callsign, value: hides.append((callsign, value)))
+    monkeypatch.setattr(tm.ds, "write_note", lambda *a, **k: None)
+    tm.test_obspkt1_g_locator_status_is_redacted_like_a_position(SimpleNamespace(admin=admin), SimpleNamespace(markers=LM, rows=before), None, None)
+    return hides
+
+
+def test_the_locator_monitor_case_passes_and_catches_each_leak(monkeypatch):
+    assert run_locator_case(monkeypatch) == [("N0OBH", True), ("N0OBH", False)]
+    with pytest.raises(AssertionError, match="worker row of the hidden base"):
+        run_locator_case(monkeypatch, hidden_leak=True)
+    with pytest.raises(AssertionError, match="blanked client row|text of the client's locator status"):
+        run_locator_case(monkeypatch, client_leak=True)
+    with pytest.raises(AssertionError, match="still shows its text"):
+        run_locator_case(monkeypatch, later_stays=True)

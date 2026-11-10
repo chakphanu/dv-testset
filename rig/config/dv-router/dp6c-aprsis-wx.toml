@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/dp6c-cases.md): the input path that admits APRS-IS WEATHER and TELEMETRY into room B (DP6c; data.md
+# 8.2: "edge:aprsis -> room allows text, weather, telemetry"). With this path an IS weather or telemetry packet becomes a type 5 / 6 item WITHOUT the position that
+# may accompany it: the station has no map marker ("No position received"), and IS positions are still refused. Without the path (or without these types) no
+# weather or telemetry row appears. Use it AFTER dp15-aprsis.toml (the launcher refuses a path whose endpoint is not enabled), data-ident.toml and
+# dp6c-aprsis-filter.toml (without that filter the aprsc never sends the station reports). cases/test_dp6c_aprsis.py skips without it; cases/test_dp6c_config.py
+# loads it through `dv-router config check`.
+[[data.path]]
+name = "aprsis-wx"
+from = "edge:aprsis"
+to = "room:B"
+types = ["weather", "telemetry"]
+per_min = 30

@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/dp6c-cases.md): the AX.25 edge with ONE KISS TCP port rf-a BOUND to room B, receive only, for the
+# DP6c / DP19 RF cases (cases/test_dp6c_rf.py). The tester plays the TNC (dvtest/kiss_tnc.py): the edge is the kiss-tcp CLIENT and connects to
+# <TESTER_IP>:8101. A port bound to a room (`room = "B"`) publishes the positions, statuses, weather and telemetry of the stations it hears straight into
+# room B (data.md 8.2; no [[data.path]] is needed for them), under the controller's position privacy and rates. It is the same shape as dp7-rf.toml, kept
+# as its own file so that the DP6c run commands name only dp6c-* snippets; use it INSTEAD of dp7-rf.toml and dp15-rf.toml (all define [edges.ax25]).
+# The station callsign N0TEST-1 is the one the RF-to-IS transit of DP19 needs (dp7-rf-igate.toml adds that path).
+[edges.ax25]
+enable = true
+callsign = "N0TEST-1"
+tx_enable = false
+alias_calls = []
+
+[[edges.ax25.port]]
+name = "rf-a"
+kind = "kiss-tcp"
+host = "<TESTER_IP>"
+port = 8101
+channel = 0
+room = "B"
+tx = false
+reconnect = { min_secs = 1, max_secs = 5 }
