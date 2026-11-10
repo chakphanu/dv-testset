@@ -21,6 +21,8 @@ Shape K (rig/config/dv-router/dp11e-kiss.toml): listeners apps / rxonly / txdeny
   DP11e-k  (shape B) a loopback listener is not reachable from another host (the default bind is loopback)
   DP11e-l  (shape B) the listener packet bucket (tx_per_min 2, tx_burst 1): `rate`
   DP11e-m  (shape B) a simulated port: `simulated`, no modem byte, no PTT
+  DP11e-n  a client frame to a receive-only exposed port is refused as tx_off (not queued, nothing at either modem)
+  DP11e-y  the counter label sets are the fixed ones of data.md 13.1 (dir in/out, results per direction, listener names as port)
   DP11e-z  no admission is ever counted `disabled` in a valid configuration (a TTL-less client frame cannot be provoked black-box)
 
 Every case skips with a reason on an image without the kiss_server schema, without the shape, or without the prerequisite service.
@@ -432,39 +434,38 @@ def test_dp11e_g_client_frames_never_reach_aprs_is_or_rooms(rig, target, kiss, r
 # ================================================================ DP11e-h: sessions, kick, log
 
 def find_session(kiss, name):
+    """The `kiss_client` item of listener `name` in GET /api/v1/admin/clients (operator or higher; IP and port only in the administrative scope).
+    Sessions are `kind: "kiss_client"` in admin/edge/<id>/sessions with the listener name as the callsign (status.md, review 235)."""
     admin = kiss.admin
-    admin.step_up() if getattr(admin, "authenticator", None) else None
+    admin.step_up()
     resp = admin.get(admin.path("/clients"), expect=None)
-    if resp.status != 200:
-        return None, resp
+    assert resp.status == 200, "GET /api/v1/admin/clients answered HTTP %d" % resp.status
     items = (resp.json() or {}).get("items") or []
-    for item in items:
-        if isinstance(item, dict) and item.get("kind") == "kiss_client" and name in (item.get("callsign"), item.get("name"), item.get("listener")):
-            return item, resp
-    return None, resp
+    mine = [i for i in items if isinstance(i, dict) and i.get("kind") == "kiss_client"]
+    assert mine, "no item with kind \"kiss_client\" in the admin client list (kinds seen: %s)" % sorted({str(i.get("kind")) for i in items if isinstance(i, dict)})
+    named = [i for i in mine if i.get("callsign") == name]
+    assert named, "no kiss_client item with callsign %r (the listener name); callsigns seen: %s" % (name, sorted(str(i.get("callsign")) for i in mine))
+    return named[0]
 
 
 def test_dp11e_h_sessions_are_listed_and_kick_closes_the_client(rig, target, kiss):
-    """data.md 10.10: administrative sessions are `kiss_client` (callsign = listener name, IP and port); kick closes the client (no timed ban) and
-    counts `kicked`. Route shapes were read from the documents, not seen on a rig (UNVERIFIED): the item fields and the kick path."""
+    """status.md / data.md 10.10: administrative sessions are `kiss_client` (callsign = listener name, IP and port); kick
+    (POST /api/v1/admin/edges/ax25/clients/{circuit}/kick, step-up) closes the client with no timed ban and counts `kicked`."""
     case = "DP11e-h"
     before = settled(kiss, "apps")
     client = app(kiss, "apps")
     try:
         time.sleep(2.0)
-        item, resp = find_session(kiss, "apps")
-        note(target, case, "RECORD", "GET /clients HTTP %d; kiss_client item: %s" % (resp.status, sorted(item) if item else None))
-        if item is None:
-            pytest.skip("no `kiss_client` item for listener apps in GET /api/v1/admin/clients (HTTP %d): the session list shape is unverified" % resp.status)
-        circuit = item.get("circuit") or item.get("id")
-        kind = item.get("protocol") or item.get("edge") or "ax25"
-        if not circuit:
-            pytest.skip("the kiss_client item has no circuit field to kick: %s" % sorted(item))
+        item = find_session(kiss, "apps")
+        note(target, case, "RECORD", "kiss_client item keys: %s" % sorted(item))
+        assert item.get("ip") and item.get("port"), "the kiss_client item has no ip / port in the administrative scope: keys %s" % sorted(item)
+        circuit = item.get("circuit")
+        assert circuit, "the kiss_client item has no circuit to kick: keys %s" % sorted(item)
         admin = kiss.admin_session("operator")
         admin.step_up()
-        kick = admin.post(admin.path("/edges/%s/clients/%s/kick" % (kind, circuit)), {}, expect=None)
-        note(target, case, "RECORD", "kick of %s/%s answered HTTP %d" % (kind, circuit, kick.status))
-        assert kick.status in (200, 202, 204), "kick answered HTTP %d" % kick.status
+        kick = admin.post(admin.path("/edges/ax25/clients/%s/kick" % circuit), {}, expect=None)
+        note(target, case, "RECORD", "kick of ax25/%s answered HTTP %d" % (circuit, kick.status))
+        assert kick.status in (200, 202, 204), "kick answered HTTP %d: %s" % (kick.status, kick.text()[:200])
         assert client.wait_closed(10.0), "the kicked client is still connected"
     finally:
         client.close()
@@ -679,12 +680,53 @@ def test_dp11e_m_a_simulated_port_counts_simulated_and_writes_no_modem_byte(rig,
     assert sim1 - sim0 == 1 and sent1 - sent0 == 1, "simulated +%d (expected 1), sent +%d (expected 1)" % (sim1 - sim0, sent1 - sent0)
 
 
+# ================================================================ DP11e-n: a receive-only exposed port
+
+def test_dp11e_n_a_frame_to_a_receive_only_port_is_tx_off(rig, target, kiss):
+    """data.md 10.10 step 2: channel 1 of `apps` maps rf-b, a receive-only port. A client frame sent there passes the listener and the peer
+    (tx true, tx_from) but not the port: refused at the KISS layer as `tx_off`. dv_edge_kiss_frames_total{dir=in,result=tx_off} +1, no `queued`,
+    and no TX at either modem (nothing is written to rf-a or rf-b). The mapping still delivers rf-b's received frames on channel 1 (DP11e-e)."""
+    case = "DP11e-n"
+    lst = listener(kiss, "apps")
+    assert lst.channels.get(1) == "rf-b" and kiss.shape.ports.get("rf-b") is False, "the snippet changed: channel 1 is not the receive-only rf-b"
+    guard(kiss, case)
+    before = settled(kiss, "apps")
+    b_received = len(kiss.tnc.b.received)
+    client = app(kiss, "apps")
+    t0 = time.monotonic()
+    try:
+        frame = dp.good_frame(dp.info_for("rx_only_port"))
+        assert client.send_frame(frame, channel=1)
+        time.sleep(MODEM_WAIT_S / 2)
+        assert client.is_open, "the refusal closed the client"
+    finally:
+        client.close()
+    delta = wait_frames_delta(kiss, "apps", before, {("in", "tx_off"): 1})
+    note(target, case, "RECORD", "dv_edge_kiss_frames_total{port=apps} deltas: %s" % delta)
+    assert delta.get(("in", "tx_off"), 0) == 1, "tx_off moved by %d, expected 1 (%s)" % (delta.get(("in", "tx_off"), 0), delta)
+    assert delta.get(("in", "queued"), 0) == 0, "a frame for a receive-only port was queued: %s" % delta
+    assert modem_frames(kiss, t0) == [] and modem_frames(kiss, t0, "b") == [], "a frame for a receive-only port reached a modem"
+    assert len(kiss.tnc.b.received) == b_received, "the receive-only modem rf-b received KISS bytes"
+
+
+def test_dp11e_y_the_counter_label_sets_are_the_fixed_ones(rig, target, kiss):
+    """data.md 13.1 / status.md: dv_edge_kiss_frames_total{port,dir,result} (in: queued, tx_off, tx_addr, channel, bad_frame, not_ui, src, path,
+    too_long, third_party, rate, command; out: sent, slow), dv_edge_kiss_clients_total{port,result} (accepted, refused_addr, full, closed, stalled,
+    kicked) and the gauge dv_edge_kiss_clients; `port` is always a configured listener name, never an address."""
+    s = samples(kiss)
+    problems = dp.label_set_problems(s, kiss.shape.listeners)
+    series = [x for x in s if x.name in ("dv_edge_kiss_frames_total", "dv_edge_kiss_clients_total", "dv_edge_kiss_clients")]
+    note(target, "DP11e-y", "RECORD", "%d kiss series checked, %d problem(s)" % (len(series), len(problems)))
+    assert series, "no dv_edge_kiss_* series in the hub metrics after a run with clients"
+    assert not problems, "; ".join(problems[:6])
+
+
 # ================================================================ the last case
 
 def test_dp11e_z_no_admission_is_counted_disabled(rig, target, kiss):
-    """tx.rs `enqueue_client`: `disabled` is the admission result for a frame whose port has no scheduler budget (no class TTL), which a valid
-    configuration (tx true or simulate needs an explicit budget) cannot produce. After every case of the run the counter must still be 0.
-    LIMIT: the refusal itself is not reachable black-box; this case only checks it never appears."""
+    """`disabled` is defensive only: TxCore::admit (crates/edge/ax25/src/tx.rs 334-383, as confirmed by DV-Router) returns it for a frame whose port
+    has no scheduler budget (no class TTL), which no valid configuration reaches: tx true or simulate requires an explicit budget. After every case of
+    the run the counter must still be 0. LIMIT: the refusal itself is not reachable black-box (it is covered by DV-Router's unit tests)."""
     s = samples(kiss)
     disabled = [(x.labels.get("port"), int(x.value)) for x in s if x.name == "dv_edge_rf_tx_total" and x.labels.get("result") == "disabled" and int(x.value)]
     note(target, "DP11e-z", "RECORD", "dv_edge_rf_tx_total{result=disabled} non-zero series: %s" % disabled)

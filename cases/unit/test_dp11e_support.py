@@ -205,3 +205,57 @@ def test_listener_helper_skips_a_missing_listener_and_modem_frames_decode():
     tnc = SimpleNamespace(a=SimpleNamespace(data_frames=lambda since=0.0: [(5.0, 0, frame)]), b=SimpleNamespace(data_frames=lambda since=0.0: []))
     kiss = SimpleNamespace(tnc=tnc)
     assert tk.modem_frames(kiss, 0.0) == [(5.0, "N0TEST-7>APDR16,WIDE1-1:=x")] and tk.modem_frames(kiss, 0.0, "b") == []
+
+
+# ---------------------------------------------------------------- label sets, sessions, the receive-only port
+
+def test_label_set_problems_accept_the_fixed_sets_and_name_each_violation():
+    names = {"apps": 1, "rxonly": 1}
+    good = "\n".join(
+        ['dv_edge_kiss_frames_total{port="apps",dir="in",result="%s"} 1' % r for r in dp.IN_RESULTS]
+        + ['dv_edge_kiss_frames_total{port="apps",dir="out",result="%s"} 1' % r for r in dp.OUT_RESULTS]
+        + ['dv_edge_kiss_clients_total{port="rxonly",result="%s"} 1' % r for r in dp.CLIENT_RESULTS] + ['dv_edge_kiss_clients{port="apps"} 2'])
+    assert dp.label_set_problems(metrics.parse(good), names) == []
+    assert len(dp.IN_RESULTS) == 12 and dp.OUT_RESULTS == ("sent", "slow") and len(dp.CLIENT_RESULTS) == 6
+    bad = metrics.parse("\n".join([
+        'dv_edge_kiss_frames_total{port="apps",dir="in",result="sent"} 1', 'dv_edge_kiss_frames_total{port="apps",dir="out",result="queued"} 1',
+        'dv_edge_kiss_frames_total{port="apps",dir="sideways",result="x"} 1', 'dv_edge_kiss_clients_total{port="apps",result="banned"} 1',
+        'dv_edge_kiss_clients{port="172.30.0.30"} 1', 'dv_edge_kiss_frames_total{port="apps",dir="in",result="queued",peer="x"} 1']))
+    problems = dp.label_set_problems(bad, names)
+    assert len(problems) == 6 and any("dir='sideways'" in p for p in problems) and any("not a configured listener" in p for p in problems)
+    assert any("unexpected labels" in p for p in problems)
+
+
+class FakeAdmin:
+    def __init__(self, items, status=200):
+        self.items, self.status, self.step_ups = items, status, 0
+
+    def path(self, suffix):
+        return "/api/v1/admin" + suffix
+
+    def step_up(self):
+        self.step_ups += 1
+
+    def get(self, path, expect=None):
+        return SimpleNamespace(status=self.status, json=lambda: {"items": self.items})
+
+
+def test_find_session_returns_the_listener_item_or_fails_with_what_it_saw():
+    item = {"kind": "kiss_client", "callsign": "apps", "circuit": "c-1", "ip": "172.30.0.30", "port": 40000}
+    other = {"kind": "modem", "callsign": "rf-a"}
+    kiss = SimpleNamespace(admin=FakeAdmin([other, item, dict(item, callsign="rxonly")]))
+    assert tk.find_session(kiss, "apps") is item and kiss.admin.step_ups == 1
+    with pytest.raises(AssertionError, match=r"kinds seen: \['modem'\]"):
+        tk.find_session(SimpleNamespace(admin=FakeAdmin([other])), "apps")
+    with pytest.raises(AssertionError, match=r"callsigns seen: \['rxonly'\]"):
+        tk.find_session(SimpleNamespace(admin=FakeAdmin([dict(item, callsign="rxonly")])), "apps")
+    with pytest.raises(AssertionError, match="HTTP 403"):
+        tk.find_session(SimpleNamespace(admin=FakeAdmin([], status=403)), "apps")
+
+
+def test_the_receive_only_port_case_rests_on_channel_1_of_apps_mapping_rf_b():
+    shp = dp.kiss_shape(rendered("dp11e-kiss.toml"))
+    assert shp.listeners["apps"].channels[1] == "rf-b" and shp.ports["rf-b"] is False and shp.listeners["apps"].tx
+    tx_off = [r for r in dp.refusal_frames() if r.id == "tx_off_port"][0]
+    assert tx_off.channel == 1 and tx_off.label == "tx_off" and tx_off.listener == "apps"
+    assert "tx_off" in dp.IN_RESULTS and "queued" in dp.IN_RESULTS

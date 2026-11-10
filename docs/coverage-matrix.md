@@ -43,8 +43,8 @@ unit test `cases/unit/test_coverage_matrix.py` runs it).
 | Built-in echo (ECHO1) | 27 | 19 | 2 | 6 | 0 |
 | Echo return integrity E9 (D-STAR kinds) | 14 | 13 | 1 | 0 | 0 |
 | Real-transcoder cross-mode audio into YSF (related to ECHO1) | 3 | 3 | 0 | 0 | 0 |
-| DP15 (APRS / AX.25 / KISS data path) | 84 | 62 | 6 | 16 | 0 |
-| **Total** | **1234** | **778** | **276** | **172** | **8** |
+| DP15 (APRS / AX.25 / KISS data path) | 92 | 64 | 6 | 22 | 0 |
+| **Total** | **1242** | **780** | **276** | **178** | **8** |
 <!-- summary:end -->
 
 ## Top 15 gaps (ranked by how much real-world traffic they touch)
@@ -1468,8 +1468,16 @@ Sources: dp15-cases.md.
 | DP11e slow client (`slow`) and write stall (`stalled`) | dp11e-cases.md "DP11e-i" | `test_dp11e_kiss::test_dp11e_i_a_slow_client_loses_the_newest_frames_and_a_stalled_one_is_closed` | rig | a | OK |
 | DP11e edge restart closes clients and the first frame meets the RFSAFE1 guard | dp11e-cases.md "DP11e-j" | `test_dp11e_kiss::test_dp11e_j_an_edge_restart_closes_clients_and_the_first_frame_meets_the_guard` | rig | a | OK |
 | DP11e listener bucket `rate`; simulated port without modem byte | dp11e-cases.md "DP11e-l" | `test_dp11e_kiss::test_dp11e_l_the_listener_bucket_counts_rate`, `test_dp11e_kiss::test_dp11e_m_a_simulated_port_counts_simulated_and_writes_no_modem_byte` | rig | a | OK |
-| DP11e TTL-less client frames are counted `disabled` (not reachable with a valid configuration: only absence is checked) | dp11e-cases.md "Limits" | `test_dp11e_kiss::test_dp11e_z_no_admission_is_counted_disabled` | rig | a | PARTIAL |
-| DP11e loopback peers are accepted and `tx_from` defaults to loopback (the tester is not in the SUT namespace) | dp11e-cases.md "Limits" | - | - | - | GAP |
+| DP11e a client frame to a receive-only exposed port is refused as `tx_off` (not queued, nothing at the modems) | dp11e-cases.md "DP11e-n" | `test_dp11e_kiss::test_dp11e_n_a_frame_to_a_receive_only_port_is_tx_off` | rig | a | OK |
+| DP11e the KISS counter label sets are the fixed ones (dir in/out, per-direction results, listener names as port) | dp11e-cases.md "DP11e-y" | `test_dp11e_kiss::test_dp11e_y_the_counter_label_sets_are_the_fixed_ones` | rig | a | OK |
+| DP11e `disabled` admission is defensive only (TxCore admit in tx.rs): only its absence is checked | dp11e-cases.md "GAPs" | `test_dp11e_kiss::test_dp11e_z_no_admission_is_counted_disabled` | rig | a | PARTIAL |
+| DP11e loopback peers are accepted and `tx_from` defaults to loopback (tester in another namespace; DV-Router shell tests) | dp11e-cases.md "GAPs" | - | - | - | GAP |
+| DP11e a mapped TNC2 port is refused (no TNC2 port in the rig; config fixtures) | dp11e-cases.md "GAPs" | - | - | - | GAP |
+| DP11e IPv4-mapped IPv6 peers match IPv4 rules (no dual-stack peer; `ipv4_mapped_peers_match_ipv4_rules`) | dp11e-cases.md "GAPs" | - | - | - | GAP |
+| DP11e the source quota key `kiss/<listener>` (only the dropped_quota effect is visible; scheduler tests) | dp11e-cases.md "GAPs" | - | - | - | GAP |
+| DP11e Nagle off and TCP keepalive socket options (not visible from the peer; shell tests) | dp11e-cases.md "GAPs" | - | - | - | GAP |
+| DP11e at most eight frames per client per turn and the 16 KiB/s read budget (core tests) | dp11e-cases.md "GAPs" | - | - | - | GAP |
+| DP11e the PTT holder token of the client TX path (a fabric key, not observable; shell tests) | dp11e-cases.md "GAPs" | - | - | - | GAP |
 | DP15-8w RF-heard positionless weather is gated to the private aprsc once, `qAR` + igate call, path as heard, information byte-identical (`qAO` receive-only) | dp15-cases.md "RF to APRS-IS igate" | `test_dp15_igate::test_dp15_8w_rf_weather_is_gated_with_qar` | rig | b:aprsc | OK |
 | DP15-8t RF-heard telemetry `T#` is gated the same way | dp15-cases.md "RF to APRS-IS igate" | `test_dp15_igate::test_dp15_8t_rf_telemetry_is_gated_with_qar` | rig | b:aprsc | OK |
 | DP15-8q RF-heard general query `?APRS?` is never gated (bounded window from the run's latency, control frame) | dp15-cases.md "RF to APRS-IS igate" | `test_dp15_igate::test_dp15_8q_rf_general_query_is_not_gated` | rig | b:aprsc | OK |

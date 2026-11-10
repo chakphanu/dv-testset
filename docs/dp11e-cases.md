@@ -25,8 +25,8 @@ snippets `rig/config/dv-router/dp11e-kiss.toml`, `dp11e-kiss-b.toml`, `dp11e-kis
 
 | Shape | Snippets (INSTEAD of `dp15-rf.toml`) | Listeners | Cases |
 |-------|--------------------------------------|-----------|-------|
-| K | `dp11e-kiss.toml`, with `dp11e-kiss-igate.toml` and `dp15-aprsis.toml` for DP11e-g | `apps` :8201 (rf-a = ch 0, rf-b rx only = ch 1, tx, keepalive 10 s, max_clients 3), `rxonly` :8202 (tx false, keepalive 0), `txdeny` :8203 (tx_from outside the tester), `outside` :8204 (allow_from outside the tester) | a, b, c, d, e, g, h, i, j, z |
-| B | `dp11e-kiss-b.toml` (rf-b `tx = "simulate"`) | `loop` 127.0.0.1:8205, `rate` :8206 (tx_per_min 2, burst 1), `sim` :8207 (rf-a ch 0, rf-b simulated ch 1) | k, l, m, z |
+| K | `dp11e-kiss.toml`, with `dp11e-kiss-igate.toml` and `dp15-aprsis.toml` for DP11e-g | `apps` :8201 (rf-a = ch 0, rf-b rx only = ch 1, tx, keepalive 10 s, max_clients 3), `rxonly` :8202 (tx false, keepalive 0), `txdeny` :8203 (tx_from outside the tester), `outside` :8204 (allow_from outside the tester) | a, b, c, d, e, g, h, i, j, n, y, z |
+| B | `dp11e-kiss-b.toml` (rf-b `tx = "simulate"`) | `loop` 127.0.0.1:8205, `rate` :8206 (tx_per_min 2, burst 1), `sim` :8207 (rf-a ch 0, rf-b simulated ch 1) | k, l, m, y, z |
 
 ```
 R=rig/config/dv-router
@@ -54,25 +54,37 @@ a label (DP11e-i): `-m rig` runs it. Notes: stdout and `out/<run>/dp11e-kiss.txt
 | DP11e-d | lone-FEND keepalive on and off (config `keepalive_secs`) | 130 s idle: a client on `apps` (10 s) and one on `rxonly` (0), nothing at the modem | on: open, at least 10 lone FENDs about 10 s apart (+-30 %), no other byte, an app with a 120 s timeout would not drop; off: zero bytes, open, an app with a 120 s timeout WOULD drop | intervals, longest silence |
 | DP11e-e | fan-out of UI/F0 frames to other clients, no echo to the sender (data 10.10, 13.4) | frames injected at rf-a (a normal one and a NOGATE one), a non-UI frame at rf-a, a frame at rf-b; two clients on `apps`, one on `rxonly`; then client 1 transmits | `apps` clients get the rf-a frames on channel 0 and the rf-b frame on channel 1, `rxonly` only the rf-a frames, nobody the non-UI frame (raw RF monitoring, unfiltered by position policy or path markers); the APRSdroid reader model takes channel 0 only; nobody, the sender included, gets the transmitted frame back (8 s); `dv_edge_kiss_frames_total{dir=out,result=sent}` +6 on `apps`, +2 on `rxonly` | counters |
 | DP11e-g | client frames never reach APRS-IS or rooms (data 10.10, K4) | a client frame is transmitted; then a frame HEARD on rf-a as the control | raw / item / room counter totals do not move; the private aprsc sees nothing from the client's source; the control reaches the aprsc over `dp11e-kiss-igate.toml` (proof that the path is alive). Without the aprsc only the counter half runs | totals |
-| DP11e-h1 | sessions `kiss_client` (callsign = listener name, IP, port) and kick (`kicked`, no timed ban) | `GET /api/v1/admin/clients`, then `POST .../edges/{kind}/clients/{circuit}/kick` | the item exists (skip with the keys seen when the shape differs: UNVERIFIED), the client is closed, the same peer reconnects at once, `kicked` +1 | the item keys |
+| DP11e-h1 | sessions `kiss_client` in `admin/edge/<id>/sessions` (callsign = listener name, IP and port in the administrative scope; status.md) and kick (`kicked`, no timed ban) | `GET /api/v1/admin/clients` (operator or higher), then `POST /api/v1/admin/edges/ax25/clients/{circuit}/kick` (step-up) | the item exists with `callsign`, `ip`, `port` and `circuit` (a failure names the kinds, callsigns or keys seen), the kick is accepted, the client is closed, the same peer reconnects at once, `kicked` +1 | the item keys |
 | DP11e-h2 | no peer address or frame content in the log (config.md) | scan the SUT log lines that mention kiss | no tester address, no information field of this module, no init text | line count |
 | DP11e-i (slow) | output queue 64 frames / 64 KiB, the newest dropped (`slow`); a 30 s write stall closes (`stalled`) | one client stops reading while 5000 frames of 900 bytes are injected; a healthy client reads | `out/slow` >= 1, `stalled` >= 1, the stalled client is closed after it resumes, the healthy client got frames | deltas |
 | DP11e-j | Restart(child) and RFSAFE1 (config.md; radio 10.4) | `POST /api/v1/admin/children/dv-edge-ax25/restart` | the client is closed, the listener rebinds within 30 s, a frame sent at once is not transmitted inside the guard and is counted `dv_edge_drops_total{reason=rf_fenced}`, a frame after `tx_fence` ended is served | restart timings, the guard line |
 | DP11e-k (B) | the default bind is loopback; `listen` has no default (config.md) | connect to the loopback listener's port on the rig address | refused | |
 | DP11e-l (B) | the listener bucket `rate` (tx_per_min 2, burst 1) | four frames at once on `rate` | `queued` + `rate` = 4, `rate` >= 2, `queued` 1 or 2, as many frames at the modem as queued | deltas |
 | DP11e-m (B) | a simulated port: `simulated`, no modem byte, no PTT | one frame on channel 0 (rf-a) and one on channel 1 (rf-b, simulate) | rf-a transmits it; `dv_edge_rf_tx_total{port=rf-b,result=simulated}` +1 and rf-a `sent` +1; rf-b's modem got no data frame and no KISS byte | counters |
-| DP11e-z | TTL-less client frames are counted `disabled` (tx.rs `enqueue_client`) | after every case of the run | `dv_edge_rf_tx_total{result=disabled}` is 0 in a valid configuration | the non-zero series |
+| DP11e-n | a frame to a receive-only exposed port is refused at the KISS layer (data 10.10 step 2) | a valid frame on channel 1 of `apps` (rf-b, receive only), the peer and listener allow TX | `dv_edge_kiss_frames_total{dir=in,result=tx_off}` +1 exactly, no `queued`, nothing at either modem (no data frame, no KISS byte at rf-b), the client stays open | deltas |
+| DP11e-y | the fixed counter label sets (data 13.1, status.md) | the hub metrics after the run | every `dv_edge_kiss_frames_total` has `dir` in/out and a result of its set (in: queued, tx_off, tx_addr, channel, bad_frame, not_ui, src, path, too_long, third_party, rate, command; out: sent, slow); every `dv_edge_kiss_clients_total` result is one of accepted, refused_addr, full, closed, stalled, kicked; `port` is a configured listener name, no other label | the series count |
+| DP11e-z | `disabled` is defensive only (`TxCore::admit`, crates/edge/ax25/src/tx.rs 334-383: no valid configuration reaches it) | after every case of the run | `dv_edge_rf_tx_total{result=disabled}` is 0 | the non-zero series |
 | config (17 params) | `listen` required; non-loopback needs `allow_from`; duplicate `listen`; four listeners at most; `keepalive_secs` <= 300; channel 0 mapped; unique channels; existing ports; `tx` needs `allow_src` and a mapped TX port; `allow_src` base = station base; name, `max_clients`, `max_hops`, `tx_burst` bounds; accept: the shipped snippet and a loopback listener without `allow_from` | `dv-router config check` on the snippet with one mutation each | non-zero exit, a positioned error that names `kiss_server` and the field (the channel-0 rule also says "channel 0"); the accept rows exit 0 | the exact error text per case |
 
-## Limits (not testable black-box, or not testable here)
+## GAPs: not testable black-box here, covered by DV-Router's unit and seam tests (review 235)
 
-* **`disabled`**: a TTL-less client frame needs a port with no scheduler budget, which a valid configuration cannot have (TX true or simulate requires an explicit budget). DP11e-z only checks that the
-  label never appears; the refusal itself is unit-level in DV-Router.
-* **Loopback peers are accepted** (the positive half of the loopback rule) is not testable: the tester is in another network namespace. DP11e-k proves the bind (refused on the rig address);
-  the acceptance of loopback peers and the `tx_from` default (loopback only) rest on DV-Router's own tests. `allow_from` and `tx_from` are tested with the tester's rig address inside and outside a CIDR.
-* IPv4-mapped IPv6 peers (review 235 F6), the sans-IO core, the shared `admit`, the quota key `kiss/<listener>`, Nagle and TCP keepalive socket options, the per-turn cap of eight frames and the
-  16 KiB/s read budget, the PTT holder token: not observable.
-* Mapping a TNC2 port is refused by config; the rig has no TNC2 port to name, so that rule is not a case.
-* The kick route, the item keys of `kiss_client` and the `{kind}` path part are read from the documents only (UNVERIFIED); DP11e-h1 skips with the keys it saw when they differ.
-* DP11e-d depends on the idle period: the fake modems are quiet and no other case runs in parallel. A `rf-a` frame injected during the 130 s would reset the server's idle timer.
+Recorded in [coverage-matrix.md](coverage-matrix.md) as GAP rows. None of these is a missing case that could be written with this rig; each rests on the tests of the merge
+(core tables, `shell_kiss_server_tests.rs` with a fake TNC and app sockets, the config fixtures).
+
+| GAP | Why not black-box | Covered by |
+|-----|-------------------|------------|
+| Loopback peers are accepted; `tx_from` empty = loopback peers only | the tester is in another network namespace than the SUT. DP11e-k proves the bind (refused on the rig address); `allow_from` and `tx_from` are tested with the tester's rig address inside and outside a CIDR | the shell tests (loopback peer, `tx_from` default) |
+| A mapped TNC2 port is refused | the rig has no TNC2 port to name | config fixtures |
+| IPv4-mapped IPv6 peers match the IPv4 rules (review 235 F6) | the rig has no dual-stack listener or IPv6 peer | `ipv4_mapped_peers_match_ipv4_rules` |
+| The source quota key `kiss/<listener>` shared by all clients of a listener | only its effect on `dv_edge_rf_tx_total{result=dropped_quota}` is visible, with a budget the rig does not exhaust | the scheduler tests |
+| Nagle off and TCP keepalive socket options | not visible from the peer | the shell tests |
+| At most eight frames per client per turn; the 16 KiB/s read budget with TCP back-pressure | needs the SUT's scheduling turns | the core tests (a throughput flood would only show the budget indirectly) |
+| The PTT holder token of the client TX path | a fabric key the control channel does not expose (as DP18-s) | `shell_kiss_server_tests.rs` |
+| `disabled` (a TTL-less client frame) | `TxCore::admit` (tx.rs 334-383) refuses it only for a port without a scheduler budget, which no valid config has; DP11e-z only checks that it never appears | the tx tests |
+
+Other limits:
+
+* DP11e-d needs the fake modems quiet for 130 s and no parallel case: a frame injected at rf-a during the idle period would reset the keepalive timer of the server.
+* The exact texts of the configuration refusals are not a contract except where the documents quote them (channel 0); `cases/test_dp11e_config.py` asserts a positioned error that names `kiss_server` and the field.
+* The shapes of the sessions list and the kick route are the documented ones (status.md: kind `kiss_client`; `POST /api/v1/admin/edges/ax25/clients/{circuit}/kick`); a deviation FAILS with the kinds, callsigns or keys seen.
 * `kissutil` (Dire Wolf) as an oracle (design 9, slow tier) is still only a proposal in dp11e-plan.md: it needs a host-side one-off container on the rig network and is not written.

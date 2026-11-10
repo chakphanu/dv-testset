@@ -142,6 +142,38 @@ def clients_gauge(samples, port):
     return None if not vals else int(vals[-1])
 
 
+IN_RESULTS = ("queued", "tx_off", "tx_addr", "channel", "bad_frame", "not_ui", "src", "path", "too_long", "third_party", "rate", "command")
+OUT_RESULTS = ("sent", "slow")
+CLIENT_RESULTS = ("accepted", "refused_addr", "full", "closed", "stalled", "kicked")
+
+
+def label_set_problems(samples, listeners):
+    """Problems ([] = fine) of the fixed label sets (data.md 13.1, status.md): every dv_edge_kiss_frames_total series has `port` = a configured
+    listener name, `dir` in/out and a result of the set of its direction; every dv_edge_kiss_clients_total result is in CLIENT_RESULTS; the gauge
+    dv_edge_kiss_clients has a configured `port`. No label carries an address."""
+    problems = []
+    names = set(listeners)
+    for s in samples:
+        port = s.labels.get("port")
+        if s.name == "dv_edge_kiss_frames_total":
+            direction, result = s.labels.get("dir"), s.labels.get("result")
+            if direction not in ("in", "out"):
+                problems.append("dv_edge_kiss_frames_total dir=%r" % (direction,))
+            elif result not in (IN_RESULTS if direction == "in" else OUT_RESULTS):
+                problems.append("dv_edge_kiss_frames_total{dir=%s} result=%r is not in %s" % (direction, result, IN_RESULTS if direction == "in" else OUT_RESULTS))
+        elif s.name == "dv_edge_kiss_clients_total":
+            if s.labels.get("result") not in CLIENT_RESULTS:
+                problems.append("dv_edge_kiss_clients_total result=%r is not in %s" % (s.labels.get("result"), CLIENT_RESULTS))
+        elif s.name != "dv_edge_kiss_clients":
+            continue
+        if port not in names:
+            problems.append("%s port=%r is not a configured listener %s" % (s.name, port, sorted(names)))
+        extra = [k for k in s.labels if k not in ("port", "dir", "result")]
+        if extra:
+            problems.append("%s carries unexpected labels %s" % (s.name, extra))
+    return problems
+
+
 def delta(after, before):
     """{key: after - before} for the keys that moved."""
     return {k: after.get(k, 0) - before.get(k, 0) for k in set(after) | set(before) if after.get(k, 0) != before.get(k, 0)}
