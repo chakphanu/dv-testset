@@ -44,8 +44,8 @@ unit test `cases/unit/test_coverage_matrix.py` runs it).
 | Echo return integrity E9 (D-STAR kinds) | 14 | 13 | 1 | 0 | 0 |
 | Real-transcoder cross-mode audio into YSF (related to ECHO1) | 3 | 3 | 0 | 0 | 0 |
 | DP15 (APRS / AX.25 / KISS data path) | 99 | 70 | 6 | 23 | 0 |
-| DP6c / DP19 (weather, telemetry, locator status) | 16 | 13 | 0 | 3 | 0 |
-| **Total** | **1273** | **807** | **276** | **182** | **8** |
+| DP6c / DP19 (weather, telemetry, locator status) | 22 | 17 | 1 | 4 | 0 |
+| **Total** | **1279** | **811** | **277** | **183** | **8** |
 <!-- summary:end -->
 
 ## Top 15 gaps (ranked by how much real-world traffic they touch)
@@ -1558,3 +1558,9 @@ Sources: dp6c-cases.md.
 | DP6c the marker click that opens and focuses the station details (a WebGL marker has no DOM element) | dp6c-cases.md "GAPs" | - | - | - | GAP |
 | DP6c the admin SPA event view (admin host sign-in with TOTP) | dp6c-cases.md "GAPs" | - | - | - | GAP |
 | DP19 embedded M17 locator status and an APRS-IS locator status (IS positions and statuses never enter a room; no room-bound seam on the rig for M17 statuses of a private base) | dp6c-cases.md "GAPs" | - | - | - | GAP |
+| DP19b a locator status, a plain status and the look-alike text are visible on the SSE and in the message history; only the first is spatial (state `spatial_status` holds it alone) | dp19b-cases.md "DP19b-1" | `test_dp19b_status::test_dp19b_1_three_items_are_visible_and_only_the_locator_status_is_spatial` | rig | a | OK |
+| DP19b hide_position withdraws the spatial status from the state, a fresh SSE replay and the user history within one state refresh; plain status and text stay | dp19b-cases.md "DP19b-2" | `test_dp19b_status::test_dp19b_2_hide_position_withdraws_the_spatial_status_everywhere` | rig | a | OK |
+| DP19b the open dashboard message panel drops the hidden base's spatial status and keeps the plain status and the text | dp19b-cases.md "DP19b-2 browser" | `test_dp19b_browser::test_dp19b_2_the_open_message_panel_drops_the_hidden_bases_spatial_status` | rig | a | OK |
+| DP19b F1: a position and a spatial status arrive live on an open SSE after a quiet minute | dp19b-cases.md "DP19b-3" | `test_dp19b_status::test_dp19b_3_a_quiet_node_still_delivers_position_and_spatial_status_live` | rig | a | OK |
+| DP19b a restart with the account store unreadable withholds spatial rows and delivers text and plain status (opt-in, destructive) | dp19b-cases.md "DP19b-4" | `test_dp19b_status::test_dp19b_4_spatial_rows_are_withheld_while_accounts_are_unavailable` | rig | a | PARTIAL |
+| DP19b the talker status drops a hidden base's spatial status; `position_optout` plus reload as the hide | dp19b-cases.md "GAPs" | - | - | - | GAP |

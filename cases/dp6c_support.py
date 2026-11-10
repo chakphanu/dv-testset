@@ -187,3 +187,58 @@ def wait_status(watch, since, base, word, timeout=WAIT_S):
     """The first public SSE status of the base callsign containing `word`, else None."""
     hit = watch.wait_data(lambda o: bool(status_rows([o], base, word)), timeout, since=since)
     return None if hit is None else hit[1]
+
+
+# ---------------------------------------------------------------- DP19b: spatial status rows (public state `spatial_status`, SSE, message history)
+
+def state_spatial(anon, room=dp6c.ROOM):
+    """The `spatial_status` array of the room in the anonymous public state ([] when the room or the key is absent)."""
+    for item in ps.public_state(anon).get("rooms", []) or []:
+        if item.get("room") == room:
+            return [r for r in item.get("spatial_status", []) or [] if isinstance(r, dict)]
+    return []
+
+
+def has_spatial_status_key(anon, room=dp6c.ROOM):
+    """True when the public state of the room carries `spatial_status` (the probe for an image with DP19b: the key is required there)."""
+    for item in ps.public_state(anon).get("rooms", []) or []:
+        if item.get("room") == room:
+            return "spatial_status" in item
+    return False
+
+
+def message_rows(rows, base, item_type=None, body=None):
+    """The status / text rows of a list (SSE events, state array or message history) of one BASE callsign, optionally of one item type and with `body` in the text."""
+    return [r for r in rows if isinstance(r, dict) and r.get("item_type") in ("status", "text") and ps.base_call(str(r.get("callsign", ""))) == base.upper()
+            and (item_type is None or r.get("item_type") == item_type) and (body is None or body in str(r.get("body", "")))]
+
+
+def wait_state_spatial(anon, base, present, timeout=WAIT_S, poll=1.0, room=dp6c.ROOM):
+    """(seconds waited, rows) until the state's spatial_status holds (present=True) or no longer holds (present=False) a row of the base, else (None, rows)."""
+    start = time.monotonic()
+    while True:
+        rows = message_rows(state_spatial(anon, room), base)
+        if bool(rows) == present:
+            return time.monotonic() - start, rows
+        if time.monotonic() - start >= timeout:
+            return None, rows
+        time.sleep(poll)
+
+
+def wait_history(reader, base, pred, timeout=WAIT_S, poll=1.0, room=dp6c.ROOM):
+    """(seconds waited, rows of the base) until `pred(rows)` holds for the user message history of the room, else (None, rows)."""
+    from dvtest import web
+    start = time.monotonic()
+    while True:
+        rows = message_rows(web.room_messages(reader, room), base)
+        if pred(rows):
+            return time.monotonic() - start, rows
+        if time.monotonic() - start >= timeout:
+            return None, rows
+        time.sleep(poll)
+
+
+def send_text_message(tnc, call, body, room_name="XLX999B"):
+    """An APRS message to the room name heard on the bound port: the room TEXT of the DP19b look-alike case (no message id, so never acked)."""
+    from dvtest import kiss_tnc as kt
+    send_rf(tnc, call, kt.aprs_message_info(room_name, body).decode("latin-1"), kinds=("text",))
