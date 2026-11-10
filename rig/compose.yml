@@ -589,6 +589,10 @@ services:
       # fails instead of skipping. Not passing them made the strict mode inert in every rig run (cases/unit/test_tester_env.py guards the class).
       DVT_SECRELOAD1: ${DVT_SECRELOAD1:-}
       DVT_SECRELOAD2: ${DVT_SECRELOAD2:-}
+      # WEBSID1 (cases/test_web_session_rotation.py): on = the image has the rule, so a probe that finds the streams ending at a step-up FAILS instead of
+      # skipping; the length in seconds of the long over whose recording the WAV cases download (the body must not fit the buffers on the way)
+      DVT_WEBSID1: ${DVT_WEBSID1:-}
+      DVT_WEBSID_OVER_S: ${DVT_WEBSID_OVER_S:-}
       # optional switches and timing knobs that rig cases read from os.environ (cases/unit/test_tester_env.py lists what stays on the host);
       # a number carries the default of the code, so that an unset knob is not an empty string
       DVT_ASL_EXT_HOLD: ${DVT_ASL_EXT_HOLD:-60}
