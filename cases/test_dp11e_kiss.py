@@ -54,6 +54,8 @@ SETTING = "dp11e"
 COUNTER_WAIT_S = 45.0               # the edge publishes its counters every 10 s
 QUIET_S = 12.0                      # one more publish: a surplus count lands here
 MODEM_WAIT_S = 25.0
+RESTART_SEND_AFTER_S = 3.0          # DP11e-j: past the fence proper (0.1-1.1 s), inside the 13 s guard
+GUARD_RELEASE_MIN_S = 12.0         # DP11e-j: earliest believable release (guard ends about 14 s; the call returns about when the child starts)
 SILENCE_S = 130.0                   # longer than the 120 s read timeout of APRSdroid
 KEEPALIVE_ON = 10                   # keepalive_secs of the listener `apps` in dp11e-kiss.toml
 APP_TIMEOUT_S = kiss_app.APRSDROID_SO_TIMEOUT_S
@@ -556,10 +558,14 @@ def test_dp11e_i_a_slow_client_loses_the_newest_frames_and_a_stalled_one_is_clos
 
 def test_dp11e_j_an_edge_restart_closes_clients_and_the_first_frame_meets_the_guard(rig, target, kiss):
     """config.md: every kiss_server key is Restart(child). The AX.25 child is restarted through the admin API (as DP15-6g): the clients are closed and the
-    listener rebinds. The RFSAFE1 guard (about 13 s after the start) holds a client frame sent at once: the first rig run (wip-8891cc7) showed it is QUEUED
-    and released when the guard ends (about 13 s after the restart), not dropped, and `rf_fenced` stayed 0. So the case asserts: not transmitted inside the
-    guard; then either released after it (the expected behaviour on this image) or counted `rf_fenced`; nothing lost silently. The status view of the fence
-    lags on this image (up to about 24.5 s, RFSAFE1b), so the wait allows 30 s. After the guard a new frame is served."""
+    listener rebinds. RFSAFE1 has two phases (radio.md 10.4 rule 4; data.md 10.5; dv-router rf_guard.rs:260, shell.rs:407-417):
+    * the fence proper (child start until the probe succeeds, normally 0.1-1.1 s): a client frame is REFUSED at admission and counted `rf_fenced`;
+    * the guard (13 s after the probe): a client frame is admitted and HELD by the scheduler, released when the guard ends (about 14 s after the
+      restart on this image), or dropped `dropped_ttl` when its class TTL ends first; `rf_fenced` stays 0.
+    The case sends its frame about 3 s after the restart returned (inside the guard, past the fence proper) and asserts: never on air before the guard
+    ends; then released (or `dropped_ttl` +1); never lost without a count; `rf_fenced` not moved. The first-100-ms window (the refusal) is racy through
+    a restart and is not driven. The status view of the fence lags (up to about 24.5 s, RFSAFE1b), so its wait allows 30 s. A frame after the guard is
+    served."""
     case = "DP11e-j"
     guard(kiss, case)
     admin = kiss.admin_session("admin")
@@ -567,13 +573,19 @@ def test_dp11e_j_an_edge_restart_closes_clients_and_the_first_frame_meets_the_gu
     names, everything = txguard.ax25_child_names(status.json() if status.status == 200 else {})
     if names != [txguard.AX25_CHILD]:
         pytest.skip("the launcher child %r is not listed; children seen: %s" % (txguard.AX25_CHILD, everything))
+
+    def total(name, label, value):
+        return sum(int(x.value) for x in samples(kiss) if x.name == name and x.labels.get(label) == value)
+
     client = app(kiss, "apps")
     again = None
     try:
+        fenced_pre = total("dv_edge_drops_total", "reason", "rf_fenced")
+        ttl_pre = total("dv_edge_rf_tx_total", "result", "dropped_ttl")
         admin.step_up()
         resp = admin.post(admin.path("/children/%s/restart" % txguard.AX25_CHILD), {}, expect=None)
         assert resp.status == 200, "restart answered HTTP %d" % resp.status
-        t_restart = time.monotonic()
+        t_restart = time.monotonic()                       # the guard is measured from the return of the restart call
         assert client.wait_closed(15.0), "the restart did not close the KISS client"
         end = time.monotonic() + 30.0
         lst = listener(kiss, "apps")
@@ -588,34 +600,41 @@ def test_dp11e_j_an_edge_restart_closes_clients_and_the_first_frame_meets_the_gu
             time.sleep(0.5)
         assert again is not None and again.is_open, "the listener did not rebind within 30 s of the restart"
         note(target, case, "RECORD", "listener back %.1f s after the restart call" % (time.monotonic() - t_restart))
-        base_drops = sum(int(s.value) for s in samples(kiss) if s.name == "dv_edge_drops_total" and s.labels.get("reason") == "rf_fenced")
-        t1 = time.monotonic()
+        wait_s = RESTART_SEND_AFTER_S - (time.monotonic() - t_restart)
+        if wait_s > 0:
+            time.sleep(wait_s)
+        sent_at = time.monotonic()
         held = dp.good_frame(dp.info_for("fenced"))
         assert again.send_frame(held)
+        note(target, case, "RECORD", "the frame was sent %.1f s after the restart call" % (sent_at - t_restart))
         time.sleep(5.0)
-        inside = [m for _t, m in modem_frames(kiss, t1) if "dp11e-fenced" in m]
-        assert inside == [], "a client frame was transmitted %.1f s after the restart, inside the RFSAFE1 guard: %s" % (time.monotonic() - t_restart, inside)
+        inside = [m for _t, m in modem_frames(kiss, t_restart) if "dp11e-fenced" in m]
+        assert inside == [], "a client frame was on air %.1f s after the restart, inside the RFSAFE1 guard: %s" % (time.monotonic() - t_restart, inside)
         result = txguard.wait_unfenced(txguard.ax25_reader(kiss.admin, "rf-a"), kind="ax25", margin_s=12.0, max_wait_s=30.0)
         note(target, case, "RECORD", txguard.describe(result, "ax25", "rf-a"))
         assert result.state not in ("timeout", "scope"), "the fence view did not end within 30 s: %s" % txguard.describe(result, "ax25", "rf-a")
         released = []
         end = time.monotonic() + 20.0
         while not released and time.monotonic() < end:
-            released = [(t, m) for t, m in modem_frames(kiss, t1) if "dp11e-fenced" in m]
+            released = [(t, m) for t, m in modem_frames(kiss, t_restart) if "dp11e-fenced" in m]
             time.sleep(0.5)
+        delay = (released[0][0] - t_restart) if released else None
+        # the edge process is new: its counters start at 0, so "moved" is judged against the value before the restart OR a restart from zero
         end = time.monotonic() + COUNTER_WAIT_S
-        drops = base_drops
+        ttl_now = fenced_now = 0
         while time.monotonic() < end:
-            drops = sum(int(s.value) for s in samples(kiss) if s.name == "dv_edge_drops_total" and s.labels.get("reason") == "rf_fenced")
-            if drops > base_drops or released:
+            ttl_now = total("dv_edge_rf_tx_total", "result", "dropped_ttl")
+            fenced_now = total("dv_edge_drops_total", "reason", "rf_fenced")
+            if released or (ttl_now >= 1 and ttl_now != ttl_pre):
                 break
             time.sleep(3.0)
-        delay = (released[0][0] - t_restart) if released else None
-        note(target, case, "RECORD", "the frame sent at once after the restart: %s; dv_edge_drops_total{reason=rf_fenced} %d -> %d" % (
-            "released %.1f s after the restart call" % delay if released else "not transmitted", base_drops, drops))
-        assert released or drops > base_drops, "the frame sent during the guard was neither released after it nor counted rf_fenced: lost"
+        note(target, case, "RECORD", "the held frame: %s; dropped_ttl %d -> %d, rf_fenced %d -> %d (counters restart with the process)" % (
+            "released %.1f s after the restart call" % delay if released else "not on air", ttl_pre, ttl_now, fenced_pre, fenced_now))
         if released:
-            assert delay >= 10.0, "the held frame was released %.1f s after the restart: before the guard (about 13 s) ended" % delay
+            assert delay >= GUARD_RELEASE_MIN_S, "the held frame was on air %.1f s after the restart: before the guard (about 14 s) ended" % delay
+        else:
+            assert ttl_now >= 1 and ttl_now != ttl_pre, "the frame sent in the guard was neither released nor counted dropped_ttl: lost"
+        assert fenced_now <= fenced_pre, "rf_fenced moved %d -> %d: a frame sent 3 s after the restart was refused instead of held" % (fenced_pre, fenced_now)
         t2 = time.monotonic()
         served = dp.good_frame(dp.info_for("after_guard"))
         assert again.send_frame(served)
