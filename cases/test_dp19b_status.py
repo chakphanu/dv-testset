@@ -10,12 +10,11 @@ commands and runtimes: docs/dp19b-cases.md. Probe, no switch: the cases skip on 
   DP19b-2  hide_position of the base: within one state refresh (policy age at most 10 s) the spatial status leaves the state, a fresh SSE replay and the user history; the plain status
            and the text stay (the browser panel half is cases/test_dp19b_browser.py)
   DP19b-3  F1: after 60 s without any page traffic a position and a spatial status of an unhidden base both arrive LIVE on an open SSE stream
-  DP19b-4  (opt-in, DVT_DP19B_ACCOUNTS_DOWN=on, LAST) dv-svc-web restarted while its account store is unreadable: spatial rows are withheld, text and plain status are delivered
+  DP19b-4  GAP, no case: dv-svc-web loads its account store at startup with a hard error, so an unreadable store makes the child crash-loop (`Store::load(path)?`,
+           auth/mod.rs:142, accounts.rs:235-250) and the case would test "web is down"; the fail-closed branch is about an unknown POLICY inside a RUNNING web (unit tests of review 247)
 """
-import os
 import sys
 import time
-import types
 from pathlib import Path
 
 import pytest
@@ -37,9 +36,7 @@ SPATIAL_BODY, PLAIN_BODY = "IO91SX/G", "Ready"                 # the status text
 HIDE_WAIT_S = 25.0                                            # one state refresh: the policy is at most 10 s old, the state is cached for 2 s
 LIVE_WAIT_S = 20.0
 QUIET_S = 60.0
-BASE_VISIBLE, BASE_HIDE, BASE_QUIET, BASE_DOWN = "N0DPA", "N0DPB", "N0DPC", "N0DPD"
-ACCOUNTS_FILE = "web/accounts.jsonl"                          # out/<run>/sut-state/web/accounts.jsonl: the persisted accounts and hide flags of dv-svc-web
-SWITCH = "DVT_DP19B_ACCOUNTS_DOWN"
+BASE_VISIBLE, BASE_HIDE, BASE_QUIET = "N0DPA", "N0DPB", "N0DPC"
 
 
 @pytest.fixture(scope="module")
@@ -148,88 +145,25 @@ def test_dp19b_2_hide_position_withdraws_the_spatial_status_everywhere(image, ta
 
 def test_dp19b_3_a_quiet_node_still_delivers_position_and_spatial_status_live(image, target, web_ctx, rf):
     """review 247 case 3 (F1): the SSE callback used a policy cache that only requests refreshed, so on a quiet node every live position and spatial status was dropped. With an open SSE
-    stream and NO other traffic to the web service for 60 s, a position and a spatial status of an unhidden base both arrive live within 20 s (the periodic refresh keeps the policy fresh)."""
+    stream and NO other traffic to the web service for 60 s, a position and a spatial status of an unhidden base both arrive live within 20 s (the periodic refresh keeps the policy fresh).
+    The case is built so that a failure can only be F1: the stream must still be open after the quiet minute (a closed stream is a failure of its own, reported as such), the fake TNC must
+    still be connected, nothing else is requested from the web service in between, the base is unhidden and fresh (no dedupe, full buckets), and there is no retry (a retry would hide the drop)."""
     case = CASE + "-3"
     base = BASE_QUIET
     with sp.ds.SseWatch(web_ctx.anon(), ps.PUBLIC_EVENTS, seconds=QUIET_S + 90.0) as pub:
         assert pub.ready(), "the public SSE gave no hello: %s" % pub.error
+        t_open = time.monotonic()
         time.sleep(QUIET_S)                                                  # no state, history or page request meanwhile
+        quiet = time.monotonic() - t_open
+        assert pub.error is None and pub.thread.is_alive(), "the SSE stream ended during the quiet minute (%s): this is not F1, the stream must stay open" % (pub.error,)
+        assert rf.wait_connected(30.0), "the fake TNC rf-a lost the AX.25 edge during the quiet minute: the injection below would prove nothing"
         t0 = time.monotonic()
         sp.send_rf(rf, base + "-5", ps.position_info(ps.APRS_LAT, ps.APRS_LON, 0, "/>", "dp19b quiet"), kinds=("position",))
         sp.send_rf(rf, base + "-5", SPATIAL + " dpc", kinds=("status",))
         position = pub.wait_data(lambda o: o.get("item_type") == "position" and ps.base_call(str(o.get("callsign", ""))) == base, LIVE_WAIT_S, since=t0)
         status = pub.wait_data(lambda o: bool(sp.message_rows([o], base, "status", SPATIAL_BODY)), LIVE_WAIT_S, since=t0)
     sp.note(target, case, "RECORD", "after %.0f s without page traffic: position %s s, spatial status %s s on the open SSE" % (
-        QUIET_S, None if position is None else "%.1f" % (position[0] - t0), None if status is None else "%.1f" % (status[0] - t0)))
+        quiet, None if position is None else "%.1f" % (position[0] - t0), None if status is None else "%.1f" % (status[0] - t0)))
     assert position is not None, "the position of an unhidden base never arrived live on the SSE after a quiet minute (F1: the policy cache was stale)"
     assert status is not None, "the spatial status of an unhidden base never arrived live on the SSE after a quiet minute (F1)"
     assert status[1].get("spatial") is True, status[1]
-
-
-# ================================================================ DP19b-4
-
-@pytest.fixture
-def accounts_down(target, rig_control, web_base_url, web_ca):
-    """The account store of dv-svc-web made unreadable (the file replaced by a DIRECTORY of the same name, so that a read fails instead of finding nothing) and the service restarted;
-    undone at the end, the service restarted again. Opt-in: DVT_DP19B_ACCOUNTS_DOWN=on. Yields a function that restarts the service and waits for it."""
-    if os.environ.get(SWITCH, "").lower() not in ("on", "1", "true", "yes"):
-        pytest.skip("opt-in and destructive (web sessions end, the account store is swapped for a while): set %s=on and name this case LAST in the run" % SWITCH)
-    store = Path(target.out) / "sut-state" / ACCOUNTS_FILE
-    if not store.is_file():
-        pytest.skip("no account store at %s as the tester sees it (the web profile mounts out/<run>/sut-state)" % store)
-    held = store.with_name(store.name + ".dvt-hold")
-    probe = web.WebClient(web_base_url, web_ca, timeout=4)
-
-    def restart(budget=150.0):
-        rig_control.kill_proc("xlxd-sut", "dv-svc-web", "KILL")
-        time.sleep(2.0)
-        end, good = time.monotonic() + budget, 0
-        while good < 2:
-            if time.monotonic() > end:
-                pytest.fail("dv-svc-web did not come back within %d s" % budget)
-            try:
-                good = good + 1 if probe.get(ps.PUBLIC_STATE, pace=False).status == 200 else 0
-            except web.WebError:
-                good = 0
-            time.sleep(0.5)
-
-    swapped = False
-    try:
-        try:
-            store.rename(held)
-            store.mkdir()
-            swapped = True
-        except OSError as exc:
-            pytest.skip("cannot swap the account store (%s)" % exc)
-        yield restart
-    finally:
-        if swapped:
-            try:
-                store.rmdir()
-                held.rename(store)
-            finally:
-                restart()
-
-
-def test_dp19b_4_spatial_rows_are_withheld_while_accounts_are_unavailable(accounts_down, target, web_ctx, rf):
-    """review 247 case 4: dv-svc-web restarted with its accounts unavailable has an UNKNOWN hidden set: spatial rows (status, and by the same predicate positions) are withheld, text and
-    plain status are still delivered. After the account store is back and the service restarted, the control (a spatial status of another base) is delivered again. Message history
-    needs a session and sessions end with the restart, so the surfaces are the anonymous SSE and state."""
-    case = CASE + "-4"
-    accounts_down()                                                              # the restart with the store unreadable
-    anon = web_ctx.anon()
-    with sp.ds.SseWatch(anon, ps.PUBLIC_EVENTS, seconds=200.0) as pub:
-        assert pub.ready(), "the public SSE gave no hello after the restart: %s" % pub.error
-        t0 = time.monotonic()
-        inject_trio(rf, BASE_DOWN)
-        end = time.monotonic() + sp.WAIT_S
-        while time.monotonic() < end and not (sp.message_rows([o for _t, o in pub.data_events(t0)], BASE_DOWN, "text", TEXT)
-                                              and sp.message_rows([o for _t, o in pub.data_events(t0)], BASE_DOWN, "status", PLAIN_BODY)):
-            time.sleep(0.5)
-        time.sleep(sp.ABSENT_S)
-        spatial, plain, text = sse_items(pub, BASE_DOWN, t0)
-    sp.note(target, case, "RECORD", "accounts unavailable: spatial %d, plain %d, text %d on the SSE; state spatial_status %s" % (
-        len(spatial), len(plain), len(text), [r["callsign"] for r in sp.message_rows(sp.state_spatial(anon), BASE_DOWN)]))
-    assert plain and text, "text and plain status must still be delivered while accounts are unavailable (plain %s, text %s)" % (bool(plain), bool(text))
-    assert not spatial, "a spatial status was delivered with an unknown hidden set: %s" % spatial
-    assert not sp.message_rows(sp.state_spatial(anon), BASE_DOWN), "a spatial status is in the public state with an unknown hidden set"

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 """The helpers and flows of the DP19b rig cases (cases/test_dp19b_status.py, test_dp19b_browser.py) against fakes: the spatial_status readers of cases/dp6c_support.py, the three
-injected items, the flag checks, the probe skip, the hide flow with fake surfaces and the opt-in account-store swap with its restore. No rig, no sleeps beyond milliseconds."""
+injected items, the flag checks, the probe skip, the hide flow with fake surfaces and the quiet-node case. No rig, no sleeps beyond milliseconds."""
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -164,38 +164,72 @@ def test_the_hide_case_withdraws_only_the_spatial_status(monkeypatch):
         st.test_dp19b_2_hide_position_withdraws_the_spatial_status_everywhere(object(), None, web_ctx, None)
 
 
-def test_the_account_store_swap_is_opt_in_and_restores_the_store(tmp_path, monkeypatch):
-    fixture = st.accounts_down.__wrapped__
-    store_dir = tmp_path / "sut-state" / "web"
-    store_dir.mkdir(parents=True)
-    store = store_dir / "accounts.jsonl"
-    store.write_text("{}\n")
-    target = SimpleNamespace(out=str(tmp_path))
-    kills = []
-    control = SimpleNamespace(kill_proc=lambda *a: kills.append(a))
-    monkeypatch.setattr(st.time, "sleep", lambda s: None)
-    monkeypatch.setattr(st.web, "WebClient", lambda *a, **k: SimpleNamespace(get=lambda path, pace=False: SimpleNamespace(status=200)))
-    monkeypatch.delenv(st.SWITCH, raising=False)
-    with pytest.raises(pytest.skip.Exception, match="opt-in and destructive"):
-        next(fixture(target, control, "https://x", None))
-    monkeypatch.setenv(st.SWITCH, "on")
-    gen = fixture(target, control, "https://x", None)
-    restart = next(gen)
-    assert store.is_dir() and (store_dir / "accounts.jsonl.dvt-hold").is_file()                  # the store is now unreadable (a directory), the file held aside
-    restart()
-    assert kills == [("xlxd-sut", "dv-svc-web", "KILL")]
-    with pytest.raises(StopIteration):
-        next(gen)
-    assert store.is_file() and store.read_text() == "{}\n" and not (store_dir / "accounts.jsonl.dvt-hold").exists() and len(kills) == 2        # restored, restarted again
-    store.unlink()
-    with pytest.raises(pytest.skip.Exception, match="no account store"):
-        next(fixture(target, control, "https://x", None))
+class QuietWatch:
+    """A SseWatch double for DP19b-3: hello at once, `deliver` says which live events arrive after the injection, `alive` the state of the reader thread."""
+
+    def __init__(self, deliver=("position", "status"), alive=True, error=None):
+        self.deliver, self.error = deliver, error
+        self.thread = SimpleNamespace(is_alive=lambda: alive)
+        self.rows = {"position": {"item_type": "position", "callsign": "N0DPC-5", "body": {}},
+                     "status": {"item_type": "status", "callsign": "N0DPC-5", "body": "IO91SX/G dpc", "spatial": True}}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def ready(self, timeout=10.0):
+        return True
+
+    def wait_data(self, pred, timeout, since=0.0, poll=0.02):
+        for kind in self.deliver:
+            if pred(self.rows[kind]):
+                return 5.0, self.rows[kind]
+        return None
+
+
+def run_quiet_case(monkeypatch, watch, connected=True):
+    notes = []
+    now = {"t": 0.0}
+    monkeypatch.setattr(st.time, "sleep", lambda s: now.__setitem__("t", now["t"] + s))
+    monkeypatch.setattr(st.time, "monotonic", lambda: now["t"])
+    monkeypatch.setattr(sp.ds, "SseWatch", lambda client, path, seconds=0: watch)
+    sent = []
+    monkeypatch.setattr(sp, "send_rf", lambda tnc, call, info, kinds=(), digis=(), spend=True: sent.append((call, info, kinds)))
+    monkeypatch.setattr(sp, "note", lambda target, case, tag, text: notes.append((tag, text)))
+    tnc = SimpleNamespace(wait_connected=lambda timeout=30.0: connected)
+    st.test_dp19b_3_a_quiet_node_still_delivers_position_and_spatial_status_live(object(), None, SimpleNamespace(anon=lambda: None), tnc)
+    return sent, notes, now["t"]
+
+
+def test_the_quiet_node_case_waits_a_minute_sends_both_items_and_blames_only_f1(monkeypatch):
+    sent, notes, elapsed = run_quiet_case(monkeypatch, QuietWatch())
+    assert elapsed >= st.QUIET_S and [c[0] for c in sent] == ["N0DPC-5", "N0DPC-5"] and sent[1][1] == ">IO91SX/G dpc" and sent[0][2] == ("position",) and sent[1][2] == ("status",)
+    assert any("without page traffic" in t for _tag, t in notes)
+    with pytest.raises(AssertionError, match="F1: the policy cache was stale"):
+        run_quiet_case(monkeypatch, QuietWatch(deliver=("status",)))
+    with pytest.raises(AssertionError, match="spatial status of an unhidden base never arrived"):
+        run_quiet_case(monkeypatch, QuietWatch(deliver=("position",)))
+    with pytest.raises(AssertionError, match="this is not F1"):
+        run_quiet_case(monkeypatch, QuietWatch(alive=False))
+    with pytest.raises(AssertionError, match="this is not F1"):
+        run_quiet_case(monkeypatch, QuietWatch(error="closed by the server"))
+    with pytest.raises(AssertionError, match="lost the AX.25 edge"):
+        run_quiet_case(monkeypatch, QuietWatch(), connected=False)
+
+
+def test_there_is_no_accounts_down_case_and_no_switch_any_more():
+    text = (Path(__file__).resolve().parent.parent / "test_dp19b_status.py").read_text(encoding="utf-8")
+    assert "def test_dp19b_4" not in text and "ACCOUNTS_DOWN" not in text and "def accounts_down" not in text
+    compose = (Path(__file__).resolve().parents[2] / "rig" / "compose.yml").read_text(encoding="utf-8")
+    assert "ACCOUNTS_DOWN" not in compose
 
 
 def test_the_dp19b_bodies_and_constants():
     assert st.SPATIAL_BODY == st.SPATIAL.lstrip(">") == "IO91SX/G" and st.PLAIN_BODY == "Ready" and st.TEXT == st.SPATIAL_BODY
     from dvtest.proto import aprs
     assert aprs.is_locator_status(st.SPATIAL) and aprs.is_locator_status(st.SPATIAL + " dpb") and not aprs.is_locator_status(st.PLAIN)
-    for base in (st.BASE_VISIBLE, st.BASE_HIDE, st.BASE_QUIET, st.BASE_DOWN):
+    for base in (st.BASE_VISIBLE, st.BASE_HIDE, st.BASE_QUIET):
         assert len(base) == 5 and base.startswith("N0") and base.isupper()
-    assert len({st.BASE_VISIBLE, st.BASE_HIDE, st.BASE_QUIET, st.BASE_DOWN}) == 4 and dp6c.ROOM == "B"
+    assert len({st.BASE_VISIBLE, st.BASE_HIDE, st.BASE_QUIET}) == 3 and dp6c.ROOM == "B"

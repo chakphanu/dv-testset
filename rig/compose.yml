@@ -583,8 +583,6 @@ services:
       DVT_OBSPKT1B: ${DVT_OBSPKT1B:-}
       # on for an image with RFSAFE1b: DP18-r1 and DP15-6g assert the bounds of the fence view after a healthy restart (dvtest/rfsafe1b.py)
       DVT_RFSAFE1B: ${DVT_RFSAFE1B:-}
-      # on: cases/test_dp19b_status.py DP19b-4 swaps the account store of dv-svc-web for a directory, restarts the service and restores it (opt-in, destructive, last in its run)
-      DVT_DP19B_ACCOUNTS_DOWN: ${DVT_DP19B_ACCOUNTS_DOWN:-}
       # SECRELOAD1 / SECRELOAD2 (cases/test_secret_reload.py): on = the APRS-IS edge and the image rule are EXPECTED, so a missing series or route
       # fails instead of skipping. Not passing them made the strict mode inert in every rig run (cases/unit/test_tester_env.py guards the class).
       DVT_SECRELOAD1: ${DVT_SECRELOAD1:-}

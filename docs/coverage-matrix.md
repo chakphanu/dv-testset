@@ -45,8 +45,8 @@ unit test `cases/unit/test_coverage_matrix.py` runs it).
 | Echo return integrity E9 (D-STAR kinds) | 14 | 13 | 1 | 0 | 0 |
 | Real-transcoder cross-mode audio into YSF (related to ECHO1) | 3 | 3 | 0 | 0 | 0 |
 | DP15 (APRS / AX.25 / KISS data path) | 99 | 70 | 6 | 23 | 0 |
-| DP6c / DP19 (weather, telemetry, locator status) | 22 | 17 | 1 | 4 | 0 |
-| **Total** | **1286** | **814** | **279** | **185** | **8** |
+| DP6c / DP19 (weather, telemetry, locator status) | 22 | 17 | 0 | 5 | 0 |
+| **Total** | **1286** | **814** | **278** | **186** | **8** |
 <!-- summary:end -->
 
 ## Top 15 gaps (ranked by how much real-world traffic they touch)
@@ -1576,5 +1576,5 @@ Sources: dp6c-cases.md.
 | DP19b hide_position withdraws the spatial status from the state, a fresh SSE replay and the user history within one state refresh; plain status and text stay | dp19b-cases.md "DP19b-2" | `test_dp19b_status::test_dp19b_2_hide_position_withdraws_the_spatial_status_everywhere` | rig | a | OK |
 | DP19b the open dashboard message panel drops the hidden base's spatial status and keeps the plain status and the text | dp19b-cases.md "DP19b-2 browser" | `test_dp19b_browser::test_dp19b_2_the_open_message_panel_drops_the_hidden_bases_spatial_status` | rig | a | OK |
 | DP19b F1: a position and a spatial status arrive live on an open SSE after a quiet minute | dp19b-cases.md "DP19b-3" | `test_dp19b_status::test_dp19b_3_a_quiet_node_still_delivers_position_and_spatial_status_live` | rig | a | OK |
-| DP19b a restart with the account store unreadable withholds spatial rows and delivers text and plain status (opt-in, destructive) | dp19b-cases.md "DP19b-4" | `test_dp19b_status::test_dp19b_4_spatial_rows_are_withheld_while_accounts_are_unavailable` | rig | a | PARTIAL |
+| DP19b a restart of dv-svc-web with the accounts unavailable withholds spatial rows (web crash-loops on an unreadable store: Store::load hard error; the unknown-policy branch is covered by DV-Router unit tests) | dp19b-cases.md "GAPs" | - | - | - | GAP |
 | DP19b the talker status drops a hidden base's spatial status; `position_optout` plus reload as the hide | dp19b-cases.md "GAPs" | - | - | - | GAP |
