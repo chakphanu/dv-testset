@@ -45,14 +45,27 @@ def fake_bp(sequence, monkeypatch):
 
 
 def test_wait_counts_follows_the_panel_until_the_wanted_counts(monkeypatch):
-    bp = fake_bp([None, [tb.BODY_SPATIAL, tb.BODY_SPATIAL, tb.BODY_PLAIN], [tb.BODY_SPATIAL, tb.BODY_PLAIN]], monkeypatch)
+    spatial, plain = tb.bodies("firefox")
+    bp = fake_bp([None, [spatial, spatial, plain], [spatial, plain]], monkeypatch)
+    bp.engine = "firefox"
     assert tb.wait_counts(bp, 2, 1, 30.0) == (2, 1)
     assert tb.wait_counts(bp, 1, 1, 30.0) == (1, 1)
-    bp = fake_bp([[tb.BODY_PLAIN]], monkeypatch)
+    bp = fake_bp([[plain]], monkeypatch)
+    bp.engine = "firefox"
     assert tb.wait_counts(bp, 2, 1, 0.0) == (0, 1)
 
 
-def test_one_base_per_engine_and_the_shared_body():
-    assert set(tb.BASES) == {"chromium", "firefox", "webkit"} and len(set(tb.BASES.values())) == 3
-    assert tb.BODY_SPATIAL == "IO91SX/G dpe" and tb.BODY_PLAIN == "Ready dpe"
+def test_an_earlier_engines_rows_do_not_count_for_the_next_engine(monkeypatch):
+    """The first rig run: the retained locator status of an earlier engine's base came back after its unhide and shared the body, so the counts were 2, 3, 4."""
+    first, _ = tb.bodies("chromium")
+    mine, plain = tb.bodies("firefox")
+    bp = fake_bp([[first, mine, plain, mine]], monkeypatch)
+    bp.engine = "firefox"
+    assert tb.wait_counts(bp, 2, 1, 0.0) == (2, 1)
+
+
+def test_one_base_and_one_body_set_per_engine():
+    assert set(tb.BASES) == set(tb.SUFFIXES) == {"chromium", "firefox", "webkit"} and len(set(tb.BASES.values())) == 3 and len(set(tb.SUFFIXES.values())) == 3
+    assert tb.bodies("webkit") == ("IO91SX/G dph", "Ready dph")
+    assert len({tb.bodies(e)[0] for e in tb.SUFFIXES}) == 3 and len({tb.bodies(e)[1] for e in tb.SUFFIXES}) == 3
     assert (Path(__file__).resolve().parent.parent / "test_dp19b_browser.py").read_text(encoding="utf-8").isascii()
