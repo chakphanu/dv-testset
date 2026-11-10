@@ -20,6 +20,15 @@ from dvtest.proto import aprs
 RF_BASE = "N0WXA"                    # RF main case: -13 position + weather, -11 position + telemetry, -9 position only
 RF_WX, RF_TLM, RF_POS, RF_SOLO = RF_BASE + "-13", RF_BASE + "-11", RF_BASE + "-9", "N0WXC-5"
 RF_DEFINER = RF_BASE + "-1"          # PARM/UNIT/EQNS/BITS come from the same BASE as the telemetering station (authority)
+# a definition from ANOTHER base for the same telemetering station must change nothing (authority = the sender's base equals the addressee's base,
+# case-insensitive; confirmed by dv-router, definitions.rs 231-240): distinct names, units, coefficients and sense, so that any effect shows
+FOREIGN_BASE = "N0WXB"
+FOREIGN_DEFINER = FOREIGN_BASE + "-1"
+FOREIGN_PARM = ["Fx1", "Fx2", "Fx3", "Fx4", "Fx5", "Fb1", "Fb2", "Fb3", "Fb4", "Fb5"]
+FOREIGN_UNIT = ["fu1", "fu2", "fu3", "fu4", "fu5", "fl1", "fl2", "fl3", "fl4", "fl5"]
+FOREIGN_EQNS = ["0", "1", "0"] * 5
+FOREIGN_BITS = "11111111"
+FOREIGN_PROJECT = "Foreign Project"
 Z_BASE = "N0WXZ"                     # the compressed weather with speed byte z
 IS_SOLO = "N0WXI-3"                  # APRS-IS weather and telemetry without a position
 IS_TLM = "N0WXI-4"

@@ -306,6 +306,44 @@ def test_the_locator_case_helpers():
     assert t19.PUBLIC_BASE not in ("N0OPT", "N0LOC")
 
 
+def test_the_foreign_definitions_differ_from_g10_in_every_field_and_come_from_another_base():
+    foreign = sp.foreign_definitions(dp6c.RF_TLM)
+    good = aprs.telemetry_definitions(dp6c.RF_TLM)
+    assert len(foreign) == 4 and all(a != b for a, b in zip(foreign, good))
+    assert [aprs.parse_definition(f)[1] for f in foreign] == ["PARM", "UNIT", "EQNS", "BITS"] and all(aprs.parse_definition(f)[0] == dp6c.RF_TLM for f in foreign)
+    assert aprs.parse_definition(foreign[3])[2] == (dp6c.FOREIGN_BITS, dp6c.FOREIGN_PROJECT)
+    assert dp6c.FOREIGN_DEFINER.split("-")[0] != dp6c.RF_TLM.split("-")[0] and dp6c.FOREIGN_DEFINER.split("-")[0] != dp6c.RF_DEFINER.split("-")[0]
+    assert len(dp6c.FOREIGN_EQNS) == 15 and not set(dp6c.FOREIGN_PARM) & set(aprs.G10_PARM) and not set(dp6c.FOREIGN_UNIT) & set(aprs.G10_UNIT)
+    # G9 under the foreign coefficients would give other values, so a leak would show in telemetry_problems
+    body = {"form": "numbered", "seq": 5, "analog": [{"ch": i + 1, "raw": r, "value": str(r), "name": n, "unit": u} for i, (r, n, u) in enumerate(zip(
+        dp6c.G9_RAW, dp6c.FOREIGN_PARM, dp6c.FOREIGN_UNIT))], "digital": [{"ch": i + 1, "bit": b, "active": True} for i, b in enumerate(dp6c.G9_DIGITAL_BITS)],
+        "project": dp6c.FOREIGN_PROJECT}
+    assert len(dp6c.telemetry_problems(body)) > 8
+
+
+def test_the_definition_sender_helper_sends_the_given_messages_in_order(monkeypatch):
+    class Tnc:
+        def __init__(self):
+            self.frames = []
+
+        def inject(self, frame):
+            self.frames.append(frame)
+            return True
+
+    monkeypatch.setattr(sp.time, "sleep", lambda s: None)
+    tnc = Tnc()
+    sp.send_definitions(tnc, dp6c.RF_DEFINER, dp6c.RF_TLM)
+    sp.send_definitions(tnc, dp6c.FOREIGN_DEFINER, dp6c.RF_TLM, sp.foreign_definitions(dp6c.RF_TLM))
+    texts = [aprs_frame_text(f) for f in tnc.frames]
+    assert len(texts) == 8 and texts[0].startswith(dp6c.RF_DEFINER + ">") and texts[4].startswith(dp6c.FOREIGN_DEFINER + ">")
+    assert "Battery" in texts[0] and "Fx1" in texts[4] and "N0CALL Balloon" in texts[3] and "Foreign Project" in texts[7]
+
+
+def aprs_frame_text(frame):
+    from dvtest import ax25
+    return ax25.to_tnc2(frame)
+
+
 def test_the_identity_rules_agree_with_the_position_helpers():
     assert dp6c.ANNEX_TYPES == ps.ANNEX_TYPES
     for kind in ("position", "object", "weather", "telemetry", "text"):

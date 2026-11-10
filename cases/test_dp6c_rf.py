@@ -4,7 +4,7 @@ GUARD identity (N0WXA-13, SSID kept, `hops` and `forwarded` on every row), priva
 13.2, 13.4 and web.md "Position map" at 4ac79f26; golden frames G1-G19 (dvtest/proto/aprs.py, cases/unit/test_proto_aprs.py); case table, run shapes, commands and
 runtimes: docs/dp6c-cases.md. The fake KISS TNC plays the radio (cases/test_dp15_positions.py `rf`); NOT RUN ON A RIG yet.
 
-  DP6c-1  separate stations on one base callsign: N0WXA-13 position + weather (G5), N0WXA-11 position + telemetry (G9 under the G10 definitions, calibrated), N0WXA-9
+  DP6c-1  separate stations on one base callsign (and a definition from ANOTHER base, N0WXB-1 for N0WXA-11, sent between the valid definition and the report: it must change nothing): N0WXA-13 position + weather (G5), N0WXA-11 position + telemetry (G9 under the G10 definitions, calibrated), N0WXA-9
           a separate position, N0WXC-5 positionless weather (G1: a row, no marker). Public state, public SSE and the operator feed carry the rows, the user message
           history carries none; weather bodies are the native ones; positions of one base are 31 s apart (the base bucket), weather and telemetry have their own
   DP6c-8  a compressed weather position with speed byte `z` keeps its marker and shows the weather without wind speed (control: `P` gives 42 mph)
@@ -66,7 +66,8 @@ def test_dp6c_1_stations_weather_and_telemetry_over_rf(rig, target, hub, web_ctx
         sp.send_rf(rf, dp6c.RF_SOLO, aprs.weather_info(11, 10, 5, 56, 220, 4, 5, 77, **WX, software="w", unit="RSW"), kinds=("weather",))           # G1
         sp.send_rf(rf, dp6c.RF_WX, aprs.weather_position_info(LAT_E7, LON_E7, 220, 4, 5, 77, **WX), kinds=("position", "weather"))                   # G5
         sp.send_rf(rf, dp6c.RF_TLM, plain_position("dp6c tlm"), kinds=("position",))
-        sp.send_definitions(rf, dp6c.RF_DEFINER, dp6c.RF_TLM)
+        sp.send_definitions(rf, dp6c.RF_DEFINER, dp6c.RF_TLM)                                                    # the valid definition (same base)
+        sp.send_definitions(rf, dp6c.FOREIGN_DEFINER, dp6c.RF_TLM, sp.foreign_definitions(dp6c.RF_TLM))         # a foreign definition (another base): changes nothing
         sp.send_rf(rf, dp6c.RF_TLM, aprs.telemetry_info(*aprs.G9_REPORT), kinds=("telemetry",))                                                       # G9
         sp.send_rf(rf, dp6c.RF_POS, plain_position("dp6c solo"), kinds=("position",))
         wx13 = sp.wait_row(web_ctx.anon(), dp6c.RF_WX, "weather")
@@ -89,7 +90,10 @@ def test_dp6c_1_stations_weather_and_telemetry_over_rf(rig, target, hub, web_ctx
     assert not dp6c.weather_problems(solo["body"], dp6c.G1_WEATHER), "positionless weather of %s: %s" % (dp6c.RF_SOLO, dp6c.weather_problems(solo["body"], dp6c.G1_WEATHER))
     # telemetry: G9 under the G10 definitions: calibrated values, names, units, digital bits with their sense, the project
     check_row(tlm11, "telemetry")
-    assert not dp6c.telemetry_problems(tlm11["body"]), "telemetry of %s: %s" % (dp6c.RF_TLM, dp6c.telemetry_problems(tlm11["body"]))
+    assert not dp6c.telemetry_problems(tlm11["body"]), "telemetry of %s: %s (a definition from another base %s must change nothing)" % (
+        dp6c.RF_TLM, dp6c.telemetry_problems(tlm11["body"]), dp6c.FOREIGN_BASE)
+    foreign = [dp6c.FOREIGN_PARM[0], dp6c.FOREIGN_UNIT[0], dp6c.FOREIGN_PROJECT]
+    assert not [f for f in foreign if f in repr(tlm11["body"])], "the foreign definition left a trace in the telemetry body: %s" % tlm11["body"]
     assert not any(k in tlm11["body"] for k in dp6c.COORDINATE_KEYS)
     # positions: three stations of one base, each its own row; the G5 position is at the sent precision
     positions = {r["callsign"]: r for r in dp6c.station_rows(rows, kind="position") if r["callsign"].startswith(dp6c.RF_BASE)}

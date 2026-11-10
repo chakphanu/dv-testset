@@ -48,10 +48,16 @@ def send_rf(tnc, call, info, kinds=("position",), digis=("WIDE1-1",), spend=True
         offered(base, kinds)
 
 
-def send_definitions(tnc, definer, target_call):
-    """The four G10 definition messages from `definer` (the same BASE callsign as `target_call`), one second apart so that the worker has stored each
-    one when the next arrives. They never become items."""
-    for info in aprs.telemetry_definitions(target_call):
+def foreign_definitions(target_call):
+    """Four definition messages for `target_call` with other names, units, coefficients and sense (dp6c.FOREIGN_*): sent by a DIFFERENT base they must change nothing."""
+    return [aprs.definition_info(target_call, "PARM", dp6c.FOREIGN_PARM), aprs.definition_info(target_call, "UNIT", dp6c.FOREIGN_UNIT),
+            aprs.definition_info(target_call, "EQNS", dp6c.FOREIGN_EQNS), aprs.definition_info(target_call, "BITS", dp6c.FOREIGN_BITS, dp6c.FOREIGN_PROJECT)]
+
+
+def send_definitions(tnc, definer, target_call, infos=None):
+    """The four G10 definition messages (or `infos`) from `definer`, one second apart so that the worker has stored each one when the next arrives. They never
+    become items. A definition is accepted only when the sender's BASE equals the addressee's base (case-insensitive) and applies to the T# reports of that exact SSID."""
+    for info in (aprs.telemetry_definitions(target_call) if infos is None else infos):
         assert tnc.inject(kiss_tnc.ui_frame(definer, dp6c.TOCALL, info, digis=("WIDE1-1",)))
         time.sleep(1.0)
 

@@ -31,11 +31,18 @@ G9 under G10 gives the calibrated values `1034.8`, `-32.00`, `196243.45`, `-1702
 `10110000` (active = bit equals sense: B3, B6, B7), names from PARM and labels from UNIT, project `N0CALL Balloon`. The weather expectation of G5 is the native body (wind 220 deg 4 mph, gust 5 mph, 77 F, rain 0,
 humidity 50 %, 990.0 hPa, software `w`, unit `RSW`); the Weather column is `25.0 C 6 km/h`. G7 gives wind 88 degrees and 42 mph from `cs`; with `z` the speed is out of range and dropped.
 
+## Confirmed by dv-router (at 4ac79f26)
+
+| Assumption | Status |
+|---|---|
+| A telemetry definition (`PARM` / `UNIT` / `EQNS` / `BITS`) is accepted only when the sender's BASE callsign equals the addressee's base, case-insensitive (`crates/lib/pkt/src/aprs/telemetry/definitions.rs` 231-240; data.md line 141). It applies only to `T#` reports from that exact SSID; a definition that arrives late applies from the next report; a restart of the worker forgets every definition (the cases never restart it, so each run defines before it reports) | confirmed |
+| The APRS-IS login filter is `g/<addressee>` plus `[edges.aprsis] filter_extra` only, so station reports need the filter of `dp6c-aprsis-filter.toml` | confirmed |
+
 ## Cases
 
 | Id | What | Shape |
 |---|---|---|
-| DP6c-1 | One base `N0WXA` over RF: `-13` position + weather (G5), `-11` a position, the definitions from `N0WXA-1`, then G9, `-9` a separate position; `N0WXC-5` positionless weather (G1). Three position rows (one per SSID), weather and telemetry on the right stations, native bodies, calibrated telemetry, `hops` 0 and `forwarded` false, no row of the bare base, no marker for the weather-only station, rows on the public SSE (and the operator feed, recorded as a FINDING when absent), no map item in the user message history. Positions of one base are 31 s apart (the base bucket); weather and telemetry have their own buckets | R1 |
+| DP6c-1 | One base `N0WXA` over RF: `-13` position + weather (G5), `-11` a position, the definitions from `N0WXA-1`, then G9, `-9` a separate position; `N0WXC-5` positionless weather (G1). The order is: the valid definition (from `N0WXA-1`), a FOREIGN definition (the four messages from `N0WXB-1` addressed to `N0WXA-11`, with other names, units, coefficients, sense and project), then the next `T#` report: the calibrated values, names, units, sense and project stay as `N0WXA-1` defined them and no foreign string appears in the body. Three position rows (one per SSID), weather and telemetry on the right stations, native bodies, calibrated telemetry, `hops` 0 and `forwarded` false, no row of the bare base, no marker for the weather-only station, rows on the public SSE (and the operator feed, recorded as a FINDING when absent), no map item in the user message history. Positions of one base are 31 s apart (the base bucket); weather and telemetry have their own buckets | R1 |
 | DP6c-8 | G7z from `N0WXZ-2` keeps its position (49.5 N, 72.75 W) and its weather without `wind_mph` (the summary is `25.0 C`); control G7 `P` from `N0WXY-2` has 42 mph | R1 |
 | DP6c-3 hide | Account `N0WXH` (created through the operator API): `-13` position + weather and `-9` position + telemetry are public; `hide_position` removes all four rows from the state on the next refresh, a reconnect with `Last-Event-ID` replays none, new items of the base are dropped (`dv_pkt_items_total{kind,result="optout"}` and `dv_room_data_total{result="optout"}` rise) and appear on no surface; clearing the flag brings a new weather report back | R1 |
 | DP6c-3 opt-out | `position_optout` names `N0OPT`: G5, G9 and positionless G1 from three SSIDs are denied/13 (counters), absent everywhere; the control `N0WXK-13` is public | R2 |
