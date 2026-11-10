@@ -235,3 +235,75 @@ def test_variant_fails_when_an_unreadable_file_restarts_the_edge(monkeypatch, tm
         run_variant(monkeypatch, tmp_path, {"restart_on_unreadable": True})
     # the case put the mode back before it failed
     assert (tmp_path / "out" / "aprs-secrets" / "passcode").stat().st_mode & 0o777 == 0o600
+
+
+
+# ---------------------------------------------------------------- waiting for the hub series (run 20261110T085417Z)
+
+def series_ctx(tmp_path):
+    from dvtest import secret_reload as sr
+    entries = sr.entries_for("4242\n", "31337\n")
+    return types.SimpleNamespace(leaks=sr.Leaks(entries), target=types.SimpleNamespace(out=str(tmp_path)))
+
+
+def fake_hub(monkeypatch, replies):
+    """hub() answers from `replies` (a value or an exception; the last one repeats); time advances on sleep only."""
+    clock = [0.0]
+    seq = list(replies)
+    calls = []
+
+    def hub(ctx):
+        calls.append(clock[0])
+        reply = seq.pop(0) if len(seq) > 1 else seq[0]
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    monkeypatch.setattr(case, "hub", hub)
+    monkeypatch.setattr(case.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(case.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + s))
+    return calls
+
+
+def test_wait_edge_series_polls_until_the_launcher_families_arrive(monkeypatch, tmp_path):
+    # the edge gauge is there at once, the launcher counter only after the first hub publication (7 s read of the 08:54 run)
+    calls = fake_hub(monkeypatch, [(False, None, None)] * 4 + [(True, 0.0, 3.0)])
+    assert case.wait_edge_series(series_ctx(tmp_path), strict=True) == (True, 0.0, 3.0)
+    assert len(calls) == 5 and calls[-1] == 8.0
+    assert "after 8 s" in (tmp_path / case.LOG).read_text()
+
+
+def test_wait_edge_series_survives_a_failed_read(monkeypatch, tmp_path):
+    fake_hub(monkeypatch, [RuntimeError("error 1"), TimeoutError("no ack"), (True, 1.0, 4.0)])
+    assert case.wait_edge_series(series_ctx(tmp_path), strict=False) == (True, 1.0, 4.0)
+
+
+def test_wait_edge_series_skips_in_lax_mode_after_the_bound_and_names_the_missing_series(monkeypatch, tmp_path):
+    calls = fake_hub(monkeypatch, [(None, None, None)])
+    with pytest.raises(pytest.skip.Exception) as exc:
+        case.wait_edge_series(series_ctx(tmp_path), strict=False)
+    text = str(exc.value)
+    assert "dv_edge_aprsis_verified and dv_launcher_child_restarts_total" in text and "60 s" in text and calls[-1] >= case.SERIES_WAIT_S
+    calls = fake_hub(monkeypatch, [(True, None, 0.0)])
+    with pytest.raises(pytest.skip.Exception) as exc:
+        case.wait_edge_series(series_ctx(tmp_path), strict=False)
+    assert "no dv_launcher_child_restarts_total" in str(exc.value) and "dv_edge_aprsis_verified" not in str(exc.value)
+
+
+def test_wait_edge_series_fails_in_strict_mode_after_the_bound(monkeypatch, tmp_path):
+    fake_hub(monkeypatch, [(False, None, None)])
+    with pytest.raises(pytest.fail.Exception, match="strict mode"):
+        case.wait_edge_series(series_ctx(tmp_path), strict=True)
+    fake_hub(monkeypatch, [RuntimeError("error 1")])
+    with pytest.raises(pytest.fail.Exception, match="metrics read failed"):
+        case.wait_edge_series(series_ctx(tmp_path), strict=True)
+
+
+@pytest.mark.parametrize("env,want", [({}, False), ({"DVT_SECRELOAD1": "on"}, True), ({"DVT_SECRELOAD2": "1"}, True),
+                                      ({"DVT_SECRELOAD1": "off"}, False)])
+def test_series_strict(monkeypatch, env, want):
+    for name in ("DVT_SECRELOAD1", "DVT_SECRELOAD2"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    assert case.series_strict() is want

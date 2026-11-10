@@ -152,7 +152,8 @@ The SIGHUP variant runs in the same rig run after the first case and needs none 
 image that is not expected to have the rule.
 
 Skips (with the reason in the report): no `out/<run>/aprs-secrets/passcode` (no `--profile aprs`); no `dv_edge_aprsis_verified` or
-`dv_launcher_child_restarts_total{child="dv-edge-aprsis"}` in the hub metrics (the edge is not running); the capability probe finds no
+`dv_launcher_child_restarts_total{child="dv-edge-aprsis"}` in the hub metrics 60 s after the case started polling (the case polls: the launcher families reach the hub with the first 10 s
+publication, run `20261110T085417Z` read them 7 s after the SUT start and skipped both cases for nothing); with `DVT_SECRELOAD1=on` or `DVT_SECRELOAD2=on` a missing series after the bound is a FAILURE, not a skip; the capability probe finds no
 rule (below); the configuration file is read-only (no `DVT_SUT_CONFIG_RW=1`). Fails: the edge is not verified at the start.
 
 ## Stages

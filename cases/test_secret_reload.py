@@ -62,6 +62,7 @@ CHILD = "dv-edge-aprsis"
 KEY = "passcode_file"
 QUIET_S = 12.0              # one hub refresh (10 s) and a bit: "nothing restarted" is judged after it
 EFFECT_S = 60.0             # a restart, its new login and the next hub refresh
+SERIES_WAIT_S = 60.0        # the hub series of the edge and of the launcher: the first 10 s publication plus the edge's own start
 SUT_PASSCODE_PATH = "/etc/dv-router/aprs-secrets/passcode"    # passcode_file of rig/config/dv-router/dp15-aprsis.toml, as the SUT sees it
 STEP_UP_S = 200.0           # the step-up window is 5 minutes; a TOTP step-up costs up to one 30 s step, so it is renewed only when old
 
@@ -191,6 +192,44 @@ def hub(ctx):
     return sr.verified(samples), own, everything
 
 
+def series_strict():
+    """True when the edge is expected: DVT_SECRELOAD1 or DVT_SECRELOAD2 is on (the run asks for the cases, so a missing edge is a failure)."""
+    return any(os.environ.get(name, "").lower() in ("on", "1", "true", "yes") for name in ("DVT_SECRELOAD1", "DVT_SECRELOAD2"))
+
+
+def wait_edge_series(ctx, strict, timeout=SERIES_WAIT_S, poll=2.0):
+    """(verified, restarts of the edge, restarts of all children) once BOTH series are in the hub metrics, polled for up to `timeout`
+    seconds: the launcher families reach the hub with the first 10 s publication after the SUT started (run 20261110T085417Z read
+    them 7 s after the start, saw `dv_edge_aprsis_verified` but no `dv_launcher_child_restarts_total`, and skipped). After the bound a
+    missing series is a FAILURE when `strict` (DVT_SECRELOAD1 / DVT_SECRELOAD2 = on: the edge is expected), else a skip that names
+    which series is missing."""
+    t0 = time.monotonic()
+    missing, error = "both", ""
+    while True:
+        try:
+            ver, own, everything = hub(ctx)
+        except (RuntimeError, TimeoutError, ValueError, OSError) as exc:
+            ver = own = everything = None
+            error = "; the last metrics read failed (%s)" % type(exc).__name__
+        else:
+            error = ""
+        if ver is not None and own is not None:
+            if time.monotonic() - t0 > 1.0:
+                say(ctx, "series", "dv_edge_aprsis_verified and dv_launcher_child_restarts_total{child=%s} in the hub metrics after %.0f s" % (
+                    CHILD, time.monotonic() - t0))
+            return ver, own, everything
+        missing = " and ".join(name for name, v in (("dv_edge_aprsis_verified", ver), ("dv_launcher_child_restarts_total{child=%s}" % CHILD, own))
+                               if v is None)
+        if time.monotonic() - t0 >= timeout:
+            break
+        time.sleep(poll)
+    reason = ("no %s in the hub metrics %.0f s after the case started polling%s: the APRS-IS edge is not running (--profile aprs with "
+              "dp15-aprsis.toml) or the image does not export the launcher families" % (missing, time.monotonic() - t0, error))
+    if strict:
+        pytest.fail("the edge is expected (strict mode) but " + reason)
+    pytest.skip(reason)
+
+
 def pid_of_edge(ctx):
     """(pid, starttime) of dv-edge-aprsis, None while no such process runs."""
     try:
@@ -275,10 +314,7 @@ def test_secreload1_passcode_file_replaced_at_the_same_path(target, rig_control,
         sr.digest_note(ctx.old.strip()), sr.digest_note(ctx.new.strip()), ctx.original_mode, strict))
 
     # ---- 0 baseline and capability
-    ver, own, everything = hub(ctx)
-    if ver is None or own is None:
-        pytest.skip("no dv_edge_aprsis_verified / dv_launcher_child_restarts_total{child=%s} in the hub metrics: the APRS-IS edge is "
-                    "not running (--profile aprs with dp15-aprsis.toml)" % CHILD)
+    ver, own, everything = wait_edge_series(ctx, series_strict())
     if not wait_for(lambda: hub(ctx)[0], 60.0):
         pytest.fail("the APRS-IS edge is not logged in and verified on the aprsc with the fixture passcode (dv_edge_aprsis_verified 0): "
                     "check out/<run>/logs/aprsc.log and the passcode file")
@@ -401,10 +437,7 @@ def test_secreload1_sighup_reload_of_unchanged_toml(target, rig_control, sr_base
     strict = os.environ.get("DVT_SECRELOAD1", "").lower() in ("on", "1", "true", "yes")
     say(ctx, "H0", "SIGHUP variant: old value %s, throwaway value %s (same size); strict=%s" % (
         sr.digest_note(ctx.old.strip()), sr.digest_note(ctx.new.strip()), strict))
-    ver, own, everything = hub(ctx)
-    if ver is None or own is None:
-        pytest.skip("no dv_edge_aprsis_verified / dv_launcher_child_restarts_total{child=%s} in the hub metrics: the APRS-IS edge is "
-                    "not running (--profile aprs with dp15-aprsis.toml)" % CHILD)
+    ver, own, everything = wait_edge_series(ctx, series_strict())
     if not wait_for(lambda: hub(ctx)[0], 60.0):
         # an earlier case of this module may have left the throwaway value running: put the fixture value back and reload
         write_atomic(ctx.path, ctx.old)
@@ -543,10 +576,7 @@ def test_secreload2_preview_and_reload_apply_a_replaced_secret(target, rig_contr
     say(ctx, "R0", "SECRELOAD2: old value %s, throwaway value %s (same size); strict=%s" % (
         sr.digest_note(ctx.old.strip()), sr.digest_note(ctx.new.strip()), strict))
     first = require_route(ctx, strict)
-    ver, own, everything = hub(ctx)
-    if ver is None or own is None:
-        pytest.skip("no dv_edge_aprsis_verified / dv_launcher_child_restarts_total{child=%s} in the hub metrics: the APRS-IS edge is "
-                    "not running (--profile aprs with dp15-aprsis.toml)" % CHILD)
+    ver, own, everything = wait_edge_series(ctx, series_strict())
     raw_text, file_etag = raw_config(ctx)
     path_match = re.search(r"(?m)^\s*passcode_file\s*=\s*\"([^\"]+)\"", raw_text)
     assert path_match, "the raw configuration has no passcode_file under [edges.aprsis]"
@@ -679,6 +709,7 @@ def test_secreload2_guards_and_preconditions(target, rig_control, sr_ctx, admin_
     require_route(ctx, strict)
     ctx.client.step_up()
     ctx.stepped = t_step = time.monotonic()
+    wait_edge_series(ctx, series_strict())
     base = state(ctx)
     _text, file_etag = raw_config(ctx)
     current = sr.etag_value(file_etag)
