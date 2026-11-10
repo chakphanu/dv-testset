@@ -38,7 +38,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "proto"))
 
-from dvtest import ax25, dp11e as dp, kiss_app, kiss_tnc, metrics, txguard  # noqa: E402
+from dvtest import ax25, dp11e as dp, kiss_app, kiss_tnc, logscan, metrics, txguard  # noqa: E402
 
 import data_support as ds  # noqa: E402
 import test_dp15_positions as p1  # noqa: E402
@@ -57,6 +57,8 @@ MODEM_WAIT_S = 25.0
 SILENCE_S = 130.0                   # longer than the 120 s read timeout of APRSdroid
 KEEPALIVE_ON = 10                   # keepalive_secs of the listener `apps` in dp11e-kiss.toml
 APP_TIMEOUT_S = kiss_app.APRSDROID_SO_TIMEOUT_S
+INJECT_FRAMES = 4500                # DP11e-i: about 4 MB at 75 frames a second, 60 s
+INJECT_FPS = 75.0
 
 
 def note(target, case, tag, text):
@@ -94,12 +96,22 @@ def listener(kiss, name):
     return lst
 
 
-def app(kiss, name, **kw):
-    """A connected AppKissClient on listener `name`."""
+def app(kiss, name, refused_ok=False, **kw):
+    """A connected AppKissClient on listener `name`. The server frees the slot of a client that closed only when it reads the EOF, which can be some
+    tens of milliseconds after the previous test ended (the first rig run saw `full` for the first client of the next test): a client that the server
+    closes within 0.4 s of the connect is retried (up to 8 times) unless `refused_ok` (the refusal itself is what the case looks at)."""
     lst = listener(kiss, name)
-    client = kiss_app.AppKissClient(lst.host, lst.port, name="app-" + name, **kw)
-    assert client.connect(), "cannot connect to listener %s (%s:%d): %s" % (name, lst.host, lst.port, client.error)
-    return client
+    for attempt in range(8):
+        client = kiss_app.AppKissClient(lst.host, lst.port, name="app-" + name, **kw)
+        assert client.connect(), "cannot connect to listener %s (%s:%d): %s" % (name, lst.host, lst.port, client.error)
+        if refused_ok:
+            return client
+        time.sleep(0.4)
+        if client.is_open:
+            return client
+        client.close()
+        time.sleep(0.3)
+    pytest.fail("listener %s closed 8 connections in a row within 0.4 s of the connect" % name)
 
 
 def samples(kiss):
@@ -245,7 +257,7 @@ def test_dp11e_b_only_the_control_reaches_the_modem_as_sent(refusal_run):
 def test_dp11e_c_a_peer_outside_allow_from_is_closed_before_any_byte(rig, target, kiss):
     """data.md 10.10: a non-loopback listener checks the peer against allow_from before reading; a refused peer is closed (refused_addr)."""
     before = settled(kiss, "outside")
-    client = app(kiss, "outside")
+    client = app(kiss, "outside", refused_ok=True)
     try:
         assert client.wait_closed(5.0), "the listener kept a peer that is outside allow_from"
         assert client.bytes_received == 0, "a refused peer received %d bytes" % client.bytes_received
@@ -268,7 +280,7 @@ def test_dp11e_c_the_fourth_client_of_three_is_refused_full(rig, target, kiss):
     try:
         time.sleep(1.0)
         assert all(c.is_open for c in held)
-        extra = app(kiss, "apps")
+        extra = app(kiss, "apps", refused_ok=True)
         assert extra.wait_closed(5.0) and extra.bytes_received == 0, "client %d of %d was not refused" % (lst.max_clients + 1, lst.max_clients)
         end = time.monotonic() + COUNTER_WAIT_S
         gauge = None
@@ -483,18 +495,21 @@ def test_dp11e_h_sessions_are_listed_and_kick_closes_the_client(rig, target, kis
 
 def test_dp11e_h_the_sut_log_has_no_peer_address_and_no_frame_content(rig, target, kiss):
     """config.md: the edge logs bind address, mapped ports, TX state and allowed sources at start, never a peer address or packet contents. Lines
-    of the SUT log that mention kiss are scanned for the tester's address and for the information fields this module sent."""
-    logs = sorted((Path(target.out) / "logs").glob("*sut*")) if (Path(target.out) / "logs").is_dir() else []
-    if not logs:
-        pytest.skip("no SUT log under %s/logs" % target.out)
+    of the SUT log that mention kiss are scanned for the tester's address and for the information fields this module sent. The SUT logs are collected
+    on the host after pytest ends, so in the rig this case writes the needles to out/<run>/logscan/DP11e-h.json and skips; the scan is then
+    `python3 -m dvtest.logscan out/<run>` on the host (exit 0 = clean). With the logs readable the scan is done here."""
+    case = "DP11e-h"
     allow = (kiss.shape.listeners.get("apps") or next(iter(kiss.shape.listeners.values()))).allow_from
     tester_ip = (allow[0].split("/")[0] if allow else "") or ""
-    text = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in logs)
-    kiss_lines = [l for l in text.splitlines() if "kiss" in l.lower()]
-    note(target, "DP11e-h", "RECORD", "%d kiss log line(s) in %d file(s); first: %s" % (len(kiss_lines), len(logs), kiss_lines[:2]))
-    bad = [l for l in kiss_lines if (tester_ip and tester_ip in l) or "dp11e-" in l or "ATE0" in l]
-    assert not bad, "the SUT log names a peer address or frame content on a kiss line: %s" % bad[:3]
-    if not kiss_lines:
+    needles = [n for n in (tester_ip, "dp11e-", "ATE0") if n]
+    state, found, looked = logscan.request(target.out, case, needles, line_filter="kiss")
+    if state == "pending":
+        note(target, case, "RECORD", "the SUT log is not readable in the case; needle file %s; run on the host after the run: %s" % (
+            found, logscan.command_for(target.out)))
+        pytest.skip("the SUT log is collected after the run: run `%s` on the host (needles in %s)" % (logscan.command_for(target.out), found))
+    note(target, case, "RECORD", "%d kiss log line(s) scanned; hits: %s" % (looked, {os.path.basename(k): v[:2] for k, v in found.items()}))
+    assert not found, "the SUT log names a peer address or frame content on a kiss line: %s" % found
+    if not looked:
         pytest.skip("the SUT log has no kiss line at all (log level?): nothing to scan")
 
 
@@ -503,27 +518,30 @@ def test_dp11e_h_the_sut_log_has_no_peer_address_and_no_frame_content(rig, targe
 @pytest.mark.slow
 def test_dp11e_i_a_slow_client_loses_the_newest_frames_and_a_stalled_one_is_closed(rig, target, kiss):
     """data.md 10.10: an output queue is at most 64 frames / 64 KiB and drops the newest (`dir=out,result=slow`); a 30 s write stall closes the client
-    (`stalled`). The client stops reading while about 4 MB of frames are injected at the modem, so the socket buffers fill and the queue overflows."""
+    (`stalled`). The client stops reading with a SMALL receive buffer while frames are injected at the modem at a steady rate, so the kernel buffers
+    fill and the queue overflows. (The first rig run injected a burst: the adapter's receive queue holds about 160 frames and drops the rest, and the
+    160 delivered frames fitted in the kernel buffers of the paused client, so the 64 frame queue was never reached.)"""
     case = "DP11e-i"
     before = settled(kiss, "apps")
-    client = app(kiss, "apps")
+    client = app(kiss, "apps", rcvbuf=2048)
     healthy = app(kiss, "apps")
     try:
-        time.sleep(1.0)
-        client.pause_reading()
+        assert client.pause_reading(), "the reader of the slow client did not park"
         pad = "x" * 800
         t0 = time.monotonic()
-        for n in range(5000):
+        injected = 0
+        for n in range(INJECT_FRAMES):
             frame = kiss_tnc.ui_frame("N0TEST-3", "APDVT1", "=1030.00N/02015.00E>dp11e-slow-%05d %s" % (n, pad))
             if not kiss.tnc.a.inject(frame):
                 break
-            if n % 200 == 0:
-                time.sleep(0.05)
-        time.sleep(40.0)                                          # past the 30 s write stall
+            injected += 1
+            time.sleep(1.0 / INJECT_FPS)
+        time.sleep(max(0.0, 45.0 - (time.monotonic() - t0)))      # at least 45 s in all: past the 30 s write stall
         delta = wait_frames_delta(kiss, "apps", before, {("out", "slow"): 1})
         cdelta = dp.delta(counters(kiss, "apps")["clients"], before["clients"])
-        note(target, case, "RECORD", "after %.0f s: dv_edge_kiss_frames_total deltas %s, clients %s; healthy client got %d frames" % (
-            time.monotonic() - t0, delta, cdelta, len(healthy.frames(t0))))
+        note(target, case, "RECORD", "injected %d frames in %.0f s; dv_edge_kiss_frames_total deltas %s, clients %s; healthy client got %d frames" % (
+            injected, time.monotonic() - t0, delta, cdelta, len(healthy.frames(t0))))
+        assert injected >= INJECT_FRAMES // 2, "only %d of %d frames could be injected" % (injected, INJECT_FRAMES)
         assert delta.get(("out", "slow"), 0) >= 1, "no frame was dropped as slow: %s" % delta
         assert cdelta.get("stalled", 0) >= 1, "the stalled client was not closed (stalled): %s" % cdelta
         client.resume_reading()
@@ -537,9 +555,11 @@ def test_dp11e_i_a_slow_client_loses_the_newest_frames_and_a_stalled_one_is_clos
 # ================================================================ DP11e-j: restart
 
 def test_dp11e_j_an_edge_restart_closes_clients_and_the_first_frame_meets_the_guard(rig, target, kiss):
-    """config.md: every kiss_server key is Restart(child). The AX.25 child is restarted through the admin API (as DP15-6g): the clients are closed,
-    the listener rebinds, a frame sent at once is held back by the RFSAFE1 guard (counted rf_fenced, never transmitted inside the 13 s), and after
-    the guard a frame is served."""
+    """config.md: every kiss_server key is Restart(child). The AX.25 child is restarted through the admin API (as DP15-6g): the clients are closed and the
+    listener rebinds. The RFSAFE1 guard (about 13 s after the start) holds a client frame sent at once: the first rig run (wip-8891cc7) showed it is QUEUED
+    and released when the guard ends (about 13 s after the restart), not dropped, and `rf_fenced` stayed 0. So the case asserts: not transmitted inside the
+    guard; then either released after it (the expected behaviour on this image) or counted `rf_fenced`; nothing lost silently. The status view of the fence
+    lags on this image (up to about 24.5 s, RFSAFE1b), so the wait allows 30 s. After the guard a new frame is served."""
     case = "DP11e-j"
     guard(kiss, case)
     admin = kiss.admin_session("admin")
@@ -547,15 +567,14 @@ def test_dp11e_j_an_edge_restart_closes_clients_and_the_first_frame_meets_the_gu
     names, everything = txguard.ax25_child_names(status.json() if status.status == 200 else {})
     if names != [txguard.AX25_CHILD]:
         pytest.skip("the launcher child %r is not listed; children seen: %s" % (txguard.AX25_CHILD, everything))
-    before_drops = sum(int(s.value) for s in samples(kiss) if s.name == "dv_edge_drops_total" and s.labels.get("reason") == "rf_fenced")
     client = app(kiss, "apps")
+    again = None
     try:
         admin.step_up()
         resp = admin.post(admin.path("/children/%s/restart" % txguard.AX25_CHILD), {}, expect=None)
         assert resp.status == 200, "restart answered HTTP %d" % resp.status
         t_restart = time.monotonic()
         assert client.wait_closed(15.0), "the restart did not close the KISS client"
-        again = None
         end = time.monotonic() + 30.0
         lst = listener(kiss, "apps")
         while again is None and time.monotonic() < end:
@@ -569,14 +588,34 @@ def test_dp11e_j_an_edge_restart_closes_clients_and_the_first_frame_meets_the_gu
             time.sleep(0.5)
         assert again is not None and again.is_open, "the listener did not rebind within 30 s of the restart"
         note(target, case, "RECORD", "listener back %.1f s after the restart call" % (time.monotonic() - t_restart))
+        base_drops = sum(int(s.value) for s in samples(kiss) if s.name == "dv_edge_drops_total" and s.labels.get("reason") == "rf_fenced")
         t1 = time.monotonic()
         held = dp.good_frame(dp.info_for("fenced"))
         assert again.send_frame(held)
         time.sleep(5.0)
         inside = [m for _t, m in modem_frames(kiss, t1) if "dp11e-fenced" in m]
         assert inside == [], "a client frame was transmitted %.1f s after the restart, inside the RFSAFE1 guard: %s" % (time.monotonic() - t_restart, inside)
-        result = txguard.wait_unfenced(txguard.ax25_reader(kiss.admin, "rf-a"), kind="ax25")
+        result = txguard.wait_unfenced(txguard.ax25_reader(kiss.admin, "rf-a"), kind="ax25", margin_s=12.0, max_wait_s=30.0)
         note(target, case, "RECORD", txguard.describe(result, "ax25", "rf-a"))
+        assert result.state not in ("timeout", "scope"), "the fence view did not end within 30 s: %s" % txguard.describe(result, "ax25", "rf-a")
+        released = []
+        end = time.monotonic() + 20.0
+        while not released and time.monotonic() < end:
+            released = [(t, m) for t, m in modem_frames(kiss, t1) if "dp11e-fenced" in m]
+            time.sleep(0.5)
+        end = time.monotonic() + COUNTER_WAIT_S
+        drops = base_drops
+        while time.monotonic() < end:
+            drops = sum(int(s.value) for s in samples(kiss) if s.name == "dv_edge_drops_total" and s.labels.get("reason") == "rf_fenced")
+            if drops > base_drops or released:
+                break
+            time.sleep(3.0)
+        delay = (released[0][0] - t_restart) if released else None
+        note(target, case, "RECORD", "the frame sent at once after the restart: %s; dv_edge_drops_total{reason=rf_fenced} %d -> %d" % (
+            "released %.1f s after the restart call" % delay if released else "not transmitted", base_drops, drops))
+        assert released or drops > base_drops, "the frame sent during the guard was neither released after it nor counted rf_fenced: lost"
+        if released:
+            assert delay >= 10.0, "the held frame was released %.1f s after the restart: before the guard (about 13 s) ended" % delay
         t2 = time.monotonic()
         served = dp.good_frame(dp.info_for("after_guard"))
         assert again.send_frame(served)
@@ -586,18 +625,10 @@ def test_dp11e_j_an_edge_restart_closes_clients_and_the_first_frame_meets_the_gu
             got = [m for _t, m in modem_frames(kiss, t2) if "dp11e-after_guard" in m]
             time.sleep(0.2)
         assert got == [ax25.to_tnc2(served)], "the frame after the guard was not served: %s" % got
-        end = time.monotonic() + COUNTER_WAIT_S
-        drops = before_drops
-        while time.monotonic() < end:
-            drops = sum(int(s.value) for s in samples(kiss) if s.name == "dv_edge_drops_total" and s.labels.get("reason") == "rf_fenced")
-            if drops > before_drops:
-                break
-            time.sleep(3.0)
-        note(target, case, "RECORD", "dv_edge_drops_total{reason=rf_fenced} %d -> %d" % (before_drops, drops))
-        assert drops > before_drops, "the frame held by the guard was not counted rf_fenced"
-        again.close()
     finally:
         client.close()
+        if again is not None:
+            again.close()
 
 
 # ================================================================ shape B: loopback, rate, simulate

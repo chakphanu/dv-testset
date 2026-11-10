@@ -130,6 +130,24 @@ def test_every_config_mutation_applies_renders_and_changes_the_snippet():
     assert len(dp.kiss_shape(rendered(text=dict((c.id, c) for c in dp.CONFIG_CASES)["fifth-listener"].mutate(text))).listeners) == 5
 
 
+def test_the_two_mutations_that_failed_the_first_run_now_hit_the_apps_listener_and_stay_at_four_listeners():
+    text = (SNIPPETS / "dp11e-kiss.toml").read_text()
+    case = {c.id: c for c in dp.CONFIG_CASES}
+    burst = rendered(text=case["tx-burst-31"].mutate(text))["edges"]["ax25"]["kiss_server"]
+    assert [l["tx_burst"] for l in burst if l.get("tx_burst") == 31] == [31] and sum(1 for l in burst if l.get("tx_burst") == 5) == 0
+    loop = rendered(text=case["accept-loopback"].mutate(text))["edges"]["ax25"]["kiss_server"]
+    assert len(loop) == 4 and [l["listen"] for l in loop if l["listen"].startswith("127.")] == ["127.0.0.1:8204"]
+    assert all("allow_from" not in l for l in loop if l["listen"].startswith("127."))
+
+
+def test_the_rf_a_budget_of_the_snippets_lets_five_position_frames_through():
+    for name in ("dp11e-kiss.toml", "dp11e-kiss-b.toml"):
+        doc = rendered(name)
+        ports = doc["edges"]["ax25"]["port"]
+        budgets = [p["tx_budget"] for p in ports if p.get("name") == "rf-a"]
+        assert budgets and budgets[0]["duty_pct"] == 20 and budgets[0]["per_source_pct"] == 100, name
+
+
 def verdict(valid, parsed=()):
     return {"valid": valid, "unsupported": False, "errors": [] if valid else ["x"], "parsed": list(parsed)}
 
@@ -224,6 +242,8 @@ def test_label_set_problems_accept_the_fixed_sets_and_name_each_violation():
     problems = dp.label_set_problems(bad, names)
     assert len(problems) == 6 and any("dir='sideways'" in p for p in problems) and any("not a configured listener" in p for p in problems)
     assert any("unexpected labels" in p for p in problems)
+    hub = metrics.parse('dv_edge_kiss_frames_total{port="apps",dir="out",result="sent",proc="ax25"} 1\ndv_edge_kiss_clients{port="apps",proc="ax25"} 1')
+    assert dp.label_set_problems(hub, names) == []                                  # the hub adds proc to every edge series
 
 
 class FakeAdmin:
@@ -259,3 +279,21 @@ def test_the_receive_only_port_case_rests_on_channel_1_of_apps_mapping_rf_b():
     tx_off = [r for r in dp.refusal_frames() if r.id == "tx_off_port"][0]
     assert tx_off.channel == 1 and tx_off.label == "tx_off" and tx_off.listener == "apps"
     assert "tx_off" in dp.IN_RESULTS and "queued" in dp.IN_RESULTS
+
+
+def test_the_log_case_leaves_a_needle_file_without_logs_and_scans_with_them(tmp_path, monkeypatch):
+    import json
+    listeners = {"apps": SimpleNamespace(allow_from=["198.51.100.9/32"])}
+    kiss = SimpleNamespace(shape=SimpleNamespace(listeners=listeners))
+    monkeypatch.setattr(tk, "note", lambda *a, **k: None)
+    target = SimpleNamespace(out=str(tmp_path))
+    with pytest.raises(pytest.skip.Exception, match="python3 -m dvtest.logscan"):
+        tk.test_dp11e_h_the_sut_log_has_no_peer_address_and_no_frame_content(None, target, kiss)
+    spec = json.loads((tmp_path / "logscan" / "DP11e-h.json").read_text())
+    assert spec["needles"] == ["198.51.100.9", "dp11e-", "ATE0"] and spec["line_filter"] == "kiss"
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "logs" / "xlxd-sut.log").write_text("kiss listener apps bound\n")
+    tk.test_dp11e_h_the_sut_log_has_no_peer_address_and_no_frame_content(None, target, kiss)
+    (tmp_path / "logs" / "xlxd-sut.log").write_text("kiss client 198.51.100.9 connected\n")
+    with pytest.raises(AssertionError, match="names a peer address"):
+        tk.test_dp11e_h_the_sut_log_has_no_peer_address_and_no_frame_content(None, target, kiss)

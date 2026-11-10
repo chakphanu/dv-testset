@@ -285,7 +285,7 @@ def test_the_leak_case_scans_logs_public_state_admin_routes_and_metrics(quiet, t
     hub = SimpleNamespace(text=lambda: 'dv_pkt_items_total{kind="text"} 3')
     tm.test_obspkt1_e_no_packet_body_in_logs_public_state_other_routes_or_telemetry(ctx, t, web_ctx, hub, None)
     (logs / "xlxd-sut.log").write_text("debug: rx N0OBA-1>APDVT1:>%s\n" % MK["S"])
-    with pytest.raises(AssertionError, match=r"log:xlxd-sut.log"):
+    with pytest.raises(AssertionError, match=r"packet body appears in the SUT log.*xlxd-sut.log"):
         tm.test_obspkt1_e_no_packet_body_in_logs_public_state_other_routes_or_telemetry(ctx, t, web_ctx, hub, None)
     (logs / "xlxd-sut.log").write_text("clean\n")
     with pytest.raises(AssertionError, match="hub metrics"):
@@ -295,9 +295,12 @@ def test_the_leak_case_scans_logs_public_state_admin_routes_and_metrics(quiet, t
         tm.test_obspkt1_e_no_packet_body_in_logs_public_state_other_routes_or_telemetry(ctx, traffic([]), web_ctx, hub, None)
     empty = tmp_path / "none"
     empty.mkdir()
-    with pytest.raises(pytest.skip.Exception, match="no SUT log"):
+    with pytest.raises(pytest.skip.Exception, match="python3 -m dvtest.logscan"):
         tm.test_obspkt1_e_no_packet_body_in_logs_public_state_other_routes_or_telemetry(
             SimpleNamespace(target=SimpleNamespace(out=str(empty)), admin=ctx.admin), t, web_ctx, hub, None)
+    import json
+    needles = json.loads((empty / "logscan" / "OBSPKT1-e.json").read_text())["needles"]       # left for the host scan
+    assert needles == [MK["S"], MK["N"], MK["C"]]
 
 
 def test_the_fixture_skips_without_the_shape_the_hidden_base_or_the_routes(tmp_path, monkeypatch):

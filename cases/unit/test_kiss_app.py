@@ -224,3 +224,14 @@ def test_pause_reading_returns_false_when_the_reader_is_gone_and_true_when_it_pa
     client.resume_reading()
     client.close()
     assert client.pause_reading(wait=0.2) is False                          # the loop has ended: nothing parks
+
+
+def test_a_small_receive_buffer_is_set_before_the_connect(server):
+    big = kiss_app.AppKissClient("127.0.0.1", server.port)
+    small = kiss_app.AppKissClient("127.0.0.1", server.port, rcvbuf=2048)
+    try:
+        assert big.connect() and small.connect()
+        assert small._sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF) < big._sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
+    finally:
+        big.close()
+        small.close()

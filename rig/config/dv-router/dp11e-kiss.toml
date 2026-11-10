@@ -11,6 +11,9 @@
 #  rxonly   :8202  allow_from the tester, rf-a = channel 0, tx false, keepalive_secs 0
 #  txdeny   :8203  allow_from the tester, rf-a = channel 0, tx true but tx_from 192.0.2.0/24 (documentation range, not the tester): `tx_addr`
 #  outside  :8204  allow_from 192.0.2.0/24 only: the tester is refused before any byte is read (`refused_addr`)
+# tx_budget: the class defaults of afsk1200-shared give the position class 1/8 of 5 % per 600 s (about four frames) and one source 25 %: the first rig run
+# (wip-8891cc7) held the fifth position frame of the listener key kiss/apps (`delayed` grew, `sent` stayed 4). The run sends about ten frames through `apps`, so the
+# budget is raised to duty_pct 20 (the amateur cap is 25) with per_source_pct 100 (config.md: tx_budget accepts these keys, omitted ones keep the defaults).
 # The ports 8201..8204 are on the rig network; <OWN_IP> is the SUT. tx_per_min 30 / tx_burst 5 on rf-a and on `apps`: the cases send several
 # frames in a row and must not be slowed by the coarse port bucket (the `rate` case uses shape B).
 [edges.ax25]
@@ -29,7 +32,7 @@ tx = true
 physical = "radio1"
 band = "2m"
 class = "afsk1200-shared"
-tx_budget = {}
+tx_budget = { duty_pct = 20, per_source_pct = 100 }
 tx_per_min = 30
 tx_burst = 5
 reconnect = { min_secs = 1, max_secs = 5 }

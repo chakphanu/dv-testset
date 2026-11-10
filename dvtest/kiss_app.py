@@ -5,7 +5,8 @@ dvtest/kiss_tnc.py plays a TNC that the DV-Router AX.25 edge connects TO. DP11e 
 (APRSdroid, PinPoint APRS, Xastir, YAAC, Dire Wolf's kissutil) connects to a `[[edges.ax25.kiss_server]]` listener and uses the node as its TNC.
 `AppKissClient` is such an app, pure stdlib, built on the same framing code as everything else (dvtest/ax25.py `kiss_encode`, `KissDecoder`):
 
-* `connect()` once (no retry loop: a refusal must be observable); `source_ip` binds the local side, for an allow_from case;
+* `connect()` once (no retry loop: a refusal must be observable); `source_ip` binds the local side, for an allow_from case; `rcvbuf` sets a small
+  SO_RCVBUF before the connect;
 * `closed_at` / `wait_closed()` / `bytes_received`: a refused or kicked client sees EOF, and "zero bytes" is a counter, not a guess;
 * `send_frame` (KISS data frame), `send_command` (TXDELAY, P, SlotTime, TXtail, FullDuplex, SetHardware, Return: the server must ignore them),
   `send_text` (the ASCII init lines APRSdroid writes to a TNC at connect), `send_raw`, `send_split` (a frame in pieces);
@@ -29,9 +30,9 @@ from dvtest import ax25, kiss_tnc
 
 
 class AppKissClient:
-    def __init__(self, host, port, name="app", source_ip=None, timeout=5.0):
+    def __init__(self, host, port, name="app", source_ip=None, timeout=5.0, rcvbuf=None):
         self.host, self.port, self.name = host, int(port), name
-        self.source_ip, self.timeout = source_ip, timeout
+        self.source_ip, self.timeout, self.rcvbuf = source_ip, timeout, rcvbuf
         self.received = []                  # [(time.monotonic, channel, command, data)] in arrival order
         self.bytes_received = 0
         self.byte_times = []                # [(time.monotonic, nbytes)] one entry per recv
@@ -53,8 +54,17 @@ class AppKissClient:
     def connect(self):
         """True when the TCP connection was made (a server may still close it at once: see `closed_at`). One attempt."""
         try:
-            sock = socket.create_connection((self.host, self.port), timeout=self.timeout,
-                                            source_address=(self.source_ip, 0) if self.source_ip else None)
+            if self.rcvbuf:
+                # a small receive buffer must be set BEFORE the connect (it fixes the window): the slow-client case needs the kernel buffers to fill
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, int(self.rcvbuf))
+                sock.settimeout(self.timeout)
+                if self.source_ip:
+                    sock.bind((self.source_ip, 0))
+                sock.connect((self.host, self.port))
+            else:
+                sock = socket.create_connection((self.host, self.port), timeout=self.timeout,
+                                                source_address=(self.source_ip, 0) if self.source_ip else None)
         except OSError as exc:
             self.error = str(exc)
             return False

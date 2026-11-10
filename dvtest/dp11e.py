@@ -150,7 +150,8 @@ CLIENT_RESULTS = ("accepted", "refused_addr", "full", "closed", "stalled", "kick
 def label_set_problems(samples, listeners):
     """Problems ([] = fine) of the fixed label sets (data.md 13.1, status.md): every dv_edge_kiss_frames_total series has `port` = a configured
     listener name, `dir` in/out and a result of the set of its direction; every dv_edge_kiss_clients_total result is in CLIENT_RESULTS; the gauge
-    dv_edge_kiss_clients has a configured `port`. No label carries an address."""
+    dv_edge_kiss_clients has a configured `port`. No label carries an address; the hub adds `proc` (the edge process) to every edge series, which is
+    allowed."""
     problems = []
     names = set(listeners)
     for s in samples:
@@ -168,7 +169,7 @@ def label_set_problems(samples, listeners):
             continue
         if port not in names:
             problems.append("%s port=%r is not a configured listener %s" % (s.name, port, sorted(names)))
-        extra = [k for k in s.labels if k not in ("port", "dir", "result")]
+        extra = [k for k in s.labels if k not in ("port", "dir", "result", "proc")]       # the hub adds proc="ax25" to every edge series
         if extra:
             problems.append("%s carries unexpected labels %s" % (s.name, extra))
     return problems
@@ -250,13 +251,10 @@ _case("tx-without-tx-port", "tx = true but the only mapped port is receive only"
 _case("bad-name", "an upper case listener name", "name", _sub('name = "apps"', 'name = "Apps"'))
 _case("max-clients-9", "max_clients above 8", "max_clients", _sub("max_clients = 3", "max_clients = 9"))
 _case("max-hops-4", "max_hops above 3", "max_hops", _sub("max_hops = 2", "max_hops = 4"))
-_case("tx-burst-31", "tx_burst above 30", "tx_burst", _sub("tx_burst = 5", "tx_burst = 31"))
-_case("accept-loopback", "a loopback listen needs no allow_from", None, lambda t: t + '''
-[[edges.ax25.kiss_server]]
-name = "local"
-listen = "127.0.0.1:8210"
-ports = [{ name = "rf-a", channel = 0 }]
-''', verdict="accept")
+_case("tx-burst-31", "tx_burst above 30", "tx_burst", _sub("max_clients = 3\ntx_per_min = 30\ntx_burst = 5", "max_clients = 3\ntx_per_min = 30\ntx_burst = 31"))
+# the snippet already has four listeners: the loopback listener REPLACES `outside` (a fifth would be refused)
+_case("accept-loopback", "a loopback listen needs no allow_from", None,
+      _sub('listen = "<OWN_IP>:8204"\nallow_from = ["192.0.2.0/24"]', 'listen = "127.0.0.1:8204"'), verdict="accept")
 
 
 def config_problems(case, verdict, exit_code):

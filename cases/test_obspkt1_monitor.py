@@ -19,6 +19,7 @@ Shape: dp11e-kiss.toml + dp11e-kiss-igate.toml + dp15-aprsis.toml + dp15-rf-out.
 without the packets routes (404), without the shape, or without a prerequisite. NOT RUN ON A RIG. Observations: stdout and out/<run>/obspkt1.txt.
 """
 import json
+import os
 import sys
 import threading
 import time
@@ -29,7 +30,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "proto"))
 
-from dvtest import aprs_passcode, dp11e, kiss_app, kiss_tnc, obspkt1 as ob, txguard, web  # noqa: E402
+from dvtest import aprs_passcode, dp11e, kiss_app, kiss_tnc, logscan, obspkt1 as ob, txguard, web  # noqa: E402
 
 import data_support as ds  # noqa: E402
 import test_dp15_positions as p1  # noqa: E402
@@ -396,10 +397,6 @@ def test_obspkt1_e_no_packet_body_in_logs_public_state_other_routes_or_telemetry
     for m in markers:
         assert ob.mentions(traffic.rows, m), "the control: %s is not in the monitor" % m
     texts = {}
-    logs = Path(ctx.target.out) / "logs"
-    for path in sorted(logs.glob("*")) if logs.is_dir() else []:
-        if path.is_file() and "sut" in path.name:
-            texts["log:" + path.name] = path.read_text(encoding="utf-8", errors="replace")
     texts["public state"] = web_ctx.anon.get("/api/v1/public/state", expect=200).text()
     for route in ("/status", "/clients", "/events", "/lastheard"):
         ctx.admin.step_up()
@@ -409,8 +406,15 @@ def test_obspkt1_e_no_packet_body_in_logs_public_state_other_routes_or_telemetry
     leaks = ob.find_leaks(texts, markers)
     note(target, "OBSPKT1-e", "RECORD", "scanned %s (%d bytes); leaks: %s" % (sorted(texts), sum(len(t) for t in texts.values()), leaks))
     assert not leaks, "a packet body appears outside the monitor: %s" % leaks
-    if not any(k.startswith("log:") for k in texts):
-        pytest.skip("no SUT log under %s/logs was scanned (the other texts are clean)" % ctx.target.out)
+    # The SUT logs are collected on the host after pytest ends: here the needles are left for `python3 -m dvtest.logscan out/<run>`
+    # (exit 0 = clean), or the logs are scanned at once when they are readable.
+    state, found, looked = logscan.request(ctx.target.out, "OBSPKT1-e", markers)
+    if state == "scanned":
+        note(target, "OBSPKT1-e", "RECORD", "SUT log scanned here: %d line(s), hits %s" % (looked, {os.path.basename(k): v for k, v in found.items()}))
+        assert not found, "a packet body appears in the SUT log: %s" % found
+        return
+    note(target, "OBSPKT1-e", "RECORD", "the SUT log is not readable in the case; needle file %s" % found)
+    pytest.skip("the other texts are clean; the SUT log is collected after the run: run `%s` on the host (needles in %s)" % (logscan.command_for(ctx.target.out), found))
 
 
 # ================================================================ OBSPKT1-f: no fresh step-up

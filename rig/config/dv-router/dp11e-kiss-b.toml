@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Snippet for DVT_SUT_CONFIG_EXTRA (docs/dp11e-cases.md): shape B of cases/test_dp11e_kiss.py, the KISS listeners that do not fit in the four of
 # dp11e-kiss.toml: the loopback bind, the listener packet bucket and a SIMULATED port. Use it INSTEAD of dp11e-kiss.toml (both define [edges.ax25]).
+# tx_budget = { duty_pct = 20, per_source_pct = 100 } on both ports, as in dp11e-kiss.toml (the class defaults hold only about four position frames per 600 s).
 # The same station N0TEST-1, rf-a transmits (tx = true) and rf-b only SIMULATES (tx = "simulate": same gates and scheduler, counted
 # dv_edge_rf_tx_total{result=simulated}, no modem byte; the physical is shared as in dp18-rf.toml).
 #
@@ -23,7 +24,7 @@ tx = true
 physical = "radio1"
 band = "2m"
 class = "afsk1200-shared"
-tx_budget = {}
+tx_budget = { duty_pct = 20, per_source_pct = 100 }
 tx_per_min = 30
 tx_burst = 5
 reconnect = { min_secs = 1, max_secs = 5 }
@@ -38,7 +39,7 @@ tx = "simulate"
 physical = "radio1"
 band = "2m"
 class = "afsk1200-shared"
-tx_budget = {}
+tx_budget = { duty_pct = 20, per_source_pct = 100 }
 tx_per_min = 30
 tx_burst = 5
 reconnect = { min_secs = 1, max_secs = 5 }
