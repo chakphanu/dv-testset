@@ -457,6 +457,8 @@ POSITIONS_EMPTY_TEXT = "No retained positions in this room."
 BASEMAP_MANIFEST = "/basemap/MANIFEST"                          # MAP1 only: MAP2 does not serve it (404)
 BASEMAP_TILES_JSON = "/basemap/tiles.json"                      # MAP2c descriptor: 200 {"installed": false} without an install
 POSITIONS_COLUMNS = ["Callsign / object", "Latitude", "Longitude", "Precision", "Time (local)"]
+# DP6c (4ac79f26): two more columns after the time, one row per station or object (guard identity, SSID kept); the first five are unchanged
+POSITIONS_COLUMNS_DP6C = POSITIONS_COLUMNS + ["Weather", "Station details"]
 
 
 def positions_url():

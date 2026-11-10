@@ -203,6 +203,15 @@ def identity_matches(callsign, identity):
     return key(callsign) == key(identity)
 
 
+def identity_note(row, sent_call):
+    """A RECORD text for the identity of a row against the callsign the case sent: `dp6c=True` when the row has hops / forwarded, whether the
+    displayed callsign equals the sent one with its SSID (DP6c: the guard identity keeps SSID and suffix) and whether the base matches (always).
+    Never an assertion: the exact identity of an M17 / RF / D-STAR source (what the guard keeps of a source callsign) is read from the first run."""
+    shown = str(row.get("callsign", "")) if isinstance(row, dict) else ""
+    return "dp6c=%s; sent %r, row callsign %r, same identity %s, same base %s" % (
+        has_dp6c_fields(row), sent_call, shown, identity_matches(shown, sent_call), same_base(shown, sent_call))
+
+
 def check_public_rows_consistent(rows):
     """All rows of one read agree on the shape: either every row has hops and forwarded (DP6c) or none does. Raises AssertionError."""
     flags = {has_dp6c_fields(r) for r in rows if isinstance(r, dict)}

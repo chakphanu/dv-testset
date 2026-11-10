@@ -338,3 +338,10 @@ def test_annex_rows_are_not_spatial_rows():
     assert len(ps.state_rows(state)) == 3
     assert len(ps.spatial_rows(ps.state_rows(state))) == 1                 # position selectors ignore types 5 and 6
     assert ps.ANNEX_TYPES == ("weather", "telemetry")
+
+
+def test_identity_note_never_asserts():
+    assert "dp6c=True" in ps.identity_note(dp6c("N0PAD-7"), "N0PAD-7") and "same identity True" in ps.identity_note(dp6c("N0PAD-7"), "n0pad-7")
+    old = ps.identity_note(row("N0PAD"), "N0PAD-7")
+    assert "dp6c=False" in old and "same identity False" in old and "same base True" in old
+    assert "same base False" in ps.identity_note({"callsign": "N0XXX"}, "N0PAD-7") and "''" in ps.identity_note("x", "N0PAD")

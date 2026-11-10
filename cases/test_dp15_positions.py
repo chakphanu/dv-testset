@@ -776,7 +776,8 @@ def test_dp7_d_object_kill_is_coordinate_free(rig, target, hub, web_ctx, shape):
         assert_visible(live, case + " live object")
         ps.check_position(live.state, source=5, ambiguity=0)
         assert live.state["body"].get("state") == 1 and str(live.state["body"].get("name")).strip() == OBJECT_NAME, live.state
-        note(target, case, "RECORD", "live object row: %s" % {k: live.state.get(k) for k in ("callsign", "protocol", "ident", "via")})
+        note(target, case, "RECORD", "live object row: %s" % {k: live.state.get(k) for k in ("callsign", "protocol", "ident", "via", "hops", "forwarded")})
+        note(target, case, "RECORD", "identity (DP6c keeps the SSID in the row callsign): %s" % ps.identity_note(live.state, call + "-7"))
         t_kill = time.monotonic()
         send_m17_object(ctx, call + "-7", ps.LAT, ps.LON, name=OBJECT_NAME, live=False)
         hit = fd.pub.wait_data(spatial_pred(call, "object", OBJECT_NAME, state=0), ps.PUBLIC_WAIT_S, since=t_kill)
