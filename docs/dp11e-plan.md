@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # DP11e plan: a headless KISS-TCP client for the KISS server of DV-Router
 
-Status: plan and client helper only. **No rig case is written**: the case list below waits for DV-Router to confirm the design is final.
+Status: plan and client helper only. **No rig case is written**: the case list below waits for the sha of the merged design document. The four DV-Router decisions of 2026-11-10 (section 1a) are folded in.
 Design under test: DV-Router's `design-233-dp11e.md` (read only, cited by name; its numbered sections are written "design 1" to "design 11" below).
 DP11e puts a KISS TCP server into `dv-edge-ax25` (`[[edges.ax25.kiss_server]]`): an APRS app uses the node as its TNC.
 Helper: `dvtest/kiss_app.py` (`AppKissClient`, `aprsdroid_frames`, `aprsdroid_init_bytes`, `AprsdroidReader`, `pinpoint_tx`), unit tests `cases/unit/test_kiss_app.py`.
@@ -45,6 +45,14 @@ whether the Google Play build equals master is not checked; the third-party guid
 4. **Default port 14580** when the app's host has no `:port`: an operator typing only a host reaches whatever listens on 14580. Documentation point for the operator page.
 5. **PinPoint** transmits on a KISS TX port that can be 0-15: with a one-port listener mapped to channel 0 any other TX port is refused `channel` (design 4/8); worth a line in the operator docs.
 
+### 1a. DV-Router decisions on these findings (recorded 2026-11-10, relayed by the lead; they change the design text, the merged document is not yet seen)
+
+1. **Idle keepalive.** New listener key `keepalive_secs` (0 to 300, default 60): the server writes a lone `FEND` to each idle client; 0 disables it. The operator documents will tell APRSdroid users
+   to use the listener port (not 14580) and that the app's timeout `0` also works. (Finding 1 above is answered; the 120 s of the app and the 60 s default leave a margin of two keepalives.)
+2. **Bytes outside a FEND frame** (APRSdroid `kiss.init` ASCII lines) are ignored and the client is NOT closed.
+3. **A listener maps to channel 0.** A frame on another channel is refused and counted `channel`.
+4. **The sample source** is an SSID of the station call in `allow_src`; `N0TEST-7` is fine (open point 1 below is closed).
+
 ## 2. The client helper (`dvtest/kiss_app.py`)
 
 Stdlib, reuses `dvtest/ax25.py` framing (`kiss_encode`, `KissDecoder`) and `dvtest/kiss_tnc.py` `ui_frame`. It is an APP: it connects to the server, it does not listen.
@@ -57,6 +65,7 @@ Running it against the node would be a host-side one-off container on the rig ne
 | `closed_at`, `wait_closed`, `bytes_received` | refused/kicked/stalled clients, "zero bytes" as a counter |
 | `send_frame(channel)`, `send_command`, `send_text`, `send_raw`, `send_split` | frames, the ignored commands (design 7), init text, partial writes |
 | `pause_reading` / `resume_reading` | slow client drop and write stall (design 7) |
+| `lone_fends()`, `fend_intervals()`, `max_silence()`, `would_time_out()`, `byte_times` | the idle keepalive (decision 1): lone FEND bytes with their times, the period, the longest silence, and whether an app with a 120 s read timeout would have dropped the link. A chunk made only of FEND bytes between frames is a keepalive; the opening FEND of a frame written in a separate segment is indistinguishable from one (documented in the helper) |
 | `aprsdroid_frames`, `aprsdroid_init_bytes`, `AprsdroidReader`, `pinpoint_tx` | app models taken from the code and documents cited above |
 
 ## 3. Case plan (to write when the design is final)
@@ -71,9 +80,9 @@ Run shapes: the fake KISS modem of RF tier A (`cases/test_dp15_rf.py` `rf` fixtu
 | Refusal order and labels: `tx_off`, `tx_addr`, `channel`, `bad_frame`, `not_ui`, `src`, `path` (used H bit, `TCPIP`, `qA*`, hops over `max_hops`), `too_long` (info over 256 B), `third_party` (`}`), `rate` (listener bucket) | 5, 8 | counters `dv_edge_kiss_frames_total{dir=in,result}`, silence at the fake TNC | the order of two simultaneous defects is visible only as the first counted result |
 | Simulate port: `simulated`, no byte at the modem | 5 | `dv_edge_rf_tx_total{result=simulated}`, silence at the fake TNC | the PTT token (fabric key, as in DP18-s) |
 | Commands ignored (TXDELAY, P, SlotTime, TXtail, FullDuplex, SetHardware, 0xFF), counted `command`; the modem parameters are not touched | 7 | counter; the fake TNC saw no new parameter frame | |
-| Init text before the first frame is absorbed; the next frame is served | 7 | `aprsdroid_init_bytes` then a frame | whether the text counts as `bad_frame` or `command` |
+| **Init lines** (decision 2): APRSdroid-like ASCII lines (`aprsdroid_init_bytes`, with the 300 ms delay between lines) then a frame: the lines are ignored, the connection stays open, the frame is served (at the modem with `tx = true`), and a second client on the listener is unaffected | 7 | `AppKissClient.send_text`, `is_open`, fake TNC frame, counters | whether the ignored text moves any counter (recorded, not asserted) |
 | Partial frames (split writes), 1100 B limit, FEND recovery, bad escape | 7 | `send_split`, oversized frame | the exact counter for each |
-| Allowed/refused peer: `allow_from` checked before any byte is read, `refused_addr` | 3 | two listeners, the tester inside and outside the CIDR: closed at once, zero bytes, counter | a second source address on the tester: none in the rig (an alias address as the T5n case would be a new rig piece) |
+| **allow_from with two listeners** (design 3): listener A with `allow_from` = a CIDR that includes the tester's rig address, listener B with a CIDR that does not (the rig address of another service); the tester connects to both: A serves, B closes at once with zero bytes (`wait_closed`, `bytes_received == 0`) and `dv_edge_kiss_clients_total{port=B,result=refused_addr}` grows. A non-loopback `listen` is needed (the tester is not in the SUT's namespace), so `tx` stays false on both | 3 | two `AppKissClient`, counters, the gauge | a second source address on the tester: none in the rig (an alias address as the T5n case would be a new rig piece) |
 | `tx_from`: an RX-allowed peer cannot transmit (`tx_addr`) | 3, 5 | counter, silence at the modem | |
 | `max_clients`: the next client is refused `full` | 7 | `wait_closed`, counter, gauge `dv_edge_kiss_clients` | |
 | Slow client: output queue 64 frames / 64 KiB, newest dropped `slow`; 30 s write stall closes (`stalled`) | 7 | `pause_reading`, a burst of injected frames, counters, `closed_at` | queue depth itself |
@@ -83,13 +92,18 @@ Run shapes: the fake KISS modem of RF tier A (`cases/test_dp15_rf.py` `rf` fixtu
 | Config validation: non-loopback `listen` without `allow_from`, duplicate `listen`, `tx = true` without a TX port, `allow_src` base unequal to the station base, `tnc2` ports | 2 | launcher config check text per fixture (host side, `--network none`) | |
 | Start log: bind, ports, TX state, allowed sources, never a peer address or frame content | 2 | scan `out/<run>/logs` after a run with clients for the tester's address | |
 | APRSdroid script (`kiss-server-aprsdroid` of design 9): init text, `=` position, `:` message from `N0TEST-7` tocall `APDR16` path `WIDE1-1`; frames at the modem with tx true, `simulated` with simulate, `src` / `path` / `third_party` refusals counted, injected modem frames readable by `AprsdroidReader`, a non-allowed peer refused | 9 | all of the above | the real app is not run |
-| Silent channel for 150 s: the connection stays up and the app model sees no byte (the 120 s timeout finding above) | 7 | a client that closes at 120 s of silence, as the app does | whether DV-Router adds a keepalive is a design question |
-| Fuzz target `kiss_server` and Dire Wolf `kissutil` oracle | 9 | not a black-box case here | `kissutil` as a host-side one-off container is proposed in section 2 |
+| **Keepalive on** (decision 1): a listener with a SHORT `keepalive_secs` in the rig snippet (10 s proposed; the default is 60) and one idle client for 130 s, nothing injected at the modem: the client is not dropped (`is_open`), at least two lone FENDs arrive (about 12 at 10 s), their intervals are close to the configured period (recorded; the check allows +-30 %), and `would_time_out(120)` is false | 7 | `lone_fends`, `fend_intervals`, `max_silence`, `would_time_out` | the exact timer jitter of the server |
+| **Keepalive off**: the same 130 s on a listener with `keepalive_secs = 0` and an idle client: zero FEND bytes and zero bytes in all (`bytes_received == 0`, `lone_fends() == []`); the connection is not closed by the server; `would_time_out(120)` is TRUE (the app model shows why the app's own timeout must then be 0) | 7 | same | |
+| **Keepalive never inside a frame**: a frame injected while the client idles is delivered whole and a keepalive is never inserted inside it | 7 | `frames`, `AprsdroidReader` on the received bytes | |
+| **Channel** (decision 3): a frame on channel 1 or higher (PinPoint TX port 3, `pinpoint_tx`) is refused, `dv_edge_kiss_frames_total{dir=in,result=channel}` grows, nothing at the modem; a channel-0 frame right after is served; modem frames reach the client on channel 0 only and `AprsdroidReader` takes them | 4, 8 | counters, fake TNC, `AprsdroidReader` | |
+| **kissutil oracle** (design 9, slow tier): Dire Wolf's `kissutil` (already built into `dvt-direwolf:local`, no install) as a host-side one-off container on the rig network, run against a listener: it connects, its transmit file produces one frame at the modem with `tx = true`, and a frame injected at the modem appears in its TNC2 view | 9 | container output and the fake TNC | a docker run from the case needs `dvtest.limits.docker_run_args()` and the rig network name; nothing is pulled |
+| Fuzz target `kiss_server` | 9 | not a black-box case here | |
 
 Not observable black-box, whatever the design: the sans-IO core, the admission code shared with `enqueue`, the exact scheduler class and the per-listener quota key `kiss/<listener>` (only the effect on `dv_edge_rf_tx_total{result=dropped_quota}` is visible), `Nagle off`, TCP keepalive options, the `PTT` holder token.
 
-## 4. Open points for the DV-Router lead
+## 4. Open points
 
-* The design names the sample client source `N0CALL-7`; a station callsign for the node that also passes `allow_src` must have the same base, so the cases use `N0TEST-7` against the `N0TEST-1` / `N0TEST-5` rig callsign. (`N0CALL` as an AX.25 source is also refused by the igate rules.)
-* Is a keepalive FEND wanted (finding 1 above)? Without it the Android app, with its defaults, will reconnect every 2.5 minutes on a quiet channel.
-* Operator documentation for the host field of the apps: the app default port 14580 if no port is typed.
+* Closed by decision 4: the sample source is `N0TEST-7`, an SSID of the station base.
+* Closed by decision 1: the idle keepalive exists (`keepalive_secs`). The operator documents are to say: use the listener port, not 14580, and timeout `0` also works.
+* Still open: the config snippet names (a rig snippet with two listeners, `keepalive_secs` 10 and 0, `allow_from` per design 3) and the case file wait for the merged design document sha; no rig case is written before it.
+* Whether the ignored init text moves a counter (decision 2 says ignored): the case records it.

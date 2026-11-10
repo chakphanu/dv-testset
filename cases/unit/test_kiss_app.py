@@ -175,3 +175,45 @@ def test_pinpoint_tx_uses_the_chosen_kiss_port():
     assert kiss_app.pinpoint_tx(FRAME, 3)[1] == 0x30
     with pytest.raises(ValueError):
         kiss_app.pinpoint_tx(FRAME, 16)
+
+
+def test_lone_fends_are_counted_with_their_times_and_frames_are_not(server):
+    with kiss_app.AppKissClient("127.0.0.1", server.port) as client:
+        assert wait_for(lambda: len(server.conns) == 1)
+        t0 = time.monotonic()
+        for _ in range(3):
+            server.push(b"\xc0")
+            time.sleep(0.12)
+        server.push(ax25.kiss_encode(0, 0, FRAME))                         # a frame: its FENDs are delimiters, not keepalives
+        time.sleep(0.12)
+        server.push(b"\xc0")                                               # a keepalive after a frame
+        assert wait_for(lambda: len(client.lone_fends()) == 4)
+        assert len(client.lone_fends(t0)) == 4 and client.wait_frames(1, timeout=1.0)
+        gaps = client.fend_intervals()
+        assert len(gaps) == 3 and all(0.05 < g < 0.6 for g in gaps)
+        assert client.other_commands() == []
+
+
+def test_fends_inside_a_frame_split_across_reads_are_not_keepalives(server):
+    with kiss_app.AppKissClient("127.0.0.1", server.port) as client:
+        assert wait_for(lambda: len(server.conns) == 1)
+        framed = ax25.kiss_encode(0, 0, FRAME)
+        server.push(framed[:1])                                            # the opening FEND alone, then the rest: idle at the first chunk
+        time.sleep(0.15)
+        server.push(framed[1:])
+        assert client.wait_frames(1, timeout=1.0)
+        # the lone opening FEND of a slowly written frame IS indistinguishable from a keepalive: one is counted, documented
+        assert len(client.lone_fends()) <= 1
+
+
+def test_max_silence_and_the_app_timeout_model(server):
+    with kiss_app.AppKissClient("127.0.0.1", server.port) as client:
+        assert wait_for(lambda: len(server.conns) == 1)
+        start = time.monotonic()
+        time.sleep(0.4)
+        server.push(b"\xc0")
+        time.sleep(0.2)
+        end = time.monotonic()
+        assert client.max_silence(start, end) >= 0.35
+        assert client.would_time_out(0.3, start, end) and not client.would_time_out(5.0, start, end) and not client.would_time_out(0, start, end)
+        assert client.max_silence(end, end + 0.1) == pytest.approx(0.1, abs=0.01)

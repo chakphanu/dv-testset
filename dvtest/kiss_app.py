@@ -10,7 +10,10 @@ dvtest/kiss_tnc.py plays a TNC that the DV-Router AX.25 edge connects TO. DP11e 
 * `send_frame` (KISS data frame), `send_command` (TXDELAY, P, SlotTime, TXtail, FullDuplex, SetHardware, Return: the server must ignore them),
   `send_text` (the ASCII init lines APRSdroid writes to a TNC at connect), `send_raw`, `send_split` (a frame in pieces);
 * `pause_reading()` / `resume_reading()`: a client that stops reading, for the slow-client drop and the write stall of the server;
-* `frames()` / `wait_frames()`: the data frames the server delivered, with the KISS channel nibble and the arrival time.
+* `frames()` / `wait_frames()`: the data frames the server delivered, with the KISS channel nibble and the arrival time;
+* `lone_fends()` / `fend_intervals()` / `max_silence()` / `would_time_out()`: the idle keepalive of the server (a lone FEND byte written to an
+  idle client, DP11e `keepalive_secs`) with its timestamps, the longest stretch without any byte, and whether an app with a read timeout (APRSdroid:
+  `tcp.sotimeout`, 120 s) would have dropped the link.
 
 App models, taken from the apps' own code and documents (cited in docs/dp11e-plan.md): `aprsdroid_frames` builds what APRSdroid transmits,
 `aprsdroid_init_bytes` its optional TNC init string, `AprsdroidReader` how its KISS reader accepts frames (a data frame of channel 0 only),
@@ -31,6 +34,8 @@ class AppKissClient:
         self.source_ip, self.timeout = source_ip, timeout
         self.received = []                  # [(time.monotonic, channel, command, data)] in arrival order
         self.bytes_received = 0
+        self.byte_times = []                # [(time.monotonic, nbytes)] one entry per recv
+        self.fend_times = []                # [time.monotonic] of every lone FEND (a chunk of FEND bytes only, outside any frame)
         self.connected_at = None
         self.closed_at = None
         self.error = None                   # why connect() failed, else None
@@ -74,8 +79,12 @@ class AppKissClient:
             if not chunk:
                 break
             now = time.monotonic()
+            idle = not self._decoder.pending()
             frames = self._decoder.feed(chunk)
             with self.lock:
+                self.byte_times.append((now, len(chunk)))
+                if idle and chunk.count(ax25.FEND) == len(chunk):
+                    self.fend_times.extend([now] * len(chunk))                 # a keepalive: FEND bytes alone, between frames
                 self.bytes_received += len(chunk)
                 self.received.extend((now, ch, cmd, data) for ch, cmd, data, _first in frames)
                 self.lock.notify_all()
@@ -164,6 +173,31 @@ class AppKissClient:
         """[(arrival time, channel, frame bytes)] of the data frames (command 0) received at or after `since` (time.monotonic)."""
         with self.lock:
             return [(t, ch, data) for t, ch, cmd, data in self.received if cmd == 0 and t >= since]
+
+    def lone_fends(self, since=0.0):
+        """Times (time.monotonic) of the lone FEND bytes the server wrote while the client was idle. A chunk made only of FEND bytes, arriving
+        between frames, counts one per byte; the opening FEND of a frame arrives with the frame and is not counted. TCP may merge two writes
+        that are less than a read apart, which a keepalive of seconds never is."""
+        with self.lock:
+            return [t for t in self.fend_times if t >= since]
+
+    def fend_intervals(self, since=0.0):
+        """Seconds between consecutive lone FENDs (the keepalive period as seen by the client)."""
+        times = self.lone_fends(since)
+        return [round(b - a, 3) for a, b in zip(times, times[1:])]
+
+    def max_silence(self, start, end):
+        """The longest stretch in [start, end] (time.monotonic) with no byte received at all, from `start` to the first byte, between bytes
+        and from the last byte to `end`."""
+        with self.lock:
+            marks = sorted(t for t, _n in self.byte_times if start <= t <= end)
+        edges = [start] + marks + [end]
+        return max(b - a for a, b in zip(edges, edges[1:]))
+
+    def would_time_out(self, timeout_s, start, end):
+        """True when an app with a read timeout of `timeout_s` seconds (APRSdroid: tcp.sotimeout, default 120) would have dropped the link
+        somewhere in [start, end]: the longest silence is at least the timeout. A timeout of 0 means disabled."""
+        return bool(timeout_s) and self.max_silence(start, end) >= timeout_s
 
     def other_commands(self):
         """[(channel, command, data)] the server sent that are not data frames (a KISS server has no reason to)."""
