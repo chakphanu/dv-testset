@@ -340,6 +340,25 @@ def test_audit_chronological_handles_both_served_orders_and_ties():
     assert sr.audit_chronological({"items": []}) == [] and sr.audit_chronological(None) == []
 
 
+def test_audit_chronological_with_distinct_timestamps_in_either_order():
+    # OBSPKT1b (432cecc8): the completion record has its own ts_ms >= the requested record's; /audit is newest first, `limit` keeps the newest
+    oldest = [{"action": "config.reload", "result": "requested", "ts_ms": 10}, {"action": "config.reload", "result": "applied", "ts_ms": 15},
+              {"action": "config.reload", "result": "requested", "ts_ms": 20}, {"action": "config.reload", "result": "unchanged", "ts_ms": 20}]
+    newest_first = {"items": list(reversed(oldest))}
+    assert [i["result"] for i in sr.audit_chronological(newest_first)] == ["requested", "applied", "requested", "unchanged"]
+    assert [i["result"] for i in sr.audit_chronological({"items": oldest})] == ["requested", "applied", "requested", "unchanged"]
+    # a single record, and a tail whose first and last record share a ts_ms, keep the newest-first assumption
+    assert sr.audit_chronological({"items": oldest[:1]}) == oldest[:1]
+    same = {"items": [{"result": "b", "ts_ms": 7}, {"result": "a", "ts_ms": 7}]}
+    assert [i["result"] for i in sr.audit_chronological(same)] == ["a", "b"]
+
+
+def test_a_suppressed_count_does_not_disturb_the_reload_audit():
+    body = {"items": [{"action": "config.reload", "user": "ada", "result": "denied", "ts_ms": 30, "suppressed": 4},
+                      {"action": "config.reload", "user": "ada", "result": "denied", "ts_ms": 1}]}
+    assert sr.reload_audit(body, user="ada") == [("config.reload", "ada", "denied", None)] * 2
+
+
 def test_the_failure_of_the_first_rig_run_is_gone():
     # served newest first, as in out/20261110T112609Z: invalid, requested, applied, ..., then the five `ok` reloads of the SECRELOAD1 PUTs
     served = {"items": [{"action": "config.reload", "user": "admin", "result": r, "diff": {"changed": c}, "ts_ms": t} for r, c, t in [

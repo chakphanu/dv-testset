@@ -41,8 +41,9 @@ def problem(status, code, **extra):
 class Sut:
     """The fake admin service plus the launcher and the APRS-IS edge behind it."""
 
-    def __init__(self, path, fixture, has_route=True, password_login=False):
+    def __init__(self, path, fixture, has_route=True, password_login=False, model="old"):
         self.path, self.fixture, self.has_route, self.password_login = path, fixture, has_route, password_login
+        self.model, self.denied_at, self.suppressed = model, {}, {}
         self.running = path.read_text()
         self.pid, self.edge_restarts, self.other_restarts = 100, 0.0, 2.0
         self.inc, self.gen = 1, 3
@@ -56,8 +57,23 @@ class Sut:
         return self.running == self.fixture
 
     def audit(self, action, user, result, changed=None):
+        """Append one record. `model` is the audit behaviour: "old" (11e19ace: a request's records share one ts_ms, every denial is written) or
+        "new" (OBSPKT1b, 432cecc8: the completion record has its own ts_ms >= the requested one; 428/412 and role denials are coalesced per
+        session and route for 10 s, the next record carries `suppressed`)."""
         self.requests = getattr(self, "requests", 0) + (1 if result == "requested" or action != "config.reload" else 0)
-        item = {"action": action, "user": user, "result": result, "role": "admin", "target": "x", "remote": "r", "ts_ms": 1000 + self.requests}
+        ts = 1000 + self.requests
+        if self.model == "new":
+            ts = int(self.clock[0] * 1000) + self.requests * 10 + (5 if result in ("applied", "unchanged", "invalid") else 0)
+            if result == "denied":
+                key = (user, action)
+                last = self.denied_at.get(key)
+                if last is not None and self.clock[0] - last < 10.0:
+                    self.suppressed[key] = self.suppressed.get(key, 0) + 1
+                    return
+                self.denied_at[key] = self.clock[0]
+        item = {"action": action, "user": user, "result": result, "role": "admin", "target": "x", "remote": "r", "ts_ms": ts}
+        if self.model == "new" and result == "denied" and self.suppressed.pop((user, action), 0):
+            item["suppressed"] = 1
         if changed is not None:
             item["diff"] = {"changed": changed}
         self.audit_items.append(item)
@@ -214,8 +230,9 @@ def build(monkeypatch, tmp_path, **kw):
     return ctx, sut
 
 
-def test_main_case_follows_the_documented_reload_routes(monkeypatch, tmp_path):
-    ctx, sut = build(monkeypatch, tmp_path)
+@pytest.mark.parametrize("model", ["old", "new"])
+def test_main_case_follows_the_documented_reload_routes(monkeypatch, tmp_path, model):
+    ctx, sut = build(monkeypatch, tmp_path, model=model)
     case.test_secreload2_preview_and_reload_apply_a_replaced_secret(ctx.target, None, ctx)
     assert sut.edge_restarts == 2.0 and len(sut.posts) == 4 and sut.history == []
     assert ctx.path.read_text() == "4242\n" and oct(ctx.path.stat().st_mode & 0o777) == "0o600"
@@ -249,14 +266,17 @@ def test_main_case_fails_when_the_reload_edits_the_toml_or_ignores_the_secret(mo
     monkeypatch.setattr(Client, "post", original)
 
 
-def test_guards_case_follows_the_documented_refusals(monkeypatch, tmp_path):
-    ctx, sut = build(monkeypatch, tmp_path)
+@pytest.mark.parametrize("model", ["old", "new"])
+def test_guards_case_follows_the_documented_refusals(monkeypatch, tmp_path, model):
+    ctx, sut = build(monkeypatch, tmp_path, model=model)
     case.test_secreload2_guards_and_preconditions(ctx.target, None, ctx, Sessions(sut))
     assert sut.posts == [] and sut.pid == 100
     denied = [(i["action"], i["user"]) for i in sut.audit_items if i["result"] == "denied"]
     for user in ("vic", "otto"):
         assert ("config.reload.preview", user) in denied and ("config.reload", user) in denied
-    assert [i["result"] for i in sut.audit_items if i["user"] == "ada" and i["action"] == "config.reload"] == ["denied"] * 5
+    ada = [i["result"] for i in sut.audit_items if i["user"] == "ada" and i["action"] == "config.reload"]
+    # the five refused If-Match probes: one record per probe before OBSPKT1b, coalesced per session and route (10 s) after it; at least one either way
+    assert ada == ["denied"] * 5 if model == "old" else ada == ["denied"]
     assert ("step_up", "ada") in [(i["action"], i["user"]) for i in sut.audit_items if i["result"] == "denied"]
     assert sut.clock[0] >= 305.0          # no session without a step-up window exists: the case waited out the 5 minutes
 

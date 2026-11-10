@@ -97,6 +97,12 @@ Audit (`GET /api/v1/admin/audit`, served NEWEST FIRST: `Audit::tail` reverses th
 the key names), or `denied` for a missing / stale / weak `If-Match`; a session below admin is `config.reload` / `config.reload.preview` `denied`. Repeated denials of one kind
 inside the denial interval are collapsed (`suppressed`), so the case asserts that a denied record exists, not how many.
 
+OBSPKT1b (merged as `432cecc8`, in the image after wip-16e8e6c) changes the audit in ways the case is written to survive: `GET /audit` and `/audit/logins` are both newest first and `limit` keeps the newest;
+the completion record of a reload has its own `ts_ms` (>= the requested record's, no longer equal); 428 / 412 reload denials are coalesced per session and route for 10 s and the next record carries `suppressed`.
+`dvtest.secret_reload.audit_chronological` reverses the tail whenever the first record is not older than the last (distinct stamps in either order, ties as before); the G checks assert at least one `denied`
+record per refused session and tolerate `suppressed`; the case reads only `/audit` (nothing reads `/audit/logins`). The unit tests run both cases against a fake admin service in both audit models ("old": one `ts_ms` per request,
+every denial written; "new": distinct stamps, coalescing).
+
 ### Cases (same file, same fixtures as SECRELOAD1; the second case needs no throwaway value)
 
 The secret kind is the APRS-IS passcode file, as in the first case, NOT a node-link account key: the rig has no node-link client (a Python implementation of the link v1
