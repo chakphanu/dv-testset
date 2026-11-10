@@ -43,8 +43,8 @@ unit test `cases/unit/test_coverage_matrix.py` runs it).
 | Built-in echo (ECHO1) | 27 | 19 | 2 | 6 | 0 |
 | Echo return integrity E9 (D-STAR kinds) | 14 | 13 | 1 | 0 | 0 |
 | Real-transcoder cross-mode audio into YSF (related to ECHO1) | 3 | 3 | 0 | 0 | 0 |
-| DP15 (APRS / AX.25 / KISS data path) | 70 | 50 | 5 | 15 | 0 |
-| **Total** | **1220** | **766** | **275** | **171** | **8** |
+| DP15 (APRS / AX.25 / KISS data path) | 84 | 62 | 6 | 16 | 0 |
+| **Total** | **1234** | **778** | **276** | **172** | **8** |
 <!-- summary:end -->
 
 ## Top 15 gaps (ranked by how much real-world traffic they touch)
@@ -1456,6 +1456,20 @@ Sources: dp15-cases.md.
 | DP18-o several RF objects on afsk1200-shared: releases spread, drops counted and not always the same object (the second half recorded only) | dp18-cases.md "DP18-o" | `test_dp18_rf::test_dp18_o_object_copies_are_spread_and_drops_are_counted` | rig | a | PARTIAL |
 | DP12c radio port with `tx = "simulate"` never keys PTT or sends audio (no radio ports in the rig) | dp18-cases.md "Limits" | - | - | - | GAP |
 | DP12c the `rf/<physical>/ptt` token of a simulated port is never declared (not observable black-box) | dp18-cases.md "Limits" | `test_dp18_rf::test_dp18_s_a_simulated_port_never_reaches_its_tnc` (counters and silence only) | rig | a | PARTIAL |
+| DP11e `listen` is required and a non-loopback bind needs `allow_from` (and 15 more `kiss_server` config rules) | dp11e-cases.md "config" | `test_dp11e_config::test_dp11e_config` | cfgload | - | OK |
+| DP11e the default bind is loopback (not reachable from another host) | dp11e-cases.md "DP11e-k" | `test_dp11e_kiss::test_dp11e_k_a_loopback_listener_is_not_reachable_from_another_host` | rig | a | OK |
+| DP11e a peer outside `allow_from` is closed before any byte; the fourth client of three is refused | dp11e-cases.md "DP11e-c" | `test_dp11e_kiss::test_dp11e_c_a_peer_outside_allow_from_is_closed_before_any_byte`, `test_dp11e_kiss::test_dp11e_c_the_fourth_client_of_three_is_refused_full` | rig | a | OK |
+| DP11e client TX only from `tx_from`, with a source in `allow_src`, channel mapping, path, size, third-party and command refusals, each with its label | dp11e-cases.md "DP11e-b" | `test_dp11e_kiss::test_dp11e_b_each_refusal_label_is_counted`, `test_dp11e_kiss::test_dp11e_b_only_the_control_reaches_the_modem_as_sent` | rig | a | OK |
+| DP11e ASCII outside frames is ignored and does not close the client | dp11e-cases.md "DP11e-a" | `test_dp11e_kiss::test_dp11e_a_ascii_outside_frames_is_ignored` | rig | a | OK |
+| DP11e the lone-FEND keepalive, on and off | dp11e-cases.md "DP11e-d" | `test_dp11e_kiss::test_dp11e_d_keepalive_on_and_off` | rig | a | OK |
+| DP11e UI/F0 fan-out to other clients with the mapped channel, no echo to the sender | dp11e-cases.md "DP11e-e" | `test_dp11e_kiss::test_dp11e_e_fan_out_to_every_client_with_the_mapped_channel_and_no_echo` | rig | a | OK |
+| DP11e client frames never reach APRS-IS or rooms | dp11e-cases.md "DP11e-g" | `test_dp11e_kiss::test_dp11e_g_client_frames_never_reach_aprs_is_or_rooms` | rig | b:aprsc | OK |
+| DP11e sessions `kiss_client`, kick, no peer address or content in the log | dp11e-cases.md "DP11e-h" | `test_dp11e_kiss::test_dp11e_h_sessions_are_listed_and_kick_closes_the_client`, `test_dp11e_kiss::test_dp11e_h_the_sut_log_has_no_peer_address_and_no_frame_content` | rig | a | OK |
+| DP11e slow client (`slow`) and write stall (`stalled`) | dp11e-cases.md "DP11e-i" | `test_dp11e_kiss::test_dp11e_i_a_slow_client_loses_the_newest_frames_and_a_stalled_one_is_closed` | rig | a | OK |
+| DP11e edge restart closes clients and the first frame meets the RFSAFE1 guard | dp11e-cases.md "DP11e-j" | `test_dp11e_kiss::test_dp11e_j_an_edge_restart_closes_clients_and_the_first_frame_meets_the_guard` | rig | a | OK |
+| DP11e listener bucket `rate`; simulated port without modem byte | dp11e-cases.md "DP11e-l" | `test_dp11e_kiss::test_dp11e_l_the_listener_bucket_counts_rate`, `test_dp11e_kiss::test_dp11e_m_a_simulated_port_counts_simulated_and_writes_no_modem_byte` | rig | a | OK |
+| DP11e TTL-less client frames are counted `disabled` (not reachable with a valid configuration: only absence is checked) | dp11e-cases.md "Limits" | `test_dp11e_kiss::test_dp11e_z_no_admission_is_counted_disabled` | rig | a | PARTIAL |
+| DP11e loopback peers are accepted and `tx_from` defaults to loopback (the tester is not in the SUT namespace) | dp11e-cases.md "Limits" | - | - | - | GAP |
 | DP15-8w RF-heard positionless weather is gated to the private aprsc once, `qAR` + igate call, path as heard, information byte-identical (`qAO` receive-only) | dp15-cases.md "RF to APRS-IS igate" | `test_dp15_igate::test_dp15_8w_rf_weather_is_gated_with_qar` | rig | b:aprsc | OK |
 | DP15-8t RF-heard telemetry `T#` is gated the same way | dp15-cases.md "RF to APRS-IS igate" | `test_dp15_igate::test_dp15_8t_rf_telemetry_is_gated_with_qar` | rig | b:aprsc | OK |
 | DP15-8q RF-heard general query `?APRS?` is never gated (bounded window from the run's latency, control frame) | dp15-cases.md "RF to APRS-IS igate" | `test_dp15_igate::test_dp15_8q_rf_general_query_is_not_gated` | rig | b:aprsc | OK |

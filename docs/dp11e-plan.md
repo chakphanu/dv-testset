@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # DP11e plan: a headless KISS-TCP client for the KISS server of DV-Router
 
-Status: plan and client helper only. **No rig case is written**: the case list below waits for the sha of the merged design document. The four DV-Router decisions of 2026-11-10 (section 1a) are folded in.
+Status: DP11e is merged in DV-Router (`cfa765a`). The rig cases are written (offline) in [dp11e-cases.md](dp11e-cases.md), which also lists the drift of this plan against the merged text; this document keeps the research on the apps (section 1) and the first case plan. The four DV-Router decisions of 2026-11-10 (section 1a) are folded in.
 Design under test: DV-Router's `design-233-dp11e.md` (read only, cited by name; its numbered sections are written "design 1" to "design 11" below).
 DP11e puts a KISS TCP server into `dv-edge-ax25` (`[[edges.ax25.kiss_server]]`): an APRS app uses the node as its TNC.
 Helper: `dvtest/kiss_app.py` (`AppKissClient`, `aprsdroid_frames`, `aprsdroid_init_bytes`, `AprsdroidReader`, `pinpoint_tx`), unit tests `cases/unit/test_kiss_app.py`.

@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (docs/dp11e-cases.md, DP11e-g): the whole-packet RF-to-APRS-IS transit path from rf-a, so that "a client frame never
+# reaches APRS-IS" has a live path to be absent from: a frame HEARD on rf-a (the fake modem injects it) reaches the private aprsc as the control, a frame
+# a KISS client TRANSMITS never does. ONLY with dp11e-kiss.toml and dp15-aprsis.toml (the launcher refuses a path whose endpoint is not enabled).
+[[data.path]]
+name = "dp11e-igate"
+from = "edge:ax25/rf-a"
+to = "edge:aprsis"
+types = ["transit"]
+per_min = 20
