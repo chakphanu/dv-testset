@@ -186,8 +186,11 @@ def test_dp6c_3_hide_position_removes_every_ssid_and_every_kind(rig, target, hub
         set_hide_position(web_ctx, base, False)
         time.sleep(3.0)
         sp.send_rf(rf, base + "-13", aprs.weather_position_info(LAT_E7 + 2000, LON_E7, 45, 3, 4, 55, **WX), kinds=("position", "weather"))
-        again = sp.wait_row(web_ctx.anon(), base + "-13", "weather")
-        assert again is not None and again["body"].get("temp_f") == 55, "after clearing the flag a new weather report of %s is not public: %s" % (base, again)
+        # the row admitted BEFORE the hide may come back while it is still retained (data.md 13.4: "one admitted earlier may return"), so wait for the NEW report (temp 55 F)
+        hits, _rows = sp.wait_map(web_ctx.anon(), lambda rows: [r for r in dp6c.station_rows(rows, base + "-13", "weather") if r["body"].get("temp_f") == 55])
+        old = sp.wait_row(web_ctx.anon(), base + "-13", "weather", timeout=1.0)
+        sp.note(target, case, "RECORD", "after clearing the flag: the new weather report is public: %s; the weather row now shown has temp_f %s" % (bool(hits), None if old is None else old["body"].get("temp_f")))
+        assert hits, "after clearing the flag a new weather report of %s is not public: the row shown is %s" % (base, old)
     finally:
         try:
             set_hide_position(web_ctx, base, False)

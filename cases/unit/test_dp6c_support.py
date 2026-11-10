@@ -214,6 +214,13 @@ def test_optout_counters_wait_for_every_kind_and_the_room_counter(monkeypatch):
     hub.bump("dv_room_data_total", result="optout")
     assert counters.wait(timeout=0.0) == ({"weather": 1, "telemetry": 1}, 2, True)
     assert counters.wait(minimum=2, timeout=0.0)[2] is False
+    # a private locator status is withheld by the worker: the controller counter stays 0 and DP19 does not wait for it
+    hub = FakeHub()
+    status = sp.OptoutCounters(hub, ("status",))
+    for _ in range(4):
+        hub.bump("dv_pkt_items_total", kind="status", result="optout")
+    assert status.wait(minimum=4, timeout=0.0) == ({"status": 4}, 0, False)                     # with the room counter required it never completes
+    assert status.wait(minimum=4, timeout=0.0, room_required=False) == ({"status": 4}, 0, True)
 
 
 def test_status_helpers_select_by_base_and_word():
@@ -351,3 +358,11 @@ def test_the_identity_rules_agree_with_the_position_helpers():
     for shown, want in (("N0WXA-13", "N0WXA-13"), ("n0wxa-13 ", "N0WXA-13"), ("N0WXA-13 extra", "N0WXA-13"), ("N0WXA", "N0WXA-13"), ("N0WXA-9", "N0WXA-13")):
         assert (dp6c.identity_key(shown) == dp6c.identity_key(want)) == ps.identity_matches(shown, want), (shown, want)
     assert [r["item_type"] for r in dp6c.annex_rows([row("N0WXA-13 x", "weather"), row("N0WXA", "weather")], "N0WXA-13")] == ["weather"]
+
+
+def test_the_config_check_stand_in_for_the_aprsis_passcode_file_is_a_valid_passcode():
+    import test_dp6c_config as tc
+    from dvtest import aprs_passcode
+    assert tc.stand_in_content("/etc/dv-router/aprs-secrets/passcode") == "%d\n" % aprs_passcode.aprs_passcode(aprs_passcode.DVR_LOGIN)
+    assert int(tc.stand_in_content("/x/passcode")) >= 0                                          # numeric, as the router validates its content
+    assert tc.stand_in_content("/etc/dv-router/web/password") == "standin\n"

@@ -10,11 +10,13 @@ throw-away container (`--network none`).
 """
 import json
 import os
+import tempfile
 from pathlib import Path
 
 import pytest
 
-from dvtest import dp6c, sut_config
+from dvtest import aprs_passcode, dp6c, sut_config
+from dvtest.tools import config_check
 
 import test_config_load as tcl
 
@@ -24,6 +26,31 @@ ROOT = Path(__file__).resolve().parents[1]
 SNIPPETS = ROOT / "rig" / "config" / "dv-router"
 BASE_FILES = ("data-ident.toml", "dp15-aprsis.toml", "dp6c-aprsis-filter.toml")
 MUTATED = SNIPPETS / "dp6c-aprsis-wx.toml"
+
+
+def stand_in_content(inside):
+    """What the config check reads from the file at `inside`. The generic stand-in (`standin`) is refused for the APRS-IS passcode file: the router validates its CONTENT
+    (`invalid APRS-IS passcode file content`), so it gets the fixture passcode of the DV-Router login, as run.sh writes it (dvtest/aprs_passcode.py --dvr)."""
+    if os.path.basename(inside) == "passcode":
+        return "%d\n" % aprs_passcode.aprs_passcode(aprs_passcode.DVR_LOGIN)
+    return "standin\n"
+
+
+def run_config_check(image, text):
+    """(verdict, exit code) of `dv-router config check` on `text`, as cases/test_config_load.py run_config_check, with stand-ins of the right content."""
+    with tempfile.TemporaryDirectory(prefix="dvt-cfgload-") as tmp:
+        path = os.path.join(tmp, "dv-router.toml")
+        Path(path).write_text(text, encoding="utf-8")
+        os.chmod(path, 0o644)
+        stand_ins = []
+        for n, inside in enumerate(config_check.secret_file_paths(text)):
+            host = os.path.join(tmp, "secret-%d" % n)
+            Path(host).write_text(stand_in_content(inside), encoding="utf-8")
+            os.chmod(host, 0o600)
+            stand_ins.append((host, inside))
+        lines, code = config_check.run_check(image, path, tcl.NET, timeout_s=60.0, stand_ins=stand_ins, mode="check")
+    assert lines, "the container printed nothing (is %s present?)" % image
+    return config_check.judge_check(lines, code), code
 
 
 @pytest.fixture(scope="module")
@@ -61,7 +88,7 @@ def results():
 def test_dp6c_config(case, image, template, results):
     extras = [(SNIPPETS / name).read_text(encoding="utf-8") for name in BASE_FILES] + [case.mutate(MUTATED.read_text(encoding="utf-8"))]
     rendered = sut_config.render(template, tcl.NET, extras=extras, gen=sut_config.COMPAT1)
-    verdict, code = tcl.run_config_check(image, rendered)
+    verdict, code = run_config_check(image, rendered)
     assert "aprsis-wx" in rendered, "the snippet did not reach the rendered file"
     problems = dp6c.config_problems(case, verdict, code)
     first = (verdict.get("parsed") or [None])[0]

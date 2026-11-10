@@ -67,9 +67,10 @@ def test_dp19_a_locator_status_is_dropped_for_a_private_base(rig, target, hub, w
     with sp.feeds(web_ctx) as fd:
         for n, (name, info) in enumerate(sorted(valid.items())):
             send_status(rf, "%s-%d" % (base, 3 + n), info)
-        items, room, reached = counters.wait(minimum=len(valid))
-        sp.note(target, case, "RECORD", "optout counters for kind status: %s, dv_room_data_total +%s (%d valid locator statuses sent)" % (items, room, len(valid)))
-        assert reached, "the valid locator statuses of the private base %s were not all denied/13: %s / %s" % (base, items, room)
+        items, room, reached = counters.wait(minimum=len(valid), room_required=False)
+        sp.note(target, case, "RECORD", "optout counters for kind status: %s, dv_room_data_total +%s (%d valid locator statuses sent; the worker withholds a private locator status "
+                "before submission, so the controller counter does not move)" % (items, room, len(valid)))
+        assert reached, "the valid locator statuses of the private base %s were not all withheld (dv_pkt_items_total{kind=status,result=optout}): %s / controller %s" % (base, items, room)
         # the look-alikes and the plain status are ordinary statuses of the same base
         controls = dict(lookalikes, plain=">On the air plainword")
         missing = []

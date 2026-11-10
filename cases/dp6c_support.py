@@ -120,12 +120,14 @@ class OptoutCounters:
         return {k: self.hub.total("dv_pkt_items_total", kind=k, result="optout") - self.items[k] for k in self.kinds}, \
             self.hub.total("dv_room_data_total", result="optout") - self.room
 
-    def wait(self, minimum=1, timeout=COUNTER_WAIT_S):
-        """(per-kind deltas, room delta, reached): until every kind rose by `minimum` and the room counter by the number of kinds times it."""
+    def wait(self, minimum=1, timeout=COUNTER_WAIT_S, room_required=True):
+        """(per-kind deltas, room delta, reached): until every kind rose by `minimum` and, when `room_required`, the room counter by the number of kinds times it. A private
+        LOCATOR STATUS is withheld by the WORKER before submission (data.md 13.4, DP19): the worker counter rises and the controller's never does, so DP19 waits with
+        `room_required=False`."""
         end = time.monotonic() + timeout
         while True:
             items, room = self.delta()
-            reached = all(v >= minimum for v in items.values()) and room >= minimum * len(self.kinds)
+            reached = all(v >= minimum for v in items.values()) and (not room_required or room >= minimum * len(self.kinds))
             if reached or time.monotonic() >= end:
                 return items, room, reached
             time.sleep(2.0)
