@@ -19,6 +19,8 @@ pytestmark = pytest.mark.unit
 
 LIB = Path(__file__).resolve().parents[2] / "scripts" / "lib" / "killproc.sh"
 METRICS_LIB = Path(__file__).resolve().parents[2] / "scripts" / "lib" / "metrics.sh"
+HUP_LIB = Path(__file__).resolve().parents[2] / "scripts" / "lib" / "hup.sh"
+RUN_SH = Path(__file__).resolve().parents[2] / "scripts" / "run.sh"
 
 SERVICES = ["xlxd-sut", "xlxd-ref", "tester", "transcoder-sut", "allstar", "XLXD-SUT", "", "xlxd-sut ", "*"]
 PROCESSES = ["dv-edge-xlx", "dv-edge-nxdn", "dv-edge-p25", "dv-edge-allstar", "dv-router", "dv-codec-ambed", "dv-svc-web", "dv-svc-admin", "dv-edge-webrtc", "dv-svc-status", "dv-data-worker", "dv-data-worker2", "dv-data-worker[pkt]", "dv-data", "dv-room", "dv-room2", "dv-codec", "dv-codec-ambed2", "dv-codec-*", "dv-edge-dextra", "dv-edge-*", "dv-edge",
@@ -648,4 +650,135 @@ def test_rig_control_metrics_failure(tmp_path):
     seen, thread = watcher(ctl.dir, "error 1", out="")
     with pytest.raises(RuntimeError, match="error 1"):
         ctl.metrics("xlxd-sut", timeout=5)
+    thread.join(5)
+
+
+# ---- hup: "hup xlxd-sut" (scripts/lib/hup.sh, SECRELOAD1 only), python table and bash agree
+
+HUP_SERVICES = ["xlxd-sut", "dvr-peer", "xlxd-ref", "tester", "transcoder-sut", "allstar", "XLXD-SUT", "", "xlxd-sut ", "*",
+                "xlxd-sut;id", "container:abc", "xlxd-sut HUP"]
+
+
+def test_hup_python_table():
+    assert control.HUP_ALLOWED == ("xlxd-sut",) and control.HUP_SIGNAL == "HUP"
+    for service in HUP_SERVICES:
+        assert control.hup_allowed(service) == (service == "xlxd-sut"), service
+    assert control.hup_line("xlxd-sut") == "hup xlxd-sut"
+    for service in ("dvr-peer", "xlxd-ref", "tester", "", "xlxd-sut HUP", "xlxd-sut extra"):
+        with pytest.raises(ValueError):
+            control.hup_line(service)
+
+
+def test_hup_bash_and_python_agree():
+    feed = "".join("%s\n" % s for s in HUP_SERVICES)
+    script = 'while IFS= read -r s; do if dvt_hup_allowed "$s"; then echo "1 $s"; else echo "0 $s"; fi; done'
+    run = subprocess.run(["bash", "-c", 'source "$1"; ' + script, "x", str(HUP_LIB)], input=feed, capture_output=True, text=True,
+                         timeout=30)
+    assert run.returncode == 0, run.stderr
+    allowed_bash = {line[2:] for line in run.stdout.splitlines() if line.startswith("1 ")}
+    assert allowed_bash == {s for s in HUP_SERVICES if control.hup_allowed(s)} == {"xlxd-sut"}
+
+
+def test_hup_bash_allowed_takes_exactly_one_word():
+    assert bash("dvt_hup_allowed xlxd-sut", lib=HUP_LIB).returncode == 0
+    assert bash("dvt_hup_allowed xlxd-sut extra", lib=HUP_LIB).returncode == 1
+    assert bash("dvt_hup_allowed dvr-peer", lib=HUP_LIB).returncode == 1
+    assert bash("dvt_hup_allowed", lib=HUP_LIB).returncode == 1
+
+
+@pytest.mark.parametrize("line,out", [("hup xlxd-sut", "xlxd-sut"), ("hup  xlxd-sut\t ", "xlxd-sut")])
+def test_hup_parse_accepts(line, out):
+    run = bash('dvt_hup_parse "$1"', line, lib=HUP_LIB)
+    assert run.returncode == 0 and run.stdout == out + "\n", run.stderr
+
+
+@pytest.mark.parametrize("line", [
+    "", "hup", "hup dvr-peer", "hup xlxd-ref", "hup tester", "hup xlxd-sut extra", "hup xlxd-sut HUP", "hup xlxd-sut USR1",
+    "hup xlxd-sut;id", "HUP xlxd-sut", "hup *", "hups xlxd-sut", "kill xlxd-sut", "kill-proc xlxd-sut dv-router HUP",
+    "kill-proc xlxd-sut dv-edge-xlx HUP", "metrics xlxd-sut", "stop xlxd-sut",
+])
+def test_hup_parse_refuses(line):
+    run = bash('dvt_hup_parse "$1"', line, lib=HUP_LIB)
+    assert run.returncode == 1 and run.stdout == ""
+
+
+def test_kill_proc_still_never_signals_the_launcher_or_sends_hup():
+    for service, process in control.KILL_PROC_ALLOWED:
+        assert process != "dv-router"
+        assert not control.kill_proc_allowed(service, process, "HUP")
+    with pytest.raises(ValueError):
+        control.kill_proc_line("xlxd-sut", "dv-router", "HUP")
+
+
+def fake_docker(tmp_path, status=0):
+    """A docker stub that records its arguments, first in PATH."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    log = tmp_path / "docker.args"
+    stub = bindir / "docker"
+    stub.write_text('#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\nexit %d\n' % (log, status))
+    stub.chmod(0o755)
+    return bindir, log
+
+
+def test_hup_exec_sends_exactly_docker_kill_signal_hup_and_reports_the_time(tmp_path):
+    bindir, log = fake_docker(tmp_path)
+    cid = "0123456789ab" * 2
+    run = subprocess.run(["bash", "-c", 'source "$1"; dvt_hup_exec "$2"', "x", str(HUP_LIB), cid], capture_output=True, text=True,
+                         timeout=30, env={**os.environ, "PATH": "%s:%s" % (bindir, os.environ["PATH"])})
+    assert run.returncode == 0, run.stderr
+    assert log.read_text().splitlines() == ["kill --signal=HUP " + cid]
+    assert control.parse_hup_out(run.stdout) > 1.7e9
+
+
+@pytest.mark.parametrize("cid", ["", "xlxd-sut", "abc", "0123456789ab;id", "--signal=KILL", "-s KILL 0123456789ab", "0123456789AB0123"])
+def test_hup_exec_refuses_a_container_id_that_is_not_hex(tmp_path, cid):
+    bindir, log = fake_docker(tmp_path)
+    run = subprocess.run(["bash", "-c", 'source "$1"; dvt_hup_exec "$2"', "x", str(HUP_LIB), cid], capture_output=True, text=True,
+                         timeout=30, env={**os.environ, "PATH": "%s:%s" % (bindir, os.environ["PATH"])})
+    assert run.returncode == 1 and not log.exists()
+
+
+def test_hup_exec_passes_on_a_docker_failure(tmp_path):
+    bindir, _log = fake_docker(tmp_path, status=1)
+    run = subprocess.run(["bash", "-c", 'source "$1"; dvt_hup_exec "$2"', "x", str(HUP_LIB), "0123456789ab"], capture_output=True,
+                         text=True, timeout=30, env={**os.environ, "PATH": "%s:%s" % (bindir, os.environ["PATH"])})
+    assert run.returncode == 1 and run.stdout == ""
+
+
+def test_run_sh_hup_branch_goes_through_the_library_only():
+    text = RUN_SH.read_text()
+    assert '. "$(dirname "$0")/lib/hup.sh"' in text
+    branch = text[text.index('[ "$action" = hup ]'):text.index('[ "$action" = proc-stat ]')]
+    assert "dvt_hup_parse" in branch and "dvt_hup_exec" in branch and "docker kill" not in branch
+    assert "--signal=" not in text.replace("--signal=HUP", "")      # no other signal word anywhere in the watcher
+
+
+def test_parse_hup_out():
+    assert control.parse_hup_out("t_hup=1700000000.25\n") == 1700000000.25
+    with pytest.raises(ValueError):
+        control.parse_hup_out("")
+
+
+def test_rig_control_hup(tmp_path):
+    ctl = control.RigControl(tmp_path / "control")
+    seen, thread = watcher(ctl.dir, "ok", out="t_hup=1700000000.5\n")
+    assert ctl.hup(timeout=5) == 1700000000.5
+    thread.join(5)
+    assert seen == ["hup xlxd-sut"]
+
+
+def test_rig_control_hup_not_allowed_sends_nothing(tmp_path):
+    ctl = control.RigControl(tmp_path / "control")
+    for service in ("dvr-peer", "xlxd-ref", "tester", "xlxd-sut HUP"):
+        with pytest.raises(ValueError):
+            ctl.hup(service)
+    assert not list(ctl.dir.iterdir())
+
+
+def test_rig_control_hup_no_container(tmp_path):
+    ctl = control.RigControl(tmp_path / "control")
+    seen, thread = watcher(ctl.dir, "error 4", out="hup: no running xlxd-sut container\n")
+    with pytest.raises(RuntimeError, match="error 4"):
+        ctl.hup(timeout=5)
     thread.join(5)

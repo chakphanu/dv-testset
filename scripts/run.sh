@@ -229,6 +229,9 @@
 # descriptors and the start time of that process by exact /proc comm from a throwaway tester-image container in
 # the sut's pid namespace (scripts/lib/procstat.sh; "list" prints pid, ppid and comm of every process); <id>.out gets
 # key=value lines. Nothing is signalled. error 3 = no such process.
+# or "hup xlxd-sut" (no other word, no other service, the signal is fixed): SIGHUP to the sut's launcher (PID 1 of the container,
+# `docker kill --signal=HUP`; scripts/lib/hup.sh). For SECRELOAD1 only, allowed by dv-router: a reload of the unchanged TOML that
+# re-reads every referenced secret file (config.md). <id>.out gets "t_hup=<epoch s>". kill-proc never signals the launcher.
 # "mark begin|end <tag>" only logs: a case brackets deliberately malformed
 # traffic so the capture check can tell it from a fault.
 # The answer is <id>.ack: "ok", "error <rc>" or "error refused" (anything else
@@ -243,6 +246,7 @@ set -euo pipefail
 . "$(dirname "$0")/lib/env.sh"
 . "$(dirname "$0")/lib/killproc.sh"
 . "$(dirname "$0")/lib/metrics.sh"
+. "$(dirname "$0")/lib/hup.sh"
 . "$(dirname "$0")/lib/procstat.sh"
 dvt_load_env
 cd "$DVT_ROOT"
@@ -1113,7 +1117,7 @@ for row in sys.stdin:
 control="$out/control"
 
 watch_control() {
-  local req id line action svc extra rc sniffer args target node mt mcid mimg kp ksvc kproc ksig kcid kimg ps_ psvc pproc pcid pimg
+  local req id line action svc extra rc sniffer args target node mt mcid mimg kp ksvc kproc ksig kcid kimg ps_ psvc pproc pcid pimg hs hcid
   while :; do
     for req in "$control"/*.req; do
       [ -e "$req" ] || continue
@@ -1171,6 +1175,17 @@ watch_control() {
             echo "metrics: no running $mt or tester container" > "$control/$id.out"; rc=4
           else
             dvt_metrics_exec "$mcid" "$mimg" > "$control/$id.out" 2>> "$control/control.log" || rc=$?
+          fi
+        fi
+      elif [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$action" = hup ]; then
+        # "hup xlxd-sut": SIGHUP to the launcher, SECRELOAD1 only, see scripts/lib/hup.sh (allow-list, fixed signal)
+        if hs="$(dvt_hup_parse "$line")"; then
+          hcid="$("${compose[@]}" ps -q "$hs" 2>/dev/null | head -n 1 || true)"
+          rc=0
+          if [ -z "$hcid" ]; then
+            echo "hup: no running $hs container" > "$control/$id.out"; rc=4
+          else
+            dvt_hup_exec "$hcid" > "$control/$id.out" 2>> "$control/control.log" || rc=$?
           fi
         fi
       elif [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$action" = proc-stat ]; then
@@ -1363,6 +1378,22 @@ if [ -f "$out/secreload/scan.json" ]; then
     --skip secreload/scan.json --skip aprs-secrets/passcode --skip-dir capture || scan_rc=$?
   if [ "$scan_rc" != 0 ]; then
     echo "run.sh: a SECRELOAD1 secret value was found in the output above (exit $scan_rc)" >&2
+    [ "$rc" != 0 ] || rc=5
+  fi
+fi
+# SECRELOAD1, SIGHUP variant: the case writes out/<utc>/secreload/log-expect.json ({t_hup, key, path}); the launcher log must hold a line at or
+# after that time that names the key and the path (the refusal of a reload whose secret file is unreadable). The shape of the line (digits
+# replaced, never a value) goes to out/<utc>/secreload/log-shape.txt. The launcher log is read only after the run (no control action reads it).
+if [ -f "$out/secreload/log-expect.json" ]; then
+  scan_rc=0
+  if [ -f "$out/logs/xlxd-sut.log" ]; then
+    PYTHONPATH="$DVT_ROOT" python3 -m dvtest.secret_reload logcheck --log "$out/logs/xlxd-sut.log" \
+      --expect "$out/secreload/log-expect.json" --shape-file "$out/secreload/log-shape.txt" || scan_rc=$?
+  else
+    echo "run.sh: SECRELOAD1 expects the launcher log $out/logs/xlxd-sut.log, which was not collected" >&2; scan_rc=3
+  fi
+  if [ "$scan_rc" != 0 ]; then
+    echo "run.sh: the SECRELOAD1 launcher-log expectation failed (exit $scan_rc)" >&2
     [ "$rc" != 0 ] || rc=5
   fi
 fi

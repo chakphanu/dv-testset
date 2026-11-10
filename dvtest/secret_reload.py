@@ -11,13 +11,21 @@ is Restart(dv-edge-aprsis) (config.md, reload table: "`edges.aprsis.passcode_fil
 scans DIR for the values listed in F (JSON, written by the case into out/<run>/secreload/scan.json with mode 0600): exit 0 when
 no value is found, 1 when one is (paths and line numbers only, never a value). scripts/run.sh runs it after the logs are
 collected, like the TURN secret scan.
+
+  python3 -m dvtest.secret_reload logcheck --log LOGFILE --expect F [--shape-file OUT]
+
+checks the collected launcher log for what the SIGHUP variant expects (F: JSON {t_hup, key, path}, written by the case): a line at or
+after t_hup (docker time stamps) that names the key and the path, i.e. the refusal of a reload whose secret file is unreadable.
+Exit 0 and the SHAPE of the line (digits replaced by N, the service prefix cut) when there is one, 1 otherwise. Never a value.
 """
 import argparse
+import calendar
 import json
 import os
 import re
 import secrets
 import sys
+import time
 
 MARKER = "# secreload1 reload marker"
 RESTART_ACTION = "restart"
@@ -194,6 +202,39 @@ def read_only_reply(status, body):
     return status >= 400 and "read-only" in text.lower().replace("read_only", "read-only")
 
 
+# ---------------------------------------------------------------- launcher log
+
+LOG_TIME = re.compile(r"(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(\.\d+)?Z")
+LOG_PREFIX = re.compile(r"^\S+\s*\|\s*")
+
+
+def log_epoch(line):
+    """The epoch seconds of the docker time stamp in `line` (UTC), None without one."""
+    m = LOG_TIME.search(line)
+    if not m:
+        return None
+    y, mo, d, h, mi, sec = (int(m.group(i)) for i in range(1, 7))
+    return calendar.timegm((y, mo, d, h, mi, sec)) + (float(m.group(7)) if m.group(7) else 0.0)
+
+
+def line_shape(line, limit=200):
+    """A log line without anything that varies or could carry a value: the compose prefix and the time stamp cut, every run of
+    digits replaced by N, cut to `limit` characters."""
+    text = LOG_PREFIX.sub("", line.rstrip("\n"))
+    text = LOG_TIME.sub("", text, count=1).strip()
+    return re.sub(r"[0-9]+", "N", text)[:limit]
+
+
+def refusal_lines(text, t_hup, key, path, slack=1.0):
+    """The shapes of the lines of a launcher log at or after t_hup - slack that name both the key and the path."""
+    out = []
+    for line in text.splitlines():
+        at = log_epoch(line)
+        if at is not None and at >= t_hup - slack and key in line and path in line:
+            out.append(line_shape(line))
+    return out
+
+
 # ---------------------------------------------------------------- hub metrics
 
 def child_restarts(samples, needle="aprsis"):
@@ -218,6 +259,29 @@ def verified(samples):
 
 # ---------------------------------------------------------------- command line
 
+def logcheck(args):
+    try:
+        with open(args.expect, "r", encoding="utf-8") as fh:
+            expect = json.load(fh)
+        with open(args.log, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+        t_hup, key, path = float(expect["t_hup"]), str(expect["key"]), str(expect["path"])
+    except (OSError, ValueError, KeyError) as exc:
+        print("secret_reload logcheck: cannot read the log or the expectation: %s" % type(exc).__name__, file=sys.stderr)
+        return 2
+    shapes = refusal_lines(text, t_hup, key, path)
+    if not shapes:
+        print("secret_reload logcheck: no launcher log line at or after the SIGHUP (%s) names %s and %s" % (
+            time.strftime("%H:%M:%S", time.gmtime(t_hup)), key, path))
+        return 1
+    for shape in sorted(set(shapes)):
+        print("secret_reload logcheck: %d line(s) of the shape: %s" % (shapes.count(shape), shape))
+    if args.shape_file:
+        with open(args.shape_file, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(sorted(set(shapes))) + "\n")
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="python3 -m dvtest.secret_reload")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -226,7 +290,13 @@ def main(argv=None):
     sc.add_argument("--root", required=True)
     sc.add_argument("--skip", action="append", default=[])
     sc.add_argument("--skip-dir", action="append", default=[])
+    lc = sub.add_parser("logcheck")
+    lc.add_argument("--log", required=True)
+    lc.add_argument("--expect", required=True)
+    lc.add_argument("--shape-file")
     args = ap.parse_args(argv)
+    if args.cmd == "logcheck":
+        return logcheck(args)
     with open(args.values_file, "r", encoding="utf-8") as fh:
         entries = json.load(fh)
     if not isinstance(entries, list) or not entries or not all(isinstance(e, dict) and e.get("value") for e in entries):

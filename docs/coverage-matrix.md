@@ -22,7 +22,7 @@ unit test `cases/unit/test_coverage_matrix.py` runs it).
 | DP7 (D-PRS positions) | 39 | 33 | 2 | 4 | 0 |
 | Stream registry (LEAK2) | 10 | 6 | 2 | 2 | 0 |
 | Config load (COMPAT1) | 19 | 18 | 0 | 1 | 0 |
-| Secret-file reload (SECRELOAD1) | 9 | 6 | 1 | 2 | 0 |
+| Secret-file reload (SECRELOAD1) | 10 | 7 | 1 | 2 | 0 |
 | M17 | 86 | 65 | 20 | 1 | 0 |
 | M17 v3 | 29 | 0 | 25 | 4 | 0 |
 | IMRS | 24 | 18 | 5 | 1 | 0 |
@@ -44,7 +44,7 @@ unit test `cases/unit/test_coverage_matrix.py` runs it).
 | Echo return integrity E9 (D-STAR kinds) | 14 | 13 | 1 | 0 | 0 |
 | Real-transcoder cross-mode audio into YSF (related to ECHO1) | 3 | 3 | 0 | 0 | 0 |
 | DP15 (APRS / AX.25 / KISS data path) | 70 | 50 | 5 | 15 | 0 |
-| **Total** | **1219** | **765** | **275** | **171** | **8** |
+| **Total** | **1220** | **766** | **275** | **171** | **8** |
 <!-- summary:end -->
 
 ## Top 15 gaps (ranked by how much real-world traffic they touch)
@@ -467,7 +467,8 @@ Sources: secreload-cases.md (config.md "Actions", reload table; status.md launch
 | An unchanged secret (and no other change) causes no restart | secreload-cases.md "Stages" 1, 2c, 4 | `test_secret_reload::test_secreload1_passcode_file_replaced_at_the_same_path` | rig | b:aprsc | OK |
 | An unreadable (mode 000) or missing explicit secret file refuses the reload with the key and the path and keeps the running generation (the old login stays up) | secreload-cases.md "Stages" 2a, 2b | `test_secret_reload::test_secreload1_passcode_file_replaced_at_the_same_path` | rig | b:aprsc | OK |
 | No secret value in any admin reply, note or file of the run, nor in the collected logs | secreload-cases.md "Stages" 6 | `test_secret_reload::test_secreload1_passcode_file_replaced_at_the_same_path`, `test_secret_reload_helpers::test_scan_tree_reports_paths_and_lines_never_values` | rig | b:aprsc | PARTIAL |
-| A byte-identical TOML reload (SIGHUP, fabric `admin/config/reload`) re-reads the secrets | secreload-cases.md "What is specified" | - | - | - | GAP |
+| A byte-identical TOML reload by SIGHUP re-reads the secrets: a replaced file restarts the owning child (counter +1, nothing else), a second SIGHUP restarts nothing, an unreadable file is refused and the old login stays up (the launcher-log line is an end-of-run check of run.sh) | secreload-cases.md "The SIGHUP variant" | `test_secret_reload::test_secreload1_sighup_reload_of_unchanged_toml` | rig | b:aprsc | OK |
+| The same by the fabric `admin/config/reload` (no HTTP route yet) | secreload-cases.md "Limits" | - | - | - | GAP |
 | Link, AllStar, TURN and callhome secret kinds follow the same rule | secreload-cases.md "Limits" | - | - | - | GAP |
 
 ## M17

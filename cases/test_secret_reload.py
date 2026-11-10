@@ -28,6 +28,11 @@ dv_launcher_child_restarts_total, the login through dv_edge_aprsis_verified):
   6  no secret value (old or new) in any admin reply, note or file of out/<run> visible now; the values are left in
      out/<run>/secreload/scan.json (mode 0600) for the end-of-run scan of scripts/run.sh over the collected logs
 
+A second case, test_secreload1_sighup_reload_of_unchanged_toml, uses the documented operator path for "same TOML, secret file
+replaced": SIGHUP to the launcher (control action `hup xlxd-sut`, scripts/lib/hup.sh, allowed by dv-router for this case only). No
+admin API, no TOML change, no DVT_SUT_CONFIG_RW. The refusal of an unreadable file has no reply to read, so run.sh checks the collected
+launcher log after the run (a line after the SIGHUP naming the key and the path, shape recorded in out/<run>/secreload/log-shape.txt).
+
 Values are never printed, logged or committed: notes carry lengths only. Run:
   ... DVT_SUT_CONFIG_RW=1 DVT_SECRELOAD1=on DVT_SUT_CONFIG_EXTRA=<web:admin:totp-required:data-ident:dp15-aprsis snippets> \\
       scripts/run.sh -m rig --profile web,aprs -- cases/test_secret_reload.py
@@ -52,6 +57,7 @@ CHILD = "dv-edge-aprsis"
 KEY = "passcode_file"
 QUIET_S = 12.0              # one hub refresh (10 s) and a bit: "nothing restarted" is judged after it
 EFFECT_S = 60.0             # a restart, its new login and the next hub refresh
+SUT_PASSCODE_PATH = "/etc/dv-router/aprs-secrets/passcode"    # passcode_file of rig/config/dv-router/dp15-aprsis.toml, as the SUT sees it
 STEP_UP_S = 200.0           # the step-up window is 5 minutes; a TOTP step-up costs up to one 30 s step, so it is renewed only when old
 
 
@@ -62,14 +68,21 @@ def note(target, tag, text):
 # ---------------------------------------------------------------- fixture
 
 @pytest.fixture(scope="module")
-def sr_ctx(target, rig_control, admin_session):
-    """The admin client (admin role, enrolled, step-up on demand), the passcode file as this tester sees it, the values and the
-    scan list. Restores the fixture value, the mode and the name of the file at the end, whatever happened."""
+def sr_ctx(sr_base, admin_session):
+    """sr_base plus the admin client (admin role, enrolled, step-up on demand) for the reloads through the admin API."""
+    sr_base.client = admin_session("admin")
+    return sr_base
+
+
+@pytest.fixture(scope="module")
+def sr_base(target, rig_control):
+    """The passcode file as this tester sees it, the values and the scan list. Restores the fixture value, the mode and the name of
+    the file at the end, whatever happened."""
     out = Path(target.out)
     path = out / "aprs-secrets" / "passcode"
     if not path.is_file():
         pytest.skip("no %s: the case needs --profile aprs (run.sh writes the fixture passcode file there)" % path)
-    client = admin_session("admin")
+    client = None
     original = path.read_text()
     old = original
     try:
@@ -351,3 +364,103 @@ def test_secreload1_passcode_file_replaced_at_the_same_path(target, rig_control,
     assert not hits, "a secret value is in out/<run> files: %s" % "; ".join("%s (%s, line %d)" % h for h in hits[:6])
     say(ctx, "6", "no secret value in any admin reply, the notes or the files of out/<run> visible now; the collected logs are "
         "scanned by run.sh from out/<run>/secreload/scan.json after the run")
+
+
+# ---------------------------------------------------------------- SIGHUP variant: the same TOML, the file replaced
+
+def hup(ctx, what):
+    """SIGHUP to the launcher through the control channel; returns the host epoch time of the signal."""
+    t_hup = ctx.control.hup()
+    say(ctx, "hup", "%s: SIGHUP sent to the launcher (t_hup %.3f)" % (what, t_hup))
+    return t_hup
+
+
+def hup_logic_restarted(ctx, before, what):
+    """What a reload that changed a secret must show without a reply to read: a new process of the owning child within 30 s and
+    exactly one more restart of it (counters checked after the hub refresh; the other children must not have restarted)."""
+    now = wait_for(lambda: new_pid(ctx, before), 30.0, 1.0)
+    assert now, "%s: dv-edge-aprsis did not restart after the SIGHUP (process %s)" % (what, pid_text(before.pid))
+    after = wait_for(lambda: counted(ctx, before), EFFECT_S)
+    assert after, "%s: dv_launcher_child_restarts_total of %s did not rise within %.0f s" % (what, CHILD, EFFECT_S)
+    time.sleep(QUIET_S)
+    last = state(ctx)
+    assert last.restarts == (before.restarts or 0) + 1, "%s: the restarts of %s rose by %s, want 1" % (
+        what, CHILD, last.restarts - (before.restarts or 0))
+    assert last.all_restarts == before.all_restarts + 1, "%s: other children restarted too (all children %s -> %s)" % (
+        what, before.all_restarts, last.all_restarts)
+    return last
+
+
+def test_secreload1_sighup_reload_of_unchanged_toml(target, rig_control, sr_base):
+    ctx = sr_base
+    strict = os.environ.get("DVT_SECRELOAD1", "").lower() in ("on", "1", "true", "yes")
+    say(ctx, "H0", "SIGHUP variant: old value %s, throwaway value %s (same size); strict=%s" % (
+        sr.digest_note(ctx.old.strip()), sr.digest_note(ctx.new.strip()), strict))
+    ver, own, everything = hub(ctx)
+    if ver is None or own is None:
+        pytest.skip("no dv_edge_aprsis_verified / dv_launcher_child_restarts_total{child=%s} in the hub metrics: the APRS-IS edge is "
+                    "not running (--profile aprs with dp15-aprsis.toml)" % CHILD)
+    if not wait_for(lambda: hub(ctx)[0], 60.0):
+        # an earlier case of this module may have left the throwaway value running: put the fixture value back and reload
+        write_atomic(ctx.path, ctx.old)
+        hup(ctx, "H0 repair")
+        if not wait_for(lambda: hub(ctx)[0], EFFECT_S):
+            pytest.fail("the APRS-IS edge is not logged in and verified with the fixture passcode, also not after a SIGHUP repair")
+    base = state(ctx)
+    assert base.pid is not None, "no dv-edge-aprsis process"
+    say(ctx, "H0", "baseline: edge process %s, restarts %s (all children %s), verified %s" % (
+        pid_text(base.pid), base.restarts, base.all_restarts, base.verified))
+
+    # ---- H1 the file rewritten in place (same inode and size), the TOML untouched, SIGHUP: restart, new value in effect
+    write_in_place(ctx.path, ctx.new)
+    hup(ctx, "H1 in-place replacement")
+    if not wait_for(lambda: new_pid(ctx, base), 30.0, 1.0):
+        reason = "no restart of %s 30 s after a SIGHUP with a changed passcode file: the image does not re-read referenced secrets on SIGHUP (config.md)" % CHILD
+        if strict:
+            pytest.fail("DVT_SECRELOAD1=on but " + reason)
+        pytest.skip("image without SECRELOAD1, or SIGHUP not handled: " + reason)
+    changed = hup_logic_restarted(ctx, base, "H1")
+    assert wait_for(lambda: hub(ctx)[0] is False, EFFECT_S), \
+        "the new passcode is not in effect: dv_edge_aprsis_verified stayed %s (a throwaway value logs in unverified)" % hub(ctx)[0]
+    say(ctx, "H1", "SIGHUP after an in-place same-size replacement: new process %s, restarts %s -> %s, other children unchanged, "
+        "verified 1 -> 0" % (pid_text(changed.pid), base.restarts, changed.restarts))
+
+    # ---- H2 a second SIGHUP with nothing changed: nothing restarts
+    keep = state(ctx)
+    hup(ctx, "H2 nothing changed")
+    assert_nothing_restarted(ctx, keep, "H2 second SIGHUP")
+    say(ctx, "H2", "second SIGHUP, secret and TOML unchanged: nothing restarted, login unchanged")
+
+    # ---- H3 the fixture value back by an atomic replacement: restart, verified again
+    write_atomic(ctx.path, ctx.old)
+    hup(ctx, "H3 atomic replacement")
+    if not wait_for(lambda: new_pid(ctx, keep), 30.0, 1.0):
+        pytest.fail("H3: dv-edge-aprsis did not restart after the SIGHUP that follows an atomic replacement")
+    back = hup_logic_restarted(ctx, keep, "H3")
+    assert wait_for(lambda: hub(ctx)[0] is True, EFFECT_S), "the fixture passcode is not in effect again (dv_edge_aprsis_verified %s)" % hub(ctx)[0]
+    say(ctx, "H3", "SIGHUP after an atomic replacement (new inode): new process %s, restarts %s, verified 0 -> 1" % (
+        pid_text(back.pid), back.restarts))
+
+    # ---- H4 the file unreadable, SIGHUP: refused, the running generation and login stay
+    held = state(ctx)
+    os.chmod(ctx.path, 0o000)
+    try:
+        t_refused = hup(ctx, "H4 mode 000")
+        assert_nothing_restarted(ctx, held, "H4 mode 000")
+    finally:
+        os.chmod(ctx.path, 0o600)
+    expect = ctx.out / "secreload" / "log-expect.json"
+    fd = os.open(expect, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        json.dump({"t_hup": t_refused, "key": KEY, "path": SUT_PASSCODE_PATH}, fh)
+    say(ctx, "H4", "mode 000 and SIGHUP: process, counters and the verified login unchanged (the old login stays up); the launcher log "
+        "line that names %s and the path is checked by run.sh after the run (out/<run>/secreload/log-shape.txt)" % KEY)
+
+    # ---- H5 the file back: a SIGHUP restarts nothing (same content as the running generation)
+    hup(ctx, "H5 file back")
+    assert_nothing_restarted(ctx, held, "H5 file back")
+    say(ctx, "H5", "file readable again, SIGHUP: nothing restarted")
+
+    assert not ctx.leaks.found, "a secret value appeared in: %s" % ctx.leaks.report()
+    hits = sr.scan_tree(ctx.out, ctx.entries, skip=["aprs-secrets/passcode", "secreload/scan.json"], skip_dirs=["capture"])
+    assert not hits, "a secret value is in out/<run> files: %s" % "; ".join("%s (%s, line %d)" % h for h in hits[:6])

@@ -854,6 +854,12 @@ Actions `stop`, `start`, `kill` (SIGKILL); services `transcoder-ref`,
 `control/control.log` gets `<utc> request <line>` before and
 `<utc> <line> -> <rc>` after each action.
 
+`hup xlxd-sut` (SECRELOAD1 only, allowed by dv-router; `scripts/lib/hup.sh`, `dvtest.control.HUP_ALLOWED`,
+`rig_control.hup()`) sends SIGHUP to the launcher, PID 1 of the dvt project's `xlxd-sut` container (`docker kill
+--signal=HUP`): a reload of the unchanged TOML that re-reads every referenced secret file. No other service, no
+other signal, no word after the service; `<id>.out` has `t_hup=<epoch s>`. `kill-proc` still never signals the
+launcher.
+
 `kill-proc xlxd-sut <process> <signal> [rooms=<LETTER>]` signals one process inside the
 system-under-test container (the DV-Router image is `FROM scratch`: no shell,
 `ps` or `pkill`, and the host user may not signal root's processes). The host

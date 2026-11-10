@@ -15,6 +15,9 @@ with one line; the host watcher answers with <id>.ack ("ok", "error <rc>" or
   "metrics xlxd-sut|dvr-peer"                the Prometheus text of the sut hub (dvr-peer: the second node, profile twonode)
                                              (127.0.0.1:19108 inside its network
                                              namespace) in <id>.out
+  "hup xlxd-sut"                             SIGHUP to the launcher of the sut (PID 1 of its
+                                             container); SECRELOAD1 only, allowed by
+                                             DV-Router; <id>.out has t_hup=<epoch s>
   "proc-stat <service> <process>"            cpu ticks, memory, threads, open fds and
                                              start time of one process inside the sut
                                              (read only; allow-list below), key=value
@@ -86,6 +89,33 @@ def proc_stat_line(service, process):
     if not proc_stat_allowed(service, process):
         raise ValueError("proc-stat %s %s is not allow-listed" % (service, process))
     return "proc-stat %s %s" % (service, process)
+
+
+# the one service whose launcher the host will signal with HUP (scripts/lib/hup.sh): SECRELOAD1 (cases/test_secret_reload.py) needs the
+# documented operator reload of an unchanged TOML, there is no HTTP route for it yet, and DV-Router allowed this for that case only.
+# No other service, no other signal.
+HUP_ALLOWED = ("xlxd-sut",)
+HUP_SIGNAL = "HUP"
+
+
+def hup_allowed(service):
+    """True when the host watcher would run `hup service`."""
+    return service in HUP_ALLOWED
+
+
+def hup_line(service):
+    """The request line, or ValueError for a service outside the allow-list."""
+    if not hup_allowed(service):
+        raise ValueError("hup %s is not allow-listed" % (service,))
+    return "hup %s" % service
+
+
+def parse_hup_out(text):
+    """t_hup (epoch seconds, the host clock right after the signal) of a hup reply; ValueError when it has none."""
+    for line in text.splitlines():
+        if line.startswith("t_hup="):
+            return float(line[len("t_hup="):])
+    raise ValueError("no t_hup in the hup reply")
 
 
 # services whose hub the host will scrape (scripts/lib/metrics.sh), no arguments
@@ -247,6 +277,13 @@ class RigControl:
         sending when not allow-listed, RuntimeError("... error 3") when no such process runs."""
         name = self._request(proc_stat_line(service, process), timeout)
         return (self.dir / (name + ".out")).read_text(encoding="utf-8", errors="replace")
+
+    def hup(self, service="xlxd-sut", timeout=30.0):
+        """SIGHUP to the launcher of `service` (allow-list: HUP_ALLOWED; SECRELOAD1 only). Returns t_hup, the host's epoch seconds
+        right after the signal. ValueError before sending when not allow-listed, RuntimeError("... error 4") when the container
+        is not running, TimeoutError when the host does not answer in `timeout` seconds."""
+        name = self._request(hup_line(service), timeout)
+        return parse_hup_out((self.dir / (name + ".out")).read_text())
 
     def metrics(self, service="xlxd-sut", timeout=30.0):
         """The Prometheus text of the hub of `service` (allow-list:

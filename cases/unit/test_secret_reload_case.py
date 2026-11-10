@@ -154,3 +154,84 @@ def test_assert_refused_needs_the_key_and_the_path():
 def json_text(value):
     import json
     return json.dumps(value)
+
+
+# ---------------------------------------------------------------- the SIGHUP variant against a fake SUT
+
+class FakeSut:
+    """A SUT that follows config.md: SIGHUP re-reads the passcode file; a content change restarts the APRS-IS edge (restart counter + 1,
+    new pid) and its verdict is `verified` only for the fixture value; an unreadable file is refused and everything stays."""
+
+    def __init__(self, path, fixture_value, follows=True, restart_on_unreadable=False):
+        self.path, self.fixture, self.follows, self.restart_on_unreadable = path, fixture_value, follows, restart_on_unreadable
+        self.running = path.read_text()
+        self.pid, self.edge_restarts, self.other_restarts = 100, 0.0, 2.0
+        self.hups = []
+
+    @property
+    def verified(self):
+        return self.running == self.fixture
+
+    def hup(self):
+        self.hups.append(len(self.hups))
+        if not self.follows:
+            return 1700000000.0 + len(self.hups)
+        try:
+            content = self.path.read_text()
+        except OSError:
+            if self.restart_on_unreadable:
+                self.pid, self.edge_restarts = self.pid + 1, self.edge_restarts + 1
+            return 1700000000.0 + len(self.hups)
+        if content != self.running:
+            self.running = content
+            self.pid, self.edge_restarts = self.pid + 1, self.edge_restarts + 1
+        return 1700000000.0 + len(self.hups)
+
+
+def run_variant(monkeypatch, tmp_path, sut_kwargs=None, strict=False):
+    from dvtest import secret_reload as sr
+    if os.geteuid() == 0:
+        pytest.skip("mode 000 does not stop root")
+    out = tmp_path / "out"
+    (out / "aprs-secrets").mkdir(parents=True)
+    (out / "secreload").mkdir()
+    path = out / "aprs-secrets" / "passcode"
+    path.write_text("4242\n")
+    os.chmod(path, 0o600)
+    sut = FakeSut(path, "4242\n", **(sut_kwargs or {}))
+    entries = sr.entries_for("4242\n", "31337\n")
+    ctx = types.SimpleNamespace(out=out, path=path, old="4242\n", new="31337\n", entries=entries, leaks=sr.Leaks(entries),
+                                control=sut, target=types.SimpleNamespace(out=str(out)), marker=0)
+    clock = [0.0]
+    monkeypatch.setattr(case.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(case.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + s))
+    monkeypatch.setattr(case, "hub", lambda c: (sut.verified, sut.edge_restarts, sut.edge_restarts + sut.other_restarts))
+    monkeypatch.setattr(case, "pid_of_edge", lambda c: (sut.pid, 1))
+    monkeypatch.setenv("DVT_SECRELOAD1", "on" if strict else "")
+    case.test_secreload1_sighup_reload_of_unchanged_toml(ctx.target, sut, ctx)
+    return ctx, sut
+
+
+def test_variant_follows_the_documented_rules(monkeypatch, tmp_path):
+    ctx, sut = run_variant(monkeypatch, tmp_path)
+    assert sut.edge_restarts == 2.0 and len(sut.hups) == 5      # in place -> restart, nothing, atomic -> restart, unreadable, back
+    assert ctx.path.read_text() == "4242\n"
+    expect = __import__("json").loads((ctx.out / "secreload" / "log-expect.json").read_text())
+    assert expect["key"] == "passcode_file" and expect["path"] == "/etc/dv-router/aprs-secrets/passcode" and expect["t_hup"] == 1700000004.0
+    assert oct(os.stat(ctx.out / "secreload" / "log-expect.json").st_mode & 0o777) == "0o600"
+    notes = (ctx.out / case.LOG).read_text()
+    assert "31337" not in notes and "4242" not in notes
+
+
+def test_variant_skips_when_sighup_changes_nothing_and_fails_in_strict_mode(monkeypatch, tmp_path):
+    with pytest.raises(pytest.skip.Exception, match="image without SECRELOAD1"):
+        run_variant(monkeypatch, tmp_path / "a", {"follows": False})
+    with pytest.raises(pytest.fail.Exception, match="DVT_SECRELOAD1=on"):
+        run_variant(monkeypatch, tmp_path / "b", {"follows": False}, strict=True)
+
+
+def test_variant_fails_when_an_unreadable_file_restarts_the_edge(monkeypatch, tmp_path):
+    with pytest.raises(AssertionError, match="H4 mode 000: dv-edge-aprsis restarted"):
+        run_variant(monkeypatch, tmp_path, {"restart_on_unreadable": True})
+    # the case put the mode back before it failed
+    assert (tmp_path / "out" / "aprs-secrets" / "passcode").stat().st_mode & 0o777 == 0o600

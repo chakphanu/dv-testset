@@ -37,14 +37,16 @@ log shows no login line, so the edge's metric is the observation of "the new val
   step-up helpers: `cases/unit/test_secret_reload_case.py`.
 * `dvtest/secret_reload.py`: pure helpers (throwaway value of the same size, comment marker, scanning, admin reply readers, metrics
   readers) and the scanner CLI `python3 -m dvtest.secret_reload scan ...`; unit tests `cases/unit/test_secret_reload_helpers.py`.
-* `scripts/run.sh`: `DVT_SUT_CONFIG_RW=1` (below) and the end-of-run scan of `out/<run>/secreload/scan.json`.
+* `scripts/run.sh`: `DVT_SUT_CONFIG_RW=1` (below), the control action `hup xlxd-sut` (`scripts/lib/hup.sh`, `dvtest/control.py` `HUP_ALLOWED`;
+  below), and two end-of-run checks over the collected output: the scan of `out/<run>/secreload/scan.json` and the launcher-log check of
+  `out/<run>/secreload/log-expect.json`.
 
 The reload is the admin API's: `PUT /api/v1/admin/config/raw?mode=apply` with `If-Match: <ETag of GET /config/raw>` after a step-up
 (TOTP; the case renews the 5 minute window only when it is old). dv-svc-admin applies nothing for byte-identical text (`noop: true`),
-and the reload that re-reads the secrets without a TOML change (`SIGHUP`, the fabric `admin/config/reload`) has no HTTP route and no
-rig control action (`kill-proc` never signals the launcher). Every reload of the case therefore carries one changed comment line
+and the reload that re-reads the secrets without a TOML change (`SIGHUP`, the fabric `admin/config/reload`) has no HTTP route yet (dv-router is
+opening a unit for one). Every reload of the first case therefore carries one changed comment line
 (`# secreload1 reload marker N`): the file hash changes, the configuration does not, and the launcher evaluates the secrets in the
-same pass. What is not covered: a reload with a byte-identical TOML (SIGHUP) and the file watcher; dv-router's own tests cover both.
+same pass. The reload that re-reads the secrets without any TOML change is covered by the second case (SIGHUP, below). What is not covered: the file watcher and `admin/config/reload` through fabric; dv-router's own tests cover them.
 
 `DVT_SUT_CONFIG_RW=1` (native launch only): the admin service writes the configuration by writing a temporary file and renaming it over
 the config, which the usual single-file read-only mount refuses. With the variable `run.sh` copies the rendered config to
@@ -52,6 +54,30 @@ the config, which the usual single-file read-only mount refuses. With the variab
 `--config /etc/dv-router-rw/dv-router.toml`. The rendered file next to it is no longer the live one: read the live one through the admin
 API. Do not combine with cases that edit the rendered file (echo E3 / E7). The aprs secrets stay at `/etc/dv-router/aprs-secrets`
 (read-only for the SUT; the tester rewrites the file in `out/<run>/aprs-secrets/`, same uid).
+
+## The SIGHUP variant
+
+`test_secreload1_sighup_reload_of_unchanged_toml` is the documented operator path for "same TOML, referenced secret file replaced"
+(config.md: SIGHUP, and `admin/config/reload`, re-read every referenced secret even when the TOML hash is unchanged). It needs no admin
+API, no TOML change and no `DVT_SUT_CONFIG_RW`: the case rewrites the passcode file and sends SIGHUP to the launcher through a new,
+narrow control action.
+
+`hup xlxd-sut` (`scripts/lib/hup.sh`, mirrored by `dvtest.control.HUP_ALLOWED` / `rig_control.hup()`, checked by `cases/unit/test_control.py`):
+`docker kill --signal=HUP` on the dvt project's `xlxd-sut` container, that is PID 1, the launcher. Nothing else: no other service
+(`dvr-peer` included), no other signal, no word after the service, a container id that is not hex is refused; `kill-proc` still never signals
+the launcher. DV-Router allowed it for this case only; do not use it elsewhere. `<id>.out` has `t_hup=<epoch s>`.
+
+| Stage | Action | Asserted |
+|---|---|---|
+| H0 | baseline (a SIGHUP repair first if an earlier case left the throwaway value running) | the edge is verified; process, restart counters read |
+| H1 | file rewritten in place (same inode, same size) with the throwaway value, TOML untouched, `hup xlxd-sut` | a new `dv-edge-aprsis` process within 30 s (no restart: skip, or fail with `DVT_SECRELOAD1=on`); its restart counter +1 and the sum over all children +1 (nothing else restarted); `dv_edge_aprsis_verified` 1 -> 0 |
+| H2 | a second SIGHUP, nothing changed | nothing restarted, login unchanged |
+| H3 | the fixture value back by rename, SIGHUP | restart again (counter +1, nothing else), verified 0 -> 1 |
+| H4 | file mode 000, SIGHUP | process, counters and the verified login unchanged (the old login stays up); after the run `run.sh` finds a launcher-log line at or after the signal that names the key `passcode_file` and the path, and records its shape (digits replaced, no value) in `out/<run>/secreload/log-shape.txt`; the mode is put back |
+| H5 | file readable again, SIGHUP | nothing restarted (same content as the running generation) |
+
+The launcher log is not readable in-case (no control action reads it), so H4's log line is an end-of-run verdict of `run.sh` (exit 5), like the value
+scan; a SIGHUP that was ignored would show as a missing line. The case writes `out/<run>/secreload/log-expect.json` ({t_hup, key, path}, no value).
 
 ## Run it
 
@@ -62,7 +88,7 @@ DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/admin.to
   scripts/run.sh -m rig --profile web,aprs -- cases/test_secret_reload.py
 ```
 
-About 4 minutes (five reloads, four 12 s waits for a hub refresh, restarts). One rig, nothing else at the same time (the case restarts
+The SIGHUP variant runs in the same rig run after the first case and needs none of `DVT_SUT_CONFIG_RW`, the web profile or the admin accounts: `DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/data-ident.toml:rig/config/dv-router/dp15-aprsis.toml scripts/run.sh -m rig --profile aprs -- cases/test_secret_reload.py -k sighup` (about 3 minutes; `-k` leaves the first case out; the data worker of `data-ident.toml` is what `dp15-aprsis.toml` needs, the web profile is not). About 4 minutes for the first case (five reloads, four 12 s waits for a hub refresh, restarts). One rig, nothing else at the same time (the case restarts
 `dv-edge-aprsis` three times). `DVT_SECRELOAD1=on` turns "image without SECRELOAD1" from a skip into a failure; leave it unset on an
 image that is not expected to have the rule.
 
@@ -94,10 +120,10 @@ synthetic callsign; the handling follows the secret rules of the repository so t
 
 * One secret kind (APRS-IS passcode). A `restart` of the owning child is proven by a new process and the restart counter, not by the child's
   other effects. The value in effect is shown by the aprsc's verdict on the login as seen by the edge.
-* Not covered: byte-identical TOML reloads (SIGHUP, fabric reload), the watcher, other secret kinds (link, AllStar, TURN, callhome),
+* Not covered: `admin/config/reload` through fabric (no HTTP route yet), the watcher, other secret kinds (link, AllStar, TURN, callhome),
   the "absent default passcode" rule (an unset `passcode_file` selects `<state>/secrets/aprs-passcode`), a symlink, FIFO or oversize file.
 * The restart counter and the verified gauge reach the hub every 10 s: "nothing restarted" is judged 12 s after the reload, together with the
   process identity (`proc-stat`, immediate). A restart of the same child for another reason during a wait would fail the case.
-* The scan of the collected logs is a verdict of `run.sh` (exit 5), not a pytest result.
+* The scan of the collected logs and the launcher-log line of H4 are verdicts of `run.sh` (exit 5), not pytest results.
 * The admin reply shapes (`actions[]`, the problem body of a refusal) are matched as text; they are not specified field by field
   (`openapi-admin.yaml`: "ConfigResult" has no schema).

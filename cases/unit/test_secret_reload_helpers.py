@@ -199,3 +199,50 @@ def test_cli_scan_exit_codes(tmp_path, capsys):
     assert sr.main(["scan", "--values-file", str(values), "--root", str(root), "--skip", "a.log"]) == 0
     values.write_text("[]")
     assert sr.main(["scan", "--values-file", str(values), "--root", str(root)]) == 2
+
+
+# ---------------------------------------------------------------- launcher log (SIGHUP variant)
+
+LOG = """\
+xlxd-sut-1  | 2026-11-10T01:00:00.100000000Z dv-router: config reload: applied generation 4
+xlxd-sut-1  | 2026-11-10T01:05:00.500000000Z dv-router: reload refused: edges.aprsis.passcode_file: cannot read /etc/dv-router/aprs-secrets/passcode (Permission denied)
+xlxd-sut-1  | 2026-11-10T01:05:01.000000000Z dv-router: dv-edge-aprsis: running generation 4 kept
+xlxd-sut-1  | 2026-11-10T01:09:00.000000000Z dv-router: reload refused: edges.aprsis.passcode_file: cannot read /etc/dv-router/aprs-secrets/passcode
+"""
+T_0105 = 1794272700.0       # 2026-11-10T01:05:00Z
+
+
+def test_log_epoch_and_shape():
+    assert sr.log_epoch("xlxd-sut-1  | 2026-11-10T01:05:00.500000000Z x") == pytest.approx(T_0105 + 0.5)
+    assert sr.log_epoch("no time stamp") is None
+    shape = sr.line_shape(LOG.splitlines()[1])
+    assert shape.startswith("dv-router: reload refused: edges.aprsis.passcode_file: cannot read /etc/dv-router/aprs-secrets/passcode")
+    assert "2026" not in shape and "xlxd-sut-1" not in shape
+    assert sr.line_shape(LOG.splitlines()[0]) == "dv-router: config reload: applied generation N"
+
+
+def test_refusal_lines_need_the_key_the_path_and_a_time_at_or_after_the_signal():
+    path = "/etc/dv-router/aprs-secrets/passcode"
+    got = sr.refusal_lines(LOG, T_0105, "passcode_file", path)
+    assert len(got) == 2 and all("passcode_file" in g and path in g for g in got)
+    assert len(sr.refusal_lines(LOG, T_0105 + 60, "passcode_file", path)) == 1       # the 01:09 line only
+    assert sr.refusal_lines(LOG, T_0105 + 600, "passcode_file", path) == []
+    assert sr.refusal_lines(LOG, T_0105, "passcode_file", "/other/path") == []
+    assert sr.refusal_lines(LOG, T_0105, "turn_secret_file", path) == []
+    assert sr.refusal_lines(LOG, T_0105 + 0.4, "passcode_file", path)               # the 1 s slack before the signal
+
+
+def test_cli_logcheck(tmp_path, capsys):
+    log = tmp_path / "xlxd-sut.log"
+    log.write_text(LOG)
+    expect = tmp_path / "expect.json"
+    shape_file = tmp_path / "shape.txt"
+    expect.write_text(json.dumps({"t_hup": T_0105, "key": "passcode_file", "path": "/etc/dv-router/aprs-secrets/passcode"}))
+    assert sr.main(["logcheck", "--log", str(log), "--expect", str(expect), "--shape-file", str(shape_file)]) == 0
+    printed = capsys.readouterr().out
+    assert "of the shape: dv-router: reload refused" in printed and "2026" not in printed
+    assert "passcode_file" in shape_file.read_text()
+    expect.write_text(json.dumps({"t_hup": T_0105 + 3600, "key": "passcode_file", "path": "/etc/dv-router/aprs-secrets/passcode"}))
+    assert sr.main(["logcheck", "--log", str(log), "--expect", str(expect)]) == 1
+    assert "no launcher log line" in capsys.readouterr().out
+    assert sr.main(["logcheck", "--log", str(tmp_path / "missing.log"), "--expect", str(expect)]) == 2
