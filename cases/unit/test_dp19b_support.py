@@ -226,6 +226,22 @@ def test_there_is_no_accounts_down_case_and_no_switch_any_more():
     assert "ACCOUNTS_DOWN" not in compose
 
 
+def test_the_locator_leak_check_does_not_reclassify_a_sanitized_look_alike():
+    """wip-a31709a first run: `> IO91SX/- space` (a leading space, an ORDINARY status) is public as `IO91SX/- space` with spatial false; classifying that body again made it look like a leak."""
+    import test_dp19_locator as t19
+    from dvtest.proto import aprs
+    lookalike = {"item_type": "status", "callsign": "N0OPT-8", "body": "IO91SX/- space", "spatial": False}
+    assert aprs.is_locator_status(">" + lookalike["body"])                       # the trap: the trimmed body alone looks like a locator status
+    assert t19.leaked_locator_rows([lookalike]) == []
+    for name, info in aprs.LOCATOR_LOOKALIKES.items():
+        body = info[1:].strip()                                                  # what the public row carries: the leading space trimmed
+        assert t19.leaked_locator_rows([{"item_type": "status", "body": body, "spatial": False}]) == [], name
+    for info in aprs.LOCATOR_VALID.values():
+        assert t19.leaked_locator_rows([{"item_type": "status", "body": info[1:], "spatial": False}]) != [], info                  # a valid vector's text is a leak
+    assert t19.leaked_locator_rows([{"item_type": "status", "body": "anything", "spatial": True}]) != []                            # and so is any spatial row
+    assert t19.leaked_locator_rows([{"item_type": "status", "body": "Ready", "spatial": False}]) == []
+
+
 def test_the_dp19b_bodies_and_constants():
     assert st.SPATIAL_BODY == st.SPATIAL.lstrip(">") == "IO91SX/G" and st.PLAIN_BODY == "Ready" and st.TEXT == st.SPATIAL_BODY
     from dvtest.proto import aprs

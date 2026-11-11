@@ -42,6 +42,18 @@ def private_base(shape):
     pytest.skip("neither position_optout %s nor positions = false is configured: add rig/config/dv-router/dp7-position-optout.toml or dp7-positions-off.toml" % dp6c.OPT_BASE)
 
 
+# The public status body is the SANITIZED text: a leading space is trimmed (the look-alike `> IO91SX/- space` is public as `IO91SX/- space`), so it must never be classified again
+# from the public body (the first rig run on wip-a31709a did, and called an ordinary status a leak). The public row says it itself: `spatial` is the worker's classification of the
+# ORIGINAL bytes (status.rs locator: the grid must start at the first byte after `>`). A row of the private base is a leak when it is spatial, or when its body is exactly the text of
+# one of the valid vectors the case sent.
+VALID_BODIES = {info.lstrip(">").strip() for info in aprs.LOCATOR_VALID.values()}
+
+
+def leaked_locator_rows(rows):
+    """The status rows (public SSE events or message history) that show a valid locator status: `spatial` true, or a body equal to the text of a valid vector."""
+    return [r for r in rows if r.get("spatial") is True or str(r.get("body", "")).strip() in VALID_BODIES]
+
+
 def word_of(info):
     """The distinguishing last word of a status information field (it stays in the status text)."""
     return info.lstrip(">").rsplit(" ", 1)[-1]
@@ -81,8 +93,8 @@ def test_dp19_a_locator_status_is_dropped_for_a_private_base(rig, target, hub, w
         sp.note(target, case, "RECORD", "look-alikes and the plain status that never reached the public SSE as statuses: %s" % (missing or "none"))
         assert not missing, "ordinary statuses were treated as locator statuses (dropped): %s" % missing
         # no valid locator status of the private base is public, on any surface
-        sse = [r for r in sp.sse_status(fd.pub, fd.t0, base) if aprs.is_locator_status(">" + str(r.get("body", "")))]
-        history = [r for r in sp.status_rows(room_history(web_ctx), base) if aprs.is_locator_status(">" + str(r.get("body", "")))]
+        sse = leaked_locator_rows(sp.sse_status(fd.pub, fd.t0, base))
+        history = leaked_locator_rows(sp.status_rows(room_history(web_ctx), base))
         assert not sse and not history, "a valid locator status of the private base is public: %s %s" % (sse[:1], history[:1])
         if shape.positions:
             send_status(rf, PUBLIC_BASE + "-3", aprs.LOCATOR_VALID["six"])
