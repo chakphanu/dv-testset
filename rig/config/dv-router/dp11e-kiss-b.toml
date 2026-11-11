@@ -73,3 +73,12 @@ allow_src = ["N0TEST-7"]
 tx_per_min = 30
 tx_burst = 5
 keepalive_secs = 0
+
+[[edges.ax25.kiss_server]]
+name = "txdefault"
+listen = "<OWN_IP>:8208"
+allow_from = ["<TESTER_IP>/32"]
+ports = [{ name = "rf-a", channel = 0 }]
+tx = true
+allow_src = ["N0TEST-7"]
+keepalive_secs = 0

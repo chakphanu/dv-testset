@@ -7,6 +7,9 @@ AX.25 edge of DV-Router (`[[edges.ax25.kiss_server]]`, data.md 10.10, config.md)
   frame_counts / client_counts / clients_gauge   dv_edge_kiss_frames_total / dv_edge_kiss_clients_total / dv_edge_kiss_clients readers
   keepalive_problems          the lone-FEND keepalive of an idle client against the configured period
   CONFIG_CASES                mutations of the dp11e-kiss.toml snippet that `dv-router config check` must refuse (cfgload style)
+  rf_results / rf_queue       dv_edge_rf_tx_total{port} by result (all classes) and the gauge dv_edge_rf_queue{port}
+  budget_problems             the outcome of a burst of client position frames against the class-default airtime budget (DP11e-p)
+  room_path                   the (room, addressee) of a data.path that carries RF text from rf-a to a room (DP11e-g room control)
 """
 import ipaddress
 import re
@@ -281,3 +284,65 @@ def config_problems(case, verdict, exit_code):
     if not first["message"].strip():
         problems.append("the error message is empty")
     return problems
+
+
+# ---------------------------------------------------------------- the client TX airtime budget (DP11e-p) and the room control (DP11e-g)
+
+def rf_results(samples, port):
+    """{result: total} of dv_edge_rf_tx_total{port} summed over the scheduler classes (kind)."""
+    out = {}
+    for x in samples:
+        if x.name == "dv_edge_rf_tx_total" and x.labels.get("port") == port:
+            out[x.labels.get("result", "")] = out.get(x.labels.get("result", ""), 0) + int(x.value)
+    return out
+
+
+def rf_queue(samples, port):
+    """The gauge dv_edge_rf_queue{port} (frames queued for the physical transmitter) or None without a series."""
+    hits = [x for x in samples if x.name == "dv_edge_rf_queue" and x.labels.get("port") == port]
+    return int(sum(x.value for x in hits)) if hits else None
+
+
+def dropped_results(results):
+    """Sum of every dropped_* result of an {result: n} map."""
+    return sum(n for r, n in results.items() if r.startswith("dropped_"))
+
+
+def budget_problems(frames, kiss_delta, at_modem, rf_delta, queue_delta):
+    """Problems ([] = as documented, data.md 10.8 and 10.10) of `frames` client position frames sent in one burst through a listener whose
+    packet buckets admit them all, against the class-default airtime budget of the port (afsk1200-shared: the position class holds about four
+    frames per 600 s). `kiss_delta` is {(dir, result): n} of the listener, `at_modem` the number of those frames the fake modem received,
+    `rf_delta` {result: n} of dv_edge_rf_tx_total{port} (all classes) and `queue_delta` the change of dv_edge_rf_queue (None = no series).
+    The documented outcome: all queued at the KISS layer, `delayed` grows, the frames the budget cannot carry are later dropped_* (class TTL),
+    fewer frames reach the modem than were sent, and every queued frame is sent, dropped or still queued."""
+    problems = []
+    queued, rate = kiss_delta.get(("in", "queued"), 0), kiss_delta.get(("in", "rate"), 0)
+    if queued != frames or rate:
+        problems.append("setup: %d frames sent, kiss queued %d and rate %d (a packet bucket refused some, so the airtime budget is not what held them): %s" % (
+            frames, queued, rate, kiss_delta))
+    sent, delayed, dropped = rf_delta.get("sent", 0), rf_delta.get("delayed", 0), dropped_results(rf_delta)
+    if at_modem >= frames:
+        problems.append("all %d frames reached the modem: the class-default airtime budget held none of them" % frames)
+    if at_modem < 1:
+        problems.append("no frame reached the modem: the budget holds about four position frames, the first ones must be sent")
+    if sent != at_modem:
+        problems.append("dv_edge_rf_tx_total{result=sent} +%d but %d frames at the modem" % (sent, at_modem))
+    if delayed < 1:
+        problems.append("dv_edge_rf_tx_total{result=delayed} did not grow: %s" % rf_delta)
+    if dropped < 1:
+        problems.append("no dropped_* result grew (the delayed frames expire by their class TTL): %s" % rf_delta)
+    if queue_delta is not None and sent + dropped + queue_delta != queued:
+        problems.append("%d frames queued, sent %d + dropped %d + still queued %d = %d" % (queued, sent, dropped, queue_delta, sent + dropped + queue_delta))
+    return problems
+
+
+def room_path(doc):
+    """(room letter, addressee) of the first enabled [[data.path]] that carries `text` from the AX.25 port rf-a (or from every AX.25 port)
+    to a room and names an addressee, else None. Such a path is the live route a client frame must never take."""
+    for row in ((doc.get("data") or {}).get("path") or []):
+        to = str(row.get("to", ""))
+        if row.get("enable", True) is False or row.get("from") not in ("edge:ax25/rf-a", "edge:ax25") or not to.startswith("room:"):
+            continue
+        if "text" in (row.get("types") or []) and row.get("addressee"):
+            return to[len("room:"):], row["addressee"]
+    return None

@@ -44,7 +44,7 @@ def test_shape_b_has_the_loopback_rate_and_simulate_listeners():
     shp = dp.kiss_shape(rendered("dp11e-kiss-b.toml"))
     assert shp.ports == {"rf-a": True, "rf-b": "simulate"}
     ls = shp.listeners
-    assert list(ls) == ["loop", "rate", "sim"] and ls["loop"].loopback and ls["loop"].host == "127.0.0.1" and ls["loop"].allow_from == []
+    assert list(ls) == ["loop", "rate", "sim", "txdefault"] and ls["loop"].loopback and ls["loop"].host == "127.0.0.1" and ls["loop"].allow_from == []
     assert (ls["rate"].tx_per_min, ls["rate"].tx_burst) == (2, 1) and ls["sim"].channels == {0: "rf-a", 1: "rf-b"}
     assert dp.kiss_shape({}) is None and dp.kiss_shape({"edges": {"ax25": {"enable": True}}}) is None
 
@@ -297,3 +297,202 @@ def test_the_log_case_leaves_a_needle_file_without_logs_and_scans_with_them(tmp_
     (tmp_path / "logs" / "xlxd-sut.log").write_text("kiss client 198.51.100.9 connected\n")
     with pytest.raises(AssertionError, match="names a peer address"):
         tk.test_dp11e_h_the_sut_log_has_no_peer_address_and_no_frame_content(None, target, kiss)
+
+
+# ---------------------------------------------------------------- DP11e-p budget, DP11e-q default tx_from, DP11e-g2 room control
+
+def test_the_budget_snippet_is_shape_b_with_class_default_budgets_and_a_wide_listener():
+    doc = rendered("dp11e-kiss-budget.toml")
+    ports = {p["name"]: p for p in doc["edges"]["ax25"]["port"]}
+    assert ports["rf-a"]["tx_budget"] == {} and ports["rf-b"]["tx_budget"] == {} and ports["rf-b"]["tx"] == "simulate"
+    assert all(p["tx_per_min"] == 30 and p["tx_burst"] == 30 for p in ports.values())          # no port packet bucket stands in the way
+    shp = dp.kiss_shape(doc)
+    ls = shp.listeners
+    assert list(ls) == ["loop", "rate", "sim", "budget"] and len({l.port for l in ls.values()}) == 4
+    assert ls["budget"].tx and ls["budget"].channels == {0: "rf-a"} and ls["budget"].allow_src == ["N0TEST-7"] and ls["budget"].port == 8209
+    assert ls["budget"].tx_burst >= tk.BUDGET_FRAMES and ls["budget"].tx_per_min >= tk.BUDGET_FRAMES      # the listener bucket admits the whole burst
+    assert (ls["rate"].tx_per_min, ls["rate"].tx_burst) == (2, 1)
+    b = dp.kiss_shape(rendered("dp11e-kiss-b.toml")).listeners
+    for name in ("loop", "rate", "sim"):
+        assert (b[name].host, b[name].port, b[name].channels, b[name].tx) == (ls[name].host, ls[name].port, ls[name].channels, ls[name].tx), name
+
+
+def test_the_txdefault_listener_has_tx_and_no_tx_from_and_the_tester_is_not_loopback():
+    ls = dp.kiss_shape(rendered("dp11e-kiss-b.toml")).listeners
+    t = ls["txdefault"]
+    assert t.tx and t.tx_from == [] and t.allow_src == ["N0TEST-7"] and t.allow_from == ["172.30.0.30/32"] and t.port == 8208 and not t.loopback
+    assert dp.peer_in(t.allow_from, "172.30.0.30") and not dp.peer_in(t.tx_from, "172.30.0.30")
+    assert len({l.port for l in ls.values()}) == 4
+
+
+def test_the_room_snippet_is_a_text_path_from_rf_a_to_room_b():
+    doc = rendered("dp11e-kiss.toml", "dp11e-kiss-room.toml")
+    assert dp.room_path(doc) == ("B", "XLX999B")
+    assert dp.room_path(rendered("dp11e-kiss.toml", "dp11e-kiss-igate.toml")) is None            # a transit path to APRS-IS is not a room path
+    assert dp.room_path({}) is None
+    path = {"from": "edge:ax25", "to": "room:C", "types": ["text"], "addressee": "XLX999C"}
+    assert dp.room_path({"data": {"path": [dict(path, enable=False), dict(path, addressee=""), dict(path, types=["position"]), dict(path, **{"from": "edge:ax25/rf-b"})]}}) is None
+    assert dp.room_path({"data": {"path": [path]}}) == ("C", "XLX999C")
+
+
+def test_rf_results_and_queue_read_the_hub_text():
+    smp = metrics.parse('dv_edge_rf_tx_total{port="rf-a",kind="position",result="sent"} 4\ndv_edge_rf_tx_total{port="rf-a",kind="beacon",result="sent"} 1\n'
+                        'dv_edge_rf_tx_total{port="rf-a",kind="position",result="delayed"} 9\ndv_edge_rf_tx_total{port="rf-a",kind="position",result="dropped_ttl"} 3\n'
+                        'dv_edge_rf_tx_total{port="rf-b",kind="position",result="simulated"} 2\ndv_edge_rf_queue{port="rf-a",proc="x"} 2\n')
+    assert dp.rf_results(smp, "rf-a") == {"sent": 5, "delayed": 9, "dropped_ttl": 3} and dp.rf_results(smp, "rf-b") == {"simulated": 2} and dp.rf_results(smp, "no") == {}
+    assert dp.rf_queue(smp, "rf-a") == 2 and dp.rf_queue(smp, "rf-b") is None
+    assert dp.dropped_results({"sent": 3, "dropped_ttl": 2, "dropped_new": 1}) == 3
+
+
+def test_budget_problems_accept_the_documented_outcome_and_name_each_deviation():
+    kiss = {("in", "queued"): 8}
+    rf = {"sent": 4, "delayed": 12, "dropped_ttl": 4}
+    assert dp.budget_problems(8, kiss, 4, rf, 0) == []
+    assert dp.budget_problems(8, kiss, 4, {"sent": 4, "delayed": 12, "dropped_ttl": 3}, 1) == []                  # one still queued
+    assert dp.budget_problems(8, kiss, 4, rf, None) == []                                                        # no gauge: the sum is not checked
+    assert any("did not grow" in p for p in dp.budget_problems(8, kiss, 4, {"sent": 4, "dropped_ttl": 4}, 0))
+    assert any("no dropped_*" in p for p in dp.budget_problems(8, kiss, 4, {"sent": 4, "delayed": 3}, 4) )
+    assert any("all 8 frames reached the modem" in p for p in dp.budget_problems(8, kiss, 8, {"sent": 8}, 0))
+    assert any("no frame reached the modem" in p for p in dp.budget_problems(8, kiss, 0, {"delayed": 8, "dropped_ttl": 8}, 0))
+    assert any("result=sent} +3 but 4" in p for p in dp.budget_problems(8, kiss, 4, {"sent": 3, "delayed": 5, "dropped_ttl": 5}, 0))
+    assert any("setup" in p and "rate 3" in p for p in dp.budget_problems(8, {("in", "queued"): 5, ("in", "rate"): 3}, 4, rf, 0))
+    bad = dp.budget_problems(8, kiss, 4, {"sent": 4, "delayed": 5, "dropped_ttl": 2}, 0)
+    assert len(bad) == 1 and "sent 4 + dropped 2 + still queued 0 = 6" in bad[0]
+
+
+class FakeApp:
+    def __init__(self, frames=()):
+        self.sent, self.is_open, self._frames = [], True, list(frames)
+
+    def send_frame(self, frame, channel=0):
+        self.sent.append((channel, frame))
+        return True
+
+    def wait_frames(self, count=1, timeout=10.0, since=0.0):
+        return self._frames
+
+    def close(self):
+        self.is_open = False
+
+
+def flow_kiss(doc_names, monkeypatch, tmp_path, delta, at_modem=(), frames_to_client=(), rf_a_inject=True):
+    """A fake run for the new flows: the listener table of the snippets, no sleeping, a fake client and canned counter deltas."""
+    doc = rendered(*doc_names)
+    monkeypatch.setattr(tk.p1, "read_config", lambda target: doc)
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(tk, "time", SimpleNamespace(monotonic=lambda: clock["t"], sleep=lambda s: clock.__setitem__("t", clock["t"] + s)))   # a fake clock: no real waiting
+    monkeypatch.setattr(tk.ds, "write_note", lambda *a, **k: None)
+    client = FakeApp(frames_to_client)
+    monkeypatch.setattr(tk, "app", lambda kiss, name, **kw: client)
+    monkeypatch.setattr(tk, "settled", lambda kiss, name: {"frames": {}, "clients": {}})
+    monkeypatch.setattr(tk, "wait_frames_delta", lambda kiss, name, before, want, timeout=0: delta)
+    monkeypatch.setattr(tk, "modem_frames", lambda kiss, since, port="a": list(at_modem) if port == "a" else [])
+    injected = []
+    tnc = SimpleNamespace(tx_guard=lambda case: None, a=SimpleNamespace(inject=lambda f: injected.append(f) or rf_a_inject), b=SimpleNamespace(inject=lambda f: True))
+    kiss = SimpleNamespace(shape=dp.kiss_shape(doc), tnc=tnc, hub=SimpleNamespace(text=lambda: ""))
+    return kiss, client, injected
+
+
+def test_flow_q_passes_when_tx_addr_is_counted_and_the_client_can_read(monkeypatch, tmp_path):
+    heard = kiss_tnc.ui_frame("N0TEST-3", "APDVT1", "=1030.00N/02015.00E>dp11e-q-heard", digis=("WIDE1-1*",))
+    kiss, client, injected = flow_kiss(["dp11e-kiss-b.toml"], monkeypatch, tmp_path, {("in", "tx_addr"): 1, ("out", "sent"): 1}, frames_to_client=[(5.0, 0, heard)])
+    tk.test_dp11e_q_an_empty_tx_from_permits_loopback_peers_only(None, SimpleNamespace(out=str(tmp_path)), kiss)
+    assert len(client.sent) == 1 and len(injected) == 1
+
+
+def test_flow_q_fails_on_each_way_the_default_can_be_wrong(monkeypatch, tmp_path):
+    heard = kiss_tnc.ui_frame("N0TEST-3", "APDVT1", "=1030.00N/02015.00E>dp11e-q-heard", digis=("WIDE1-1*",))
+    tgt = SimpleNamespace(out=str(tmp_path))
+    kiss, _c, _i = flow_kiss(["dp11e-kiss-b.toml"], monkeypatch, tmp_path, {("in", "queued"): 1}, frames_to_client=[(5.0, 0, heard)])
+    with pytest.raises(AssertionError, match="tx_addr moved by 0"):
+        tk.test_dp11e_q_an_empty_tx_from_permits_loopback_peers_only(None, tgt, kiss)
+    kiss, _c, _i = flow_kiss(["dp11e-kiss-b.toml"], monkeypatch, tmp_path, {("in", "tx_addr"): 1, ("in", "queued"): 1}, frames_to_client=[(5.0, 0, heard)])
+    with pytest.raises(AssertionError, match="was queued although tx_from is empty"):
+        tk.test_dp11e_q_an_empty_tx_from_permits_loopback_peers_only(None, tgt, kiss)
+    kiss, _c, _i = flow_kiss(["dp11e-kiss-b.toml"], monkeypatch, tmp_path, {("in", "tx_addr"): 1}, at_modem=[(1.0, "x")], frames_to_client=[(5.0, 0, heard)])
+    with pytest.raises(AssertionError, match="reached the modem"):
+        tk.test_dp11e_q_an_empty_tx_from_permits_loopback_peers_only(None, tgt, kiss)
+    kiss, _c, _i = flow_kiss(["dp11e-kiss-b.toml"], monkeypatch, tmp_path, {("in", "tx_addr"): 1}, frames_to_client=[])
+    with pytest.raises(AssertionError, match="could not READ"):
+        tk.test_dp11e_q_an_empty_tx_from_permits_loopback_peers_only(None, tgt, kiss)
+
+
+def test_new_cases_skip_without_their_shape(monkeypatch, tmp_path):
+    tgt = SimpleNamespace(out=str(tmp_path))
+    kiss, _c, _i = flow_kiss(["dp11e-kiss-b.toml"], monkeypatch, tmp_path, {})
+    with pytest.raises(pytest.skip.Exception, match="no listener 'budget'"):
+        tk.test_dp11e_p_the_client_airtime_budget_delays_then_drops_the_frames_it_cannot_carry(None, tgt, kiss)
+    kiss, _c, _i = flow_kiss(["dp11e-kiss.toml"], monkeypatch, tmp_path, {})
+    with pytest.raises(pytest.skip.Exception, match="no listener 'txdefault'"):
+        tk.test_dp11e_q_an_empty_tx_from_permits_loopback_peers_only(None, tgt, kiss)
+    with pytest.raises(pytest.skip.Exception, match="dp11e-kiss-room.toml"):
+        tk.test_dp11e_g2_a_heard_frame_moves_the_room_counters_and_a_client_frame_does_not(None, tgt, kiss)
+    kiss, _c, _i = flow_kiss(["dp11e-kiss-b.toml"], monkeypatch, tmp_path, {})
+    with pytest.raises(pytest.skip.Exception, match="no listener 'apps'"):
+        tk.test_dp11e_g2_a_heard_frame_moves_the_room_counters_and_a_client_frame_does_not(None, tgt, kiss)
+    # the budget listener exists but rf-a has a raised budget: the case names the snippet
+    text = (SNIPPETS / "dp11e-kiss-budget.toml").read_text().replace("tx_budget = {}", "tx_budget = { duty_pct = 20, per_source_pct = 100 }")
+    doc = rendered(text=text)
+    kiss, _c, _i = flow_kiss(["dp11e-kiss-budget.toml"], monkeypatch, tmp_path, {})
+    monkeypatch.setattr(tk.p1, "read_config", lambda target: doc)
+    with pytest.raises(pytest.skip.Exception, match="class defaults"):
+        tk.test_dp11e_p_the_client_airtime_budget_delays_then_drops_the_frames_it_cannot_carry(None, tgt, kiss)
+
+
+def test_flow_g2_needs_the_client_frame_quiet_and_the_heard_frame_to_move_the_counters(monkeypatch, tmp_path):
+    tgt = SimpleNamespace(out=str(tmp_path))
+    mine = dp.good_frame(kiss_tnc.aprs_message_info("XLX999B", "dp11e-roomclient", "7"), src=dp.SRC2)
+    kiss, client, injected = flow_kiss(["dp11e-kiss.toml", "dp11e-kiss-room.toml"], monkeypatch, tmp_path, {}, at_modem=[(1.0, ax25.to_tnc2(mine))])
+    state = {"n": 0}
+
+    def counters(kiss_):
+        state["n"] += 1
+        return state["counters"]
+
+    monkeypatch.setattr(tk, "room_counters", counters)
+    quiet = {"items": 5, "room": 5, "items_all": 9, "room_all": 7}
+    state["counters"] = quiet
+    with pytest.raises(AssertionError, match="room path is not live"):                     # nothing moves after the heard frame: the control fails
+        tk.test_dp11e_g2_a_heard_frame_moves_the_room_counters_and_a_client_frame_does_not(None, tgt, kiss)
+    assert len(injected) == 1 and len(client.sent) == 1
+    seq = iter([quiet, quiet, quiet, dict(quiet, items=6, room=6)])
+    monkeypatch.setattr(tk, "room_counters", lambda kiss_: next(seq))
+    kiss, client, injected = flow_kiss(["dp11e-kiss.toml", "dp11e-kiss-room.toml"], monkeypatch, tmp_path, {}, at_modem=[(1.0, ax25.to_tnc2(mine))])
+    monkeypatch.setattr(tk, "room_counters", lambda kiss_: next(seq))
+    tk.test_dp11e_g2_a_heard_frame_moves_the_room_counters_and_a_client_frame_does_not(None, tgt, kiss)
+    # a client frame that moves a counter is a failure before the control is even sent
+    moved = iter([quiet, dict(quiet, items_all=10)])
+    kiss, client, injected = flow_kiss(["dp11e-kiss.toml", "dp11e-kiss-room.toml"], monkeypatch, tmp_path, {}, at_modem=[(1.0, ax25.to_tnc2(mine))])
+    monkeypatch.setattr(tk, "room_counters", lambda kiss_: next(moved))
+    with pytest.raises(AssertionError, match="a client frame moved room or item counters"):
+        tk.test_dp11e_g2_a_heard_frame_moves_the_room_counters_and_a_client_frame_does_not(None, tgt, kiss)
+    assert injected == []
+
+
+def test_flow_p_passes_on_the_documented_outcome_and_fails_when_the_budget_holds_nothing(monkeypatch, tmp_path):
+    tgt = SimpleNamespace(out=str(tmp_path))
+    bud = [(1.0 + n, "N0TEST-7>APDR16,WIDE1-1:=1030.00N/02015.00E>dp11e-bud%d" % n) for n in range(4)]
+
+    def run(sent, delayed, dropped, queue, modem, kiss_delta):
+        kiss, client, _i = flow_kiss(["dp11e-kiss-budget.toml"], monkeypatch, tmp_path, kiss_delta, at_modem=modem)
+        calls = {"n": 0}
+
+        def text(_kiss):
+            calls["n"] += 1
+            # the first scrape is the baseline, later ones show the burst
+            rows = [] if calls["n"] <= 2 else [("sent", sent), ("delayed", delayed), ("dropped_ttl", dropped)]
+            body = "".join('dv_edge_rf_tx_total{port="rf-a",kind="position",result="%s"} %d\n' % r for r in rows)
+            return metrics.parse(body + 'dv_edge_rf_queue{port="rf-a"} %d\n' % (0 if calls["n"] <= 2 else queue))
+
+        monkeypatch.setattr(tk, "samples", text)
+        tk.test_dp11e_p_the_client_airtime_budget_delays_then_drops_the_frames_it_cannot_carry(None, tgt, kiss)
+        return client
+
+    client = run(4, 12, 4, 0, bud, {("in", "queued"): 8})
+    assert len(client.sent) == tk.BUDGET_FRAMES and {ch for ch, _f in client.sent} == {0}
+    with pytest.raises(AssertionError, match="all 8 frames reached the modem"):
+        run(8, 0, 0, 0, bud + [(9.0, "x>y:dp11e-bud4")] * 4, {("in", "queued"): 8})
+    with pytest.raises(AssertionError, match="did not grow"):
+        run(4, 0, 4, 0, bud, {("in", "queued"): 8})
+    with pytest.raises(AssertionError, match="setup"):
+        run(4, 12, 4, 0, bud, {("in", "queued"): 6, ("in", "rate"): 2})

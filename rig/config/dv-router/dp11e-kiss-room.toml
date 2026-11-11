@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (docs/dp11e-cases.md, DP11e-g room control): the live RF-to-room path from rf-a, so that "a client frame never reaches
+# a room" has a path to be absent from: a message addressed to the room name that is HEARD on rf-a (the fake modem injects it) becomes a text item of
+# room B and moves the counters dv_pkt_items_total{kind=text,result=accepted} and dv_room_data_total{result=accepted}; the same message TRANSMITTED by
+# a KISS client must move neither. Same shape as `rf-in` of dp15-rf.toml, narrowed to the port rf-a. ONLY with dp11e-kiss.toml (the port rf-a) and
+# data-ident.toml (the data worker); independent of dp11e-kiss-igate.toml and dp15-aprsis.toml. Room B is the room of the DP15 cases; its APRS name is the
+# reflector callsign plus the module letter, XLX999B (7 characters, not an AX.25 address, so no RF ack exists for it).
+[[data.path]]
+name = "dp11e-room"
+from = "edge:ax25/rf-a"
+to = "room:B"
+types = ["text"]
+addressee = "XLX999B"
+per_min = 30

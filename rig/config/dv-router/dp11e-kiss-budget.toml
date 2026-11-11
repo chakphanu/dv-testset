@@ -1,0 +1,92 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (docs/dp11e-cases.md, DP11e-p): shape B (dp11e-kiss-b.toml) with the class-default `tx_budget = {}` on both
+# ports instead of duty_pct 20 / per_source_pct 100, so that the CLIENT TX airtime budget is exercised: the afsk1200-shared defaults are 5 % per
+# 600 s (30 s of airtime), the position class holds 1/8 of it and one source 25 % (data.md 10.8), about four 0.8 s position frames per 600 s; the first
+# rig run of shape K (wip-8891cc7) held the fifth position frame (`delayed` grew, `sent` stayed 4). Use it INSTEAD of dp11e-kiss-b.toml (both
+# define [edges.ax25]). TX needs a tx_budget on the port row (data.md 10.8 rule 7: there is no default), so `{}` is the way to say "the class defaults".
+# The port packet bucket is raised to its maximum (tx_per_min 30 / tx_burst 30) and the listener `budget` below carries tx_burst 10, so that NO packet
+# bucket refuses a burst of eight frames: the only thing left to hold them is the airtime budget (the listener bucket `rate` stays in the run for
+# DP11e-l, and is NOT the subject here).
+#
+#  loop     127.0.0.1:8205  as in shape B (DP11e-k)
+#  rate     <OWN_IP>:8206   as in shape B (DP11e-l): tx_per_min 2 / tx_burst 1
+#  sim      <OWN_IP>:8207   as in shape B (DP11e-m)
+#  budget   <OWN_IP>:8209   rf-a = channel 0, tx true for the tester, allow_src N0TEST-7, tx_per_min 30 / tx_burst 10 (eight frames pass the listener bucket)
+# Run DP11e-p alone (`-k dp11e_p`): the earlier cases of the file spend position budget on rf-a, and the case has to wait for the class TTL (300 s).
+[edges.ax25]
+enable = true
+callsign = "N0TEST-1"
+tx_enable = true
+alias_calls = []
+
+[[edges.ax25.port]]
+name = "rf-a"
+kind = "kiss-tcp"
+host = "<TESTER_IP>"
+port = 8101
+channel = 0
+tx = true
+physical = "radio1"
+band = "2m"
+class = "afsk1200-shared"
+tx_budget = {}
+tx_per_min = 30
+tx_burst = 30
+reconnect = { min_secs = 1, max_secs = 5 }
+
+[[edges.ax25.port]]
+name = "rf-b"
+kind = "kiss-tcp"
+host = "<TESTER_IP>"
+port = 8102
+channel = 0
+tx = "simulate"
+physical = "radio1"
+band = "2m"
+class = "afsk1200-shared"
+tx_budget = {}
+tx_per_min = 30
+tx_burst = 30
+reconnect = { min_secs = 1, max_secs = 5 }
+
+[[edges.ax25.kiss_server]]
+name = "loop"
+listen = "127.0.0.1:8205"
+ports = [{ name = "rf-a", channel = 0 }]
+tx = false
+
+[[edges.ax25.kiss_server]]
+name = "rate"
+listen = "<OWN_IP>:8206"
+allow_from = ["<TESTER_IP>/32"]
+ports = [{ name = "rf-a", channel = 0 }]
+tx = true
+tx_from = ["<TESTER_IP>/32"]
+allow_src = ["N0TEST-7"]
+tx_per_min = 2
+tx_burst = 1
+keepalive_secs = 0
+
+[[edges.ax25.kiss_server]]
+name = "sim"
+listen = "<OWN_IP>:8207"
+allow_from = ["<TESTER_IP>/32"]
+ports = [{ name = "rf-a", channel = 0 }, { name = "rf-b", channel = 1 }]
+tx = true
+tx_from = ["<TESTER_IP>/32"]
+allow_src = ["N0TEST-7"]
+tx_per_min = 30
+tx_burst = 5
+keepalive_secs = 0
+
+[[edges.ax25.kiss_server]]
+name = "budget"
+listen = "<OWN_IP>:8209"
+allow_from = ["<TESTER_IP>/32"]
+ports = [{ name = "rf-a", channel = 0 }]
+tx = true
+tx_from = ["<TESTER_IP>/32"]
+allow_src = ["N0TEST-7"]
+tx_per_min = 30
+tx_burst = 10
+keepalive_secs = 0

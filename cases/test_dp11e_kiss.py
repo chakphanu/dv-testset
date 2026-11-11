@@ -4,7 +4,8 @@ tester plays the fake KISS modems rf-a / rf-b (dvtest/kiss_tnc.py, as RF tier A 
 an APRSdroid / PinPoint-like client). Case table, shapes, run commands, limits: docs/dp11e-cases.md; helpers: dvtest/dp11e.py; the
 configuration refusals are cases/test_dp11e_config.py (host side, no rig).
 
-Shape K (rig/config/dv-router/dp11e-kiss.toml): listeners apps / rxonly / txdeny / outside.  Shape B (dp11e-kiss-b.toml): loop / rate / sim.
+Shape K (rig/config/dv-router/dp11e-kiss.toml): listeners apps / rxonly / txdeny / outside.  Shape B (dp11e-kiss-b.toml): loop / rate / sim / txdefault.
+Shape budget (dp11e-kiss-budget.toml): B with the class-default airtime budget, loop / rate / sim / budget.  Room control: dp11e-kiss-room.toml with K.
 
   DP11e-a  ASCII outside frames (an APRSdroid init string, text between frames) is ignored, the client stays open, the frames are served
   DP11e-b  the TX gate: one client frame per refusal label (tx_off, tx_addr, channel, bad_frame, not_ui, src, path, too_long, third_party,
@@ -22,6 +23,10 @@ Shape K (rig/config/dv-router/dp11e-kiss.toml): listeners apps / rxonly / txdeny
   DP11e-l  (shape B) the listener packet bucket (tx_per_min 2, tx_burst 1): `rate`
   DP11e-m  (shape B) a simulated port: `simulated`, no modem byte, no PTT
   DP11e-n  a client frame to a receive-only exposed port is refused as tx_off (not queued, nothing at either modem)
+  DP11e-p  (shape budget) the client TX airtime budget: eight position frames through a listener whose packet buckets admit them all are
+           queued, then `delayed` grows, later dropped_* (class TTL), and fewer frames reach the modem than were sent
+  DP11e-q  (shape B) the default of an empty tx_from: the tester may connect and read, its TX is refused as tx_addr
+  DP11e-g2 (shapes K + room) a frame HEARD on rf-a addressed to the room moves the room counters, the same frame TRANSMITTED by a client does not
   DP11e-y  the counter label sets are the fixed ones of data.md 13.1 (dir in/out, results per direction, listener names as port)
   DP11e-z  no admission is ever counted `disabled` in a valid configuration (a TTL-less client frame cannot be provoked black-box)
 
@@ -445,6 +450,64 @@ def test_dp11e_g_client_frames_never_reach_aprs_is_or_rooms(rig, target, kiss, r
             login.__exit__(None, None, None)
 
 
+ROOM_WAIT_S = 60.0                  # the data worker publishes its counters every 10 s
+
+
+def room_counters(kiss):
+    s = samples(kiss)
+    return {"items": int(metrics.total(s, "dv_pkt_items_total", kind="text", result="accepted")),
+            "room": int(metrics.total(s, "dv_room_data_total", result="accepted")),
+            "items_all": int(metrics.total(s, "dv_pkt_items_total")), "room_all": int(metrics.total(s, "dv_room_data_total"))}
+
+
+def test_dp11e_g2_a_heard_frame_moves_the_room_counters_and_a_client_frame_does_not(rig, target, kiss):
+    """data.md 10.10: client frames never enter rooms. The positive control for the ROOM half of that sentence (DP11e-g has one for APRS-IS only):
+    a path from rf-a to a room (dp11e-kiss-room.toml) makes a message addressed to the room name that is HEARD on rf-a a text item of the room
+    (dv_pkt_items_total{kind=text,result=accepted} and dv_room_data_total{result=accepted} +1); the same kind of message TRANSMITTED by a KISS
+    client (it reaches the modem) moves no room or item counter at all. Order: the client frame first (the absence is proven against a live
+    path), then the heard control."""
+    case = "DP11e-g2"
+    listener(kiss, "apps")
+    path = dp.room_path(p1.read_config(target))
+    if path is None:
+        pytest.skip("no [[data.path]] with text from edge:ax25/rf-a to a room and an addressee: add rig/config/dv-router/dp11e-kiss-room.toml (and data-ident.toml) "
+                    "to DVT_SUT_CONFIG_EXTRA (docs/dp11e-cases.md)")
+    room, addressee = path
+    guard(kiss, case)
+    time.sleep(QUIET_S)
+    before = room_counters(kiss)
+    client = app(kiss, "apps")
+    try:
+        t0 = time.monotonic()
+        body = "dp11e-roomclient"
+        mine = dp.good_frame(kiss_tnc.aprs_message_info(addressee, body, "7"), src=dp.SRC2)
+        assert client.send_frame(mine)
+        got = []
+        end = time.monotonic() + MODEM_WAIT_S
+        while not got and time.monotonic() < end:
+            got = [m for _t, m in modem_frames(kiss, t0) if body in m]
+            time.sleep(0.2)
+        assert got == [ax25.to_tnc2(mine)], "the client message did not reach the modem: %s" % got
+        time.sleep(20.0 + QUIET_S)
+        mid = room_counters(kiss)
+        note(target, case, "RECORD", "room %s addressee %s; counters before %s after the client message %s" % (room, addressee, before, mid))
+        assert mid == before, "a client frame moved room or item counters: %s -> %s" % (before, mid)
+        control = kiss_tnc.ui_frame("N0TEST-3", "APDVT1", kiss_tnc.aprs_message_info(addressee, "dp11e-roomheard", "3"), digis=("WIDE1-1",))
+        assert kiss.tnc.a.inject(control), "the fake modem rf-a has no connection to inject into"
+        end = time.monotonic() + ROOM_WAIT_S
+        after = mid
+        while time.monotonic() < end:
+            after = room_counters(kiss)
+            if after["items"] > mid["items"] and after["room"] > mid["room"]:
+                break
+            time.sleep(3.0)
+        note(target, case, "RECORD", "after the heard control %s" % (after,))
+        assert after["items"] > mid["items"], "dv_pkt_items_total{kind=text,result=accepted} did not move after a message heard on rf-a: the room path is not live, the absence above proves nothing (%s -> %s)" % (mid, after)
+        assert after["room"] > mid["room"], "dv_room_data_total{result=accepted} did not move after a message heard on rf-a (%s -> %s)" % (mid, after)
+    finally:
+        client.close()
+
+
 # ================================================================ DP11e-h: sessions, kick, log
 
 def find_session(kiss, name):
@@ -757,6 +820,84 @@ def test_dp11e_n_a_frame_to_a_receive_only_port_is_tx_off(rig, target, kiss):
     assert delta.get(("in", "queued"), 0) == 0, "a frame for a receive-only port was queued: %s" % delta
     assert modem_frames(kiss, t0) == [] and modem_frames(kiss, t0, "b") == [], "a frame for a receive-only port reached a modem"
     assert len(kiss.tnc.b.received) == b_received, "the receive-only modem rf-b received KISS bytes"
+
+
+BUDGET_FRAMES = 8
+BUDGET_TTL_WAIT_S = 360.0           # the position class TTL is 300 s (data.md 10.8): a frame the budget holds expires by then
+
+
+def test_dp11e_p_the_client_airtime_budget_delays_then_drops_the_frames_it_cannot_carry(rig, target, kiss):
+    """data.md 10.8 / 10.10 step 7: client frames share the port's airtime budget and the class shares (a position client frame is class
+    `position`; afsk1200-shared holds about four of them per 600 s with the class defaults) with the source quota key `kiss/<listener>`. Shape
+    budget (dp11e-kiss-budget.toml): rf-a has `tx_budget = {}` (the class defaults), the listener `budget` admits a burst of ten, so eight
+    position frames pass every packet bucket and are `queued`. Then: `dv_edge_rf_tx_total{result=delayed}` grows, the frames the budget cannot
+    carry expire (some `dropped_*`, normally `dropped_ttl` after 300 s), fewer frames reach the fake modem than were sent, and every queued frame
+    is sent, dropped or still queued (the gauge dv_edge_rf_queue; unchecked when the gauge has no series). Run it alone (`-k dp11e_p`)."""
+    case = "DP11e-p"
+    listener(kiss, "budget")
+    row = next((x for x in ((p1.read_config(target).get("edges") or {}).get("ax25") or {}).get("port") or [] if x.get("name") == "rf-a"), {})
+    if row.get("tx_budget") != {}:
+        pytest.skip("rf-a has tx_budget %r: the case needs the class defaults (`tx_budget = {}`, dp11e-kiss-budget.toml); the other shapes raise the budget" % (row.get("tx_budget"),))
+    guard(kiss, case)
+    before = settled(kiss, "budget")
+    rf0, q0 = dp.rf_results(samples(kiss), "rf-a"), dp.rf_queue(samples(kiss), "rf-a")
+    client = app(kiss, "budget")
+    t0 = time.monotonic()
+    try:
+        for n in range(BUDGET_FRAMES):
+            assert client.send_frame(dp.good_frame(dp.info_for("bud%d" % n)))
+        end = t0 + BUDGET_TTL_WAIT_S
+        rf_delta = {}
+        while time.monotonic() < end:
+            time.sleep(10.0)
+            now = dp.rf_results(samples(kiss), "rf-a")
+            rf_delta = {r: now.get(r, 0) - rf0.get(r, 0) for r in now if now.get(r, 0) - rf0.get(r, 0)}
+            if dp.dropped_results(rf_delta) and time.monotonic() - t0 > 30.0:
+                break
+        assert client.is_open, "the budget closed the client"
+    finally:
+        client.close()
+    time.sleep(QUIET_S)
+    s1 = samples(kiss)                                           # one scrape for the counters and the gauge: they must agree
+    now = dp.rf_results(s1, "rf-a")
+    rf_delta = {r: now.get(r, 0) - rf0.get(r, 0) for r in now if now.get(r, 0) - rf0.get(r, 0)}
+    q1 = dp.rf_queue(s1, "rf-a")
+    queue_delta = None if q1 is None or q0 is None else q1 - q0
+    kiss_delta = wait_frames_delta(kiss, "budget", before, {("in", "queued"): BUDGET_FRAMES})
+    at_modem = [m for _t, m in modem_frames(kiss, t0) if "dp11e-bud" in m]
+    note(target, case, "RECORD", "%d frames sent; kiss deltas %s; dv_edge_rf_tx_total{port=rf-a} deltas %s; dv_edge_rf_queue %s -> %s; %d frames at the modem "
+         "%.0f s after the first" % (BUDGET_FRAMES, kiss_delta, rf_delta, q0, q1, len(at_modem), time.monotonic() - t0))
+    problems = dp.budget_problems(BUDGET_FRAMES, kiss_delta, len(at_modem), rf_delta, queue_delta)
+    assert not problems, "; ".join(problems)
+
+
+def test_dp11e_q_an_empty_tx_from_permits_loopback_peers_only(rig, target, kiss):
+    """data.md 10.10: `tx_from` independently permits TX and its empty list permits only loopback peers. The listener `txdefault` (shape B) has tx true,
+    allow_src, allow_from with the tester and NO tx_from: the tester (a peer on the rig network, not loopback) may connect and READ, but a valid frame
+    it sends is refused as `tx_addr` (+1 exactly), not queued, never at the modem; the client stays open and still receives a frame heard on rf-a."""
+    case = "DP11e-q"
+    lst = listener(kiss, "txdefault")
+    assert lst.tx and not lst.tx_from and lst.allow_src, "the snippet changed: txdefault must have tx true, allow_src and no tx_from (%s)" % (lst,)
+    guard(kiss, case)
+    before = settled(kiss, "txdefault")
+    client = app(kiss, "txdefault")
+    t0 = time.monotonic()
+    try:
+        frame = dp.good_frame(dp.info_for("tx_from_default"))
+        assert client.send_frame(frame)
+        time.sleep(MODEM_WAIT_S / 2)
+        assert client.is_open, "the refusal closed the client"
+        heard = kiss_tnc.ui_frame("N0TEST-3", "APDVT1", "=1030.00N/02015.00E>dp11e-q-heard", digis=("WIDE1-1*",))
+        assert kiss.tnc.a.inject(heard)
+        got = [(ch, ax25.to_tnc2(f)) for _t, ch, f in client.wait_frames(1, timeout=10.0, since=t0)]
+    finally:
+        client.close()
+    delta = wait_frames_delta(kiss, "txdefault", before, {("in", "tx_addr"): 1, ("out", "sent"): 1})
+    note(target, case, "RECORD", "dv_edge_kiss_frames_total{port=txdefault} deltas %s; frames received by the client %s" % (delta, got))
+    assert delta.get(("in", "tx_addr"), 0) == 1, "tx_addr moved by %d, expected 1 (%s)" % (delta.get(("in", "tx_addr"), 0), delta)
+    assert delta.get(("in", "queued"), 0) == 0, "a frame from a non-loopback peer was queued although tx_from is empty: %s" % delta
+    assert modem_frames(kiss, t0) == [], "a frame from a non-loopback peer reached the modem although tx_from is empty"
+    assert (0, ax25.to_tnc2(heard)) in got, "the client could not READ (allow_from includes the tester): received %s" % got
 
 
 def test_dp11e_y_the_counter_label_sets_are_the_fixed_ones(rig, target, kiss):
