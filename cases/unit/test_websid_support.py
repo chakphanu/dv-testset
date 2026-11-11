@@ -240,3 +240,24 @@ def test_parse_head_and_problem_code():
     status, headers = ws.parse_head(b"HTTP/1.1 503 Service Unavailable\r\nRetry-After: 5\r\nContent-Type: application/problem+json")
     assert status == 503 and headers["retry-after"] == "5"
     assert ws.problem_code_of(b'{"code": "unavailable"}') == "unavailable" and ws.problem_code_of(b"not json") is None and ws.problem_code_of(b"[]") is None
+
+
+def test_probe_verdict_tells_the_causes_apart():
+    # run 20261111T040647Z: the stream lived exactly 40.007 s = the probe's own read timeout, no bye
+    assert ws.probe_verdict(True, False, True, 40.007, 40.0)[0] == "client_timeout"
+    assert ws.probe_verdict(True, True, True, 27.0, 150.0)[0] == "bye"
+    assert ws.probe_verdict(True, True, False, None, 150.0)[0] == "bye"                    # a bye wins whatever the thread state
+    assert ws.probe_verdict(True, False, True, 31.2, 150.0)[0] == "dropped"
+    assert ws.probe_verdict(True, False, True, None, 150.0)[0] == "dropped"
+    assert ws.probe_verdict(True, False, False, None, 150.0)[0] == "follows"
+    assert ws.probe_verdict(False, False, True, 3.0, 150.0)[0] == "no_hello"
+
+
+def test_probe_decision():
+    assert ws.probe_decision(["follows"]) == (True, "an attempt kept the stream open across the step-up")
+    assert ws.probe_decision(["client_timeout", "follows"])[0] is True
+    assert ws.probe_decision(["bye"])[0] is False and ws.probe_decision(["follows", "bye"])[0] is True
+    assert ws.probe_decision(["dropped"])[0] is None and ws.probe_decision(["dropped", "dropped"])[0] is False
+    assert ws.probe_decision(["dropped", "client_timeout", "dropped"])[0] is None                  # not two in a row
+    assert ws.probe_decision(["client_timeout", "no_hello", "client_timeout"])[0] is None
+    assert "inconclusive after 3" in ws.probe_decision(["a", "b", "c"])[1] and ws.probe_decision([])[0] is None

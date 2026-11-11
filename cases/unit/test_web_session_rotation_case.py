@@ -129,3 +129,52 @@ def test_the_websid1b_positive_control_exists():
     assert "make_login" in case.test_step_up_in_the_same_tab_keeps_the_circuit.__code__.co_varnames
     assert case.card_text(types.SimpleNamespace(status=lambda: "Listening on module V")) == "Listening on module V"
     assert case.card_text(types.SimpleNamespace(status=lambda: 1 / 0)) == "(no card)"
+
+
+# ---------------------------------------------------------------- the WEBSID1 probe fixture
+
+def run_probe(monkeypatch, outcomes):
+    """The websid1 fixture function with probe_once answering from `outcomes` ([(kind, text)])."""
+    fixture = getattr(case.websid1, "__wrapped__", None) or getattr(case.websid1, "_fixture_function", None)
+    if fixture is None:
+        pytest.skip("cannot reach the fixture function of this pytest")
+    queue = list(outcomes)
+    monkeypatch.setattr(case, "probe_once", lambda *a: queue.pop(0))
+    return fixture(None, None, None)
+
+
+def test_the_probe_passes_after_a_client_timeout_retry(monkeypatch, capsys):
+    monkeypatch.delenv("DVT_WEBSID1", raising=False)
+    assert run_probe(monkeypatch, [("client_timeout", "the probe's own 40 s read timeout"), ("follows", "still open")]) is True
+    assert "attempt 1: client_timeout" in capsys.readouterr().out
+
+
+def test_a_server_bye_skips_or_fails_in_strict_mode(monkeypatch):
+    monkeypatch.delenv("DVT_WEBSID1", raising=False)
+    with pytest.raises(pytest.skip.Exception, match="image without WEBSID1.*bye"):
+        run_probe(monkeypatch, [("bye", "session ended")])
+    monkeypatch.setenv("DVT_WEBSID1", "on")
+    with pytest.raises(pytest.fail.Exception, match="DVT_WEBSID1=on but"):
+        run_probe(monkeypatch, [("bye", "session ended")])
+
+
+def test_two_drops_in_a_row_are_a_verdict_one_is_not(monkeypatch):
+    monkeypatch.delenv("DVT_WEBSID1", raising=False)
+    assert run_probe(monkeypatch, [("dropped", "x"), ("follows", "y")]) is True
+    with pytest.raises(pytest.skip.Exception, match="dropped without a `bye` in two attempts"):
+        run_probe(monkeypatch, [("dropped", "x"), ("dropped", "y")])
+
+
+def test_an_inconclusive_probe_is_neither_a_pass_nor_an_image_verdict(monkeypatch):
+    monkeypatch.delenv("DVT_WEBSID1", raising=False)
+    outcomes = [("client_timeout", "a"), ("no_hello", "b"), ("client_timeout", "c")]
+    with pytest.raises(pytest.skip.Exception, match="inconclusive"):
+        run_probe(monkeypatch, outcomes)
+    monkeypatch.setenv("DVT_WEBSID1", "on")
+    with pytest.raises(pytest.fail.Exception, match="inconclusive"):
+        run_probe(monkeypatch, outcomes)
+
+
+def test_a_failed_step_up_in_the_probe_fails_at_once(monkeypatch):
+    with pytest.raises(pytest.fail.Exception, match="step-up of the probe answered HTTP 403"):
+        run_probe(monkeypatch, [("step_up_failed", "HTTP 403")])

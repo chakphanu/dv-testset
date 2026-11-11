@@ -262,6 +262,35 @@ JS_ICE = """async (id) => { const r = await fetch('/api/v1/rtc/ice', {credential
 # ---------------------------------------------------------------- verdicts (pure)
 
 
+def probe_verdict(got_hello, bye, ended, ran_s, client_timeout_s, margin_s=1.5):
+    """The verdict of ONE probe attempt (an HTTP-client operator stream watched across a step-up): ("follows", ...) the stream was still open at the end of
+    the window; ("bye", ...) the server said `session ended`; ("dropped", ...) the connection ended by itself without a bye before the client's own timeout;
+    ("client_timeout", ...) the stream ended because the probe's CLIENT read timeout expired (run 20261111T040647Z: the step-up waited 27 s for a TOTP step,
+    27 s + 18 s overran the 40 s timeout, and the proxy log shows the stream open for exactly 40007 ms) and ("no_hello", ...) the stream never opened. The last
+    two say nothing about the image."""
+    if not got_hello:
+        return "no_hello", "the operator stream sent no hello"
+    if bye:
+        return "bye", "the server ended the stream with a `bye` (session ended)"
+    if ended:
+        if ran_s is not None and ran_s >= client_timeout_s - margin_s:
+            return "client_timeout", "the probe's own %.0f s read timeout ended the stream after %.1f s" % (client_timeout_s, ran_s)
+        return "dropped", "the connection ended after %s s without a `bye`" % ("?" if ran_s is None else "%.1f" % ran_s)
+    return "follows", "the stream was still open"
+
+
+def probe_decision(kinds):
+    """(follows, reason) from the verdict kinds of the attempts, oldest first: any "follows" wins; a `bye` is final; a second "dropped" in a row is final;
+    anything else is inconclusive (follows None)."""
+    if "follows" in kinds:
+        return True, "an attempt kept the stream open across the step-up"
+    if "bye" in kinds:
+        return False, "the server ended an operator stream with `bye` at a step-up"
+    if len(kinds) >= 2 and kinds[-1] == "dropped" and kinds[-2] == "dropped":
+        return False, "the operator stream was dropped without a `bye` in two attempts in a row"
+    return None, "inconclusive after %d attempt(s): %s" % (len(kinds), ", ".join(kinds) or "none")
+
+
 def sse_alive_problems(state):
     """What is wrong with a stream that must still be open after a step-up: it opened, its readyState is OPEN (1), no error event, no `bye`."""
     if not isinstance(state, dict):

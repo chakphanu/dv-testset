@@ -107,21 +107,30 @@ def sid_wav(sid_recorder, target, sid_listing_user):
     pytest.fail("the recorder listed no recording of %s in room %s 60 s after the over" % (OVER_CALL, ROOM))
 
 
-@pytest.fixture(scope="session")
-def websid1(sid_operator, web_base_url, web_ca):
-    """Whether the image has WEBSID1, probed: an operator SSE stream opened with the HTTP client must still be open 18 s after a step-up (an
-    image before WEBSID1 ends it with a `bye`, the stream followed the cookie). Skips with the reason; DVT_WEBSID1=on makes it a failure."""
+PROBE_ATTEMPTS = 3
+PROBE_CLIENT_TIMEOUT_S = 150.0          # far above hello wait + a TOTP step wait + the window
+
+
+def probe_once(sid_operator, web_base_url, web_ca):
+    """One attempt: a fresh operator login of the HTTP client, a stream, a step-up, 18 s of watching. Returns (kind, text) of ws.probe_verdict, or
+    ("step_up_failed", status) when the step-up itself did not answer 200. Both TOTP codes are taken BEFORE the stream opens, so no wait for the next
+    30 s step can eat the window."""
     client = web.WebClient(web_base_url, web_ca)
     client.authenticator = sid_operator.client.authenticator
     client.hide(sid_operator.password)
     client.login(sid_operator.callsign, sid_operator.password, client.authenticator.next_code())
+    code = client.authenticator.next_code()
+    client.hide(code)
     frames, stop = [], threading.Event()
+    marks = {"open": None, "end": None}
 
     def run():
+        marks["open"] = time.monotonic()
         try:
-            client.sse("/api/v1/operator/stream", max_events=10000, timeout=40.0, on_frame=frames.append, stop=stop)
+            client.sse("/api/v1/operator/stream", max_events=100000, timeout=PROBE_CLIENT_TIMEOUT_S, on_frame=frames.append, stop=stop)
         except web.WebError:
             pass
+        marks["end"] = time.monotonic()
 
     thread = threading.Thread(target=run, daemon=True)
     thread.start()
@@ -129,12 +138,14 @@ def websid1(sid_operator, web_base_url, web_ca):
         end = time.monotonic() + 10.0
         while time.monotonic() < end and not any(f.get("event") == "hello" for f in frames):
             time.sleep(0.2)
-        code = client.authenticator.next_code()
-        client.hide(code)
         stepped = client.post("/api/v1/auth/session/step-up", {"code": code}, expect=None)
+        if stepped.status != 200:
+            return "step_up_failed", "HTTP %d" % stepped.status
         time.sleep(18.0)
-        bye = [f for f in frames if f.get("event") == "bye"]
-        alive = thread.is_alive()
+        ended = not thread.is_alive()
+        ran = None if marks["end"] is None or marks["open"] is None else marks["end"] - marks["open"]
+        return ws.probe_verdict(any(f.get("event") == "hello" for f in frames), any(f.get("event") == "bye" for f in frames), ended, ran,
+                                PROBE_CLIENT_TIMEOUT_S)
     finally:
         stop.set()
         thread.join(5)
@@ -143,14 +154,35 @@ def websid1(sid_operator, web_base_url, web_ca):
             client.logout()
         except web.WebError:
             pass
-    if stepped.status != 200:
-        pytest.fail("the step-up of the probe answered HTTP %d" % stepped.status)
-    if bye or not alive:
-        reason = "an operator SSE stream ended at a step-up (bye %s, stream alive %s): the image does not follow the session across a rotation" % (bool(bye), alive)
+
+
+@pytest.fixture(scope="session")
+def websid1(sid_operator, web_base_url, web_ca):
+    """Whether the image has WEBSID1, probed: an operator SSE stream opened with the HTTP client must still be open 18 s after a step-up (an image
+    before WEBSID1 ends it with a `bye`, the stream followed the cookie). Up to three attempts; a stream that ended by itself (a dropped connection, the
+    probe's own timeout, no hello) is told apart from a server `bye` and retried. Skips with the reason; DVT_WEBSID1=on makes it a failure."""
+    kinds, texts = [], []
+    for _ in range(PROBE_ATTEMPTS):
+        kind, text = probe_once(sid_operator, web_base_url, web_ca)
+        kinds.append(kind)
+        texts.append(text)
+        print("[RECORD] WEBSID1 probe attempt %d: %s: %s" % (len(kinds), kind, text))
+        if kind == "step_up_failed":
+            pytest.fail("the step-up of the probe answered %s" % text)
+        follows, reason = ws.probe_decision(kinds)
+        if follows is not None:
+            break
+    if follows:
+        return True
+    if follows is False:
+        message = "%s (attempts: %s)" % (reason, "; ".join("%s: %s" % kt for kt in zip(kinds, texts)))
         if strict():
-            pytest.fail("DVT_WEBSID1=on but " + reason)
-        pytest.skip("image without WEBSID1: " + reason)
-    return True
+            pytest.fail("DVT_WEBSID1=on but " + message)
+        pytest.skip("image without WEBSID1: " + message)
+    message = "the WEBSID1 probe was inconclusive: %s (%s)" % (reason, "; ".join(texts))
+    if strict():
+        pytest.fail(message)
+    pytest.skip(message)
 
 
 # ---------------------------------------------------------------- the page of one login

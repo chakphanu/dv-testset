@@ -43,7 +43,11 @@ token), and passes. `DVT_WEBSID1B=on` (an image with the fix) makes the circuit 
 positive control `test_step_up_in_the_same_tab_keeps_the_circuit`.
 
 Skip / strict: a probe fixture (`websid1`) logs the operator in with the HTTP client, opens `/api/v1/operator/stream`, steps up and watches 18 s; an image before
-WEBSID1 ends the stream with a `bye`, and every case skips with that reason. `DVT_WEBSID1=on` turns the skip into a failure (use it for an image that must have the rule).
+WEBSID1 ends the stream with a `bye`, and every case skips with that reason. Both TOTP codes are taken before the stream opens and the client's read timeout is 150 s. An attempt is
+judged by `ws.probe_verdict`: `follows`, `bye` (the server said `session ended`: final), `dropped` (the connection ended by itself without a `bye`; two in a row are final) or one of the
+two inconclusive kinds `client_timeout` and `no_hello`, which say nothing about the image; up to three attempts, and an inconclusive probe skips (fails with `DVT_WEBSID1=on`) with
+that text instead of blaming the image. The first rerun (`out/20261111T040647Z`) errored every test for this reason: the step-up waited 27 s for the next TOTP step, 27 s + the 18 s
+window overran the old 40 s read timeout, and the proxy log shows the stream open for exactly 40007 ms with no `bye` and no end from the server. `DVT_WEBSID1=on` turns the skip into a failure (use it for an image that must have the rule).
 
 ## How a WAV body is held (first rig run, wip-a31709a, `out/20261110T220224Z`)
 
