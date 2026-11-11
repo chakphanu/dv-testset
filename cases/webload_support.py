@@ -7,6 +7,12 @@
             a catch-up burst) and records how late every frame left
   Sampler   reads cpu ticks and VmHWM of the edge through the control channel (proc-stat) and cpu of the
             generator, at chosen wall-clock instants
+  WebProcSampler  dv-svc-web cpu and thread count about once a second while the listeners connect (WEBSTALL1)
+
+Offer retries and slow requests (run 20261111T123937Z: dv-svc-web stopped answering for 5.6 s during the ramp, the generator's queued offers were
+released at once and the edge refused two for its 5-per-second join window): the generator sends a refused offer again (503 "WebRTC capacity
+reached", at most 3 times, after max(Retry-After, 1.1 s)); the case fails when more than 5 % of the offers needed a retry or one ran out of retries.
+Every web request slower than 1 s is reported as FINDING WEBSTALL1 (count, longest, the dv-svc-web cpu while it ran); not a failure yet.
 """
 import json
 import threading
@@ -217,3 +223,110 @@ class Source:
             except OSError:
                 pass
             peer.close()
+
+
+# ------------------------------------------------------------------ offer retries and slow requests (WEBSTALL1)
+
+RETRY_SHARE_MAX = 0.05             # more than this share of the offers needing a retry fails the case
+SLOW_REPORT_S = 1.0                # a web request slower than this is a WEBSTALL1 observation (the generator's SLOW_S)
+SLOW_ITEMS = 20
+
+
+def retry_stats(status, n):
+    """The retry numbers of a generator /status document for a run of n listeners."""
+    retried = int(status.get("retried") or 0)
+    return {"offers": n, "retried": retried, "retries": int(status.get("retries") or 0), "exhausted": int(status.get("exhausted") or 0),
+            "share": round(retried / n, 4) if n else 0.0}
+
+
+def retry_problems(stats):
+    """What a run's retries say: an offer that ran out of retries, or more than RETRY_SHARE_MAX of the offers needing one, fails the run."""
+    if not stats:
+        return []
+    out = []
+    if stats.get("exhausted"):
+        out.append("%d offers were refused 503 'WebRTC capacity reached' on every try (3 retries)" % stats["exhausted"])
+    if stats.get("share", 0.0) > RETRY_SHARE_MAX:
+        out.append("%d of %d offers (%.1f %%) needed a retry, more than %.0f %%" % (stats["retried"], stats["offers"], 100.0 * stats["share"], 100.0 * RETRY_SHARE_MAX))
+    return out
+
+
+def web_cpu_during(series, start, seconds):
+    """Highest dv-svc-web cpu percent (one core = 100) of the sampling intervals that overlap [start, start + seconds]; None without samples there.
+    series: rows [epoch of the interval end, cpu percent, threads]."""
+    best = None
+    for end, cpu, _threads in series:
+        if end >= start and end - 1.0 <= start + seconds:
+            best = cpu if best is None else max(best, cpu)
+    return best
+
+
+def slow_stats(status, series=()):
+    """The slow-request numbers of a generator /status document: count, the longest, and up to SLOW_ITEMS in start order, each with the dv-svc-web
+    cpu while it ran (a request that waited shows low cpu, a request that burned cpu shows high)."""
+    items = []
+    for row in status.get("slow") or []:
+        item = {"method": row.get("m"), "path": row.get("p"), "seconds": row.get("d"), "start": row.get("t")}
+        item["web_cpu_pct_during"] = web_cpu_during(series, item["start"] or 0.0, item["seconds"] or 0.0)
+        items.append(item)
+    count = int(status.get("slow_count") or len(items))
+    longest = max(items, key=lambda i: i["seconds"] or 0.0) if items else None
+    return {"count": count, "kept": len(items), "longest": longest,
+            "items": sorted(items, key=lambda i: i["start"] or 0.0)[:SLOW_ITEMS]}
+
+
+def stall_text(slow):
+    """The text of FINDING WEBSTALL1, None when no request was slow."""
+    if not slow or not slow.get("count"):
+        return None
+    top = slow["longest"] or {}
+    return ("WEBSTALL1: %d web requests took longer than %.0f s during the load run; longest %s %s %.2f s (started %.3f, dv-svc-web cpu %s %% while it ran)"
+            % (slow["count"], SLOW_REPORT_S, top.get("method"), top.get("path"), top.get("seconds") or 0.0, top.get("start") or 0.0,
+               top.get("web_cpu_pct_during")))
+
+
+def web_proc_series(samples):
+    """[[epoch of the interval end, cpu percent of one core, threads]] from ProcSamples (cpu ticks, t, clk_tck, threads) of one process."""
+    out = []
+    for a, b in zip(samples, samples[1:]):
+        dt = b.t - a.t
+        if dt <= 0 or a.pid != b.pid:
+            continue
+        out.append([round(b.t, 3), round(100.0 * (b.ticks - a.ticks) / b.clk_tck / dt, 1), b.threads])
+    return out
+
+
+def web_proc_summary(samples, keep=400):
+    """What the dv-svc-web sampler saw: sample count, pid changes, threads min / max, cpu p50 / max, the longest gap between two samples, and the
+    series (thinned to `keep` rows) for a later look at a stall."""
+    series = web_proc_series(samples)
+    cpus = sorted(r[1] for r in series)
+    gaps = [b.t - a.t for a, b in zip(samples, samples[1:])]
+    stride = max(1, len(series) // keep)
+    return {"samples": len(samples), "pids": sorted({s.pid for s in samples}), "threads_min": min((s.threads for s in samples), default=None),
+            "threads_max": max((s.threads for s in samples), default=None), "cpu_pct_p50": wl.nearest_rank(cpus, 50) if cpus else None,
+            "cpu_pct_max": cpus[-1] if cpus else None, "max_gap_s": round(max(gaps), 2) if gaps else None, "series": series[::stride]}
+
+
+class WebProcSampler(threading.Thread):
+    """dv-svc-web cpu ticks and thread count through the control channel (proc-stat), one request after the other (about one a second), until
+    stop(). A request that fails is skipped. Runs while the listeners connect; the measured window is not shared with it."""
+
+    def __init__(self, rig_control, process="dv-svc-web", service="xlxd-sut"):
+        super().__init__(daemon=True, name="web-proc-sampler")
+        self.ctl, self.process, self.service = rig_control, process, service
+        self.samples = []
+        self._stop_flag = threading.Event()
+
+    def run(self):
+        while not self._stop_flag.is_set():
+            try:
+                self.samples.append(wl.parse_procstat_out(self.ctl.proc_stat(self.service, self.process, timeout=10.0)))
+            except Exception:                                    # noqa: BLE001 - a missing sample is a gap, never an error of the run
+                time.sleep(0.5)
+            self._stop_flag.wait(0.3)
+
+    def stop(self):
+        self._stop_flag.set()
+        self.join(15.0)
+        return list(self.samples)

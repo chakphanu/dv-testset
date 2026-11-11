@@ -43,6 +43,10 @@ OFFER_PATH = "/api/v1/rtc/offer"
 ALIVE_PATH = "/api/v1/rtc/alive"
 CLOSE_PATH = "/api/v1/rtc/close"
 CONNECT_TIMEOUT_S = 20.0
+OFFER_RETRIES = 3               # an offer refused 503 "WebRTC capacity reached" is sent again at most this many times
+RETRY_MIN_S = 1.1               # at least: the edge counts joins in a 1 s window (5 per window, edge/webrtc settings joins_per_second)
+SLOW_S = 1.0                    # a web request slower than this is reported (WEBSTALL1)
+SLOW_KEEP = 200                 # slow requests kept per run
 MAX_PACKETS = 20000             # per listener: a runaway source cannot grow memory without bound
 
 
@@ -101,6 +105,42 @@ def read_cgroup():
 
 # ====================================================================== worker
 
+def is_capacity_refusal(status, text):
+    """An offer the service refused for capacity: 503 with the detail "WebRTC capacity reached" (a join window, a cap; the reply does not say which)."""
+    return status == 503 and "capacity reached" in (text or "")
+
+
+def retry_delay(headers):
+    """Seconds to wait before an offer is sent again: the Retry-After of the refusal, at least RETRY_MIN_S."""
+    try:
+        wanted = float((headers or {}).get("retry-after", 0))
+    except (TypeError, ValueError):
+        wanted = 0.0
+    return max(wanted, RETRY_MIN_S)
+
+
+def timed_client_class():
+    """WebClient that reports every request slower than SLOW_S (its own network time; the client side pacing is not counted) to `slow_sink`
+    (method, path without query, seconds, wall-clock start)."""
+    from dvtest.web import WebClient, classify
+
+    class TimedClient(WebClient):
+        slow_sink = None
+
+        def request(self, method, path, json_body=None, headers=None, expect=None, pace=True, raw_body=None):
+            if pace:
+                self.pacer.wait(classify(method, path))
+            t0, w0 = time.monotonic(), time.time()
+            try:
+                return super().request(method, path, json_body=json_body, headers=headers, expect=expect, pace=False, raw_body=raw_body)
+            finally:
+                dur = time.monotonic() - t0
+                if dur > SLOW_S and self.slow_sink is not None:
+                    self.slow_sink(method, path.split("?", 1)[0], dur, w0)
+
+    return TimedClient
+
+
 class Listener:
     """One receive-only peer: its counters and arrival log. The receive hook runs in the event loop."""
 
@@ -121,6 +161,8 @@ class Listener:
         self.alive = collections.Counter()
         self.error = None
         self.sess_id = None
+        self.retries = 0                    # offers sent again after a capacity refusal
+        self.exhausted = False              # every retry was refused too
 
     def on_rtp(self, t_ns, pkt):
         """pkt: one SRTP-authenticated, decrypted RTP packet."""
@@ -229,10 +271,14 @@ class Worker:
         sys.stdout.flush()
 
     # -- http (threads: urllib blocks)
+    def note_slow(self, method, path, seconds, start):
+        """A web request slower than SLOW_S (WEBSTALL1): one event per request, kept by the control server."""
+        self.emit(ev="slow", m=method, p=path, d=round(seconds, 3), t=round(start, 3))
+
     def make_client(self, account):
-        from dvtest.web import WebClient
         callsign, password = self.accounts[account]
-        client = WebClient(self.cfg["base_url"], self.cfg["ca"], timeout=30.0, user_agent=self.cfg["user_agent"])
+        client = timed_client_class()(self.cfg["base_url"], self.cfg["ca"], timeout=30.0, user_agent=self.cfg["user_agent"])
+        client.slow_sink = self.note_slow
         client.hide(password)
         client.login(callsign, password)
         return client
@@ -286,13 +332,12 @@ class Worker:
             tr.receiver.transport._dvt_sink = lst.on_rtp
             await pc.setLocalDescription(await pc.createOffer())
             offer_sdp = relay_sdp(pc.localDescription.sdp)
-            await self.pace(slot)
-            t_offer = time.monotonic()
-            reply = await loop.run_in_executor(
-                self.pool, lambda: client.request("POST", OFFER_PATH, json_body={"sdp": offer_sdp, "room": slot["room"]},
-                                                  pace=False))
+            reply, t_offer = await self.offer(slot, lst, client, offer_sdp)
             if reply.status != 200:
                 lst.error = "offer HTTP %d %s" % (reply.status, reply.text()[:120].replace("\n", " "))
+                if lst.retries and is_capacity_refusal(reply.status, reply.text()):
+                    lst.exhausted = True
+                    self.emit(ev="exhausted", j=lst.j, tries=lst.retries)
                 self.emit(ev="failed", j=lst.j, why=lst.error)
                 return
             body = reply.json()
@@ -341,6 +386,23 @@ class Worker:
         finally:
             if not lst.left:
                 lst.client, lst.pc = locals().get("client"), pc
+
+    async def offer(self, slot, lst, client, offer_sdp):
+        """POST the offer; a 503 "WebRTC capacity reached" is sent again (at most OFFER_RETRIES times, after max(Retry-After, RETRY_MIN_S)),
+        which also spreads a burst that a stalled service released at once over more than one join window. Returns (reply, the monotonic
+        time the last attempt went out). Each retry is an event, so the run's retry share is judged by the case."""
+        loop = asyncio.get_running_loop()
+        while True:
+            await self.pace(slot)
+            t_offer = time.monotonic()
+            reply = await loop.run_in_executor(
+                self.pool, lambda: client.request("POST", OFFER_PATH, json_body={"sdp": offer_sdp, "room": slot["room"]}, pace=False))
+            if lst.retries >= OFFER_RETRIES or not is_capacity_refusal(reply.status, reply.text()):
+                return reply, t_offer
+            lst.retries += 1
+            wait = retry_delay(getattr(reply, "headers", None))
+            self.emit(ev="retry", j=lst.j, n=lst.retries, wait=round(wait, 2))
+            await asyncio.sleep(wait)
 
     async def release(self, lst, client, pc):
         """A soak session ends: revoke the circuit like the page's Disconnect, close the peer and forget it."""
@@ -394,7 +456,7 @@ class Worker:
             row.update(j=lst.j, room=lst.slot["room"], login=lst.slot["login"],
                        connect_s=None if lst.connected_at is None else round(lst.connected_at, 3),
                        answer_s=None if lst.answer_at is None else round(lst.answer_at, 3),
-                       packets=lst.packets, tail_ok=lst.tail_ok, error=lst.error,
+                       packets=lst.packets, tail_ok=lst.tail_ok, error=lst.error, retries=lst.retries,
                        alive={str(k): v for k, v in sorted(lst.alive.items(), key=str)})
             rows.append(row)
             first, end = self.plan.window
@@ -499,6 +561,10 @@ class Job:
         self.started = time.time()
         self.t_first_offer = None
         self.error = None
+        self.retried = {}                   # j -> offers sent again (WEBLOAD retry)
+        self.exhausted = set()              # j whose retries were all refused
+        self.slow = []                      # web requests slower than SLOW_S: {m, p, d, t}
+        self.slow_count = 0
 
     def status(self):
         with self.lock:
@@ -507,6 +573,8 @@ class Job:
                     "live": len(set(self.connected) - self.left),
                     "failures": sorted(set(self.failed.values()))[:5], "ready": self.ready,
                     "results": len(self.results), "closed": self.closed, "error": self.error,
+                    "retried": len(self.retried), "retries": sum(self.retried.values()), "exhausted": len(self.exhausted),
+                    "slow_count": self.slow_count, "slow": list(self.slow),
                     "elapsed_s": round(time.time() - self.started, 1)}
 
 
@@ -581,6 +649,14 @@ class Server:
                     job.left.add(ev["j"])
                 elif kind == "failed":
                     job.failed[ev["j"]] = str(ev.get("why", ""))[:200]
+                elif kind == "retry":
+                    job.retried[ev["j"]] = ev.get("n", 1)
+                elif kind == "exhausted":
+                    job.exhausted.add(ev["j"])
+                elif kind == "slow":
+                    job.slow_count += 1
+                    if len(job.slow) < SLOW_KEEP:
+                        job.slow.append({k: ev.get(k) for k in ("m", "p", "d", "t")})
                 elif kind == "result":
                     job.results[w] = ev
                 elif kind == "closed":

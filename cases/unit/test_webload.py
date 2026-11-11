@@ -1,9 +1,15 @@
 # SPDX-License-Identifier: MIT
 """dvtest/webload.py: markers, per-listener statistics, the adopted gate, pacing and the procfs readers of
 the web load test (cases/test_web_load.py)."""
+import sys
+from pathlib import Path
+
 import pytest
 
 from dvtest import webload as wl
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import webload_support as ws  # noqa: E402
 
 pytestmark = pytest.mark.unit
 
@@ -333,3 +339,98 @@ def test_eight_circuits_at_the_page_schedule_do_not_fit_one_session():
     assert page == 48 and page > 10 + 2 * 5
     ours = sum(1 for off, _ in zip(wl.alive_schedule(first_seconds=1), range(3)) if off <= 5.0) * 8
     assert ours == 8 and ours <= 10
+
+
+# ---------------------------------------------------------------- offer retries, slow requests and the dv-svc-web sampler (WEBSTALL1)
+
+def test_retry_stats_and_problems():
+    quiet = ws.retry_stats({"retried": 0, "retries": 0, "exhausted": 0}, 200)
+    assert quiet["share"] == 0.0 and ws.retry_problems(quiet) == []
+    ten = ws.retry_stats({"retried": 10, "retries": 12, "exhausted": 0}, 200)                 # exactly 5 %: allowed
+    assert ten["share"] == 0.05 and ws.retry_problems(ten) == []
+    eleven = ws.retry_stats({"retried": 11, "retries": 11, "exhausted": 0}, 200)
+    assert any("5.5 %" in p for p in ws.retry_problems(eleven))
+    lost = ws.retry_stats({"retried": 1, "retries": 3, "exhausted": 1}, 200)
+    assert any("every try" in p for p in ws.retry_problems(lost))
+    assert ws.retry_problems(None) == [] and ws.retry_stats({}, 0)["share"] == 0.0
+
+
+def test_slow_stats_carry_the_web_cpu_while_the_request_ran():
+    series = [[100.0, 3.0, 20], [101.0, 4.0, 20], [102.0, 95.0, 24], [103.0, 5.0, 20]]
+    status = {"slow_count": 3, "slow": [{"m": "POST", "p": "/api/v1/rtc/offer", "d": 1.4, "t": 101.2},
+                                         {"m": "GET", "p": "/health", "d": 1.5, "t": 99.0},
+                                         {"m": "POST", "p": "/api/v1/auth/session", "d": 1.1, "t": 500.0}]}
+    slow = ws.slow_stats(status, series)
+    assert slow["count"] == 3 and slow["longest"]["path"] == "/health"
+    assert [i["path"] for i in slow["items"]] == ["/health", "/api/v1/rtc/offer", "/api/v1/auth/session"]
+    by = {i["path"]: i["web_cpu_pct_during"] for i in slow["items"]}
+    assert by["/api/v1/rtc/offer"] == 95.0 and by["/health"] == 4.0 and by["/api/v1/auth/session"] is None
+    text = ws.stall_text(slow)
+    assert text.startswith("WEBSTALL1: 3 web requests") and "GET /health 1.50 s" in text
+    assert ws.stall_text(ws.slow_stats({}, ())) is None
+
+
+def sample(t, ticks, threads=20, pid=7):
+    return wl.ProcSample(pid=pid, comm="dv-svc-web", t=t, ticks=ticks, clk_tck=100, vmhwm_kib=1, vmrss_kib=1, threads=threads, fds=-1,
+                         starttime=0, smaps={}, raw={})
+
+
+def test_web_proc_summary_reads_cpu_threads_and_gaps():
+    samples = [sample(10.0, 0), sample(11.0, 5), sample(12.0, 105, threads=26), sample(15.5, 110)]
+    series = ws.web_proc_series(samples)
+    assert series == [[11.0, 5.0, 20], [12.0, 100.0, 26], [15.5, 1.4, 20]]
+    summary = ws.web_proc_summary(samples)
+    assert summary["samples"] == 4 and summary["pids"] == [7] and summary["threads_min"] == 20 and summary["threads_max"] == 26
+    assert summary["cpu_pct_max"] == 100.0 and summary["cpu_pct_p50"] == 5.0 and summary["max_gap_s"] == 3.5
+    assert ws.web_proc_summary([])["samples"] == 0 and ws.web_proc_series([sample(1.0, 1), sample(2.0, 2, pid=8)]) == []
+
+
+def test_the_web_proc_sampler_collects_until_stopped_and_skips_failures():
+    import time
+
+    class Ctl:
+        def __init__(self):
+            self.n = 0
+
+        def proc_stat(self, service, process, timeout=60.0):
+            self.n += 1
+            if self.n == 2:
+                raise RuntimeError("proc-stat error 3")
+            return "pid=7\ncomm=dv-svc-web\nt=%d.0\nutime=%d\nstime=0\nclk_tck=100\nvmhwm_kb=1\nvmrss_kb=1\nthreads=21\n" % (self.n, self.n)
+
+    sampler = ws.WebProcSampler(Ctl())
+    sampler.start()
+    time.sleep(1.6)
+    got = sampler.stop()
+    assert len(got) >= 2 and all(s.threads == 21 for s in got) and not sampler.is_alive()
+
+
+def test_the_case_reports_generator_observations_and_fails_on_retries(monkeypatch, capsys):
+    import test_web_load as case
+
+    class Gen:
+        def status(self):
+            return {"retried": 12, "retries": 14, "exhausted": 0, "slow_count": 1,
+                    "slow": [{"m": "POST", "p": "/api/v1/rtc/offer", "d": 5.57, "t": 100.0}]}
+    summary = {"listeners": 200, "web_proc": {"series": [[101.0, 88.0, 24]], "samples": 5, "threads_min": 20, "threads_max": 24,
+                                              "cpu_pct_p50": 3.0, "cpu_pct_max": 88.0, "max_gap_s": 1.4}}
+    case.generator_observations(summary, Gen(), 200)
+    assert summary["offer_retries"]["retried"] == 12 and summary["slow_requests"]["items"][0]["web_cpu_pct_during"] == 88.0
+    seen = []
+    monkeypatch.setattr(case.web, "finding", lambda text, out_dir=None: seen.append(text))
+    case.stall_finding(summary)
+    out = capsys.readouterr().out
+    assert len(seen) == 1 and seen[0].startswith("WEBSTALL1: 1 web requests") and "offers retried 12 of 200" in out
+    problems = case.ws.retry_problems(summary["offer_retries"])
+    assert problems and "6.0 %" in problems[0]
+
+
+def test_generator_observations_never_raise(monkeypatch):
+    import test_web_load as case
+
+    class Gen:
+        def status(self):
+            raise OSError("down")
+    summary = {"listeners": 1}
+    case.generator_observations(summary, Gen(), 1)
+    assert "generator_observations_error" in summary and "offer_retries" not in summary

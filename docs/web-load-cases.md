@@ -110,6 +110,25 @@ All 5 cases pass (717 s). W8 at 200 listeners x 50 pps x 60 s: 600000 of 600000 
 reads it and fails on any refusal). Edge: 10.4 percent cpu (limit 25), peak RSS 32.1 MiB (limit 64), worst-listener jitter
 p99 11.0 ms (limit 20) and max 12.1 ms (limit 60), 0 source deadlines missed. The 128-listener cap of F9 is gone.
 
+## Offer retries and the stall detector (WEBSTALL1; run `out/20261111T123937Z`, wip-7bd0082)
+
+w8_200 connected 198 of 200: two offers were refused 503 "WebRTC capacity reached". The web-proxy log shows every request of dv-svc-web (logins, `/rtc/alive`, offers) held for about
+5.6 s (12:49:12.3 to 12:49:18.86, longest offer 5570 ms); the generator sends its offers on a schedule without waiting for the replies, so the queued ones were released together
+and five joins in 59 ms filled the edge's join window (`joins_per_second` 5, `edge/webrtc/src/transport.rs`), the sixth and, 0.75 s later, the seventh were refused. No circuit of
+an earlier phase was left (calibration leases end 30 s after the last `/rtc/alive`; the previous phase had ended more than 3 minutes before). The stall itself is a product finding
+(dv-router unit WEBSTALL1). The run before it (`out/20261111T122626Z`, wip-a31709a) had no request slower than 1 s except the deliberate 2 s `auth/register`.
+
+Harness changes:
+* The generator (`dvtest/tools/webload_gen.py`) sends an offer again when it is refused 503 "WebRTC capacity reached": at most 3 retries, after max(Retry-After, 1.1 s). The case counts
+  them (`offer_retries` in `load.json`: offers, retried, retries, exhausted, share) and FAILS when more than 5 % of the offers needed a retry or one ran out of retries.
+* Every web request slower than 1 s (the generator's own network time, its client side pacing excluded) is an event; the case reports FINDING WEBSTALL1 with the count and the longest
+  (`slow_requests` in `load.json`, each with the dv-svc-web cpu while it ran). It does not fail the case.
+* `web_proc` in `load.json`: dv-svc-web cpu (one core = 100) and thread count about once a second through the control channel (`proc-stat xlxd-sut dv-svc-web`) while the listeners
+  connect; a stall with low cpu is a wait (a lock, a hub query), one with high cpu is work on the wrong pool (a password hash). The sampler stops before the measured window starts, so
+  the gate numbers are not shared with it.
+* Not recorded: the fabric round trip of an rtc offer. The hub metrics hold counters only (`dv_web_http_requests_total`, `dv_web_hub_unavailable_total`, `dv_web_rate_limited_total`,
+  no latency); `answer_s` in the listener totals is the offer round trip seen by the client (offer sent to answer received).
+
 ## Flood (short, bounded; MS9 limits)
 
 From the tester's address while a probe listener (generator address) kept hearing a 36 s over, in the same run: **passed**.

@@ -29,6 +29,7 @@ import pytest
 
 from dvtest import metrics, web
 from dvtest import webload as wl
+import webload_support as ws
 from webload_support import LoadGen, LoadGenError, Sampler, Source, generator_cpu
 from stall_kills_support import check_end, stall_kills_start  # noqa: F401  (RFWD1 false-kill guard: autouse start read, last test)
 
@@ -151,6 +152,31 @@ def wait_connected(load_gen, n, budget_s):
     return st
 
 
+def generator_observations(summary, load_gen, n):
+    """The offer retries and the slow web requests the generator has seen so far (called after the connect phase and again after the run, so a
+    run that is aborted before the window still reports them)."""
+    try:
+        st = load_gen.status()
+    except Exception as exc:                                        # noqa: BLE001 - an observation, never the verdict
+        summary["generator_observations_error"] = "%s: %s" % (type(exc).__name__, exc)
+        return
+    summary["offer_retries"] = ws.retry_stats(st, n)
+    summary["slow_requests"] = ws.slow_stats(st, (summary.get("web_proc") or {}).get("series") or ())
+
+
+def stall_finding(summary):
+    """FINDING WEBSTALL1 (not a failure): web requests slower than 1 s, with the dv-svc-web cpu while they ran."""
+    text = ws.stall_text(summary.get("slow_requests"))
+    if text:
+        web.finding(text)
+        print("[RECORD] %s" % text)
+    wp, rt = summary.get("web_proc") or {}, summary.get("offer_retries") or {}
+    print("[RECORD] W8 %d listeners: offers retried %s of %s (%s retries, %s out of retries); dv-svc-web during the connect phase: %s samples, "
+          "threads %s..%s, cpu p50 %s max %s %%, longest gap between samples %s s" % (
+              summary["listeners"], rt.get("retried"), rt.get("offers"), rt.get("retries"), rt.get("exhausted"), wp.get("samples"),
+              wp.get("threads_min"), wp.get("threads_max"), wp.get("cpu_pct_p50"), wp.get("cpu_pct_max"), wp.get("max_gap_s")))
+
+
 # ------------------------------------------------------------------ the measurement
 
 def run_load(n, plan_kw, web_base_url, web_ca, load_gen, rig_control, target, accounts, workers):
@@ -167,6 +193,8 @@ def run_load(n, plan_kw, web_base_url, web_ca, load_gen, rig_control, target, ac
     creds = accounts(wl.accounts_needed(n))
     rooms = sorted({s.room for s in wl.slots(n)})
     offsets = wl.paced_offsets(n, wl.RTC_IP_RATE, wl.RTC_IP_BURST)
+    webproc = ws.WebProcSampler(rig_control)
+    webproc.start()
     t_run = time.time()
     started = load_gen.run({"listeners": n, "workers": workers, "accounts": creds, "base_url": web_base_url,
                             "ca": "/webout/" + os.path.basename(web_ca), "plan": plan_kw})
@@ -176,6 +204,8 @@ def run_load(n, plan_kw, web_base_url, web_ca, load_gen, rig_control, target, ac
     summary["connect_status"] = {k: st[k] for k in ("state", "connected", "failed", "failures", "error")}
     ok_connect = st["connected"] == n and st["state"] != "error"
     summary["edge_listeners_gauge"], summary["edge_listeners_gauge_seen"] = wait_gauge(rig_control, n)
+    summary["web_proc"] = ws.web_proc_summary(webproc.stop())
+    generator_observations(summary, load_gen, n)
     summary["join_refused_core"] = join_refused(rig_control)
     post_connect, _ = sampler.edge()
     summary["edge_vmhwm_after_connect_kib"] = post_connect.vmhwm_kib
@@ -199,6 +229,7 @@ def run_load(n, plan_kw, web_base_url, web_ca, load_gen, rig_control, target, ac
         src.close()
     summary["source_errors"] = list(src.errors)
     res = load_gen.finish()
+    generator_observations(summary, load_gen, n)
     summary["loadavg_end"] = loadavg()
     edge = {"cpu_pct": round(wl.cpu_percent(e0, e1), 3), "window_s": round(e1.t - e0.t, 3),
             "window_start_error_s": round(err0, 3), "window_end_error_s": round(err1, 3),
@@ -248,6 +279,7 @@ def report(name, summary, checks):
 def judge_integrity(summary, totals, n):
     """What every size must satisfy (the gate's zero-error checks and a clean set-up)."""
     problems = []
+    problems.extend(ws.retry_problems(summary.get("offer_retries")))
     st = summary["connect_status"]
     if st["connected"] != n:
         problems.append("only %d of %d listeners connected (failed %d: %s %s)" % (st["connected"], n, st["failed"], st["failures"], st["error"]))
@@ -290,8 +322,10 @@ def test_calibration(n, load_gen, load_ready, rig_control, target, load_accounts
     RESULTS["cases"]["calibration_%d" % n] = summary
     write_results()
     report("calibration %d" % n, summary, checks)
+    stall_finding(summary)
     finding_lines(summary, totals)
-    problems = judge_integrity(summary, totals, n) if totals is not None else ["did not connect: %s" % summary["connect_status"]]
+    problems = judge_integrity(summary, totals, n) if totals is not None else (
+        ["did not connect: %s" % summary["connect_status"]] + ws.retry_problems(summary.get("offer_retries")))
     assert not problems, "; ".join(problems)
 
 
@@ -302,7 +336,8 @@ def test_w8_load_200(load_gen, load_ready, rig_control, target, load_accounts, w
     summary["gate_reference_c90"] = {"cpu_pct": 16.2, "peak_rss_mib": 33.6, "p99_ms": 4.6, "max_ms": 12.5, "packets": 600000, "lost": 0}
     RESULTS["cases"]["w8_200"] = summary
     write_results()
-    assert totals is not None, "did not connect: %s" % summary["connect_status"]
+    stall_finding(summary)
+    assert totals is not None, "did not connect: %s; %s" % (summary["connect_status"], "; ".join(ws.retry_problems(summary.get("offer_retries"))) or "no offer ran out of retries")
     report("200 x 50 pps", summary, checks)
     finding_lines(summary, totals)
     problems = judge_integrity(summary, totals, n)

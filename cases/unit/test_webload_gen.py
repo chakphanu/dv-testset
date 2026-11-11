@@ -210,3 +210,129 @@ def test_late_bins_marks_a_stall_seen_by_every_listener():
     bins = gen.Worker.late_bins(fake)
     assert sum(n for n, _dev in bins.values()) == 4          # two spacings per listener, two listeners
     assert all(dev >= 11.9 for _n, dev in bins.values())
+
+
+# ---------------------------------------------------------------- offer retries and slow requests (WEBSTALL1)
+
+def test_capacity_refusal_and_retry_delay():
+    assert gen.is_capacity_refusal(503, '{"detail":"WebRTC capacity reached"}')
+    assert not gen.is_capacity_refusal(503, '{"detail":"the edge does not answer"}')
+    assert not gen.is_capacity_refusal(429, '{"detail":"WebRTC capacity reached"}')
+    assert not gen.is_capacity_refusal(200, "")
+    assert gen.retry_delay({"retry-after": "5"}) == 5.0
+    assert gen.retry_delay({"retry-after": "0"}) == gen.RETRY_MIN_S and gen.retry_delay({}) == gen.RETRY_MIN_S
+    assert gen.retry_delay({"retry-after": "soon"}) == gen.RETRY_MIN_S and gen.retry_delay(None) == gen.RETRY_MIN_S
+
+
+class Reply:
+    def __init__(self, status, text="", headers=None):
+        self.status, self._text, self.headers = status, text, headers or {}
+
+    def text(self):
+        return self._text
+
+
+def offer_worker(monkeypatch, replies):
+    import asyncio
+    cfg = {"plan": {"listeners": 100}, "slots": [], "accounts": [], "start_mono": 0.0, "threads": 1}
+    worker = gen.Worker(cfg)
+    events, sleeps, sent = [], [], []
+    worker.emit = lambda **ev: events.append(ev)
+
+    async def no_pace(slot):
+        pass
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    class Client:
+        def request(self, method, path, json_body=None, pace=True):
+            sent.append((method, path, pace))
+            return replies.pop(0)
+
+    worker.pace = no_pace
+    monkeypatch.setattr(gen.asyncio, "sleep", fake_sleep)
+    lst = gen.Listener({"j": 9, "room": "A", "login": 0}, worker.plan)
+
+    def run():
+        return asyncio.run(worker.offer({"room": "A", "login": 0}, lst, Client(), "v=0"))
+    return run, lst, events, sleeps, sent
+
+
+FULL = '{"detail":"WebRTC capacity reached"}'
+
+
+def test_a_capacity_refusal_is_sent_again_after_the_retry_after(monkeypatch):
+    run, lst, events, sleeps, sent = offer_worker(monkeypatch, [Reply(503, FULL, {"retry-after": "5"}), Reply(503, FULL, {}), Reply(200, "{}")])
+    reply, _t = run()
+    assert reply.status == 200 and lst.retries == 2 and len(sent) == 3 and all(not pace for _m, _p, pace in sent)
+    assert sleeps == [5.0, gen.RETRY_MIN_S]
+    assert [(e["ev"], e["n"]) for e in events] == [("retry", 1), ("retry", 2)]
+
+
+def test_after_three_retries_the_refusal_is_final(monkeypatch):
+    run, lst, events, sleeps, sent = offer_worker(monkeypatch, [Reply(503, FULL, {}) for _ in range(5)])
+    reply, _t = run()
+    assert reply.status == 503 and lst.retries == gen.OFFER_RETRIES == 3 and len(sent) == 4 and len(sleeps) == 3
+
+
+@pytest.mark.parametrize("reply", [Reply(429, FULL), Reply(503, '{"detail":"the edge does not answer"}'), Reply(401, "")])
+def test_other_refusals_are_not_retried(monkeypatch, reply):
+    run, lst, events, sleeps, sent = offer_worker(monkeypatch, [reply])
+    got, _t = run()
+    assert got is reply and lst.retries == 0 and len(sent) == 1 and sleeps == [] and events == []
+
+
+def test_the_job_counts_retries_exhausted_offers_and_slow_requests():
+    import io
+    job = gen.Job({"listeners": 200})
+    lines = [{"ev": "retry", "j": 4, "n": 1}, {"ev": "retry", "j": 4, "n": 2}, {"ev": "retry", "j": 7, "n": 1}, {"ev": "exhausted", "j": 7, "tries": 3},
+             {"ev": "slow", "m": "POST", "p": "/api/v1/rtc/offer", "d": 5.57, "t": 1000.5}, {"ev": "failed", "j": 7, "why": "offer HTTP 503"}]
+
+    class Proc:
+        stdout = io.StringIO("\n".join(json.dumps(x) for x in lines) + "\n")
+
+        def poll(self):
+            return 0
+
+    gen.Server.reader(job, 0, Proc())
+    st = job.status()
+    assert st["retried"] == 2 and st["retries"] == 3 and st["exhausted"] == 1 and st["failed"] == 1
+    assert st["slow_count"] == 1 and st["slow"] == [{"m": "POST", "p": "/api/v1/rtc/offer", "d": 5.57, "t": 1000.5}]
+
+
+def test_the_job_keeps_at_most_slow_keep_slow_requests_but_counts_all():
+    import io
+    job = gen.Job({"listeners": 1})
+    n = gen.SLOW_KEEP + 30
+    text = "".join(json.dumps({"ev": "slow", "m": "GET", "p": "/x", "d": 1.5, "t": float(i)}) + "\n" for i in range(n))
+
+    class Proc:
+        stdout = io.StringIO(text)
+
+        def poll(self):
+            return 0
+
+    gen.Server.reader(job, 0, Proc())
+    st = job.status()
+    assert st["slow_count"] == n and len(st["slow"]) == gen.SLOW_KEEP
+
+
+def test_the_timed_client_reports_only_requests_slower_than_the_limit(monkeypatch):
+    import time as _time
+    from dvtest import web
+    seen = []
+
+    def fake_request(self, method, path, json_body=None, headers=None, expect=None, pace=True, raw_body=None):
+        assert pace is False                                 # the client side pacing is waited for before the clock starts
+        _time.sleep(0.12 if path.startswith("/slow") else 0.0)
+        return "reply"
+
+    monkeypatch.setattr(web.WebClient, "request", fake_request)
+    monkeypatch.setattr(web.Pacer, "wait", lambda self, kind: None, raising=False)
+    monkeypatch.setattr(gen, "SLOW_S", 0.05)
+    client = gen.timed_client_class()("https://dvt-web", None)
+    client.slow_sink = lambda *a: seen.append(a)
+    assert client.request("GET", "/fast") == "reply" and seen == []
+    assert client.request("POST", "/slow/offer?x=1", json_body={}) == "reply"
+    assert len(seen) == 1 and seen[0][0] == "POST" and seen[0][1] == "/slow/offer" and seen[0][2] >= 0.1
