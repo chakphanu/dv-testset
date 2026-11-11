@@ -583,6 +583,9 @@ services:
       DVT_OBSPKT1B: ${DVT_OBSPKT1B:-}
       # on for an image with RFSAFE1b: DP18-r1 and DP15-6g assert the bounds of the fence view after a healthy restart (dvtest/rfsafe1b.py)
       DVT_RFSAFE1B: ${DVT_RFSAFE1B:-}
+      # on for an image with RFSAFE1c: cases/test_rfsafe1c.py asserts the launcher start in the hub's process rows, no session/update hint item in the feeds and
+      # the shape of the probe failed log line (dvtest/rfsafe1c.py, docs/rfsafe1c-cases.md); the cases skip with a reason without it
+      DVT_RFSAFE1C: ${DVT_RFSAFE1C:-}
       # SECRELOAD1 / SECRELOAD2 (cases/test_secret_reload.py): on = the APRS-IS edge and the image rule are EXPECTED, so a missing series or route
       # fails instead of skipping. Not passing them made the strict mode inert in every rig run (cases/unit/test_tester_env.py guards the class).
       DVT_SECRELOAD1: ${DVT_SECRELOAD1:-}

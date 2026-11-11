@@ -31,7 +31,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "proto"))
 
-from dvtest import ax25, kiss_tnc, logscan, metrics, rfsafe1b, txguard  # noqa: E402
+from dvtest import ax25, kiss_tnc, logscan, metrics, rfsafe1b, rfsafe1c, txguard  # noqa: E402
 
 import data_support as ds  # noqa: E402
 import dp18_support as dc  # noqa: E402
@@ -125,6 +125,22 @@ def fence_view_bounds(sim, target, case, port):
         pytest.fail("the fence view of %s carries no `modem` object (operator or admin needed)" % port)
     assert not judged.problems, "RFSAFE1b bounds (DVT_RFSAFE1B=on): %s; %s" % (judged.problems, judged.summary)
     return judged
+
+
+def procs_origin(sim, target, case, before):
+    """RFSAFE1c (DVT_RFSAFE1C=on, dvtest/rfsafe1c.py, statement 4): after the child restart the hub's procs[] row of dv-edge-ax25 has the launcher child's since_ms once
+    its pid is the child's pid (a stale row with the previous pid is recorded and waited out, up to 15 s). `before`: children_state before the restart."""
+    if not rfsafe1c.strict_on():
+        return None
+    pid = (before or {}).get("pid")
+
+    def read():
+        resp = sim.admin.get(sim.admin.path("/status"), expect=None)
+        return resp.json() if resp.status == 200 else None
+    res = rfsafe1c.wait_origin(read, only=[txguard.AX25_CHILD], previous={("edge", "ax25"): pid} if pid is not None else None)
+    note(target, case, "RECORD", "RFSAFE1c " + rfsafe1c.describe_origin(res))
+    assert not res.problems, "RFSAFE1c procs[] row of the restarted AX.25 edge (DVT_RFSAFE1C=on): %s" % (res.problems,)
+    return res
 
 
 def post_text(sim, poster_index, tag):
@@ -270,6 +286,7 @@ def test_dp18_r1_simulate_to_true_drops_the_queued_simulated_frames(rig, target,
     after = wait_edge_restart(sim, before, case, target)
     assert dc.restarted(before, after), "the AX.25 edge was not restarted by the tx change: %s -> %s" % (before, after)
     fence_view_bounds(sim, target, case, "rf-b")                         # first: the view clears 13-16 s after the child start, the TNC wait must not eat it
+    procs_origin(sim, target, case, before)                              # RFSAFE1c: the hub row carries the launcher's child start (after the 15 s of the view bounds it has caught up)
     assert sim.rf.b.wait(lambda t: t.connections > b_conn and t.is_connected(), 30.0), "the edge did not reconnect to rf-b after the restart"
     wait_unfenced(sim, target, case, "rf-b")
     time.sleep(WATCH_AFTER_CHANGE_S)
@@ -306,6 +323,7 @@ def test_dp18_r2_true_to_simulate_then_restore_from_history(rig, target, hub, re
     apply_tx(sim, "rf-a", "simulate", "dvt DP18-r2 true -> simulate")
     after = wait_edge_restart(sim, before, case, target)
     assert dc.restarted(before, after), "the AX.25 edge was not restarted by the tx change: %s -> %s" % (before, after)
+    procs_origin(sim, target, case, before)                              # RFSAFE1c (DVT_RFSAFE1C=on): the hub row carries the launcher's child start
     time.sleep(WATCH_AFTER_CHANGE_S)
     late = [(body, f[0] - t_change) for body, _t0 in queued for f in frames_with(sim.rf.a, body, t_change)]
     note(target, case, "RECORD", "frames of the queued texts at rf-a after the change: %s" % (late,))
