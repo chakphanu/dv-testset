@@ -21,6 +21,8 @@ WAV_BODY_CAP = 2
 WAV_REFUSED = 429
 HEARTBEAT_S = 15.0              # the default SSE heartbeat of the web service (hub sse.rs): the session is checked at each one
 RTC_SWEEP_S = 5.0               # the RTC owner sweep tick (rtc/shell.rs)
+WRITE_TIMEOUT_S = 30.0          # dv-svc-web write timeout (crates/lib/web/src/http.rs:43): a body whose reader makes no progress this long may be closed by the server
+AUDIO_RATE_WINDOW_S = 10.0      # the 20-audio-requests-per-10-s limit shares the 429 `rate_limited` code with the transfer cap
 WAV_CHECK_S = 0.1               # recordings: the owner is checked every 100 ms (plus the time to see the connection end)
 WAV_RESIDUAL_BYTES = 49 * 1024  # "under 49 KiB buffered" after the end (review-248, 3)
 SSE_EVENT_NAMES = ("hello", "bye", "session", "room", "status", "data", "config", "ids", "lag")
@@ -49,8 +51,9 @@ class RawWav(threading.Thread):
     code), retry_after, t_start / t_end (time.time() ms)."""
 
     def __init__(self, host, port, path, cookie, user_agent, ca=None, rate=0.0, hold=False, rcvbuf=4096, timeout=30.0, extra_headers=None,
-                 proxy_buf=PROXY_BUF):
+                 proxy_buf=PROXY_BUF, meta=None):
         super().__init__(daemon=True)
+        self.meta = dict(meta or {})
         self.host, self.port, self.path, self.cookie, self.ua = host, port, path, cookie, user_agent
         self.ca, self.rate, self.hold, self.rcvbuf, self.timeout = ca, float(rate), bool(hold), rcvbuf, timeout
         self.extra = dict(extra_headers or {})
@@ -58,12 +61,13 @@ class RawWav(threading.Thread):
             self.extra["X-Dvt-Buf"] = str(int(proxy_buf))                  # web-proxy test hook: small kernel buffers on both legs of THIS request
         self.lock = threading.Lock()
         self.state = {"status": None, "length": None, "got": 0, "done": False, "err": None, "code": None, "retry_after": None,
-                      "t_start": None, "t_end": None, "headers_at": None}
+                      "t_start": None, "t_end": None, "headers_at": None, "detail": None, "content_range": None, "request": "GET %s" % path,
+                      "range": (extra_headers or {}).get("Range")}
         self.headers_seen = threading.Event()
 
     def snapshot(self):
         with self.lock:
-            return dict(self.state, hold=self.hold, rate=self.rate)
+            return dict(self.state, hold=self.hold, rate=self.rate, **self.meta)
 
     def release(self):
         with self.lock:
@@ -105,7 +109,7 @@ class RawWav(threading.Thread):
             status, headers = parse_head(head)
             length = headers.get("content-length")
             self._set(status=status, length=int(length) if length is not None and length.isdigit() else None,
-                      retry_after=headers.get("retry-after"), headers_at=time.time() * 1000.0)
+                      retry_after=headers.get("retry-after"), content_range=headers.get("content-range"), headers_at=time.time() * 1000.0)
             self.headers_seen.set()
             got = len(body)
             self._set(got=got)
@@ -120,7 +124,7 @@ class RawWav(threading.Thread):
                         rest += more
                 except (socket.timeout, OSError):
                     pass
-                self._set(code=problem_code_of(rest), done=True, t_end=time.time() * 1000.0)
+                self._set(code=problem_code_of(rest), detail=problem_detail_of(rest), done=True, t_end=time.time() * 1000.0)
                 return
             sock.settimeout(self.timeout)
             while True:
@@ -170,6 +174,38 @@ def problem_code_of(body):
     except ValueError:
         return None
     return value.get("code") if isinstance(value, dict) else None
+
+
+def problem_detail_of(body):
+    """The `detail` of a problem+json body (bytes), at most 80 characters; None when it has none."""
+    import json
+    try:
+        value = json.loads(body.decode("utf-8", "replace"))
+    except ValueError:
+        return None
+    detail = value.get("detail") if isinstance(value, dict) else None
+    return detail[:80] if isinstance(detail, str) else None
+
+
+def audio_in_window(log, t_ms, seconds=AUDIO_RATE_WINDOW_S):
+    """How many entries of `log` (list of (name, t_ms) of the audio requests of one login) fall in the `seconds` before and including t_ms."""
+    return sum(1 for _name, t in log if t_ms - seconds * 1000.0 < t <= t_ms)
+
+
+def wav_finished(state, length):
+    """Whether a held body is over (done, failed, or all its bytes read): then it no longer holds a server-side slot."""
+    return isinstance(state, dict) and (bool(state.get("done")) or bool(state.get("err")) or (state.get("got") or 0) >= length)
+
+
+def describe_request(name, state, log=None):
+    """One line for the RECORD of an audio request: what was asked (method, path tail, Range, cookie generation), what came back."""
+    path = str(state.get("request") or "").rsplit("/", 2)
+    tail = "/".join(path[-2:]) if len(path) > 1 else str(state.get("request"))
+    return "%s: %s ... Range=%s cookie=%s -> %s Content-Length=%s Content-Range=%s Retry-After=%s code=%s detail=%r; read %s bytes, done=%s err=%s; sent at %s%s" % (
+        name, str(state.get("request") or "").split(" ")[0] + " " + tail, state.get("range") or "none", state.get("cookie", "?"), state.get("status"),
+        state.get("length"), state.get("content_range"), state.get("retry_after"), state.get("code"), state.get("detail"), state.get("got"),
+        state.get("done"), state.get("err"), None if state.get("t_start") is None else "%.3f" % (state["t_start"] / 1000.0),
+        "" if log is None or state.get("t_start") is None else "; audio requests of the login in the 10 s up to it: %d" % audio_in_window(log, state["t_start"]))
 
 
 # ---------------------------------------------------------------- JavaScript run in the page

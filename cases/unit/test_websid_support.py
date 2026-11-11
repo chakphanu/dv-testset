@@ -274,3 +274,49 @@ def test_rawwav_asks_the_proxy_for_small_buffers_unless_told_not_to():
     wait_done(r)
     assert b"X-Dvt-Buf" not in server.request
     server.close()
+
+
+def test_problem_detail_is_cut_and_none_without_json():
+    assert ws.problem_detail_of(b'{"detail": "recording rate limit"}') == "recording rate limit"
+    assert len(ws.problem_detail_of(b'{"detail": "%s"}' % (b"x" * 200))) == 80
+    assert ws.problem_detail_of(b"nope") is None and ws.problem_detail_of(b"[]") is None and ws.problem_detail_of(b'{"detail": 3}') is None
+
+
+def test_audio_requests_in_the_ten_seconds_before_a_request():
+    log = [("a", 1000.0), ("b", 4000.0), ("c", 11000.0), ("d", 11500.0)]
+    assert ws.audio_in_window(log, 11500.0) == 3                      # b, c, d: a is exactly 10.5 s back
+    assert ws.audio_in_window(log, 1000.0) == 1
+    assert ws.audio_in_window(log, 11000.0, seconds=1.0) == 1
+
+
+def test_a_held_body_is_finished_when_done_failed_or_fully_read():
+    assert not ws.wav_finished({"done": False, "err": None, "got": 5000}, 100000)
+    assert ws.wav_finished({"done": True, "err": None, "got": 5000}, 100000)
+    assert ws.wav_finished({"done": False, "err": "OSError: x", "got": 5000}, 100000)
+    assert ws.wav_finished({"done": False, "err": None, "got": 100000}, 100000)
+    assert not ws.wav_finished(None, 10)
+
+
+def test_rawwav_records_the_request_the_refusal_detail_and_the_meta():
+    def refuse(conn):
+        body = b'{"code": "rate_limited", "detail": "recording rate limit"}'
+        conn.sendall(b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 1\r\nContent-Length: %d\r\nConnection: close\r\n\r\n" % len(body) + body)
+    server = Server(refuse)
+    r = reader(server, meta={"cookie": "gen1", "name": "four"})
+    got = wait_done(r)
+    server.close()
+    assert got["status"] == 429 and got["detail"] == "recording rate limit" and got["cookie"] == "gen1" and got["range"] is None
+    assert got["request"].startswith("GET /api/v1/user/recordings/ab/audio.wav")
+    line = ws.describe_request("four", got, [("four", got["t_start"]), ("x", got["t_start"] - 3000.0)])
+    assert "Range=none" in line and "cookie=gen1" in line and "-> 429" in line and "Retry-After=1" in line
+    assert "recording rate limit" in line and "in the 10 s up to it: 2" in line
+
+
+def test_a_body_with_a_content_range_is_recorded():
+    def partial(conn):
+        conn.sendall(b"HTTP/1.1 206 Partial Content\r\nContent-Length: 4\r\nContent-Range: bytes 0-3/10\r\nConnection: close\r\n\r\nabcd")
+    server = Server(partial)
+    r = reader(server)
+    got = wait_done(r)
+    server.close()
+    assert got["content_range"] == "bytes 0-3/10"

@@ -74,6 +74,12 @@ about 150 KB. (2) Case 2 takes the step-up code BEFORE the bodies start (`Login.
 longer refused the case skips and says so (the slots were not held, nothing can be judged); if it is refused and the probe about one second after the rotation is accepted, the cap
 was reset or rekeyed by the rotation and that is a product defect (the failure message says how long before and how many bytes the held bodies had read).
 
+Records added for dv-router's analysis (OPEN-1): every audio request of case 2 prints one RECORD line (`WEBSID1: <engine>: one|two|three|pre|four: GET <recording>/audio.wav Range=none
+cookie=gen0|gen1 -> status Content-Length Content-Range Retry-After code detail; read N bytes, done, err; sent at; audio requests of the login in the 10 s up to it`). `gen0` is
+the cookie before the step-up, `gen1` the rotated one (identity only, never the value). If the two held bodies are over at the probe after the step-up (done, failed or fully
+read) and the probe is not refused, the case is inconclusive ("bodies finished, cap not exercised": a skip, a failure with `DVT_WEBSID1=on`), not a verdict. Case 3 treats a cut of
+a body that was paused for 29 s or more as inconclusive too (the server write timeout is 30 s, `crates/lib/web/src/http.rs:43`).
+
 ## Cases
 
 | Case | Steps | Asserted |

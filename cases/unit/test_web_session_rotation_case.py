@@ -207,6 +207,7 @@ def fake_login():
     client = types.SimpleNamespace(authenticator=auth, hide=lambda code: None)
     login.account = types.SimpleNamespace(client=client)
     login.pending_code = None
+    login.generation = 0
     tab = FakeTab()
     login.second_tab = lambda: tab
     return login, auth, tab
@@ -220,3 +221,22 @@ def test_a_prepared_step_up_code_is_used_once_and_not_taken_again():
     assert tab.codes == ["code1"] and auth.taken == [0] and login.pending_code is None
     login.step_up()                                       # nothing prepared: takes its own
     assert tab.codes == ["code1", "code2"] and auth.taken == [0, 1]
+
+
+def test_a_step_up_moves_the_cookie_generation_only_when_it_succeeds():
+    login, _auth, tab = fake_login()
+    login.generation = 0
+    login.step_up()
+    assert login.generation == 1
+    tab.evaluate = lambda js, arg: {"status": 403, "csrf_before": "c"}
+    login.step_up()
+    assert login.generation == 1
+
+
+def test_inconclusive_is_a_skip_unless_the_image_must_have_the_rule(monkeypatch):
+    monkeypatch.delenv("DVT_WEBSID1", raising=False)
+    with pytest.raises(pytest.skip.Exception):
+        case.inconclusive("x")
+    monkeypatch.setenv("DVT_WEBSID1", "on")
+    with pytest.raises(pytest.fail.Exception):
+        case.inconclusive("x")

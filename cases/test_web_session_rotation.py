@@ -65,6 +65,13 @@ def note(text):
     print("[RECORD] WEBSID1: %s" % text)
 
 
+def inconclusive(message):
+    """A case that could not exercise what it checks: a failure with DVT_WEBSID1=on, a skip otherwise (never a pass)."""
+    if strict():
+        pytest.fail("inconclusive (DVT_WEBSID1=on): %s" % message)
+    pytest.skip(message)
+
+
 # ---------------------------------------------------------------- fixtures
 
 @pytest.fixture(scope="session")
@@ -195,6 +202,8 @@ class Login:
         self.bp = BrowserPage(engine, engine_browsers(engine), web_base_url, name, context_options=ctx)
         self.engine, self.account, self.base, self.ca = engine, account, web_base_url, ca
         self.wavs = {}
+        self.wav_log = []                                    # (name, t_ms) of every audio request of this login, for the 10 s rate window
+        self.generation = 0                                  # the cookie generation: 0 before any step-up, +1 after each
         self.pending_code = None
         self.bp.install_rtc_probe()
         code = account.client.authenticator.next_code()
@@ -246,8 +255,9 @@ class Login:
         assert cookie, "the login has no session cookie to give the WAV reader"
         parts = urlsplit(self.base)
         reader = ws.RawWav(parts.hostname, parts.port or 443, AUDIO % rec_id, "%s=%s" % (cookie["name"], cookie["value"]), self.user_agent(),
-                           ca=self.ca, rate=rate, hold=hold)
+                           ca=self.ca, rate=rate, hold=hold, meta={"cookie": "gen%d" % self.generation, "name": name})
         self.wavs[name] = reader
+        self.wav_log.append((name, time.time() * 1000.0))
         reader.start()
         got = reader.wait_headers(15.0)
         assert got is not None, "the WAV request %s got no response headers in 15 s" % name
@@ -255,6 +265,12 @@ class Login:
 
     def wav(self, name):
         return self.wavs[name].snapshot()
+
+    def wav_report(self, engine, names):
+        """RECORD lines for the audio requests `names` (what was sent: URL tail, method, Range, cookie generation; what came back)."""
+        for name in names:
+            if name in self.wavs:
+                note("%s: %s" % (engine, ws.describe_request(name, self.wav(name), self.wav_log)))
 
     def wav_release(self, name):
         self.wavs[name].release()
@@ -284,6 +300,8 @@ class Login:
             got = tab.evaluate(ws.JS_STEP_UP, {"code": code})
         finally:
             tab.close()
+        if got["status"] == 200:
+            self.generation += 1
         return got["status"], got["csrf_before"]
 
     def finish(self, request):
@@ -453,10 +471,11 @@ def test_step_up_does_not_multiply_the_caps(engine, make_login, sid_operator, si
     # held only until the transfer task has queued its last chunk, so a body the buffers on the way swallowed would free it with no rotation involved.
     pre = login.wav_start("pre", sid_wav, hold=True)
     t_pre = time.monotonic()
+    login.wav_report(engine, ("one", "two", "three", "pre"))
     if pre["status"] != ws.WAV_REFUSED:
-        pytest.skip("%s: a third WAV body answered %s just before the step-up: the two held bodies (%s / %s of %s bytes read) no longer hold their "
-                    "slots (taken by the buffers on the way), so the step-up cannot be judged; the web-proxy X-Dvt-Buf hook did not limit them" % (
-                        engine, pre["status"], login.wav("one")["got"], login.wav("two")["got"], sid_wav[1]))
+        inconclusive("%s: a third WAV body answered %s just before the step-up: the two held bodies (%s / %s of %s bytes read) no longer hold their "
+                     "slots (taken by the buffers on the way), so the step-up cannot be judged; the web-proxy X-Dvt-Buf hook did not limit them" % (
+                         engine, pre["status"], login.wav("one")["got"], login.wav("two")["got"], sid_wav[1]))
     status, _ = login.step_up()
     assert status == 200, "the step-up answered %s" % status
     login.page.evaluate(ws.JS_ALIVE_SET_CSRF, login.csrf())
@@ -466,6 +485,11 @@ def test_step_up_does_not_multiply_the_caps(engine, make_login, sid_operator, si
     assert not shape, "the cap counted per cookie again? %s" % "; ".join(shape)
     d = login.wav_start("four", sid_wav, hold=True)
     gap = time.monotonic() - t_pre
+    login.wav_report(engine, ("four",))
+    over = [n for n in ("one", "two") if ws.wav_finished(login.wav(n), sid_wav[1])]
+    if d["status"] != ws.WAV_REFUSED and over:
+        inconclusive("%s: bodies finished, cap not exercised: %s no longer held a slot at the probe after the step-up (%s)" % (
+            engine, " and ".join(over), {n: (login.wav(n)["got"], login.wav(n)["done"], login.wav(n)["err"]) for n in over}))
     shape = ws.refusal_shape_problems("a third WAV body after the step-up", d, ws.WAV_REFUSED, "rate_limited", 1)
     assert not shape, "%s (a third body was refused %.1f s earlier with the same two held and not read: one %s / two %s of %s bytes read; the key of the cap is (role, session), it must not change at the step-up)" % (
         "; ".join(shape), gap, login.wav("one")["got"], login.wav("two")["got"], sid_wav[1])
@@ -573,6 +597,7 @@ def test_session_end_ends_the_handles(engine, cause, make_login, sid_operator, s
 
     # WAV: the bodies are CUT. The paused reader is released only now; what the server had already queued is below 49 KiB past the buffers,
     # so a body that arrives whole was fully buffered (the over is too short for this case) and is reported instead of passing.
+    held_for = time.time() - login.wavs["held"].snapshot()["t_start"] / 1000.0
     login.wav_release("held")
     login.wav_release("slow")
     end = time.monotonic() + 20.0
@@ -584,6 +609,10 @@ def test_session_end_ends_the_handles(engine, cause, make_login, sid_operator, s
     if ws.wav_fits_buffers(held):
         pytest.skip("the held WAV body (%s bytes) arrived whole after %s: it fit the buffers on the way, so a cut cannot be shown; raise "
                     "DVT_WEBSID_OVER_S (now %.0f s)" % (held.get("length"), cause, OVER_S))
+    if held_for >= ws.WRITE_TIMEOUT_S - 1.0 and ws.wav_cut(held):
+        inconclusive("%s %s: the held WAV body was paused for %.0f s, as long as the server write timeout (%.0f s): a cut cannot be told from a timeout" % (
+            engine, cause, held_for, ws.WRITE_TIMEOUT_S))
+    note("%s %s: the held body was paused %.1f s before its release" % (engine, cause, held_for))
     assert ws.wav_cut(held), "the held WAV body was not cut after %s: %s" % (cause, held)
     assert ws.wav_cut(slow), "the slow WAV body was not cut after %s: %s" % (cause, slow)
 
