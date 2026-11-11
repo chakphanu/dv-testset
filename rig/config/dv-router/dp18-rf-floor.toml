@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (docs/dp18-cases.md, stage F, DP18-o-f): the node beacon and TWO node objects with RF copies on the transmitting
+# port rf-a of dp18-rf.toml, for the interval floor at the RF side (cases/test_dp18_rf.py, test_dp18_o_f_...). ONLY with dp18-rf.toml and
+# dp15-aprsis.toml (INSTEAD of dp18-origin.toml and of dp18-rf-objects.toml). Three reports share about four 0.8 s frames of the beacon class on
+# afsk1200-shared per 600 s, so nothing is dropped and EVERY report is transmitted once per cycle: two cycles show each of them twice, which
+# dp18-rf-objects.toml (eleven reports, most dropped) does not. Same 600 s interval (the floor), first emissions at 600 / 635 / 670 s.
+# Names DVTOB01 and DVTOB02 have 7 characters (not station callsigns); distinct positions.
+[edges.aprsis.beacon]
+enable = true
+interval_secs = 600
+lat_e7 = 105000000
+lon_e7 = 202500000
+symbol = "/&"
+comment = "dvt dp18 floor"
+ambiguity = 0
+rf_ports = ["rf-a"]
+
+[[edges.aprsis.objects]]
+name = "DVTOB01"
+comment = "dvt1"
+interval_secs = 600
+lat_e7 = 106000000
+lon_e7 = 203500000
+symbol = "/r"
+ambiguity = 0
+rf_ports = ["rf-a"]
+
+[[edges.aprsis.objects]]
+name = "DVTOB02"
+comment = "dvt2"
+interval_secs = 600
+lat_e7 = 107000000
+lon_e7 = 204500000
+symbol = "/r"
+ambiguity = 0
+rf_ports = ["rf-a"]

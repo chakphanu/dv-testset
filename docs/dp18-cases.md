@@ -4,7 +4,7 @@
 Status: written offline for the next DV-Router image (DP12c + DP18, wip 33a6d6e, after SECRELOAD1 and RFWD1). **Nothing here has run on a rig**: there is no image yet.
 What the cases check comes from the DV-Router documents (`data.md` 9.5 "Built (DP18)", 10.x "Built (DP12c)", 13.1, `config.md` `[edges.aprsis.beacon]` and
 `[[edges.aprsis.objects]]`, `radio.md`, `admin.md`, `status.md`) and from the DV-Router review 232 of the change (`review-232-dp18.md`, read only, cited by name).
-Case files `cases/test_dp18_origin.py` (private aprsc) and `cases/test_dp18_rf.py` (AX.25 edge, two fake TNCs), helpers `cases/dp18_support.py`, builders in
+Case files `cases/test_dp18_origin.py` (private aprsc), `cases/test_dp18_rf.py` (AX.25 edge, two fake TNCs) and `cases/test_dp18_config.py` (host side, `cfgload`, no rig; helpers `dvtest/dp18cfg.py`), helpers `cases/dp18_support.py`, builders in
 `dvtest/proto/aprs.py` (`position_report`, `object_report`, `lat_text_e7`, `lon_text_e7`, `parse_object`), snippets in `rig/config/dv-router/`, unit tests
 `cases/unit/test_dp18_support.py` and `cases/unit/test_proto_aprs.py`. Expected lines are built from the RENDERED config of the run with hand-written APRS101 shapes, never from
 DV-Router's encoder.
@@ -20,6 +20,7 @@ DV-Router's encoder.
 | `dp18-origin-withheld.toml` | `[data] position_optout = ["N0TEST"]`: the position policy withholds the gateway call (login `N0TEST-5`) | `dp18-origin.toml` |
 | `dp18-rf.toml` | `[edges.ax25]` callsign `N0TEST-5` (equal to the APRS-IS login, a rule for RF copies), `tx_enable` true; ports `rf-a` (`tx = true`) and `rf-b` (`tx = "simulate"`) on ONE physical `radio1`, band 2m, class `afsk1200-shared`, `tx_per_min` 2 burst 1; paths `rf-out` (room B to rf-a) and `rf-out-sim` (room B to rf-b). INSTEAD of `dp15-rf.toml` | `dp15-aprsis.toml` |
 | `dp18-rf-objects.toml` | the beacon and ten objects `DVTOB01..DVTOB10` with `rf_ports = ["rf-a"]`, interval 600 s; INSTEAD of `dp18-origin.toml` | `dp18-rf.toml`, `dp15-aprsis.toml` |
+| `dp18-rf-floor.toml` | the beacon and TWO objects `DVTOB01`, `DVTOB02` with `rf_ports = ["rf-a"]`, interval 600 s (three reports fit the class share of about four frames, so nothing is dropped and every report is transmitted once per cycle); INSTEAD of `dp18-origin.toml` and `dp18-rf-objects.toml` | `dp18-rf.toml`, `dp15-aprsis.toml` |
 
 ## Run commands (the image with DP12c / DP18 is `<image>`; the first lines of `docs/dp15-cases.md` "Run" give the rest of the environment)
 
@@ -38,9 +39,17 @@ DVT_SUT_CONFIG_EXTRA=$E:$R/dp18-origin.toml scripts/run.sh -m rig --capture --pr
 ... DVT_SUT_CONFIG_RW=1 DVT_SUT_CONFIG_EXTRA=$E:$R/dp18-rf.toml scripts/run.sh -m rig --capture --profile web,aprs -- cases/test_dp18_rf.py -k "dp18_s or dp18_r"
 # R: eleven reports with RF copies (about 27 minutes for 2 cycles: DVT_DP18_CYCLES=2, the default)
 ... DVT_SUT_CONFIG_EXTRA=$E:$R/dp18-rf.toml:$R/dp18-rf-objects.toml scripts/run.sh -m rig --capture --profile web,aprs -- cases/test_dp18_rf.py -k dp18_o
+# R strict: the same run (the same 27 minutes: the strict cases read the one observation of the objects_run fixture) with the switch DVT_DP18STRICT=on; see "Strict" below.
+# On the images where dv-edge-aprsis exits on rf_ports the no_edge case, the aprsc case and the conservation case FAIL there; that is what the switch is for.
+... DVT_DP18STRICT=on DVT_SUT_CONFIG_EXTRA=$E:$R/dp18-rf.toml:$R/dp18-rf-objects.toml scripts/run.sh -m rig --capture --profile web,aprs -- cases/test_dp18_rf.py -k dp18_o
+# F: the interval floor at the RF side, nothing dropped (about 24 minutes: first emission 600 s, last 670 s, 2 cycles, 60 s + 30 s of settling). Add DVT_DP18STRICT=on and
+# -k "dp18_o_f or dp18_o_strict" for the strict cases on this shape too (never -k dp18_o here: the spread case asserts a drop, which three reports do not produce).
+... DVT_SUT_CONFIG_EXTRA=$E:$R/dp18-rf.toml:$R/dp18-rf-floor.toml scripts/run.sh -m rig --capture --profile web,aprs -- cases/test_dp18_rf.py -k dp18_o_f
+# C: object and beacon configuration, host side (about 20 s measured on wip-495aae0: 30 throw-away containers one after the other; no rig, no network)
+DVT_CFGLOAD_IMAGE=<image with DP18> DVT_SUT_GEN=compat1 DVT_SUT_CONFIG=<template> scripts/contained.sh --name test -- python3 -m pytest -m cfgload cases/test_dp18_config.py
 ```
 
-Times are ESTIMATES. The first beacon is due one full interval (600 s, the floor) after the data worker started, the object 35 s later (one earlier report), object k at 600 + 35 k s.
+Times are ESTIMATES (C was measured: 18.5 s). The first beacon is due one full interval (600 s, the floor) after the data worker started, the object 35 s later (one earlier report), object k at 600 + 35 k s.
 One rig at a time; the O and R runs hold the rig for the full time. Notes: stdout and `out/<run>/dp18-origin.txt`, `out/<run>/dp18-rf.txt`.
 
 ## Case table
@@ -57,6 +66,10 @@ One rig at a time; the O and R runs hold the rig for the full time. Notes: stdou
 | DP18-r1 | "admin reload simulate -> true: the edge restarts and no frame queued before the change is transmitted after it" | three texts posted, then `POST /api/v1/admin/config/changes` (mode apply, `base_etag` from `GET /config` `meta.etag`, op `replace /edges/ax25/port/1/tx` true); the launcher child `dv-edge-ax25` | the child's `restarts` counter grew or its pid changed; the fence view of rf-b is read at once (`fence_view_bounds`, `dvtest/rfsafe1b.py`); the origin is the child start, `since_ms` (Unix ms of the CURRENT start) of the `dv-edge-ax25` entry of the admin status `launcher.children[]` (the hub's procs[] row of an edge has none by design; an implausible value falls back to the time the pid change was seen and skips the 13.0 s lower-bound check): with `DVT_RFSAFE1B=on` (RFSAFE1b image, passed through rig/compose.yml) only the cause `startup_guard` may show (`recovery_probe`, `own_token_pending` or a `probe failed` log line is a FINDING, the log part by `python3 -m dvtest.logscan out/<run>`: a FOUND for DP18-r1-probe-failed), the view clears within 16 s of the child start and not before 13.0 s, `tx_guard_ms` is <= 13000 and non-increasing within one fence epoch, and read time + `tx_guard_ms` predicts the end within 1.5 s; without the switch the view may lag up to about 24.5 s (the case waits up to 30 s) and only the cause and timing are recorded; with `DVT_RFSAFE1C=on` (RFSAFE1c image) the hub's procs[] row of the edge has the launcher child's `since_ms` once its pid is the child's (`procs_origin`, `docs/rfsafe1c-cases.md`; DP18-r2 carries the same check); the edge reconnects to rf-b; no frame carrying a queued text at rf-b in 45 s after the change; a control text then reaches rf-b (the port is live); the change is reverted (same API) and the TX guard of the new process waited out | the child state before and after | written, not run on a rig |
 | DP18-r2 | "true -> simulate", "a restore" | one text on air at rf-a, two more queued (tx_per_min 2, burst 1), then `tx` of rf-a -> "simulate"; then `GET /config/history` and `POST /config/history/{seq}/restore` of the newest entry (the file before the apply) | restart as r1; no frame carrying a queued text at rf-a after the change; after the restore a control text is transmitted at rf-a | the restore status; a history list without sequence numbers is a FINDING and the reverse change is used | written, not run on a rig |
 | DP18-o | "several RF objects on afsk1200-shared: releases spread over the interval; drops beyond the beacon share are counted (dropped_queue/quota/ttl), not always the same object" (review 232 finding 1) | run R; observe `DVT_DP18_CYCLES` (2) cycles | the gaps between releases at the TNC are at least 30 s (the 35 s stagger, never one tick); the TNC saw exactly the frames counted `sent` (+ `sent_over_budget`); at least one drop counted (eleven reports against a share of about four frames); which objects were transmitted per cycle is recorded, and equal sets in every cycle are a FINDING (not asserted: the share arithmetic is not specified to that depth) | frames, gaps, `dv_edge_rf_tx_total` and `dv_pkt_origin_total` deltas, objects per cycle | written, not run on a rig |
+| DP18-o strict (3 cases) | `data.md` 13.1 `dv_pkt_origin_total`; 10.8 item 8 (`sent_over_budget` only for `ident`); 10.8 `dv_edge_rf_queue` | run R (or F) with `DVT_DP18STRICT=on` | (1) `dv_pkt_origin_total{result=no_edge}` and `{result=no_rf_edge}` are 0 (the KNOWN DEFECT fails this one, see "Strict"); (2) `dv_edge_rf_tx_total{result=sent_over_budget}` is 0 on the RF port; (3) conservation: `generated` copies = `sent` + `simulated` + `sent_over_budget` + every `dropped_*` + the change of the gauge `dv_edge_rf_queue`, re-read for up to 45 s (counters are published every 10 s) | the deltas and every unreadable term | written, not run on a rig |
+| DP18-o-f | "RF copies obey the 600 s floor" (`data.md` 9.5: at most once per interval, no catch-up burst) | run F (or R: it asserts what repeats there); two cycles | for every OBJECT seen at least twice at the TNC the HMS stamps (the generation time) are at least `interval - 2` s apart, whatever the queue did (a retransmission shows gap 0); the beacon has no stamp. With `DVT_DP18STRICT=on` the release times at the TNC are at least `interval - 15` s apart too, the beacon included | per report: the stamp gaps and the arrival gaps; the reports NOT seen twice. Skips with the reason when nothing repeats (R: most are dropped) | written, not run on a rig |
+| DP18-o aprsc | "the configured beacon and objects reach the private aprsc" with RF copies selected | run R or F with `DVT_DP18STRICT=on`; the tester stays logged in at the aprsc for the whole wait | more than one distinct OBJECT and every configured report at the aprsc at least once, each line as in DP18-a (source = gateway call, `TCPIP*` before the server's qAC, the information field byte for byte, the object stamp within 1 s of the read time) | lines per report | written, not run on a rig |
+| DP18-cfg (30 params) | `config.md` `[edges.aprsis.beacon]`, `[[edges.aprsis.objects]]`; `aprsis_origin.rs` (DV-Router f00079f4) | `dv-router config check` on `dp18-origin.toml` (with `data-ident.toml`, `dp15-aprsis.toml`) with ONE mutation each | reject (non-zero exit, a positioned `edges.aprsis...` error that names the field and carries the source's wording): station callsign names `N0CALL-7` / `n0call-7` / `N0CALL`, name of 10 characters, leading and trailing space, empty name, non-ASCII name, duplicate name, `interval_secs` 599 (object and beacon) and 86401, lat and lon both 0 (object and beacon), frequency `144.80MHz` / `144.800mhz` / `14a.800MHz`, sent comment of 44 bytes (object: frequency + room + comment; beacon), 17 objects. Accept (exit 0): name of 9 characters, an inner space, the gateway call itself (`N0TEST-5`, also lower case), `interval_secs` 86400, lat 0 with lon not 0, sent comment of exactly 43 bytes (object and beacon), 16 objects, the shipped snippet | the exact error text per case in `$DVT_OUT/config-load/dp18-config.json` | all 30 passed on `dv-router:wip-495aae0` (host side, 2026) |
 
 Limits and what is NOT covered:
 
@@ -77,3 +90,38 @@ Limits and what is NOT covered:
   with `base_etag`, `GET /config/history`, `POST /config/history/{seq}/restore`) and the status route for the child's `restarts` and pid. The rendered `dv-router.toml` of the run is only
   READ at the start (the shape: port numbers and `tx` modes), never edited; with `DVT_SUT_CONFIG_RW=1` it stays the pre-reload copy, and both reload cases leave the SUT on the original shape.
   `cases/unit/test_dp18_support.py` scans the three DP18 modules for file writes.
+
+## Strict (`DVT_DP18STRICT=on`)
+
+The default run of R stays comparable across images. The switch adds the asserts that depend on the APRS-IS leg working TOGETHER with `rf_ports`, on counter conservation
+and on the strict floor; it is passed to the tester by `rig/compose.yml`. Without it each strict case skips naming the switch.
+
+* **Known product defect, the reason for the switch.** `dv-edge-aprsis` exits with a configuration error as soon as an object or the beacon has `rf_ports`: `crates/edge/aprsis/src/shell.rs` validates
+  the file with `Config::default()` plus only `edges.aprsis`, so the AX.25 port the RF copy names does not exist in what it validates.
+  The worker then finds no `aprsis-` edge and counts `dv_pkt_origin_total{result=no_edge}` for every report, and nothing reaches the aprsc. Reported to DV-Router; this testset does not track the fix.
+  On an image with the defect the strict `no_edge` case and the strict aprsc case FAIL; the conservation case is expected to pass there (the worker emits the RF copy whether or not an APRS-IS edge exists, `core_origination.rs`).
+* **Conservation terms** (read per RF port, deltas since the start of the observation): copies = `dv_pkt_origin_total{result=generated}` of each kind times the RF ports of its reports (the
+  case computes it from the rendered config and skips, saying so, when a report names a port other than the one read or the reports of a kind differ in their ports); terminal =
+  `dv_edge_rf_tx_total` results `sent`, `simulated`, `sent_over_budget` and every result that starts with `dropped_`, summed over the scheduler classes; queued = the change of the gauge
+  `dv_edge_rf_queue{port}` (frames queued for the physical transmitter). `delayed` is NOT terminal (the frame is still queued). A frame refused before the scheduler (an `rf_fenced` admission) would
+  show as unaccounted; none can be due in the 13 s TX guard of a start because the first report is due after one full interval.
+* **Terms that cannot be read** are recorded as `RECORD` lines and are not guessed: a missing `dv_edge_rf_queue` series for the port (only "terminal is not more than generated" is then checked); the frames
+  that are in flight between a scheduler release and the modem adapter (counted `sent` at the release; the TNC count is compared in the spread case, not here); two RF ports on one physical (the gauge is
+  per physical transmitter: the case reads the first RF port and its snippets use `rf-a` only).
+* **The floor** is judged on the object's HMS stamp, which is the generation time, so a queue that delays one release cannot create a false failure; the release times at the TNC are judged only with the
+  switch (a queue delay may legitimately shorten that gap). Observing the floor needs two cycles: at least 1330 s with `dp18-rf-floor.toml` (stage F), and R already runs two cycles
+  (`DVT_DP18_CYCLES`, default 2), where most of the eleven reports are dropped and few repeat, so F is the clean run.
+
+## Done when (DV-Router work unit DP18)
+
+"The configured beacon and objects reach the private aprsc; RF copies obey the 600 s floor and the airtime budget; object names are validated; dv-testset aprsc case."
+
+| Clause | Cases | Status |
+|--------|-------|--------|
+| beacon and objects reach the private aprsc | DP18-a, b, c, n (run O); DP18-o aprsc (run R / F, strict: with `rf_ports` set) | O green on wip-8891cc7 (work-units.md DP18 row); the strict case is written, expected to FAIL on images with the `rf_ports` defect |
+| the 600 s floor on the APRS-IS side | DP18-k (no replay after a worker kill) and the first-line timing of DP18-a | O green on wip-8891cc7 (work-units.md DP18 row) |
+| RF copies obey the 600 s floor | DP18-o-f (run F, optional long stage of about 24 minutes; R asserts what repeats) | written, not run |
+| RF copies obey the airtime budget | DP18-o (spread, drops counted, TNC frames = counted `sent`), strict: nothing `sent_over_budget`, conservation | DP18-o green on wip-8891cc7 (R, work-units.md DP18 row); strict cases written, not run |
+| object names are validated (and the beacon / object fields) | DP18-cfg (30 params, run C) | 30 of 30 on wip-495aae0 |
+| a position policy withholds the gateway call | DP18-e (run W) | W green on wip-8891cc7 (work-units.md DP18 row) |
+| no secret, no peer address in the logs | not a DP18 clause; DP11e-h2 covers the KISS side | n/a |

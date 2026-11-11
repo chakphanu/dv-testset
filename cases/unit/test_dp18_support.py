@@ -163,6 +163,207 @@ def test_object_frames_and_gaps():
     assert dc.spread_gaps([40.0, 5.0, 75.5]) == [35.0, 35.5]
 
 
+# ---------------------------------------------------------------- DVT_DP18STRICT: conservation, floor, aprsc side
+
+def frame_of(info):
+    return kiss_tnc.ui_frame("N0TEST-5", "APZDVR", info)
+
+
+def obj_frame(name, hms):
+    return frame_of(aprs.object_report(name, hms, 105000000, 202500000, "/r", "x"))
+
+
+def test_strict_switch_reads_only_the_value_on():
+    assert dc.strict_on({"DVT_DP18STRICT": "on"}) is True
+    for value in ("", "1", "true", "ON", "off"):
+        assert dc.strict_on({"DVT_DP18STRICT": value}) is False
+    assert dc.strict_on({}) is False
+
+
+def test_queue_gauge_and_dropped_totals_read_the_hub_text():
+    text = ('dv_edge_rf_queue{port="rf-a",proc="x"} 3\ndv_edge_rf_queue{port="rf-b"} 9\n'
+            'dv_edge_rf_tx_total{port="rf-a",kind="beacon",result="dropped_queue"} 2\n'
+            'dv_edge_rf_tx_total{port="rf-a",kind="beacon",result="dropped_new_reason"} 1\n')
+    smp = samples(text)
+    assert dc.queue_len(smp, "rf-a") == 3 and dc.queue_len(smp, "rf-b") == 9 and dc.queue_len(smp, "nope") is None
+    assert dc.dropped_total(dc.rf_tx_counts(smp, "rf-a")) == 3          # an undocumented dropped_* still counts
+
+
+def shape_with(ports_beacon=("rf-a",), ports_object=("rf-a",)):
+    doc = rendered(["dp15-aprsis.toml", "dp18-rf.toml", "dp18-rf-objects.toml"])
+    shp = dc.origin_shape(doc)
+    for r in shp.reports:
+        r.rf_ports = list(ports_beacon if r.kind == "beacon" else ports_object)
+    return shp
+
+
+def test_copies_expected_counts_one_copy_per_generated_report_and_port():
+    shp = shape_with()
+    assert dc.copies_expected({("beacon", "generated"): 2, ("object", "generated"): 20}, shp, "rf-a") == (22, "")
+    assert dc.copies_expected({}, shp, "rf-a") == (0, "")
+    assert dc.copies_expected({("beacon", "generated"): 1}, shape_with(ports_beacon=("rf-a", "rf-b")), "rf-a")[0] is None
+    assert dc.copies_expected({("object", "generated"): 5}, shape_with(ports_object=()), "rf-a") == (0, "")
+    assert "rf-a" in dc.copies_expected({("object", "generated"): 5}, shape_with(ports_object=("rf-z",)), "rf-a")[1]
+
+
+def test_conservation_is_exact_with_the_queue_and_names_the_unaccounted_frames():
+    delta = {("beacon", "sent"): 4, ("beacon", "dropped_queue"): 3, ("beacon", "dropped_ttl"): 1, ("beacon", "delayed"): 5}
+    assert dc.conservation_problems(10, delta, 2) == []                          # 4 + 4 + 2 queued; delayed is not terminal
+    bad = dc.conservation_problems(11, delta, 2)
+    assert len(bad) == 1 and "1 unaccounted" in bad[0] and "dropped 4" in bad[0]
+    assert "-1 unaccounted" in dc.conservation_problems(9, delta, 2)[0]
+    assert dc.conservation_problems(8, {("object", "simulated"): 3, ("ident", "sent_over_budget"): 1, ("beacon", "sent"): 4}, 0) == []
+    # the gauge unreadable: only an impossible excess is a problem
+    assert dc.conservation_problems(10, delta, None) == []
+    assert "exceed" in dc.conservation_problems(7, delta, None)[0]
+
+
+def test_rf_events_keys_stamps_and_ignores_other_frames():
+    frames = [(30.0, 0, obj_frame("DVTOB01", "010203")), (10.0, 0, frame_of(aprs.position_report(105000000, 202500000))),
+              (40.0, 0, frame_of(":XLX999B  :hello")), (50.0, 0, b"\x00junk")]
+    ev = dc.rf_events(frames, ax25)
+    assert [(e.key, e.stamp_s) for e in ev] == [("beacon", None), ("object:DVTOB01", 3723)]
+
+
+def test_floor_report_uses_the_object_stamp_not_the_queue_delayed_arrival():
+    ev = dc.rf_events([(100.0, 0, obj_frame("DVTOB01", "100000")), (500.0, 0, obj_frame("DVTOB01", "101000"))], ax25)   # stamps 600 s apart, released 400 s apart
+    problems, rows = dc.floor_report(ev, 600)
+    assert problems == [] and rows[0]["stamp_gaps"] == [600] and rows[0]["arrival_gaps"] == [400.0]
+    problems, _rows = dc.floor_report(ev, 600, arrival=True)
+    assert len(problems) == 1 and "400.0 s apart at the TNC" in problems[0]
+    # the same report sent twice: stamp gap 0
+    twice = dc.rf_events([(100.0, 0, obj_frame("DVTOB01", "100000")), (130.0, 0, obj_frame("DVTOB01", "100000"))], ax25)
+    assert "generated 0 s apart" in dc.floor_report(twice, 600)[0][0]
+    # a stamp across midnight; a key seen once is not a row; a beacon has no stamp and is judged by arrival only
+    over = dc.rf_events([(1.0, 0, obj_frame("DVTOB02", "235500")), (700.0, 0, obj_frame("DVTOB02", "000510")), (5.0, 0, obj_frame("DVTOB03", "000000"))], ax25)
+    problems, rows = dc.floor_report(over, 600)
+    assert problems == [] and [r["key"] for r in rows] == ["object:DVTOB02"] and rows[0]["stamp_gaps"] == [610]
+    beacons = dc.rf_events([(10.0, 0, frame_of(aprs.position_report(105000000, 202500000))), (400.0, 0, frame_of(aprs.position_report(105000000, 202500000)))], ax25)
+    assert dc.floor_report(beacons, 600)[0] == [] and len(dc.floor_report(beacons, 600, arrival=True)[0]) == 1
+
+
+def aprsc_lines(shp, names, hms_offset=0.0, q="qAC,SRV"):
+    out = []
+    wall = 1_700_000_000.0
+    for name in names:
+        report = next(r for r in shp.reports if (r.kind == "beacon" and name == "beacon") or (r.kind == "object" and "object:" + r.name == name))
+        hms = time.strftime("%H%M%S", time.gmtime(wall - hms_offset))
+        info = dc.expected_info(report, hms if report.kind == "object" else None)
+        parsed = line(info, q=q)
+        out.append((wall, dc.classify(parsed, shp), parsed))
+    return out
+
+
+def test_aprsc_problems_need_several_objects_and_every_report():
+    shp = dc.origin_shape(rendered(["dp15-aprsis.toml", "dp18-rf.toml", "dp18-rf-objects.toml"]))
+    everything = ["beacon"] + ["object:" + r.name for r in shp.objects]
+    problems, counts = dc.aprsc_problems(aprsc_lines(shp, everything + everything), shp)
+    assert problems == [] and counts["beacon"] == 2 and len(counts) == 11
+    problems, _c = dc.aprsc_problems(aprsc_lines(shp, ["beacon", "object:DVTOB01"]), shp)
+    assert any("1 distinct object" in p for p in problems) and any("no line at the aprsc for" in p for p in problems)
+    problems, _c = dc.aprsc_problems([], shp)
+    assert any("0 distinct object" in p for p in problems)
+    problems, _c = dc.aprsc_problems(aprsc_lines(shp, everything, q="qAS,SRV"), shp)
+    assert any("qAC" in p for p in problems)
+    problems, _c = dc.aprsc_problems(aprsc_lines(shp, everything, hms_offset=10.0), shp)
+    assert any("off the read time" in p for p in problems)
+
+
+class Hub:
+    def __init__(self, text):
+        self._t = text
+
+    def text(self):
+        return self._t
+
+
+def fake_run(shp, origin, delta, queue=0, base_queue=0, lines=None, events=()):
+    return SimpleNamespace(shape=shp, port="rf-a", interval=600, wait=1.0, delta=delta, origin=origin, base={}, base_origin={}, base_queue=base_queue,
+                           queue_now=queue, aprsc_lines=lines, aprsc_why="no aprsc", events=list(events))
+
+
+def test_strict_cases_skip_without_the_switch_and_assert_with_it(monkeypatch):
+    shp = shape_with()
+    monkeypatch.setattr(trf, "note", lambda *a: None)
+    ok = fake_run(shp, {("beacon", "generated"): 2, ("object", "generated"): 20}, {("beacon", "sent"): 4, ("beacon", "dropped_queue"): 18})
+    monkeypatch.delenv("DVT_DP18STRICT", raising=False)
+    for fn in (trf.test_dp18_o_strict_every_report_finds_both_edges, trf.test_dp18_o_strict_nothing_is_sent_over_budget):
+        with pytest.raises(pytest.skip.Exception, match="DVT_DP18STRICT=on"):
+            fn(None, NOTE, ok)
+    monkeypatch.setenv("DVT_DP18STRICT", "on")
+    trf.test_dp18_o_strict_every_report_finds_both_edges(None, NOTE, ok)
+    trf.test_dp18_o_strict_nothing_is_sent_over_budget(None, NOTE, ok)
+    broken = fake_run(shp, {("beacon", "generated"): 2, ("beacon", "no_edge"): 2}, {("ident", "sent_over_budget"): 1})
+    with pytest.raises(AssertionError, match="beacon/no_edge.*dv-edge-aprsis"):
+        trf.test_dp18_o_strict_every_report_finds_both_edges(None, NOTE, broken)
+    with pytest.raises(AssertionError, match="sent over the budget"):
+        trf.test_dp18_o_strict_nothing_is_sent_over_budget(None, NOTE, broken)
+
+
+def test_the_conservation_case_polls_until_the_counters_settle(monkeypatch):
+    shp = shape_with()
+    monkeypatch.setattr(trf, "note", lambda *a: None)
+    monkeypatch.setenv("DVT_DP18STRICT", "on")
+    clock = {"t": 0.0}
+    monkeypatch.setattr(trf.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(trf.time, "sleep", lambda s: clock.__setitem__("t", clock["t"] + s))
+
+    def text(generated, sent, queue):
+        return ('dv_pkt_origin_total{kind="beacon",result="generated"} %d\ndv_edge_rf_tx_total{port="rf-a",kind="beacon",result="sent"} %d\n'
+                'dv_edge_rf_queue{port="rf-a"} %d\n' % (generated, sent, queue))
+
+    run = fake_run(shp, {}, {})
+    trf.test_dp18_o_strict_every_generated_copy_is_accounted_for(None, NOTE, Hub(text(5, 3, 2)), run)
+    with pytest.raises(AssertionError, match="1 unaccounted"):
+        trf.test_dp18_o_strict_every_generated_copy_is_accounted_for(None, NOTE, Hub(text(5, 3, 1)), run)
+    assert clock["t"] >= 45.0                                                  # it waited the whole settle time before failing
+    run.base_queue = None                                                      # no gauge at the start: only terminal <= copies is checked
+    trf.test_dp18_o_strict_every_generated_copy_is_accounted_for(None, NOTE, Hub(text(5, 3, 0)), run)
+    with pytest.raises(pytest.skip.Exception, match="not computable"):
+        trf.test_dp18_o_strict_every_generated_copy_is_accounted_for(None, NOTE, Hub(text(5, 3, 2)), fake_run(shape_with(ports_beacon=("rf-a", "rf-b")), {}, {}))
+
+
+def test_floor_and_aprsc_cases(monkeypatch):
+    shp = shape_with()
+    monkeypatch.setattr(trf, "note", lambda *a: None)
+    monkeypatch.delenv("DVT_DP18STRICT", raising=False)
+    twice = dc.rf_events([(100.0, 0, obj_frame("DVTOB01", "100000")), (130.0, 0, obj_frame("DVTOB01", "100000"))], ax25)
+    with pytest.raises(AssertionError, match="generated 0 s apart"):
+        trf.test_dp18_o_f_the_same_report_is_not_sent_twice_within_the_interval(None, NOTE, fake_run(shp, {}, {}, events=twice))
+    once = dc.rf_events([(100.0, 0, obj_frame("DVTOB01", "100000"))], ax25)
+    with pytest.raises(pytest.skip.Exception, match="dp18-rf-floor.toml"):
+        trf.test_dp18_o_f_the_same_report_is_not_sent_twice_within_the_interval(None, NOTE, fake_run(shp, {}, {}, events=once))
+    spaced = dc.rf_events([(100.0, 0, obj_frame("DVTOB01", "100000")), (700.0, 0, obj_frame("DVTOB01", "101000"))], ax25)
+    trf.test_dp18_o_f_the_same_report_is_not_sent_twice_within_the_interval(None, NOTE, fake_run(shp, {}, {}, events=spaced))
+    with pytest.raises(pytest.skip.Exception, match="DVT_DP18STRICT=on"):
+        trf.test_dp18_o_strict_the_aprsc_sees_several_objects(None, NOTE, fake_run(shp, {}, {}))
+    monkeypatch.setenv("DVT_DP18STRICT", "on")
+    with pytest.raises(pytest.skip.Exception, match="no private aprsc"):
+        trf.test_dp18_o_strict_the_aprsc_sees_several_objects(None, NOTE, fake_run(shp, {}, {}))
+    everything = ["beacon"] + ["object:" + r.name for r in shp.objects]
+    trf.test_dp18_o_strict_the_aprsc_sees_several_objects(None, NOTE, fake_run(shp, {}, {}, lines=aprsc_lines(shp, everything)))
+    with pytest.raises(AssertionError, match="distinct object"):
+        trf.test_dp18_o_strict_the_aprsc_sees_several_objects(None, NOTE, fake_run(shp, {}, {}, lines=[]))
+
+
+def test_the_objects_run_fixture_skips_without_its_shape(tmp_path, monkeypatch):
+    monkeypatch.setattr(trf.p1, "read_config", lambda target: {})
+    with pytest.raises(pytest.skip.Exception, match="dp18-rf-floor.toml"):
+        trf.objects_run.__wrapped__(None, SimpleNamespace(out=str(tmp_path)), None, None)
+    doc = rendered(["dp15-aprsis.toml", "dp18-rf.toml", "dp18-rf-objects.toml"])
+    monkeypatch.setattr(trf.p1, "read_config", lambda target: doc)
+    old = SimpleNamespace(path=lambda s: s, get=lambda p, expect=None: SimpleNamespace(status=200, text=lambda: '{"properties": {"enable": {}}}'))
+    with pytest.raises(pytest.skip.Exception, match="does not know DP12c"):
+        trf.objects_run.__wrapped__(None, SimpleNamespace(out=str(tmp_path)), None, lambda role: old)
+
+
+def test_the_floor_snippet_has_three_reports_with_rf_copies_and_the_compose_passes_the_switch():
+    shp = dc.origin_shape(rendered(["dp15-aprsis.toml", "dp18-rf.toml", "dp18-rf-floor.toml"]))
+    assert [r.kind for r in shp.reports] == ["beacon", "object", "object"] and all(r.rf_ports == ["rf-a"] and r.interval_s == 600 for r in shp.reports)
+    assert [r.first_due_s for r in shp.reports] == [600.0, 635.0, 670.0] and len({r.name for r in shp.objects}) == 2
+    assert "DVT_DP18STRICT: ${DVT_DP18STRICT:-}" in (ROOT / "rig" / "compose.yml").read_text()
+
+
 # ---------------------------------------------------------------- the admin config API helpers
 
 def test_tx_change_request_and_the_other_admin_helpers():

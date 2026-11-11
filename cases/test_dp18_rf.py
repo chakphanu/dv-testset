@@ -31,7 +31,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "proto"))
 
-from dvtest import ax25, kiss_tnc, logscan, metrics, rfsafe1b, rfsafe1c, txguard  # noqa: E402
+from dvtest import aprsis_client as ai, ax25, kiss_tnc, logscan, metrics, rfsafe1b, rfsafe1c, txguard  # noqa: E402
 
 import data_support as ds  # noqa: E402
 import dp18_support as dc  # noqa: E402
@@ -39,6 +39,8 @@ import test_dp15_positions as p1  # noqa: E402
 import test_dp15_rf as tr  # noqa: E402
 # the fake TNCs rf-a / rf-b (their `hub` argument is the fixture of THIS module) and the web side of tier A, reused by name
 from test_dp15_rf import rf, web_ctx  # noqa: E402,F401
+# the private aprsc (and the `shape` it reads) of the first DP7 set, as cases/test_dp18_origin.py; `hub` is the fixture of THIS module
+from test_dp15_positions import aprsc, shape  # noqa: E402,F401
 
 pytestmark = pytest.mark.rig
 
@@ -354,14 +356,19 @@ def test_dp18_r2_true_to_simulate_then_restore_from_history(rig, target, hub, re
 
 # ================================================================ DP18-o: several RF objects on afsk1200-shared
 
-def test_dp18_o_object_copies_are_spread_and_drops_are_counted(rig, target, hub, request, admin_session):
-    """data.md 9.5 / review 232 finding 1: with the 35 s stagger the reports never share a tick, so the RF copies are released spread over the
-    interval; what the beacon class share (1/8 of 5 % per 600 s on afsk1200-shared) cannot carry is counted dropped_*, and the TNC sees
-    exactly the frames counted sent. The dropped objects differ between cycles (recorded)."""
-    case = "DP18-o"
+def strict_or_skip(what):
+    if not dc.strict_on():
+        pytest.skip("%s needs the strict switch DVT_DP18STRICT=on (it fails on the images where dv-edge-aprsis exits on rf_ports: docs/dp18-cases.md, \"Strict\")" % what)
+
+
+@pytest.fixture(scope="module")
+def objects_run(request, target, hub, admin_session):
+    """ONE observation for every DP18-o case: the run waits DVT_DP18_CYCLES cycles with the tester logged in at the private aprsc (when the run
+    has one), then reads the frames at the TNC of the first RF port and the counter deltas. Skips with the reason without the shape."""
     shp = dc.origin_shape(p1.read_config(target))
     if shp is None or len(shp.reports) < 3 or not all(r.rf_ports for r in shp.reports):
-        pytest.skip("no run with a beacon and several objects with RF copies: add dp15-aprsis.toml, dp18-rf.toml and dp18-rf-objects.toml (docs/dp18-cases.md)")
+        pytest.skip("no run with a beacon and several objects with RF copies: add dp15-aprsis.toml, dp18-rf.toml and dp18-rf-objects.toml "
+                    "(or dp18-rf-floor.toml) (docs/dp18-cases.md)")
     admin = admin_session("operator")
     schema = admin.get(admin.path("/schema"), expect=None)
     if schema.status != 200 or not dc.schema_has_dp18(schema.text()):
@@ -373,32 +380,66 @@ def test_dp18_o_object_copies_are_spread_and_drops_are_counted(rig, target, hub,
     end_uptime = interval * (CYCLES - 1) + last_due + 60.0
     uptime = txguard.uptime_reader(admin)()
     wait = max(60.0, end_uptime - uptime) if uptime is not None else end_uptime
-    base = dc.rf_tx_counts(metrics.parse(hub.text()), port)
-    base_origin = dc.origin_counts(metrics.parse(hub.text()))
+    samples = metrics.parse(hub.text())
+    base = dc.rf_tx_counts(samples, port)
+    base_origin = dc.origin_counts(samples)
+    base_queue = dc.queue_len(samples, port)
+    aprsc_host, aprsc_why = None, ""
+    try:
+        aprsc_host = request.getfixturevalue("aprsc")
+    except pytest.skip.Exception as exc:
+        aprsc_why = str(exc)
     t_start = time.monotonic()
-    note(target, case, "RECORD", "%d reports, interval %d s, %d cycle(s): waiting %.0f s (node uptime %s s)" % (len(shp.reports), interval, CYCLES, wait, uptime))
-    time.sleep(wait)
-    time.sleep(30.0)                                           # the last counters are published every 10 s
+    note(target, "DP18-o", "RECORD", "%d reports, interval %d s, %d cycle(s): waiting %.0f s (node uptime %s s); aprsc %s; strict %s" % (
+        len(shp.reports), interval, CYCLES, wait, uptime, aprsc_host or ("none: " + aprsc_why), dc.strict_on()))
+    lines = None
+    if aprsc_host:
+        with p1.aprsc_login(aprsc_host) as session:
+            time.sleep(wait + 30.0)                            # the last counters are published every 10 s
+            seen = session.snapshot()
+        lines = []
+        for at, line in seen:
+            parsed = ai.parse_line(line)
+            key = dc.classify(parsed, shp) if parsed else None
+            if key:
+                lines.append((dc.wall_of(at), key, parsed))
+    else:
+        time.sleep(wait + 30.0)
     frames = tnc.a.data_frames(t_start)
     objs = dc.object_frames(frames, ax25)
-    beacons = [at for at, _ch, f in frames if (ax25.parse_frame(f)["info"][:1] == b"!")]
+    events = dc.rf_events(frames, ax25)
+    beacons = [e.at for e in events if e.key == "beacon"]
     times = sorted([at for at, *_ in objs] + beacons)
-    gaps = dc.spread_gaps(times)
-    now = dc.rf_tx_counts(metrics.parse(hub.text()), port)
+    samples = metrics.parse(hub.text())
+    now = dc.rf_tx_counts(samples, port)
     delta = {k: v - base.get(k, 0) for k, v in now.items() if v - base.get(k, 0)}
+    origin = {k: v - base_origin.get(k, 0) for k, v in dc.origin_counts(samples).items() if v - base_origin.get(k, 0)}
+    queue_now = dc.queue_len(samples, port)
+    return types.SimpleNamespace(shape=shp, port=port, interval=interval, wait=wait, uptime=uptime, frames=frames, objs=objs, beacons=beacons, events=events,
+                                 times=times, gaps=dc.spread_gaps(times), delta=delta, origin=origin, base_queue=base_queue, queue_now=queue_now,
+                                 aprsc_lines=lines, aprsc_why=aprsc_why, base=base, base_origin=base_origin)
+
+
+def test_dp18_o_object_copies_are_spread_and_drops_are_counted(rig, target, hub, objects_run):
+    """data.md 9.5 / review 232 finding 1: with the 35 s stagger the reports never share a tick, so the RF copies are released spread over the
+    interval; what the beacon class share (1/8 of 5 % per 600 s on afsk1200-shared) cannot carry is counted dropped_*, and the TNC sees
+    exactly the frames counted sent. The dropped objects differ between cycles (recorded)."""
+    case = "DP18-o"
+    run = objects_run
+    shp, port, interval, delta, times, gaps = run.shape, run.port, run.interval, run.delta, run.times, run.gaps
     dropped = dc.drops(delta)
     sent = dc.result_total(delta, "sent") + dc.result_total(delta, "sent_over_budget")
-    origin = {k: v - base_origin.get(k, 0) for k, v in dc.origin_counts(metrics.parse(hub.text())).items() if v - base_origin.get(k, 0)}
     note(target, case, "RECORD", "frames at the TNC: %d (%d objects, %d beacons); gaps between releases %s s; dv_edge_rf_tx_total deltas %s; drops %s; "
-         "dv_pkt_origin_total deltas %s" % (len(times), len(objs), len(beacons), gaps, delta, dropped, origin))
-    assert times, "no beacon or object frame reached the TNC of %s in %.0f s" % (port, wait)
+         "dv_pkt_origin_total deltas %s; dv_edge_rf_queue %s -> %s" % (len(times), len(run.objs), len(run.beacons), gaps, delta, dropped, run.origin,
+                                                                      run.base_queue, run.queue_now))
+    assert times, "no beacon or object frame reached the TNC of %s in %.0f s" % (port, run.wait)
     assert min(gaps, default=dc.STAGGER_S) >= dc.STAGGER_S - STAGGER_TOLERANCE_S, (
         "two releases %.1f s apart: the reports are not spread by the 35 s stagger (smallest gap allowed %.0f s)" % (min(gaps), dc.STAGGER_S - STAGGER_TOLERANCE_S))
     assert len(times) == sent, "the TNC saw %d frames, the counters say sent %d" % (len(times), sent)
     assert dropped, "nothing was dropped although %d reports share a class budget of about four frames: counters %s" % (len(shp.reports), delta)
-    first_beacon = min(beacons) if beacons else min(times)
+    first_beacon = min(run.beacons) if run.beacons else min(times)
     per_cycle = {}
-    for at, name, _src, _info in objs:
+    for at, name, _src, _info in run.objs:
         per_cycle.setdefault(int((at - first_beacon) // interval), set()).add(name)
     note(target, case, "RECORD", "objects transmitted per cycle: %s" % ({c: sorted(v) for c, v in sorted(per_cycle.items())},))
     if len(per_cycle) >= 2:
@@ -409,3 +450,87 @@ def test_dp18_o_object_copies_are_spread_and_drops_are_counted(rig, target, hub,
             note(target, case, "RECORD", "the transmitted objects differ between cycles: the drops do not always hit the same object")
     else:
         note(target, case, "RECORD", "only %d cycle observed: DVT_DP18_CYCLES=2 or more compares which objects are dropped" % len(per_cycle))
+
+
+def test_dp18_o_strict_every_report_finds_both_edges(rig, target, objects_run):
+    """DVT_DP18STRICT=on. `dv_pkt_origin_total{result=no_edge}` and `{result=no_rf_edge}` stay 0 (data.md 13.1: no_edge = the worker finds no APRS-IS
+    edge, no_rf_edge = RF copies selected and no AX.25 edge). KNOWN PRODUCT DEFECT on the images before the fix: dv-edge-aprsis exits with a configuration
+    error as soon as `rf_ports` is set (crates/edge/aprsis/src/shell.rs validates the file with Config::default() plus only edges.aprsis, so the
+    AX.25 port the copy names does not exist there); the worker then counts no_edge for every report and nothing reaches the aprsc."""
+    strict_or_skip("DP18-o no_edge")
+    run = objects_run
+    moved = {"%s/%s" % k: v for k, v in run.origin.items() if k[1] in ("no_edge", "no_rf_edge")}
+    note(target, "DP18-o", "RECORD", "strict: dv_pkt_origin_total no_edge / no_rf_edge deltas %s (generated %s)" % (
+        moved, {"%s" % k[0]: v for k, v in run.origin.items() if k[1] == "generated"}))
+    assert not moved, ("dv_pkt_origin_total moved for %s: the worker found no edge for some reports. With rf_ports set this is the known dv-edge-aprsis "
+                       "defect (it exits on a configuration error); see docs/dp18-cases.md, \"Strict\"" % moved)
+
+
+def test_dp18_o_strict_nothing_is_sent_over_budget(rig, target, objects_run):
+    """DVT_DP18STRICT=on. `dv_edge_rf_tx_total{result=sent_over_budget}` is the fixed label of the `ident` class only (data.md 10.8 item 8): node
+    beacons and objects must never use it, so it stays 0 on the port (a beacon that is over its class share is dropped, not sent over budget)."""
+    strict_or_skip("DP18-o sent_over_budget")
+    run = objects_run
+    over = dc.result_total(run.delta, "sent_over_budget")
+    note(target, "DP18-o", "RECORD", "strict: sent_over_budget delta %d on %s (all deltas %s)" % (over, run.port, run.delta))
+    assert over == 0, "%d frames were sent over the budget on %s: %s" % (over, run.port, {k: v for k, v in run.delta.items() if k[1] == "sent_over_budget"})
+
+
+def test_dp18_o_strict_every_generated_copy_is_accounted_for(rig, target, hub, objects_run):
+    """DVT_DP18STRICT=on. Conservation on the RF port: the RF copies the worker generated (dv_pkt_origin_total{result=generated}, one per report and
+    named RF port) equal sent + simulated + sent_over_budget + dropped_* of dv_edge_rf_tx_total{port} plus the frames still queued (the change of the
+    gauge dv_edge_rf_queue{port}); `delayed` is not terminal. The counters are published every 10 s, so the sums are re-read for up to 45 s. Terms
+    that cannot be read are recorded (a missing gauge: only terminal <= generated is checked; a report that names another port: skipped)."""
+    strict_or_skip("DP18-o conservation")
+    run = objects_run
+    end = time.monotonic() + 45.0
+    while True:
+        samples = metrics.parse(hub.text())
+        now = dc.rf_tx_counts(samples, run.port)
+        delta = {k: v - run.base.get(k, 0) for k, v in now.items() if v - run.base.get(k, 0)}
+        origin = {k: v - run.base_origin.get(k, 0) for k, v in dc.origin_counts(samples).items() if v - run.base_origin.get(k, 0)}
+        queue = dc.queue_len(samples, run.port)
+        queue_delta = None if queue is None or run.base_queue is None else queue - run.base_queue
+        copies, why = dc.copies_expected(origin, run.shape, run.port)
+        if copies is None:
+            pytest.skip("conservation not computable: %s" % why)
+        problems = dc.conservation_problems(copies, delta, queue_delta)
+        if not problems or time.monotonic() > end:
+            break
+        time.sleep(5.0)
+    note(target, "DP18-o", "RECORD", "strict: copies generated %d; dv_edge_rf_tx_total %s; dv_edge_rf_queue %s -> %s (delta %s); unreadable terms: %s" % (
+        copies, delta, run.base_queue, queue, queue_delta, "none" if queue_delta is not None else "the dv_edge_rf_queue gauge has no series for %s" % run.port))
+    assert not problems, "; ".join(problems)
+
+
+def test_dp18_o_f_the_same_report_is_not_sent_twice_within_the_interval(rig, target, objects_run):
+    """The interval floor (600 s) at the RF side (data.md 9.5: at most once per interval, no catch-up burst). The HMS stamp of an object is the time
+    the report was generated, so two frames of ONE object at the TNC must have stamps at least interval - 2 s apart however long the queue held the
+    first (a retransmission would show gap 0). That is always asserted for the objects seen at least twice. Under DVT_DP18STRICT=on the release
+    times at the TNC must be at least interval - 15 s apart too, the beacon included (a queue delay can shorten that gap, so it is a strict check
+    and recorded otherwise). Needs two cycles (DVT_DP18_CYCLES, default 2): with the eleven reports of dp18-rf-objects.toml most are dropped and
+    few repeat, so the clean run is dp18-rf-floor.toml (beacon and two objects, about four frames of share: nothing dropped)."""
+    run = objects_run
+    problems, rows = dc.floor_report(run.events, run.interval, arrival=dc.strict_on())
+    note(target, "DP18-o-f", "RECORD", "interval %d s; reports seen at least twice at the TNC: %s" % (run.interval, rows))
+    if not rows:
+        pytest.skip("no report was transmitted twice at the TNC of %s in %d cycle(s): use dp18-rf-floor.toml (beacon and two objects, nothing dropped) and "
+                    "DVT_DP18_CYCLES=2 or more" % (run.port, CYCLES))
+    if dc.strict_on():
+        few = sorted({"beacon" if r.kind == "beacon" else "object:" + r.name for r in run.shape.reports} - {r["key"] for r in rows})
+        note(target, "DP18-o-f", "RECORD", "strict: reports NOT seen twice (dropped or not yet due): %s" % (few,))
+    assert not problems, "; ".join(problems)
+
+
+def test_dp18_o_strict_the_aprsc_sees_several_objects(rig, target, objects_run):
+    """DVT_DP18STRICT=on. The APRS-IS leg of the same run (run R shares it with the RF copies): the private aprsc delivers the node's own lines
+    for more than one object, every configured report at least once, each as in DP18-a (source = gateway call, `TCPIP*` before the server's qAC,
+    the information field byte for byte, the object stamp within 1 s of the read time). The RF copies must not stop the APRS-IS line. On the
+    images before the fix of dv-edge-aprsis (exits on rf_ports) NOTHING arrives: this case fails there, which is the point of the switch."""
+    strict_or_skip("DP18-o several objects at the aprsc")
+    run = objects_run
+    if run.aprsc_lines is None:
+        pytest.skip("no private aprsc in this run (%s): run scripts/run.sh --profile web,aprs" % run.aprsc_why)
+    problems, counts = dc.aprsc_problems(run.aprsc_lines, run.shape)
+    note(target, "DP18-o", "RECORD", "strict: lines from the node at the aprsc per report %s" % (counts,))
+    assert not problems, "; ".join(problems)

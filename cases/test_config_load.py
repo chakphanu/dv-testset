@@ -61,8 +61,9 @@ def results(tmp_path_factory):
         pass
 
 
-def run_config_check(image, text):
-    """(verdict, exit code) of `dv-router config check` on `text`; secret-file stand-ins are mounted as config_check does."""
+def run_config_check(image, text, stand_in_text=None):
+    """(verdict, exit code) of `dv-router config check` on `text`; secret-file stand-ins are mounted as config_check does.
+    `stand_in_text(inside_path)` may return another content for a stand-in (the APRS-IS passcode file is checked for its content: "-1")."""
     with tempfile.TemporaryDirectory(prefix="dvt-cfgload-") as tmp:
         path = os.path.join(tmp, "dv-router.toml")
         Path(path).write_text(text, encoding="utf-8")
@@ -70,7 +71,7 @@ def run_config_check(image, text):
         stand_ins = []
         for n, inside in enumerate(config_check.secret_file_paths(text)):
             host = os.path.join(tmp, "secret-%d" % n)
-            Path(host).write_text("standin\n", encoding="utf-8")
+            Path(host).write_text((stand_in_text(inside) if stand_in_text else None) or "standin\n", encoding="utf-8")
             os.chmod(host, 0o600)
             stand_ins.append((host, inside))
         lines, code = config_check.run_check(image, path, NET, timeout_s=60.0, stand_ins=stand_ins, mode="check")

@@ -3,6 +3,7 @@
 node objects DV-Router originates to APRS-IS (data.md 9.5), the RF copies of the objects, and the per-port TX mode `simulate`
 (data.md 10.x, "Built (DP12c)"). Expectations are derived from the RENDERED config of the run and built with dvtest/proto/aprs.py,
 never from DV-Router's encoder. Unit tests: cases/unit/test_dp18_support.py. No network, no pytest."""
+import os
 import time
 import types
 
@@ -305,3 +306,133 @@ def schema_has_dp18(schema_text):
     """True when the served configuration schema (GET /api/v1/admin/schema) knows the DP12c/DP18 keys: the `simulate` tx value and
     the beacon and objects tables. A capability probe, independent of the image tag."""
     return "simulate" in schema_text and '"beacon"' in schema_text and '"objects"' in schema_text
+
+
+# ---------------------------------------------------------------- DVT_DP18STRICT: the strict asserts of run R / F (docs/dp18-cases.md, "Strict")
+
+ENV_STRICT = "DVT_DP18STRICT"
+
+
+def strict_on(env=None):
+    """True when DVT_DP18STRICT=on: the asserts that depend on the aprsis leg working together with rf_ports (a known product defect on
+    the images before the fix) and on counter conservation. Off by default, so that a run on a current image stays comparable."""
+    env = os.environ if env is None else env
+    return env.get(ENV_STRICT, "") == "on"
+
+
+def queue_len(samples, port):
+    """The gauge dv_edge_rf_queue{port} (frames queued for the physical transmitter of the port, data.md 10.8) or None without a series."""
+    hits = [s for s in samples if s.name == "dv_edge_rf_queue" and s.labels.get("port") == port]
+    return int(sum(s.value for s in hits)) if hits else None
+
+
+def dropped_total(counts):
+    """Sum of every dropped_* result of a {(kind, result): n} map (not only the documented ones)."""
+    return sum(n for (_k, r), n in counts.items() if r.startswith("dropped_"))
+
+
+def copies_expected(origin_delta, shape, port):
+    """(copies, why) the RF scheduler of `port` must account for: per kind (beacon / object) the `generated` reports times one copy per RF
+    port. copies is None (and why says so) when a report names a port other than `port` or the reports of a kind differ in their ports."""
+    total = 0
+    for kind in ("beacon", "object"):
+        generated = origin_delta.get((kind, "generated"), 0)
+        rows = {tuple(r.rf_ports) for r in shape.reports if r.kind == kind}
+        if not generated:
+            continue
+        if len(rows) != 1 or rows - {(port,), ()}:
+            return None, "the %s reports name RF ports %s, not exactly [%r]" % (kind, sorted(rows), port)
+        total += generated * len(next(iter(rows)))
+    return total, ""
+
+
+def conservation_problems(copies, rf_delta, queue_delta):
+    """Problems of generated copies == sent + simulated + sent_over_budget + dropped_* + still queued, on one port. `delayed` is not
+    terminal (the frame is still queued). queue_delta is the change of dv_edge_rf_queue since the start, None when the gauge has no series:
+    then only 'terminal <= copies' can be checked."""
+    terminal = result_total(rf_delta, "sent") + result_total(rf_delta, "simulated") + result_total(rf_delta, "sent_over_budget") + dropped_total(rf_delta)
+    if queue_delta is None:
+        return ["terminal results %d exceed the %d generated copies" % (terminal, copies)] if terminal > copies else []
+    if copies != terminal + queue_delta:
+        return ["%d copies generated, %d terminal (sent %d, simulated %d, sent_over_budget %d, dropped %d) + %d still queued = %d: %d unaccounted" % (
+            copies, terminal, result_total(rf_delta, "sent"), result_total(rf_delta, "simulated"), result_total(rf_delta, "sent_over_budget"),
+            dropped_total(rf_delta), queue_delta, terminal + queue_delta, copies - terminal - queue_delta)]
+    return []
+
+
+def rf_events(tnc_frames, ax25_mod):
+    """[namespace(at, key, stamp_s, info)] of the beacon (`!` position, key 'beacon', no stamp) and object frames among the KISS data frames
+    of a fake TNC, by time; key 'object:<name>' with the HMS stamp of the object in seconds of the UTC day. Other frames are ignored."""
+    out = []
+    for at, _channel, frame in tnc_frames:
+        try:
+            info = ax25_mod.parse_frame(frame)["info"].decode("latin-1")
+        except (ValueError, KeyError):
+            continue
+        if info.startswith("!"):
+            out.append(types.SimpleNamespace(at=at, key="beacon", stamp_s=None, info=info))
+            continue
+        try:
+            obj = aprs.parse_object(info)
+        except ValueError:
+            continue
+        out.append(types.SimpleNamespace(at=at, key="object:" + obj["name"], stamp_s=hms_to_seconds(obj["hms"]), info=info))
+    return sorted(out, key=lambda e: e.at)
+
+
+STAMP_TOLERANCE_S = 2.0               # two whole-second stamps: each may be 1 s off
+ARRIVAL_TOLERANCE_S = 15.0            # a release is shifted by the queue and the worker tick, never by a whole interval
+
+
+def floor_report(events, interval_s, stamp_tolerance_s=STAMP_TOLERANCE_S, arrival_tolerance_s=ARRIVAL_TOLERANCE_S, arrival=False):
+    """(problems, rows): the interval floor per report at the TNC. For an object the HMS stamp is the time the report was generated, so
+    two frames of one object must have stamps at least interval - stamp_tolerance_s apart whatever the queue did in between (this holds
+    for a retransmission of the same report too: gap 0). Arrival gaps (the release time, shifted by queue delay) are always recorded and are
+    a problem only with arrival=True (strict). rows = [{key, n, stamp_gaps, arrival_gaps}] for the keys seen at least twice."""
+    by_key = {}
+    for e in events:
+        by_key.setdefault(e.key, []).append(e)
+    problems, rows = [], []
+    for key in sorted(by_key):
+        seq = sorted(by_key[key], key=lambda e: e.at)
+        if len(seq) < 2:
+            continue
+        arrival_gaps = [round(b.at - a.at, 1) for a, b in zip(seq, seq[1:])]
+        stamp_gaps = [(b.stamp_s - a.stamp_s) % 86400 for a, b in zip(seq, seq[1:])] if seq[0].stamp_s is not None else []
+        rows.append({"key": key, "n": len(seq), "stamp_gaps": stamp_gaps, "arrival_gaps": arrival_gaps})
+        for gap in stamp_gaps:
+            if gap < interval_s - stamp_tolerance_s:
+                problems.append("%s: two frames generated %d s apart (stamps), the interval floor is %d s" % (key, gap, interval_s))
+        if arrival:
+            for gap in arrival_gaps:
+                if gap < interval_s - arrival_tolerance_s:
+                    problems.append("%s: two frames %.1f s apart at the TNC, the interval floor is %d s" % (key, gap, interval_s))
+    return problems, rows
+
+
+def aprsc_problems(lines, shape):
+    """Problems of the node's lines read at the private aprsc, [(wall epoch, key, parsed)]: every line passes check_origin_line (objects:
+    their HMS stamp within the read time), more than one distinct OBJECT was seen, and every configured report was seen at least once.
+    Returns (problems, counts per key)."""
+    counts = {}
+    problems = []
+    by_key = {("beacon" if r.kind == "beacon" else "object:" + r.name): r for r in shape.reports}
+    for wall, key, parsed in lines:
+        counts[key] = counts.get(key, 0) + 1
+        report = by_key.get(key)
+        if report is None:
+            problems.append("a line from the node for an unconfigured report %r: %s" % (key, parsed["raw"]))
+            continue
+        bad = check_origin_line(parsed, report, shape)
+        if report.kind == "object" and not bad:
+            hms = aprs.parse_object(parsed["info"])["hms"]
+            if not hms_ok(hms, wall):
+                bad.append("the stamp %s is %.1f s off the read time" % (hms, hms_offset_s(hms, wall)))
+        problems.extend("%s: %s" % (key, b) for b in bad)
+    objects_seen = sorted(k for k in counts if k.startswith("object:"))
+    if len(objects_seen) < 2:
+        problems.append("%d distinct object(s) at the aprsc (%s), expected more than one" % (len(objects_seen), objects_seen))
+    missing = sorted(set(by_key) - set(counts))
+    if missing:
+        problems.append("no line at the aprsc for %s" % (missing,))
+    return problems, counts
