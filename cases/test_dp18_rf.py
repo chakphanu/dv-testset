@@ -498,8 +498,7 @@ def test_dp18_o_strict_every_generated_copy_is_accounted_for(rig, target, hub, o
         if not problems or time.monotonic() > end:
             break
         time.sleep(5.0)
-    note(target, "DP18-o", "RECORD", "strict: copies generated %d; dv_edge_rf_tx_total %s; dv_edge_rf_queue %s -> %s (delta %s); unreadable terms: %s" % (
-        copies, delta, run.base_queue, queue, queue_delta, "none" if queue_delta is not None else "the dv_edge_rf_queue gauge has no series for %s" % run.port))
+    note(target, "DP18-o", "RECORD", "strict conservation: " + dc.conservation_terms(origin, copies, delta, run.base_queue, queue))
     assert not problems, "; ".join(problems)
 
 

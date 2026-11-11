@@ -218,6 +218,16 @@ def test_conservation_is_exact_with_the_queue_and_names_the_unaccounted_frames()
     assert "exceed" in dc.conservation_problems(7, delta, None)[0]
 
 
+def test_conservation_terms_name_every_term_and_the_difference():
+    delta = {("beacon", "sent"): 4, ("beacon", "dropped_queue"): 3, ("beacon", "dropped_ttl"): 1, ("beacon", "delayed"): 5}
+    line = dc.conservation_terms({("beacon", "generated"): 1, ("object", "generated"): 9}, 10, delta, 1, 3)
+    for part in ("'beacon/generated': 1", "'object/generated': 9", "copies expected 10", "sent 4", "simulated 0", "sent_over_budget 0",
+                 "delayed(not terminal) 5", "'dropped_queue': 3", "'dropped_ttl': 1", "(sum 4)", "terminal 8", "queue gauge start 1 now 3 delta 2", "unaccounted 0"):
+        assert part in line, (part, line)
+    assert "unaccounted 1" in dc.conservation_terms({}, 11, delta, 1, 3)
+    assert "unreadable" in dc.conservation_terms({}, 10, delta, None, 3)
+
+
 def test_rf_events_keys_stamps_and_ignores_other_frames():
     frames = [(30.0, 0, obj_frame("DVTOB01", "010203")), (10.0, 0, frame_of(aprs.position_report(105000000, 202500000))),
               (40.0, 0, frame_of(":XLX999B  :hello")), (50.0, 0, b"\x00junk")]

@@ -360,6 +360,21 @@ def conservation_problems(copies, rf_delta, queue_delta):
     return []
 
 
+def conservation_terms(origin_delta, copies, rf_delta, queue_base, queue_now):
+    """One line with EVERY term of the conservation check, so that a mismatch shows exactly which terms differ: generated per kind and result,
+    copies expected, then per RF result (sent, simulated, sent_over_budget, delayed, every dropped_*), the queue gauge at the start and now, and the
+    unaccounted difference (None when the gauge is unreadable)."""
+    queue_delta = None if queue_base is None or queue_now is None else queue_now - queue_base
+    terminal = result_total(rf_delta, "sent") + result_total(rf_delta, "simulated") + result_total(rf_delta, "sent_over_budget") + dropped_total(rf_delta)
+    dropped = {r: n for (_k, r), n in sorted(rf_delta.items()) if r.startswith("dropped_")}
+    gen = {"%s/%s" % k: v for k, v in sorted(origin_delta.items())}
+    return ("origin %s; copies expected %s; sent %d simulated %d sent_over_budget %d delayed(not terminal) %d dropped %s (sum %d); terminal %d; "
+            "queue gauge start %s now %s delta %s; unaccounted %s" % (
+                gen, copies, result_total(rf_delta, "sent"), result_total(rf_delta, "simulated"), result_total(rf_delta, "sent_over_budget"),
+                result_total(rf_delta, "delayed"), dropped, dropped_total(rf_delta), terminal, queue_base, queue_now, queue_delta,
+                "unreadable (gauge has no series)" if queue_delta is None else copies - terminal - queue_delta))
+
+
 def rf_events(tnc_frames, ax25_mod):
     """[namespace(at, key, stamp_s, info)] of the beacon (`!` position, key 'beacon', no stamp) and object frames among the KISS data frames
     of a fake TNC, by time; key 'object:<name>' with the HMS stamp of the object in seconds of the UTC day. Other frames are ignored."""

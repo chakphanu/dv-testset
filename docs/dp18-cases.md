@@ -98,13 +98,14 @@ and on the strict floor; it is passed to the tester by `rig/compose.yml`. Withou
 
 * **Known product defect, the reason for the switch.** `dv-edge-aprsis` exits with a configuration error as soon as an object or the beacon has `rf_ports`: `crates/edge/aprsis/src/shell.rs` validates
   the file with `Config::default()` plus only `edges.aprsis`, so the AX.25 port the RF copy names does not exist in what it validates.
-  The worker then finds no `aprsis-` edge and counts `dv_pkt_origin_total{result=no_edge}` for every report, and nothing reaches the aprsc. Reported to DV-Router; this testset does not track the fix.
+  The worker then finds no `aprsis-` edge and counts `dv_pkt_origin_total{result=no_edge}` for every report, and nothing reaches the aprsc. Confirmed by DV-Router; the fix is their unit DP18b, in a later image.
   On an image with the defect the strict `no_edge` case and the strict aprsc case FAIL; the conservation case is expected to pass there (the worker emits the RF copy whether or not an APRS-IS edge exists, `core_origination.rs`).
 * **Conservation terms** (read per RF port, deltas since the start of the observation): copies = `dv_pkt_origin_total{result=generated}` of each kind times the RF ports of its reports (the
   case computes it from the rendered config and skips, saying so, when a report names a port other than the one read or the reports of a kind differ in their ports); terminal =
   `dv_edge_rf_tx_total` results `sent`, `simulated`, `sent_over_budget` and every result that starts with `dropped_`, summed over the scheduler classes; queued = the change of the gauge
   `dv_edge_rf_queue{port}` (frames queued for the physical transmitter). `delayed` is NOT terminal (the frame is still queued). A frame refused before the scheduler (an `rf_fenced` admission) would
   show as unaccounted; none can be due in the 13 s TX guard of a start because the first report is due after one full interval.
+* **Hard asserts.** Under the switch `no_edge` / `no_rf_edge` = 0, `sent_over_budget` = 0 and the conservation are hard asserts. The conservation case writes ONE `RECORD` line before it asserts that names every term (generated per kind and result, copies expected, sent, simulated, sent_over_budget, delayed, each `dropped_*` and their sum, terminal, the queue gauge at the start and now, and the unaccounted difference), so on the DP18b image a mismatch is a product accounting finding that shows exactly which terms differ.
 * **Terms that cannot be read** are recorded as `RECORD` lines and are not guessed: a missing `dv_edge_rf_queue` series for the port (only "terminal is not more than generated" is then checked); the frames
   that are in flight between a scheduler release and the modem adapter (counted `sent` at the release; the TNC count is compared in the spread case, not here); two RF ports on one physical (the gauge is
   per physical transmitter: the case reads the first RF port and its snippets use `rf-a` only).
