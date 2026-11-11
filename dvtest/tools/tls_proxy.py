@@ -45,6 +45,7 @@ import http.server
 import os
 import select
 import shutil
+import socket
 import ssl
 import subprocess
 import sys
@@ -57,6 +58,16 @@ HOP_BY_HOP = frozenset((
     "te", "trailer", "transfer-encoding", "upgrade"))
 CHUNK = 16384
 MAX_CONNS = 256
+BUF_HEADER = "x-dvt-buf"          # test hook: bytes of kernel buffer for this request on both legs; never forwarded upstream
+
+
+def buffer_hint(value):
+    """The size asked for in X-Dvt-Buf, clamped to 1 KiB .. 256 KiB; 0 (no hook) for a missing or malformed value."""
+    try:
+        size = int(str(value).strip())
+    except (TypeError, ValueError):
+        return 0
+    return max(1024, min(size, 262144)) if size > 0 else 0
 
 
 def make_certs(workdir, san_dns, san_ip, ca_out, days=2):
@@ -240,11 +251,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except ValueError:
                 status = 400
                 return self._send_simple(400, "bad request framing")
+            small_buf = buffer_hint(self.headers.get(BUF_HEADER))
             headers = {}
             for key, value in self.headers.items():
                 low = key.lower()
                 if low in HOP_BY_HOP or low in ("x-forwarded-for", "x-forwarded-proto", "x-forwarded-host",
-                                                "x-forwarded-port", "forwarded", "x-real-ip", "content-length"):
+                                                "x-forwarded-port", "forwarded", "x-real-ip", "content-length",
+                                                BUF_HEADER):
                     continue
                 headers[key] = value if key not in headers else headers[key] + ", " + value
             host = self.headers.get("Host")
@@ -255,6 +268,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if length is not None:
                 headers["Content-Length"] = str(length)
             up = http.client.HTTPConnection(*self.server.upstream, timeout=self.server.upstream_timeout)
+            if small_buf:
+                self._shrink_buffers(up, small_buf)
             try:
                 try:
                     up.request(self.command, path, body=body, headers=headers,
@@ -274,6 +289,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
         finally:
             self.server.log("%s %s -> %d %d bytes %d ms" % (
                 self.command, path.split("?", 1)[0], status, sent, (time.monotonic() - start) * 1000))
+
+    def _shrink_buffers(self, up, size):
+        """Test hook (X-Dvt-Buf): cap the kernel buffers of this one request on both legs, so a reader that stops reading stalls the
+        upstream after a few tens of KiB instead of after the whole body. The client leg gets a small send buffer; the upstream socket is
+        created here with a small receive buffer BEFORE connect (the window is fixed by the SYN)."""
+        try:
+            self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, size)
+            host, port = self.server.upstream
+            family, kind, proto, _canon, addr = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)[0]
+            sock = socket.socket(family, kind, proto)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, size)
+            try:                      # a small MSS keeps the SENDER's autotuned send buffer small too (on loopback 10 segments of 64 KiB are 2.6 MB)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_MAXSEG, 1024)
+            except OSError:
+                pass
+            sock.settimeout(self.server.upstream_timeout)
+            sock.connect(addr)
+            up.sock = sock
+        except OSError:
+            pass                      # the request still works on a default socket; the hook is best effort
 
     def _relay(self, resp):
         """Send the upstream response; returns the body bytes sent."""

@@ -27,6 +27,14 @@ SSE_EVENT_NAMES = ("hello", "bye", "session", "room", "status", "data", "config"
 
 # ---------------------------------------------------------------- the WAV reader (a raw socket, not the browser)
 #
+# Second rig run (wip-a31709a, out/20261111T054920Z): even a tester socket with a 4 KiB receive buffer did not hold the server: the web-proxy
+# (a send buffer that autotunes up to 4 MiB) plus the buffers between it and dv-svc-web took the whole 2.4 MB body, so the transfer task (it
+# holds the per-login permit only until its last 16 KiB chunk is queued, channel of 2) ended with the reader still paused. Case 3 skipped
+# 7 of 12 runs ("arrived whole") and case 2 saw a free slot after a 23 s wait for the next TOTP step (Firefox kept it, Chromium / WebKit did not).
+# RawWav therefore sends X-Dvt-Buf: the web-proxy (dvtest/tools/tls_proxy.py, never forwarded) shrinks its send buffer towards the reader and the
+# receive buffer of its upstream socket for that one request, so a paused reader stalls the server after a few tens of KiB.
+PROXY_BUF = 8192
+#
 # First rig run (wip-a31709a, out/20261110T220224Z): a browser fetch reader cannot hold a WAV body back. The 2.4 MB body (a 150 s over) arrived in
 # about 130 ms at the proxy whatever the page did, because the browser's network stack and the autotuned TCP buffers swallow it (Chromium handed the page
 # 2 MiB in ONE chunk at 3 s); the server-side transfer was over, its slot free, so a "third concurrent body" was accepted (429 only when the requests
@@ -40,11 +48,14 @@ class RawWav(threading.Thread):
     drains the rest at full speed. snapshot() gives the dict the verdict functions read: status, length, got, done, err, code (a refusal's problem
     code), retry_after, t_start / t_end (time.time() ms)."""
 
-    def __init__(self, host, port, path, cookie, user_agent, ca=None, rate=0.0, hold=False, rcvbuf=4096, timeout=30.0, extra_headers=None):
+    def __init__(self, host, port, path, cookie, user_agent, ca=None, rate=0.0, hold=False, rcvbuf=4096, timeout=30.0, extra_headers=None,
+                 proxy_buf=PROXY_BUF):
         super().__init__(daemon=True)
         self.host, self.port, self.path, self.cookie, self.ua = host, port, path, cookie, user_agent
         self.ca, self.rate, self.hold, self.rcvbuf, self.timeout = ca, float(rate), bool(hold), rcvbuf, timeout
         self.extra = dict(extra_headers or {})
+        if proxy_buf:
+            self.extra["X-Dvt-Buf"] = str(int(proxy_buf))                  # web-proxy test hook: small kernel buffers on both legs of THIS request
         self.lock = threading.Lock()
         self.state = {"status": None, "length": None, "got": 0, "done": False, "err": None, "code": None, "retry_after": None,
                       "t_start": None, "t_end": None, "headers_at": None}

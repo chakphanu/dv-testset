@@ -101,6 +101,20 @@ class Backend(http.server.BaseHTTPRequestHandler):
             self.wfile.write(b"x" * 100000)
             self.close_connection = True
             return
+        if path.startswith("/pushed"):                # 8 MiB in 16 KiB writes; counts what it managed to write
+            total = 8 * 1024 * 1024
+            self.send_response(200)
+            self.send_header("Content-Length", str(total))
+            self.end_headers()
+            self.server.pushed = 0
+            try:
+                while self.server.pushed < total:
+                    self.wfile.write(b"y" * 16384)
+                    self.server.pushed += 16384
+            except OSError:
+                pass
+            self.close_connection = True
+            return
         if path.startswith("/304"):
             self.send_response(304)
             self.send_header("ETag", 'W/"1"')
@@ -342,3 +356,51 @@ def test_extra_route_serves_its_own_upstream(stack):
     finally:
         second.shutdown()
         other.shutdown()
+
+
+def test_buffer_hint_is_clamped_and_ignores_garbage():
+    assert tls_proxy.buffer_hint("8192") == 8192
+    assert tls_proxy.buffer_hint("10") == 1024
+    assert tls_proxy.buffer_hint("999999999") == 262144
+    for bad in (None, "", "abc", "0", "-5", "1.5"):
+        assert tls_proxy.buffer_hint(bad) == 0
+
+
+def test_the_buffer_hint_is_not_forwarded_upstream(stack):
+    r, got = get_json(stack, "GET", "/echo", headers={"X-Dvt-Buf": "8192", "X-Other": "1"})
+    assert r.status == 200 and got["headers"].get("x-other") == "1"
+    assert "x-dvt-buf" not in got["headers"]
+
+
+def reader_that_stops_reading(stack, hint):
+    """GET /pushed with a 4 KiB receive buffer, read the head and 64 KiB of the body, then stop; returns (backend pushed after 1.5 s, the socket)."""
+    raw = socket.socket()
+    raw.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+    raw.settimeout(10)
+    raw.connect(("127.0.0.1", stack["port"]))
+    sock = ssl.create_default_context(cafile=stack["ca"]).wrap_socket(raw, server_hostname="localhost")
+    extra = "X-Dvt-Buf: %d\r\n" % hint if hint else ""
+    sock.sendall(("GET /pushed HTTP/1.1\r\nHost: localhost\r\n%sConnection: close\r\n\r\n" % extra).encode())
+    got = b""
+    while len(got) < 65536 + 100:
+        got += sock.recv(8192)
+    time.sleep(1.5)
+    return stack["backend"].pushed, sock
+
+
+def test_a_stopped_reader_stalls_the_backend_with_the_hint(stack):
+    pushed, sock = reader_that_stops_reading(stack, 8192)
+    sock.settimeout(20)
+    total = 0
+    try:
+        while True:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            total += len(chunk)
+    except (OSError, ssl.SSLError):
+        pass
+    sock.close()
+    # measured on loopback: about 150 KB with the hint, 3.3 MB without it (the autotuned buffers of every hop take the body)
+    assert pushed < 512 * 1024, "the backend pushed %d bytes into a reader that stopped: the hint did not limit the buffers" % pushed
+    assert total > 0

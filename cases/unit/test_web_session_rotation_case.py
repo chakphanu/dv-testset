@@ -178,3 +178,45 @@ def test_an_inconclusive_probe_is_neither_a_pass_nor_an_image_verdict(monkeypatc
 def test_a_failed_step_up_in_the_probe_fails_at_once(monkeypatch):
     with pytest.raises(pytest.fail.Exception, match="step-up of the probe answered HTTP 403"):
         run_probe(monkeypatch, [("step_up_failed", "HTTP 403")])
+
+
+class FakeTab:
+    def __init__(self):
+        self.codes = []
+
+    def evaluate(self, js, arg):
+        self.codes.append(arg["code"])
+        return {"status": 200, "csrf_before": "c"}
+
+    def close(self):
+        pass
+
+
+class CountingAuthenticator:
+    def __init__(self):
+        self.taken = []
+
+    def next_code(self):
+        self.taken.append(len(self.taken))
+        return "code%d" % len(self.taken)
+
+
+def fake_login():
+    login = object.__new__(case.Login)
+    auth = CountingAuthenticator()
+    client = types.SimpleNamespace(authenticator=auth, hide=lambda code: None)
+    login.account = types.SimpleNamespace(client=client)
+    login.pending_code = None
+    tab = FakeTab()
+    login.second_tab = lambda: tab
+    return login, auth, tab
+
+
+def test_a_prepared_step_up_code_is_used_once_and_not_taken_again():
+    login, auth, tab = fake_login()
+    login.prepare_step_up()
+    assert auth.taken == [0] and login.pending_code == "code1"
+    assert login.step_up() == (200, "c")
+    assert tab.codes == ["code1"] and auth.taken == [0] and login.pending_code is None
+    login.step_up()                                       # nothing prepared: takes its own
+    assert tab.codes == ["code1", "code2"] and auth.taken == [0, 1]

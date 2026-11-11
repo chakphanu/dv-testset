@@ -261,3 +261,16 @@ def test_probe_decision():
     assert ws.probe_decision(["dropped", "client_timeout", "dropped"])[0] is None                  # not two in a row
     assert ws.probe_decision(["client_timeout", "no_hello", "client_timeout"])[0] is None
     assert "inconclusive after 3" in ws.probe_decision(["a", "b", "c"])[1] and ws.probe_decision([])[0] is None
+
+
+def test_rawwav_asks_the_proxy_for_small_buffers_unless_told_not_to():
+    server = Server(ok_body(1000))
+    r = reader(server)
+    wait_done(r)
+    assert b"X-Dvt-Buf: %d\r\n" % ws.PROXY_BUF in server.request
+    server.close()
+    server = Server(ok_body(1000))
+    r = reader(server, proxy_buf=0)
+    wait_done(r)
+    assert b"X-Dvt-Buf" not in server.request
+    server.close()

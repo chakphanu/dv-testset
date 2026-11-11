@@ -59,6 +59,21 @@ twelve case 3 runs skip ("fit the buffers"). The cases now read the bodies in th
 User-Agent of the browser login (the session is bound to the UA), a `hold` that reads nothing after the response headers and a `rate` throttle. The unit tests show that a 32 MiB
 body is still in flight on the server 0.6 s later behind a held reader.
 
+## The buffers on the way (second rig run, wip-a31709a, `out/20261111T054920Z`)
+
+A tester socket with a 4 KiB receive buffer was still not enough. Run 3 of case 2 failed in Chromium and WebKit ("a third WAV body after the step-up answered 200, want 429")
+and passed in Firefox, and case 3 skipped 7 of 12 runs ("arrived whole"). Class: HARNESS, not the cap. The key of the cap is `(role, SessionKey)` and the session key is kept across
+`rotate_prepared`; the transfer task holds the per-login permit only until it has queued its last 16 KiB chunk (channel of 2), so once the buffers of every hop took the whole 2.4 MB
+body the slot is free with no rotation involved. A local measurement shows it: a reader with a 4 KiB receive buffer that stops reading let the backend push 3.3 MB through the
+proxy (about 150 KB with the hook below). Two things made it fail in case 2: the step-up waited 23 s for the next TOTP step while the two bodies were held (the logins use one
+code each, so `next_code()` is two steps ahead), and the buffers took the bodies in that time in two of three engines.
+
+Fixes: (1) `RawWav` sends `X-Dvt-Buf: 8192`; the web-proxy (`dvtest/tools/tls_proxy.py`, hook never forwarded upstream) then gives that one request a small send buffer towards the
+reader and an upstream socket with a small receive buffer and `TCP_MAXSEG` 1024 (the sender's autotuned send buffer follows the MSS), so a paused reader stalls the server after
+about 150 KB. (2) Case 2 takes the step-up code BEFORE the bodies start (`Login.prepare_step_up`) and probes a third body once more right before the step-up; if that probe is no
+longer refused the case skips and says so (the slots were not held, nothing can be judged); if it is refused and the probe about one second after the rotation is accepted, the cap
+was reset or rekeyed by the rotation and that is a product defect (the failure message says how long before and how many bytes the held bodies had read).
+
 ## Cases
 
 | Case | Steps | Asserted |

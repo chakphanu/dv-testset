@@ -195,6 +195,7 @@ class Login:
         self.bp = BrowserPage(engine, engine_browsers(engine), web_base_url, name, context_options=ctx)
         self.engine, self.account, self.base, self.ca = engine, account, web_base_url, ca
         self.wavs = {}
+        self.pending_code = None
         self.bp.install_rtc_probe()
         code = account.client.authenticator.next_code()
         account.client.hide(code)
@@ -263,12 +264,23 @@ class Login:
         tab.goto(self.bp.url("/shared/img/favicon.svg"))
         return tab
 
+    def prepare_step_up(self):
+        """Take the TOTP code of the next step-up now. next_code() sleeps up to a whole TOTP step when the counter is two steps ahead (the login and
+        the enrolment each used one): run 20261111T054920Z waited 23 s there while two WAV bodies were being held, long enough for the buffers on
+        the way to take them and free their server-side slots. A code taken early stays valid for the window (+-1 step); step_up() uses it."""
+        code = self.account.client.authenticator.next_code()
+        self.account.client.hide(code)
+        self.pending_code = code
+
     def step_up(self):
         """A step-up from a second tab of the same context (same cookie jar). Returns (status, csrf before)."""
         tab = self.second_tab()
         try:
-            code = self.account.client.authenticator.next_code()
-            self.account.client.hide(code)
+            code = self.pending_code
+            self.pending_code = None
+            if code is None:
+                code = self.account.client.authenticator.next_code()
+                self.account.client.hide(code)
             got = tab.evaluate(ws.JS_STEP_UP, {"code": code})
         finally:
             tab.close()
@@ -427,6 +439,8 @@ def test_step_up_does_not_multiply_the_caps(engine, make_login, sid_operator, si
     problems = ws.cap_refusal(statuses, ws.CIRCUIT_CAP)
     assert not problems, "circuits of one login before the step-up: %s (statuses %s)" % ("; ".join(problems), statuses)
     login.page.evaluate(ws.JS_ALIVE_START, {"ids": ids, "csrf": csrf})
+    ice_before = ice_probe(login, ids[0])
+    login.prepare_step_up()                      # the wait for the next TOTP step happens HERE, with nothing held (see prepare_step_up)
     a = login.wav_start("one", sid_wav, hold=True)
     b = login.wav_start("two", sid_wav, hold=True)
     c = login.wav_start("three", sid_wav, hold=True)
@@ -434,8 +448,15 @@ def test_step_up_does_not_multiply_the_caps(engine, make_login, sid_operator, si
     shape = ws.refusal_shape_problems("the third WAV body", c, ws.WAV_REFUSED, "rate_limited", 1)
     assert not shape, "before the step-up: %s" % "; ".join(shape)
     note("%s: circuits %s; WAV statuses %s / %s / %s" % (engine, statuses, a["status"], b["status"], c["status"]))
-    ice_before = ice_probe(login, ids[0])
 
+    # The precondition of the verdict: the two bodies hold their slots RIGHT BEFORE the step-up (a probe, not an assumption). A server-side slot is
+    # held only until the transfer task has queued its last chunk, so a body the buffers on the way swallowed would free it with no rotation involved.
+    pre = login.wav_start("pre", sid_wav, hold=True)
+    t_pre = time.monotonic()
+    if pre["status"] != ws.WAV_REFUSED:
+        pytest.skip("%s: a third WAV body answered %s just before the step-up: the two held bodies (%s / %s of %s bytes read) no longer hold their "
+                    "slots (taken by the buffers on the way), so the step-up cannot be judged; the web-proxy X-Dvt-Buf hook did not limit them" % (
+                        engine, pre["status"], login.wav("one")["got"], login.wav("two")["got"], sid_wav[1]))
     status, _ = login.step_up()
     assert status == 200, "the step-up answered %s" % status
     login.page.evaluate(ws.JS_ALIVE_SET_CSRF, login.csrf())
@@ -444,10 +465,12 @@ def test_step_up_does_not_multiply_the_caps(engine, make_login, sid_operator, si
     shape = ws.refusal_shape_problems("a ninth circuit after the step-up", ninth, ws.CIRCUIT_REFUSED, "unavailable", 5)
     assert not shape, "the cap counted per cookie again? %s" % "; ".join(shape)
     d = login.wav_start("four", sid_wav, hold=True)
+    gap = time.monotonic() - t_pre
     shape = ws.refusal_shape_problems("a third WAV body after the step-up", d, ws.WAV_REFUSED, "rate_limited", 1)
-    assert not shape, "%s" % "; ".join(shape)
+    assert not shape, "%s (a third body was refused %.1f s earlier with the same two held and not read: one %s / two %s of %s bytes read; the key of the cap is (role, session), it must not change at the step-up)" % (
+        "; ".join(shape), gap, login.wav("one")["got"], login.wav("two")["got"], sid_wav[1])
     assert ws.wav_progress_problems(login.wav("one"), expect_complete=False) == [], "the held body one died at the step-up"
-    note("%s: after the step-up a ninth circuit is %s and a third body %s" % (engine, ninth["status"], d["status"]))
+    note("%s: after the step-up a ninth circuit is %s and a third body %s (%.1f s after the last refusal before it)" % (engine, ninth["status"], d["status"], gap))
     if ice_before is not None:
         again = ice_probe(login, ids[0])
         assert again != 200, "the TURN issue budget refilled at the step-up (GET /rtc/ice answered 200 again; before: %s)" % (ice_before,)
