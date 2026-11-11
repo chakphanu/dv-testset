@@ -30,7 +30,12 @@ Verdict (`webstall_support.verdict`) is taken over the logins that WERE slow (>=
 * no login slow (the filesystem absorbed the writer), fewer than 2 probes of a kind inside the stall windows, or the probes slow outside any stall (the host is not quiet): INCONCLUSIVE =
   skip, or a failure with `DVT_WEBSTALL1=on` (set it for the fix image). The `web/stall.json` of the run holds the records and the I/O pressure.
 
-It needs `DVT_WEBSTALL1_IO=on` (the owner's go: the writer loads the host disk for about half a minute) and 20 GiB free after the file. Run it alone, on a quiet host, with
+It needs `DVT_WEBSTALL1_IO=on` (the owner's go: the writer loads the host disk for about half a minute) and 20 GiB free after the file. It also refuses to start (a skip with the reason)
+on a btrfs whose device has less than 2 GiB unallocated: such a file system has free room inside its data chunks (statfs shows it) but cannot add a chunk, so the writer's
+metadata (extents, the fsync log tree) could push it towards ENOSPC for every process on the host, the SUT and the desktop included. `webstall_support.room_problem` reads the device
+size and the chunk sizes from sysfs (`/sys/fs/btrfs/<uuid>/allocation`, the numbers `btrfs filesystem usage` prints) and treats anything it cannot read as "do not start".
+On the rig host (2026-11-11) the device is fully allocated (1.0 MiB unallocated, about 12.8 GiB of metadata room after the global reserve), so the case skips there until the owner
+frees allocation (a balance; root, not done here) or says to start it anyway (`DVT_WEBSTALL_IGNORE_BTRFS=on`, passed to the tester). Run it alone, on a quiet host, with
 `--profile web`. The rig filesystem is btrfs on dm-crypt; the stall length depends on the host, which is why the case judges only a stall it has seen, and says so when it saw none.
 
 ## Why not the other mechanisms

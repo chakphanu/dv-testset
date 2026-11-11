@@ -152,6 +152,17 @@ class RawWav(threading.Thread):
         """The snapshot once the response headers (or a failure) are in; None after `timeout`."""
         return self.snapshot() if self.headers_seen.wait(timeout) else None
 
+    def wait_done(self, timeout=5.0):
+        """The snapshot once the reader is over (a refusal's body read, a body ended, a failure); the snapshot as it is after `timeout`. A refusal's
+        code is only known then: its body is read after the headers (run 20261111T125640Z recorded code=None for refusals read too early)."""
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            snap = self.snapshot()
+            if snap["done"]:
+                return snap
+            time.sleep(0.01)
+        return self.snapshot()
+
 
 def parse_head(head):
     """(status, {lower-case header: value}) of a response head (bytes)."""
@@ -167,13 +178,19 @@ def parse_head(head):
 
 
 def problem_code_of(body):
-    """The `code` of a problem+json body (bytes), None when it has none."""
+    """The problem code of a problem+json body (bytes): its `code`, else the last segment of its `type` ("/api/v1/problems/rate_limited" ->
+    "rate_limited"); None when it has neither. The `detail` is generic by design ("The request could not be completed.") and is never judged."""
     import json
     try:
         value = json.loads(body.decode("utf-8", "replace"))
     except ValueError:
         return None
-    return value.get("code") if isinstance(value, dict) else None
+    if not isinstance(value, dict):
+        return None
+    if value.get("code"):
+        return value["code"]
+    kind = value.get("type")
+    return kind.rstrip("/").rsplit("/", 1)[-1] or None if isinstance(kind, str) and kind else None
 
 
 def problem_detail_of(body):
@@ -263,7 +280,7 @@ JS_OFFER_ONLY = """async ({room, csrf}) => {
   let body = null;
   try { body = await r.json(); } catch (e) { body = null; }
   (window.__sidPcs = window.__sidPcs || []).push(pc);
-  return {status: r.status, sess_id: body && body.sess_id ? body.sess_id : null, code: body && body.code ? body.code : null,
+  return {status: r.status, sess_id: body && body.sess_id ? body.sess_id : null, code: body && body.code ? body.code : (body && typeof body.type === 'string' ? (body.type.split('/').filter(Boolean).pop() || null) : null),
           retry_after: r.headers.get('retry-after')};
 }"""
 
@@ -435,13 +452,14 @@ def circuit_problems(peer_state, panel_state):
 
 
 def refusal_shape_problems(what, got, status, code=None, retry_after=None):
-    """The pinned shape of a refusal: `got` is the dict the page returned (status, optional code, retry_after as the header string)."""
+    """The pinned shape of a refusal: `got` is the dict the page or the reader returned (status, code, retry_after as the header string). Status, code and
+    Retry-After are judged, each one that is asked for must be there and equal; the detail text is generic by design and never judged."""
     out = []
     if got.get("status") != status:
         out.append("%s answered %s, want %s" % (what, got.get("status"), status))
-    if code is not None and got.get("code") not in (None, code):
+    if code is not None and got.get("code") != code:
         out.append("%s code %r, want %r" % (what, got.get("code"), code))
-    if retry_after is not None and got.get("retry_after") not in (None, str(retry_after)):
+    if retry_after is not None and got.get("retry_after") != str(retry_after):
         out.append("%s Retry-After %r, want %s" % (what, got.get("retry_after"), retry_after))
     return out
 

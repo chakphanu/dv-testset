@@ -80,6 +80,12 @@ the cookie before the step-up, `gen1` the rotated one (identity only, never the 
 read) and the probe is not refused, the case is inconclusive ("bodies finished, cap not exercised": a skip, a failure with `DVT_WEBSID1=on`), not a verdict. Case 3 treats a cut of
 a body that was paused for 29 s or more as inconclusive too (the server write timeout is 30 s, `crates/lib/web/src/http.rs:43`).
 
+A refusal is judged by its status, its code (`rate_limited` for the third body, `unavailable` for the ninth circuit) and its Retry-After (1 s and 5 s) and NEVER by its detail: dv-router
+makes the 429 detail generic on purpose ("The request could not be completed."). Run `20261111T125640Z` recorded `code=None detail=None` for some refusals from the same 169-byte body:
+the record was taken when the response headers arrived, before the reader had read the body, and the shape check let a missing code pass. Now `wav_start` waits for a refusal to be
+read (`RawWav.wait_done`), a code that is asked for must be there and equal, and the code falls back to the last segment of the problem `type` (`/api/v1/problems/rate_limited`) when
+the body has no `code` (the browser's offer probe does the same).
+
 ## Cases
 
 | Case | Steps | Asserted |

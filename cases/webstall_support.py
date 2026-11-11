@@ -69,6 +69,102 @@ class IoStaller(threading.Thread):
             self.join(60.0)
 
 
+BTRFS_MIN_UNALLOCATED = 2 * 1024 ** 3      # a btrfs whose device has less than this unallocated cannot add a metadata chunk: the writer could push it to ENOSPC
+
+
+def _mount_of(directory, mountinfo):
+    """(mount point, fs type, source) of the mount that holds `directory`, from the text of /proc/self/mountinfo; None when none matches."""
+    path, best = os.path.realpath(directory), None
+    for line in mountinfo.splitlines():
+        left, sep, right = line.partition(" - ")
+        fields = left.split()
+        if not sep or len(fields) < 5:
+            continue
+        point = fields[4].replace("\\040", " ")
+        if (path == point or path.startswith(point.rstrip("/") + "/")) and (best is None or len(point) >= len(best[0])):
+            rest = right.split()
+            best = (point, rest[0] if rest else "", rest[1] if len(rest) > 1 else "")
+    return best
+
+
+def _read_int(path):
+    try:
+        with open(path, encoding="ascii") as fh:
+            return int(fh.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def btrfs_headroom(directory, mountinfo_path="/proc/self/mountinfo", sysfs="/sys"):
+    """For a directory on btrfs: {"unallocated", "metadata_free", "uuid"} in bytes from sysfs (the device size minus what the data, metadata and
+    system chunks hold; the metadata room left after the global reserve). "not_btrfs" when the directory is on another file system; None when it is
+    btrfs and the numbers cannot be read (then nothing is known and the writer must not start)."""
+    try:
+        with open(mountinfo_path, encoding="utf-8") as fh:
+            mount = _mount_of(directory, fh.read())
+    except OSError:
+        return None
+    if mount is None:
+        return None
+    if mount[1] != "btrfs":
+        return "not_btrfs"
+    base = os.path.join(sysfs, "fs", "btrfs")
+    try:
+        uuids = [n for n in sorted(os.listdir(base)) if os.path.isdir(os.path.join(base, n, "allocation"))]
+    except OSError:
+        return None
+    wanted = os.path.basename(os.path.realpath(mount[2])) if mount[2].startswith("/") else mount[2]
+    chosen = []
+    for uuid in uuids:
+        try:
+            devs = os.listdir(os.path.join(base, uuid, "devices"))
+        except OSError:
+            continue
+        names = set(devs)
+        for dev in devs:                                               # a device-mapper node is known by its dm name too ("root" for dm-0)
+            try:
+                with open(os.path.join(sysfs, "block", dev, "dm", "name"), encoding="ascii") as fh:
+                    names.add(fh.read().strip())
+            except OSError:
+                pass
+        if wanted in names:
+            chosen = [(uuid, devs)]
+            break
+        chosen.append((uuid, devs))
+    if len(chosen) != 1:
+        return None                                                    # no match, or several file systems and none is the source: unknown
+    uuid, devs = chosen[0]
+    alloc = os.path.join(base, uuid, "allocation")
+    held = [_read_int(os.path.join(alloc, kind, "disk_total")) for kind in ("data", "metadata", "system")]
+    sizes = [_read_int(os.path.join(sysfs, "block", dev, "size")) for dev in devs]
+    rsv = _read_int(os.path.join(alloc, "global_rsv_size"))
+    total, used = _read_int(os.path.join(alloc, "metadata", "total_bytes")), _read_int(os.path.join(alloc, "metadata", "bytes_used"))
+    if None in held or None in sizes or not sizes or rsv is None or total is None or used is None:
+        return None
+    return {"uuid": uuid, "unallocated": sum(sizes) * 512 - sum(held), "metadata_free": total - used - rsv}
+
+
+def room_problem(directory, megabytes, margin_gb=20, mountinfo_path="/proc/self/mountinfo", sysfs="/sys", ignore_btrfs=False):
+    """Why the disk writer must NOT start in `directory` (a sentence for the skip), None when there is room: statfs must leave `margin_gb` GiB
+    free after the file, and a btrfs device must still have BTRFS_MIN_UNALLOCATED bytes unallocated (a fully allocated btrfs has data room inside
+    its chunks but cannot grow its metadata: the writer's metadata could push it towards ENOSPC for every process on the host).
+    ignore_btrfs (DVT_WEBSTALL_IGNORE_BTRFS=on, the owner's decision) skips the second test."""
+    if not enough_space(directory, megabytes, margin_gb):
+        return "less than %d GiB would stay free on the filesystem of %s after a %d MiB writer" % (margin_gb, directory, megabytes)
+    if ignore_btrfs:
+        return None
+    room = btrfs_headroom(directory, mountinfo_path, sysfs)
+    if room == "not_btrfs":
+        return None
+    if room is None:
+        return "%s is on btrfs (or its file system cannot be told) and its unallocated space cannot be read from sysfs: not starting a writer" % directory
+    if room["unallocated"] < BTRFS_MIN_UNALLOCATED:
+        return ("btrfs under %s has %.1f MiB unallocated (%.1f GiB of metadata room after the global reserve): it cannot add a chunk, and the writer could push "
+                "its metadata towards ENOSPC; needs %d GiB unallocated (DVT_WEBSTALL_IGNORE_BTRFS=on only on the owner's word)" % (
+                    directory, room["unallocated"] / 1048576.0, room["metadata_free"] / 1024 ** 3, BTRFS_MIN_UNALLOCATED // 1024 ** 3))
+    return None
+
+
 def enough_space(directory, megabytes, margin_gb=20):
     """True when the filesystem of `directory` keeps at least `margin_gb` GiB free after the writer's file."""
     try:

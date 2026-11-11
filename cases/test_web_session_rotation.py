@@ -261,6 +261,8 @@ class Login:
         reader.start()
         got = reader.wait_headers(15.0)
         assert got is not None, "the WAV request %s got no response headers in 15 s" % name
+        if got["status"] != 200:
+            got = reader.wait_done(5.0)                      # a refusal: its body (the problem code) is read after the headers
         return got
 
     def wav(self, name):

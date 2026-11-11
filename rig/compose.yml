@@ -595,6 +595,7 @@ services:
       DVT_WEBSTALL1: ${DVT_WEBSTALL1:-}        # WEBSTALL1 fixed: a slow disk that was seen and not judged is a failure, not a skip
       DVT_WEBSTALL1_IO: ${DVT_WEBSTALL1_IO:-}  # the owner's go for the disk writer of the WEBSTALL1 case (docs/webstall1-cases.md)
       DVT_WEBSTALL_MB: ${DVT_WEBSTALL_MB:-}
+      DVT_WEBSTALL_IGNORE_BTRFS: ${DVT_WEBSTALL_IGNORE_BTRFS:-}   # only on the owner's word: start the writer on a fully allocated btrfs
       DVT_WEBSTALL_S: ${DVT_WEBSTALL_S:-}
       # optional switches and timing knobs that rig cases read from os.environ (cases/unit/test_tester_env.py lists what stays on the host);
       # a number carries the default of the code, so that an unset knob is not an empty string

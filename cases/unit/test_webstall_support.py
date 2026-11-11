@@ -139,3 +139,79 @@ def test_inconclusive_is_a_skip_unless_the_fix_image_is_under_test(monkeypatch):
     monkeypatch.setenv("DVT_WEBSTALL1", "on")
     with pytest.raises(pytest.fail.Exception):
         case.inconclusive("no stall")
+
+
+# ---------------------------------------------------------------- the writer must not start where it could push a btrfs towards ENOSPC
+
+def fake_host(tmp_path, fstype="btrfs", source="/dev/mapper/root", unalloc_mib=1, meta_free_gib=13, extra_fs=False):
+    """A fake /proc/self/mountinfo and /sys: one btrfs on dm-0 (4000 GB device) with `unalloc_mib` MiB unallocated."""
+    sysfs = tmp_path / "sys"
+    dev_bytes = 4_000_000_000_000
+    chunks = {"data": 3_900_000_000_000, "metadata": 80_000_000_000}
+    chunks["system"] = dev_bytes - chunks["data"] - chunks["metadata"] - unalloc_mib * 1048576
+    base = sysfs / "fs" / "btrfs" / "8447b98d-1b22-4ebc-930a-0224b9e3f435"
+    (base / "devices" / "dm-0").mkdir(parents=True)
+    for kind, size in chunks.items():
+        (base / "allocation" / kind).mkdir(parents=True)
+        (base / "allocation" / kind / "disk_total").write_text("%d\n" % size)
+    (base / "allocation" / "metadata" / "total_bytes").write_text("%d\n" % 40_000_000_000)
+    (base / "allocation" / "metadata" / "bytes_used").write_text("%d\n" % (40_000_000_000 - meta_free_gib * 1024 ** 3 - 536870912))
+    (base / "allocation" / "global_rsv_size").write_text("536870912\n")
+    (sysfs / "block" / "dm-0" / "dm").mkdir(parents=True)
+    (sysfs / "block" / "dm-0" / "dm" / "name").write_text("root\n")
+    (sysfs / "block" / "dm-0" / "size").write_text("%d\n" % (dev_bytes // 512))
+    if extra_fs:
+        other = sysfs / "fs" / "btrfs" / "11111111-2222-3333-4444-555555555555"
+        (other / "devices" / "sdb1").mkdir(parents=True)
+        (other / "allocation").mkdir(parents=True)
+    work = tmp_path / "work" / "run"
+    work.mkdir(parents=True)
+    mountinfo = tmp_path / "mountinfo"
+    mountinfo.write_text("1 0 0:1 / / rw - ext4 /dev/sda1 rw\n40 1 0:50 /@home %s rw,relatime - %s %s rw,subvol=/@home\n" % (tmp_path / "work", fstype, source))
+    return str(work), str(mountinfo), str(sysfs)
+
+
+def test_a_fully_allocated_btrfs_is_refused(tmp_path):
+    work, mountinfo, sysfs = fake_host(tmp_path, unalloc_mib=1)
+    room = st.btrfs_headroom(work, mountinfo, sysfs)
+    assert room["unallocated"] == 1048576 and room["metadata_free"] == 13 * 1024 ** 3
+    problem = st.room_problem(work, 1, margin_gb=0, mountinfo_path=mountinfo, sysfs=sysfs)
+    assert problem and "1.0 MiB unallocated" in problem and "ENOSPC" in problem and "13.0 GiB of metadata room" in problem
+
+
+def test_a_btrfs_with_room_to_grow_is_accepted_and_the_owner_can_override(tmp_path):
+    work, mountinfo, sysfs = fake_host(tmp_path, unalloc_mib=4096)
+    assert st.room_problem(work, 1, margin_gb=0, mountinfo_path=mountinfo, sysfs=sysfs) is None
+    work, mountinfo, sysfs = fake_host(tmp_path / "b", unalloc_mib=1)
+    assert st.room_problem(work, 1, margin_gb=0, mountinfo_path=mountinfo, sysfs=sysfs, ignore_btrfs=True) is None
+
+
+def test_another_file_system_needs_only_the_statfs_margin(tmp_path):
+    work, mountinfo, sysfs = fake_host(tmp_path, fstype="ext4", source="/dev/sda2")
+    assert st.btrfs_headroom(work, mountinfo, sysfs) == "not_btrfs"
+    assert st.room_problem(work, 1, margin_gb=0, mountinfo_path=mountinfo, sysfs=sysfs) is None
+    assert "would stay free" in st.room_problem(work, 1, margin_gb=10 ** 9, mountinfo_path=mountinfo, sysfs=sysfs)
+
+
+def test_unreadable_or_ambiguous_btrfs_numbers_mean_do_not_start(tmp_path):
+    work, mountinfo, sysfs = fake_host(tmp_path)
+    for name in ("global_rsv_size",):
+        (tmp_path / "sys" / "fs" / "btrfs" / "8447b98d-1b22-4ebc-930a-0224b9e3f435" / "allocation" / name).unlink()
+    assert st.btrfs_headroom(work, mountinfo, sysfs) is None
+    assert "cannot be read" in st.room_problem(work, 1, margin_gb=0, mountinfo_path=mountinfo, sysfs=sysfs)
+    work, mountinfo, sysfs = fake_host(tmp_path / "c", source="/dev/mapper/other", extra_fs=True)               # two btrfs, the source matches neither
+    assert st.btrfs_headroom(work, mountinfo, sysfs) is None
+    assert st.btrfs_headroom(work, str(tmp_path / "no-mountinfo"), sysfs) is None
+    assert "cannot be read" in st.room_problem(work, 1, margin_gb=0, mountinfo_path=str(tmp_path / "no-mountinfo"), sysfs=sysfs)
+
+
+def test_the_source_picks_its_file_system_among_several(tmp_path):
+    work, mountinfo, sysfs = fake_host(tmp_path, extra_fs=True)
+    room = st.btrfs_headroom(work, mountinfo, sysfs)
+    assert room["uuid"].startswith("8447b98d")                                                                  # "root" is the dm name of dm-0
+
+
+def test_the_mount_with_the_longest_matching_point_wins(tmp_path):
+    text = "1 0 0:1 / / rw - ext4 /dev/sda1 rw\n2 1 0:2 / /srv rw - btrfs /dev/b rw\n3 1 0:3 / /srv2 rw - xfs /dev/c rw\n"
+    assert st._mount_of("/srv/a/b", text) == ("/srv", "btrfs", "/dev/b")
+    assert st._mount_of("/srv2", text)[1] == "xfs" and st._mount_of("/other", text)[1] == "ext4"

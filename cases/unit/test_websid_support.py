@@ -90,7 +90,12 @@ def test_javascript_snippets_are_self_consistent():
 
 def test_refusal_shapes():
     assert ws.refusal_shape_problems("x", {"status": 503, "code": "unavailable", "retry_after": "5"}, 503, "unavailable", 5) == []
-    assert ws.refusal_shape_problems("x", {"status": 503}, 503, "unavailable", 5) == []                      # a missing code / header is not judged
+    problems = ws.refusal_shape_problems("x", {"status": 503}, 503, "unavailable", 5)                         # a code or header that is asked for must be there
+    assert len(problems) == 2 and "code None" in problems[0] and "Retry-After None" in problems[1]
+    generic = {"status": 429, "code": "rate_limited", "retry_after": "1", "detail": "The request could not be completed."}
+    assert ws.refusal_shape_problems("x", generic, 429, "rate_limited", 1) == []                              # the detail text is never judged
+    assert ws.refusal_shape_problems("x", dict(generic, detail="recording rate limit"), 429, "rate_limited", 1) == []
+    assert ws.refusal_shape_problems("x", {"status": 429}, 429) == []                                         # nothing asked for, nothing judged
     assert len(ws.refusal_shape_problems("x", {"status": 429, "code": "rate_limited", "retry_after": "1"}, 503, "unavailable", 5)) == 3
     assert ws.refusal_shape_problems("x", {"status": 429, "code": "rate_limited", "retry_after": "1"}, 429, "rate_limited", 1) == []
     assert any("Retry-After" in p for p in ws.refusal_shape_problems("x", {"status": 429, "retry_after": "9"}, 429, None, 1))
@@ -320,3 +325,44 @@ def test_a_body_with_a_content_range_is_recorded():
     got = wait_done(r)
     server.close()
     assert got["content_range"] == "bytes 0-3/10"
+
+
+def test_problem_code_comes_from_code_or_from_the_type():
+    assert ws.problem_code_of(b'{"type":"/api/v1/problems/rate_limited","status":429,"detail":"The request could not be completed."}') == "rate_limited"
+    assert ws.problem_code_of(b'{"type":"/api/v1/problems/unavailable/","code":"other"}') == "other"
+    assert ws.problem_code_of(b'{"type":"/api/v1/problems/unavailable/"}') == "unavailable"
+    assert ws.problem_code_of(b'{"type":""}') is None and ws.problem_code_of(b'{"type":3}') is None and ws.problem_code_of(b"{}") is None
+    assert "body.type.split('/')" in ws.JS_OFFER_ONLY
+
+
+def test_a_refusal_snapshot_taken_after_the_headers_has_no_code_until_the_body_is_read():
+    """Run 20261111T125640Z recorded code=None for refusals: the snapshot came with the headers, before the body was read."""
+    body = json.dumps({"type": "/api/v1/problems/rate_limited", "status": 429, "detail": "The request could not be completed."}).encode()
+
+    def respond(conn):
+        conn.sendall(b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 1\r\nContent-Length: %d\r\n\r\n" % len(body))
+        time.sleep(0.3)
+        conn.sendall(body)
+    server = Server(respond)
+    r = reader(server)
+    early = r.wait_headers(5.0)
+    assert early["status"] == 429 and early["code"] is None and early["done"] is False
+    late = r.wait_done(5.0)
+    assert late["done"] and late["code"] == "rate_limited" and late["retry_after"] == "1"
+    assert ws.refusal_shape_problems("the third WAV body", late, 429, "rate_limited", 1) == []
+    assert ws.refusal_shape_problems("the third WAV body", early, 429, "rate_limited", 1) != []
+    server.close()
+
+
+def test_wait_done_returns_the_snapshot_after_the_timeout():
+    def hang(conn):
+        conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n")
+        time.sleep(1.0)
+    server = Server(hang)
+    r = reader(server, hold=True)
+    assert r.wait_headers(5.0)["status"] == 200
+    t0 = time.monotonic()
+    snap = r.wait_done(0.2)
+    assert snap["done"] is False and 0.15 <= time.monotonic() - t0 < 0.6
+    r.release()
+    server.close()

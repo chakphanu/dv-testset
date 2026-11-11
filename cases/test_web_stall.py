@@ -6,7 +6,8 @@ service's only tokio worker, so every request waited behind it (run 20261111T123
 buffered writer on the same filesystem, webstall_support.IoStaller), repeats logins, and probes /rtc/alive, /api/v1/public/state and /health
 every 0.4 to 0.7 s. Over the spans of the logins that were slow (>= 1 s) every probe must be answered within 500 ms. No slow login = the disk was
 not slow = inconclusive (skip; a failure with DVT_WEBSTALL1=on, for the fix image). The writer loads the host disk, so it needs
-DVT_WEBSTALL1_IO=on (the owner's go); size and length: DVT_WEBSTALL_MB (2048), DVT_WEBSTALL_S (25).
+DVT_WEBSTALL1_IO=on (the owner's go); size and length: DVT_WEBSTALL_MB (2048), DVT_WEBSTALL_S (25). It also refuses to start (skip) on a btrfs whose
+device has less than 2 GiB unallocated (room_problem): there the writer could push the metadata towards ENOSPC for the whole host.
 On an image without the fix a stall that is seen is a FAIL: that is the reproduction.
 """
 import json
@@ -18,7 +19,7 @@ import pytest
 
 from dvtest import web
 from webload_support import PsiSampler
-from webstall_support import IoStaller, Recorder, enough_space, verdict
+from webstall_support import IoStaller, Recorder, room_problem, verdict
 
 pytestmark = [pytest.mark.rig, pytest.mark.web]
 
@@ -56,8 +57,9 @@ def test_a_slow_disk_does_not_hold_the_other_requests(stall_accounts, web_base_u
                     "docs/webstall1-cases.md)")
     out_dir = Path(os.environ.get("DVT_OUT", "out"))
     megabytes, seconds = int(os.environ.get("DVT_WEBSTALL_MB") or 2048), float(os.environ.get("DVT_WEBSTALL_S") or 25.0)
-    if not enough_space(str(out_dir), megabytes):
-        pytest.skip("less than 20 GiB would stay free on the filesystem of %s after a %d MiB writer" % (out_dir, megabytes))
+    problem = room_problem(str(out_dir), megabytes, ignore_btrfs=on("DVT_WEBSTALL_IGNORE_BTRFS"))
+    if problem:
+        pytest.skip(problem)
     login_call, login_pw = stall_accounts[0]
     session_call, session_pw = stall_accounts[1]
     holder = web.WebClient(web_base_url, web_ca, timeout=30)
