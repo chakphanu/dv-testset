@@ -24,6 +24,7 @@ unit test `cases/unit/test_coverage_matrix.py` runs it).
 | Config load (COMPAT1) | 19 | 18 | 0 | 1 | 0 |
 | Secret-file reload (SECRELOAD1) | 18 | 15 | 1 | 2 | 0 |
 | Session rotation (WEBSID1) | 8 | 3 | 3 | 2 | 0 |
+| Slow disk (WEBSTALL1) | 3 | 2 | 0 | 1 | 0 |
 | M17 | 86 | 65 | 20 | 1 | 0 |
 | M17 v3 | 29 | 0 | 25 | 4 | 0 |
 | IMRS | 24 | 18 | 5 | 1 | 0 |
@@ -46,7 +47,7 @@ unit test `cases/unit/test_coverage_matrix.py` runs it).
 | Real-transcoder cross-mode audio into YSF (related to ECHO1) | 3 | 3 | 0 | 0 | 0 |
 | DP15 (APRS / AX.25 / KISS data path) | 99 | 70 | 6 | 23 | 0 |
 | DP6c / DP19 (weather, telemetry, locator status) | 22 | 17 | 0 | 5 | 0 |
-| **Total** | **1287** | **814** | **279** | **186** | **8** |
+| **Total** | **1290** | **816** | **279** | **187** | **8** |
 <!-- summary:end -->
 
 ## Top 15 gaps (ranked by how much real-world traffic they touch)
@@ -494,6 +495,15 @@ Sources: websid1-cases.md (web.md "Built (WEBSID1)", review-248). Written offlin
 | A repeated reload denial across a step-up is one record per 10 s with `suppressed` on the next | websid1-cases.md "Cases" 4 | `test_web_session_rotation::test_denials_coalesce_across_a_step_up`, `test_web_session_rotation_case::test_denials_coalesce_across_the_step_up_with_a_stable_session_key` | rig | a:admin | OK |
 | Idle and absolute expiry end the handles; TOTP enable / replace / disable keep current handles and end siblings | websid1-cases.md "GAPs" | - | - | - | GAP |
 | A WAV body ends within 100 ms of the end of the session | websid1-cases.md "GAPs" | - | - | - | GAP |
+
+## Slow disk (WEBSTALL1)
+Sources: webstall1-cases.md (dv-router analysis 252). Written offline, not run; the case needs DVT_WEBSTALL1_IO=on.
+
+| Obligation | Source | Case ids | Marker | Client | Status |
+|---|---|---|---|---|---|
+| While a login is held by a slow disk, /rtc/alive, the public state and /health answer within 500 ms (only a stall that was seen is judged; none seen = inconclusive) | webstall1-cases.md "The case" | `test_web_stall::test_a_slow_disk_does_not_hold_the_other_requests` | rig | http | OK |
+| Every web request slower than 1 s in a load run is reported with the host I/O pressure, the nearest audit login and the dv-svc-web cpu (FINDING WEBSTALL1) | webstall1-cases.md "What the load case records now" | `test_web_load::test_w8_load_200` | rig | http | OK |
+| A deterministic stall of a chosen length (cgroup io.max on the SUT container through a control-channel action) | webstall1-cases.md "GAP" | - | - | - | GAP |
 
 ## M17
 Sources: protocols/m17.md.

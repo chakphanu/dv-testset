@@ -166,6 +166,7 @@ def generator_observations(summary, load_gen, n):
 
 def stall_finding(summary):
     """FINDING WEBSTALL1 (not a failure): web requests slower than 1 s, with the dv-svc-web cpu while they ran."""
+    ws.annotate_slow(summary)
     text = ws.stall_text(summary.get("slow_requests"))
     if text:
         web.finding(text)
@@ -195,6 +196,8 @@ def run_load(n, plan_kw, web_base_url, web_ca, load_gen, rig_control, target, ac
     offsets = wl.paced_offsets(n, wl.RTC_IP_RATE, wl.RTC_IP_BURST)
     webproc = ws.WebProcSampler(rig_control)
     webproc.start()
+    psi = ws.PsiSampler()
+    psi.start()
     t_run = time.time()
     started = load_gen.run({"listeners": n, "workers": workers, "accounts": creds, "base_url": web_base_url,
                             "ca": "/webout/" + os.path.basename(web_ca), "plan": plan_kw})
@@ -213,6 +216,7 @@ def run_load(n, plan_kw, web_base_url, web_ca, load_gen, rig_control, target, ac
     if not ok_connect:
         load_gen.abort()
         summary["aborted"] = True
+        summary["io_pressure"] = ws.psi_summary(psi.stop())
         return summary, plan, None, None
     src = Source(target, rooms)
     try:
@@ -229,6 +233,7 @@ def run_load(n, plan_kw, web_base_url, web_ca, load_gen, rig_control, target, ac
         src.close()
     summary["source_errors"] = list(src.errors)
     res = load_gen.finish()
+    summary["io_pressure"] = ws.psi_summary(psi.stop())
     generator_observations(summary, load_gen, n)
     summary["loadavg_end"] = loadavg()
     edge = {"cpu_pct": round(wl.cpu_percent(e0, e1), 3), "window_s": round(e1.t - e0.t, 3),

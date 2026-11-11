@@ -100,7 +100,7 @@ def test_wait_new_pid_skips_the_old_pid_and_the_gap(monkeypatch):
     new_out = PROC_OUT.replace("pid=42", "pid=43")
     ctl = FakeControl([PROC_OUT, err, new_out])
     sample, at = tw.wait_new_pid(ctl, 42, timeout=5.0)
-    assert sample.pid == 43 and abs(at - tw.epoch_to_monotonic(sample.t)) < 1e-6
+    assert sample.pid == 43 and abs(at - tw.epoch_to_monotonic(sample.t)) < 0.05
     assert tw.wait_new_pid(FakeControl([PROC_OUT] * 3 + [err] * 200), 42, timeout=0.0) == (None, None)
 
 

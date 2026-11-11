@@ -126,6 +126,9 @@ Harness changes:
 * `web_proc` in `load.json`: dv-svc-web cpu (one core = 100) and thread count about once a second through the control channel (`proc-stat xlxd-sut dv-svc-web`) while the listeners
   connect; a stall with low cpu is a wait (a lock, a hub query), one with high cpu is work on the wrong pool (a password hash). The sampler stops before the measured window starts, so
   the gate numbers are not shared with it.
+* `io_pressure` in `load.json`: `/proc/pressure/io` of the host once a second for the whole run; every slow request carries the host I/O stall in its window and the nearest login in
+  `sut-state/web/audit.jsonl` (dv-router: a login's audit fsync runs on the service's only worker). After a run: `python3 -m dvtest.stallscan out/<run>`. The case that provokes the
+  stall is prepared in `docs/webstall1-cases.md`.
 * Not recorded: the fabric round trip of an rtc offer. The hub metrics hold counters only (`dv_web_http_requests_total`, `dv_web_hub_unavailable_total`, `dv_web_rate_limited_total`,
   no latency); `answer_s` in the listener totals is the offer round trip seen by the client (offer sent to answer received).
 

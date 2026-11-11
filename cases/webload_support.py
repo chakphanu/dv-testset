@@ -21,6 +21,7 @@ import urllib.error
 import urllib.request
 
 from crossmode_fake import UsrpPeer, usrp_hub
+from dvtest import stallscan
 from dvtest import webload as wl
 from dvtest.proto import usrp
 
@@ -275,14 +276,74 @@ def slow_stats(status, series=()):
             "items": sorted(items, key=lambda i: i["start"] or 0.0)[:SLOW_ITEMS]}
 
 
+class PsiSampler(threading.Thread):
+    """/proc/pressure/io of the host once a second: rows [epoch, some_us, full_us] (cumulative stall time). A kernel without PSI, or a tester
+    that cannot read the file, leaves no rows (reported as unavailable, never an error)."""
+
+    def __init__(self, path=stallscan.PSI_PATH, period_s=1.0):
+        super().__init__(daemon=True, name="psi-sampler")
+        self.path, self.period_s = path, period_s
+        self.rows = []
+        self._stop_flag = threading.Event()
+
+    def run(self):
+        while True:
+            psi = stallscan.read_psi(self.path)
+            if psi is not None:
+                self.rows.append([round(time.time(), 3), psi["some_us"], psi.get("full_us", 0)])
+            if self._stop_flag.wait(self.period_s):
+                return
+
+    def stop(self):
+        self._stop_flag.set()
+        self.join(5.0)
+        return list(self.rows)
+
+
+def psi_summary(rows, keep=400):
+    """What the I/O pressure did over the run: sample count, the stall time added (ms), the largest step between two samples (ms) and the series."""
+    if len(rows) < 2:
+        return {"available": False, "samples": len(rows), "series": list(rows)}
+    steps = [b[1] - a[1] for a, b in zip(rows, rows[1:])]
+    stride = max(1, len(rows) // keep)
+    return {"available": True, "samples": len(rows), "some_ms_total": round((rows[-1][1] - rows[0][1]) / 1000.0, 1),
+            "full_ms_total": round((rows[-1][2] - rows[0][2]) / 1000.0, 1), "some_ms_max_step": round(max(steps) / 1000.0, 1), "series": rows[::stride]}
+
+
+def annotate_slow(summary, audit_path=None):
+    """Add the host I/O stall and the nearest audit login to the slow requests of a run summary (in place); the audit log is read from the run's
+    sut-state directory when it is there."""
+    slow = summary.get("slow_requests") or {}
+    items = slow.get("items") or []
+    if not items:
+        return summary
+    audit = []
+    for path in ([audit_path] if audit_path else stallscan.audit_candidates()):
+        audit = stallscan.load_audit(path)
+        if audit:
+            break
+    rows = (summary.get("io_pressure") or {}).get("series") or []
+    stallscan.annotate(items, rows, audit)
+    if slow.get("longest"):
+        for item in items:
+            if item["start"] == slow["longest"].get("start") and item["path"] == slow["longest"].get("path"):
+                slow["longest"] = item
+    return summary
+
+
 def stall_text(slow):
     """The text of FINDING WEBSTALL1, None when no request was slow."""
     if not slow or not slow.get("count"):
         return None
     top = slow["longest"] or {}
-    return ("WEBSTALL1: %d web requests took longer than %.0f s during the load run; longest %s %s %.2f s (started %.3f, dv-svc-web cpu %s %% while it ran)"
+    text = ("WEBSTALL1: %d web requests took longer than %.0f s during the load run; longest %s %s %.2f s (started %.3f, dv-svc-web cpu %s %% while it ran)"
             % (slow["count"], SLOW_REPORT_S, top.get("method"), top.get("path"), top.get("seconds") or 0.0, top.get("start") or 0.0,
                top.get("web_cpu_pct_during")))
+    if "nearest_login" in top or "io_some_ms" in top:
+        near = top.get("nearest_login")
+        text += "; nearest login in the audit log: %s; host io stall in that window: some %s ms, full %s ms" % (
+            "none" if not near else "%+.3f s (%s)" % (near["delta_s"], near.get("result")), top.get("io_some_ms"), top.get("io_full_ms"))
+    return text
 
 
 def web_proc_series(samples):
