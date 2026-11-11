@@ -9,6 +9,15 @@ dv-svc-web has ONE tokio worker. A login writes its audit record with a synchron
 all requests (logins, `/rtc/alive`, offers) waited 5.6 s (12:49:12.3 to 12:49:18.86). The fix moves the write off the worker. Acceptance: while a login is stalled on the disk,
 `/rtc/alive`, `/api/v1/public/state` and `/health` answer within 500 ms.
 
+## The fix image (dv-router 17b05933): what is asserted now
+
+Written offline, not run, in `docs/web-refusals-cases.md` (run commands, estimated times, GAPs): `DVT_WEBSTALL1FIX=on` turns the slow-request detector of the load cases into a
+FAILURE (any web request above 1 s except `/auth/register`, the deliberate 2 s delay; a login is not exempt), and enables the refusal-counter cases (both families with every
+reason, the ninth circuit of a login counts `login_circuits`, a join burst counts `join_window`). The per-limit problem detail is recorded and never judged; the contract is
+503, code `unavailable`, `Retry-After: 5`. The load generator's offer retry rule matches status 503 + code `unavailable` + a Retry-After (the old text rule is only the fallback for a
+body without a code). `DVT_WEBSTALL1FIX` is separate from `DVT_WEBSTALL1` of the disk case below: set both for the fix image when the disk case is allowed to run. The deterministic
+disk-throttle stall case remains the GAP at the end of this file.
+
 ## What the load case records now (every load run)
 
 * `io_pressure` in `web/load.json`: `/proc/pressure/io` of the host once a second (cumulative `some` / `full` stall time, microseconds), for the whole run.

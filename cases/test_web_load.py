@@ -14,6 +14,13 @@ duplicate, reordered or invalid packets; the source does not miss deadlines.
   b  test_w8_load_200           the gate at 200 x 50 pps; JSON summary out/<run>/web/load.json
   c  test_flood_keeps_serving   a short bounded flood of the public API, the login/register buckets and the per-address
                                 connection share while one probe listener keeps listening (MS9 limits, 429 behaviour)
+  d  test_join_burst_counts_join_window
+                                WEBSTALL1 (DVT_WEBSTALL1FIX=on and rig/config/dv-router/join-window.toml): a burst of joins from one
+                                address inside the edge's join window is refused 503 and counted in both refusal families
+
+Every load case also records the WebRTC refusal counters before and after the gate (`refusals` in load.json: dv_edge_webrtc_offer_refused_total
+and dv_web_rtc_refused_total, by reason, never summed; dvtest/refusals.py). With DVT_WEBSTALL1FIX=on the run also FAILS when the families are not
+fully exposed or a web request other than auth/register took longer than 1 s (the slow-request detector is then a failure, not only FINDING WEBSTALL1).
 
 Every number goes into ONE file, out/<run>/web/load.json, rewritten after each case (aggregates and one compact row per
 listener; no per-listener files, no packet logs). Differences from the documents are web.finding() lines.
@@ -27,7 +34,7 @@ from pathlib import Path
 
 import pytest
 
-from dvtest import metrics, web
+from dvtest import metrics, refusals, web
 from dvtest import webload as wl
 import webload_support as ws
 from webload_support import LoadGen, LoadGenError, Sampler, Source, generator_cpu
@@ -39,6 +46,7 @@ LISTENERS = "dv_edge_webrtc_listeners"
 JOIN_REFUSED = "dv_edge_webrtc_join_refused_total"   # EDG2: {reason="core"}, zero from the first record
 ROOMS = ("A", "B")
 READY_WAIT_S = 180.0
+
 RESULTS = {"schema": 1, "cases": {}}
 
 
@@ -128,6 +136,17 @@ def join_refused(rig_control):
     return metrics.total(samples, JOIN_REFUSED, reason="core")
 
 
+def fix_problems(summary):
+    """DVT_WEBSTALL1FIX=on: what the fix image must show in a load run (empty without the switch). The counter families are fully exposed and no web
+    request other than auth/register took longer than 1 s (ws.slow_problems)."""
+    if not refusals.fix_on():
+        return []
+    shape = (summary.get("refusals") or {}).get("shape_problems")
+    out = ["the refusal counters: %s" % p for p in (["were not recorded"] if shape is None else shape)]
+    out.extend("slow web request: %s" % p for p in ws.slow_problems(summary.get("slow_requests")))
+    return out
+
+
 def wait_gauge(rig_control, n, budget_s=45.0):
     """The edge publishes its listener gauge every few seconds and the hub caches it (web.md; K22 waited up to 35 s):
     poll until it equals n. Returns (last value, [values seen])."""
@@ -164,6 +183,17 @@ def generator_observations(summary, load_gen, n):
     summary["slow_requests"] = ws.slow_stats(st, (summary.get("web_proc") or {}).get("series") or ())
 
 
+def record_refusals(summary, before, rig_control):
+    """`refusals` in load.json: both families by reason before the run and after the gate (settled reads), the reasons that moved and the shape
+    problems of the exposition. The two families are never added together. Next to it what the generator saw: refusals it received (retries
+    plus the offers that ran out of retries) and the detail texts of the retried ones (recorded, never judged)."""
+    after, settled = refusals.settled(lambda: refusals.read(rig_control))
+    summary["refusals"] = refusals.record(before, after)
+    summary["refusals"]["settled"] = settled
+    rt = summary.get("offer_retries") or {}
+    summary["refusals"]["generator_saw"] = {"retries": rt.get("retries"), "exhausted": rt.get("exhausted"), "details": rt.get("refused_details") or {}}
+
+
 def stall_finding(summary):
     """FINDING WEBSTALL1 (not a failure): web requests slower than 1 s, with the dv-svc-web cpu while they ran."""
     ws.annotate_slow(summary)
@@ -188,6 +218,7 @@ def run_load(n, plan_kw, web_base_url, web_ca, load_gen, rig_control, target, ac
     sampler = Sampler(rig_control, load_gen)
     lead = sampler.calibrate()
     pre, _ = sampler.edge()
+    refusals_before, _settled = refusals.settled(lambda: refusals.read(rig_control))
     summary = {"listeners": n, "rate_pps": plan.rate, "warmup_s": plan.warmup_s, "window_s": plan.window_s,
                "workers": workers, "loadavg_start": loadavg(), "edge_pid": pre.pid, "edge_threads_pre": pre.threads,
                "edge_vmhwm_pre_kib": pre.vmhwm_kib, "edge_vmrss_pre_kib": pre.vmrss_kib, "proc_stat_lead_s": round(lead, 3)}
@@ -217,6 +248,7 @@ def run_load(n, plan_kw, web_base_url, web_ca, load_gen, rig_control, target, ac
         load_gen.abort()
         summary["aborted"] = True
         summary["io_pressure"] = ws.psi_summary(psi.stop())
+        record_refusals(summary, refusals_before, rig_control)
         return summary, plan, None, None
     src = Source(target, rooms)
     try:
@@ -235,6 +267,7 @@ def run_load(n, plan_kw, web_base_url, web_ca, load_gen, rig_control, target, ac
     res = load_gen.finish()
     summary["io_pressure"] = ws.psi_summary(psi.stop())
     generator_observations(summary, load_gen, n)
+    record_refusals(summary, refusals_before, rig_control)
     summary["loadavg_end"] = loadavg()
     edge = {"cpu_pct": round(wl.cpu_percent(e0, e1), 3), "window_s": round(e1.t - e0.t, 3),
             "window_start_error_s": round(err0, 3), "window_end_error_s": round(err1, 3),
@@ -278,6 +311,8 @@ def report(name, summary, checks):
     lines = ["W8 %s: %d listeners, window %.1f s" % (name, summary["listeners"], summary.get("edge", {}).get("window_s", 0))]
     for c in checks or []:
         lines.append("  %-52s %-10s limit %-9s %s %s" % (c.name, c.measured, c.limit, "ok" if c.ok else "FAIL", c.note))
+    if summary.get("refusals"):
+        lines.append("  " + refusals.line(summary["refusals"]))
     print("\n".join(lines))
 
 
@@ -301,6 +336,7 @@ def judge_integrity(summary, totals, n):
                         % (summary["join_refused_core"], JOIN_REFUSED))
     if not summary["edge_same_pid"]:
         problems.append("dv-edge-webrtc restarted during the run")
+    problems.extend(fix_problems(summary))
     return problems
 
 
@@ -330,7 +366,7 @@ def test_calibration(n, load_gen, load_ready, rig_control, target, load_accounts
     stall_finding(summary)
     finding_lines(summary, totals)
     problems = judge_integrity(summary, totals, n) if totals is not None else (
-        ["did not connect: %s" % summary["connect_status"]] + ws.retry_problems(summary.get("offer_retries")))
+        ["did not connect: %s" % summary["connect_status"]] + ws.retry_problems(summary.get("offer_retries")) + fix_problems(summary))
     assert not problems, "; ".join(problems)
 
 
@@ -536,6 +572,85 @@ def _via_proxy(base_url, ca, count):
         for c in conns:
             c.close()
     return _status_count(results)
+
+
+# ---- WEBSTALL1: a burst of joins inside the edge's join window
+
+JOIN_BURST = 4                  # offers sent at once from one address: the first is admitted, the rest fall in the same one second window
+
+
+def rendered_config_text(target):
+    """The run's rendered dv-router.toml (out/<run>/xlxd-config/xlxd-sut/dv-router.toml), '' when it is not there."""
+    path = Path(target.out) / "xlxd-config" / "xlxd-sut" / "dv-router.toml"
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def test_join_burst_counts_join_window(load_gen, load_ready, rig_control, target, load_accounts, web_base_url, web_ca):
+    """WEBSTALL1 (3c): offers sent at once land in the edge's join window and are refused 503 `unavailable` with Retry-After 5; each refusal counts
+    dv_edge_webrtc_offer_refused_total{reason=join_window} (the deciding edge boundary) and dv_web_rtc_refused_total{reason=join_window} (the HTTP
+    reply), the two families are judged one by one and never added. The other reasons of both families do not move. The harness retry rule must see
+    the refusals as capacity refusals by status and code (not by the detail text): it sends the offers again after the Retry-After.
+
+    Why the window is set to 1 per second (rig/config/dv-router/join-window.toml, [edges.webrtc] joins_per_second = 1): with the default 5 the
+    web service's own gates stop one address first (per address 1/s, burst 5; global 5/s, burst 5), so a burst of MORE than 5 joins per second
+    cannot reach the edge from a single address. Only two addresses, the second one timed 0.2 to 0.9 s after the five of the first (a refilled
+    global token while the first five are still in the edge window), can: that needs two client addresses with a timed second wave, a GAP
+    (docs/web-refusals-cases.md). One address and a window of 1 per second exercises the same counters and the same refusal deterministically."""
+    if not refusals.fix_on():
+        pytest.skip(refusals.skip_reason())
+    setting = refusals.join_window_setting(rendered_config_text(target), os.environ.get("DVT_SUT_CONFIG_EXTRA"))
+    if setting["joins_per_second"] != 1:
+        pytest.skip("the edge's join window is not 1 per second (%s): name rig/config/dv-router/join-window.toml in DVT_SUT_CONFIG_EXTRA "
+                    "(docs/web-refusals-cases.md)" % setting)
+    before, _settled = refusals.settled(lambda: refusals.read(rig_control))
+    core_before = join_refused(rig_control)
+    creds = load_accounts(wl.accounts_needed(JOIN_BURST))
+    load_gen.run({"listeners": JOIN_BURST, "workers": 1, "accounts": creds, "base_url": web_base_url,
+                  "ca": "/webout/" + os.path.basename(web_ca), "plan": {}, "burst": True})
+    st = wait_connected(load_gen, JOIN_BURST, 90.0)
+    summary = {"listeners": JOIN_BURST, "join_window_setting": setting, "connect_status": {k: st[k] for k in ("state", "connected", "failed", "failures", "error")}}
+    try:
+        status = load_gen.status()
+    except Exception as exc:                                        # noqa: BLE001 - an observation
+        status = {}
+        summary["status_error"] = "%s: %s" % (type(exc).__name__, exc)
+    summary["offer_retries"] = ws.retry_stats(status, JOIN_BURST)
+    load_gen.abort()
+    summary["edge_listeners_after_abort"], summary["edge_listeners_after_abort_seen"] = wait_gauge(rig_control, 0)
+    after, settled = refusals.settled(lambda: refusals.read(rig_control))
+    summary["refusals"] = refusals.record(before, after)
+    summary["refusals"]["settled"] = settled
+    core_after = join_refused(rig_control)
+    summary["join_refused_core"] = {"before": core_before, "after": core_after}
+    RESULTS["cases"]["join_burst"] = summary
+    write_results()
+    print("[RECORD] WEBSTALL1 join burst of %d: %s; generator retries %s, exhausted %s, refusal details %s; connected %s of %d" % (
+        JOIN_BURST, refusals.line(summary["refusals"]), summary["offer_retries"]["retries"], summary["offer_retries"]["exhausted"],
+        {k: refusals.detail_note(k) for k in summary["offer_retries"].get("refused_details", {})}, st["connected"], JOIN_BURST))
+
+    problems = list(summary["refusals"]["shape_problems"])
+    delta = summary["refusals"]["delta"]
+    want = JOIN_BURST - 1                                                  # the first offer is admitted, the others fall in the same window
+    for fam, family in (("edge", refusals.EDGE_FAMILY), ("web", refusals.WEB_FAMILY)):
+        counts = delta.get(fam)
+        if counts is None:
+            continue
+        got = counts.get("join_window", 0)
+        if got < want:
+            problems.append("%s{reason=join_window} rose by %g, want at least %d (a burst of %d offers in a window of 1 per second)" % (family, got, want, JOIN_BURST))
+        other = {r: v for r, v in refusals.moved(counts).items() if r != "join_window"}
+        if other:
+            problems.append("%s moved other reasons too: %s" % (family, other))
+    if summary["offer_retries"]["retries"] < want:
+        problems.append("the generator sent %d offers again, want at least %d: its retry rule did not see the refusals (503 + code unavailable + Retry-After) as capacity refusals"
+                        % (summary["offer_retries"]["retries"], want))
+    if core_before is not None and core_after is not None and core_after != core_before:
+        problems.append("%s{reason=core} moved from %s to %s: a JOIN refused by the room core is another counter and must not follow an offer refusal"
+                        % (JOIN_REFUSED, core_before, core_after))
+    assert not problems, "; ".join(problems)
 
 
 def test_zz_rfwd1_no_stall_kills(stall_kills_start):

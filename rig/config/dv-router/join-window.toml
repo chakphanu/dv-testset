@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/rig.md): the WebRTC edge admits ONE join per second (its own default and maximum is 5;
+# [edges.webrtc] joins_per_second accepts 1 to 5). Only for the WEBSTALL1 case cases/test_web_load.py::test_join_burst_counts_join_window
+# (docs/web-refusals-cases.md): with a window of 1 per second a burst of offers from ONE address reaches the edge (the web service's own gates
+# allow 5 at once per address) and is refused there with reason join_window, which counts dv_edge_webrtc_offer_refused_total and
+# dv_web_rtc_refused_total. Name it after web.toml and run that case ALONE: the 200 listener load cases pace their offers for the default of 5.
+#   DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/join-window.toml
+# The key and its place are DV-Router's own (docs/design/web.md, "[edges.webrtc] joins_per_second", DV_WEBRTC_JOINS_PER_SECOND; crates/edge/webrtc settings).
+[edges.webrtc]
+joins_per_second = 1

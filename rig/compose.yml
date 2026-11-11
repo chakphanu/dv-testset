@@ -596,6 +596,9 @@ services:
       DVT_WEBSID1B: ${DVT_WEBSID1B:-}      # WEBSID1b fixed: the circuit of tab 1 must survive a step-up in tab 2 (otherwise a FINDING)
       DVT_WEBSID_OVER_S: ${DVT_WEBSID_OVER_S:-}
       DVT_WEBSTALL1: ${DVT_WEBSTALL1:-}        # WEBSTALL1 fixed: a slow disk that was seen and not judged is a failure, not a skip
+      # WEBSTALL1 fix image (dv-router 17b05933): on = the strict assertions apply (cases/test_web_rtc_refusals.py, the join burst and the refusal counters of
+      # cases/test_web_load.py, a web request other than auth/register slower than 1 s is a failure); the new cases skip with a reason without it
+      DVT_WEBSTALL1FIX: ${DVT_WEBSTALL1FIX:-}
       DVT_WEBSTALL1_IO: ${DVT_WEBSTALL1_IO:-}  # the owner's go for the disk writer of the WEBSTALL1 case (docs/webstall1-cases.md)
       DVT_WEBSTALL_MB: ${DVT_WEBSTALL_MB:-}
       DVT_WEBSTALL_IGNORE_BTRFS: ${DVT_WEBSTALL_IGNORE_BTRFS:-}   # only on the owner's word: start the writer on a fully allocated btrfs

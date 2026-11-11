@@ -132,6 +132,21 @@ Harness changes:
 * Not recorded: the fabric round trip of an rtc offer. The hub metrics hold counters only (`dv_web_http_requests_total`, `dv_web_hub_unavailable_total`, `dv_web_rate_limited_total`,
   no latency); `answer_s` in the listener totals is the offer round trip seen by the client (offer sent to answer received).
 
+### The fix image (WEBSTALL1, dv-router 17b05933; written offline, NOT run)
+
+Details, run commands and GAPs: `docs/web-refusals-cases.md`. In this file's cases:
+* The generator's offer retry rule is status 503 + problem code `unavailable` + a positive Retry-After (`dvtest/refusals.py is_capacity_refusal`), never the detail text: the fix image names
+  the limit in it ("WebRTC join window capacity reached", ...), the earlier images say "WebRTC capacity reached". A body without a code still falls back to the old text rule, so both
+  shapes are retried. The detail text of each retried refusal is counted in the generator status (`refused_details`) and ends up in `offer_retries.refused_details` of `load.json`: recorded, not judged.
+* `refusals` in `load.json` (every load case, any image): `dv_edge_webrtc_offer_refused_total{reason}` and `dv_web_rtc_refused_total{reason}` read before the run and after the gate (two equal
+  reads 12 s apart, so the hub's cache has caught up), by reason, with `delta`, `moved`, the shape problems of the exposition, and what the generator saw (`generator_saw`: retries, exhausted, details).
+  One printed line per case: `refusals edge(...): none; web(...): none`. The families are never added together. An image without them records `null` (no failure).
+* `DVT_WEBSTALL1FIX=on`: the case also FAILS when a family or a reason is missing, and when a web request other than `/auth/register` took longer than 1 s (the slow-request detector is a
+  failure, not only FINDING WEBSTALL1). Off: unchanged (finding only), so the cases pass on the current image `wip-a31709a`.
+* `test_join_burst_counts_join_window`: four offers at once from the generator with the edge's join window set to 1 per second (`rig/config/dv-router/join-window.toml`), see the new file.
+  Run it alone: `DVT_WEBSTALL1FIX=on DVT_USRP_DYNAMIC=1 DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/join-window.toml ... scripts/run.sh -m rig --profile web,webload -- cases/test_web_load.py::test_join_burst_counts_join_window`
+  (3 to 4 minutes). The full file runs without the snippet (about 17 minutes with the settled reads); the burst case then skips with the reason.
+
 ## Flood (short, bounded; MS9 limits)
 
 From the tester's address while a probe listener (generator address) kept hearing a 36 s over, in the same run: **passed**.

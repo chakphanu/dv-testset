@@ -236,8 +236,12 @@ SLOW_ITEMS = 20
 def retry_stats(status, n):
     """The retry numbers of a generator /status document for a run of n listeners."""
     retried = int(status.get("retried") or 0)
-    return {"offers": n, "retried": retried, "retries": int(status.get("retries") or 0), "exhausted": int(status.get("exhausted") or 0),
-            "share": round(retried / n, 4) if n else 0.0}
+    out = {"offers": n, "retried": retried, "retries": int(status.get("retries") or 0), "exhausted": int(status.get("exhausted") or 0),
+           "share": round(retried / n, 4) if n else 0.0}
+    details = status.get("refused_details")
+    if details:
+        out["refused_details"] = dict(details)           # the detail text of each retried refusal: the limit it names on the fix image (recorded, never judged)
+    return out
 
 
 def retry_problems(stats):
@@ -246,9 +250,27 @@ def retry_problems(stats):
         return []
     out = []
     if stats.get("exhausted"):
-        out.append("%d offers were refused 503 'WebRTC capacity reached' on every try (3 retries)" % stats["exhausted"])
+        out.append("%d offers were refused for capacity (503 unavailable with a Retry-After) on every try (3 retries)" % stats["exhausted"])
     if stats.get("share", 0.0) > RETRY_SHARE_MAX:
         out.append("%d of %d offers (%.1f %%) needed a retry, more than %.0f %%" % (stats["retried"], stats["offers"], 100.0 * stats["share"], 100.0 * RETRY_SHARE_MAX))
+    return out
+
+
+SLOW_EXEMPT = ("/auth/register",)  # the one request that is slow on purpose: register answers after a fixed 2 s delay (user enumeration guard)
+
+
+def slow_problems(slow):
+    """WEBSTALL1 fixed (DVT_WEBSTALL1FIX=on): the failures among the slow requests of a run, one text per request kept (up to SLOW_ITEMS), and one for the
+    ones not kept. A web request slower than SLOW_REPORT_S fails unless its path ends with one of SLOW_EXEMPT; without the switch the same requests are
+    only FINDING WEBSTALL1 (stall_text). Durable writes no longer run on the runtime worker, so no request may wait for a disk."""
+    if not slow or not slow.get("count"):
+        return []
+    items = [i for i in slow.get("items") or [] if not str(i.get("path") or "").endswith(SLOW_EXEMPT)]
+    out = ["%s %s took %.2f s (limit %.0f s; started %.3f, dv-svc-web cpu %s %% while it ran)" % (
+        i.get("method"), i.get("path"), i.get("seconds") or 0.0, SLOW_REPORT_S, i.get("start") or 0.0, i.get("web_cpu_pct_during")) for i in items]
+    unseen = int(slow.get("count") or 0) - len(slow.get("items") or [])
+    if unseen > 0:
+        out.append("%d more slow requests were counted but not kept (the summary keeps %d)" % (unseen, SLOW_ITEMS))
     return out
 
 

@@ -224,6 +224,20 @@ def test_capacity_refusal_and_retry_delay():
     assert gen.retry_delay({"retry-after": "soon"}) == gen.RETRY_MIN_S and gen.retry_delay(None) == gen.RETRY_MIN_S
 
 
+NEW_BODY = json.dumps({"type": "https://example.invalid/problems/unavailable", "code": "unavailable", "detail": "WebRTC join window capacity reached"})
+OLD_BODY = json.dumps({"code": "unavailable", "detail": "WebRTC capacity reached"})
+
+
+def test_capacity_refusal_is_judged_by_status_code_and_retry_after_in_both_shapes():
+    for body in (NEW_BODY, OLD_BODY):
+        assert gen.is_capacity_refusal(503, body, {"retry-after": "5"})
+    # the detail text does not decide: a renamed limit is still a capacity refusal, a capacity-looking text on another code is not
+    assert gen.is_capacity_refusal(503, json.dumps({"code": "unavailable", "detail": "no room"}), {"retry-after": "5"})
+    assert not gen.is_capacity_refusal(503, json.dumps({"code": "rate_limited", "detail": "WebRTC capacity reached"}), {"retry-after": "5"})
+    assert not gen.is_capacity_refusal(503, NEW_BODY, {})                       # a 503 unavailable with no Retry-After is not a capacity refusal
+    assert not gen.is_capacity_refusal(429, NEW_BODY, {"retry-after": "5"})
+
+
 class Reply:
     def __init__(self, status, text="", headers=None):
         self.status, self._text, self.headers = status, text, headers or {}
@@ -336,3 +350,42 @@ def test_the_timed_client_reports_only_requests_slower_than_the_limit(monkeypatc
     assert client.request("GET", "/fast") == "reply" and seen == []
     assert client.request("POST", "/slow/offer?x=1", json_body={}) == "reply"
     assert len(seen) == 1 and seen[0][0] == "POST" and seen[0][1] == "/slow/offer" and seen[0][2] >= 0.1
+
+
+def test_a_new_shape_refusal_is_retried_and_its_detail_is_kept(monkeypatch):
+    run, lst, events, sleeps, sent = offer_worker(monkeypatch, [Reply(503, NEW_BODY, {"retry-after": "5"}), Reply(200, "{}")])
+    reply, _t = run()
+    assert reply.status == 200 and lst.retries == 1 and sleeps == [5.0]
+    assert events == [{"ev": "retry", "j": 9, "n": 1, "wait": 5.0, "detail": "WebRTC join window capacity reached"}]
+
+
+def test_a_503_unavailable_without_retry_after_is_not_retried(monkeypatch):
+    run, lst, events, sleeps, sent = offer_worker(monkeypatch, [Reply(503, NEW_BODY, {})])
+    got, _t = run()
+    assert got.status == 503 and lst.retries == 0 and sleeps == [] and events == []
+
+
+def test_the_job_counts_the_details_of_the_retried_refusals():
+    import io
+    job = gen.Job({"listeners": 4})
+    lines = [{"ev": "retry", "j": 1, "n": 1, "detail": "WebRTC join window capacity reached"},
+             {"ev": "retry", "j": 2, "n": 1, "detail": "WebRTC join window capacity reached"},
+             {"ev": "retry", "j": 2, "n": 2, "detail": "WebRTC peer slot capacity reached"}, {"ev": "retry", "j": 3, "n": 1}]
+
+    class Proc:
+        stdout = io.StringIO("\n".join(json.dumps(x) for x in lines) + "\n")
+
+        def poll(self):
+            return 0
+
+    gen.Server.reader(job, 0, Proc())
+    st = job.status()
+    assert st["refused_details"] == {"WebRTC join window capacity reached": 2, "WebRTC peer slot capacity reached": 1}
+    assert st["retries"] == 4 and st["retried"] == 3
+
+
+def test_plan_offsets_paced_or_all_at_once():
+    assert gen.plan_offsets(4, burst=True) == [0.0, 0.0, 0.0, 0.0]
+    paced = gen.plan_offsets(8)
+    assert paced[:4] == [0.0] * 4 and paced[4] > 0 and paced == sorted(paced)
+    assert gen.plan_offsets(0, burst=True) == []

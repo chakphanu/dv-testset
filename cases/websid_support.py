@@ -12,8 +12,8 @@ import ssl
 import threading
 import time
 
-# refusal shapes pinned by dv-router from the code at a1ff890c: the ninth circuit of a login is 503 `unavailable` ("WebRTC capacity reached",
-# Retry-After 5; the cap of 8 counts across rotations); the third concurrent WAV body of a (role, session) is 429 `rate_limited` ("recording rate
+# refusal shapes pinned by dv-router from the code at a1ff890c: the ninth circuit of a login is 503 `unavailable` (detail "WebRTC capacity reached";
+# from the WEBSTALL1 image "WebRTC login circuit capacity reached", dvtest/refusals.py; the detail is never judged), Retry-After 5; the cap of 8 counts across rotations); the third concurrent WAV body of a (role, session) is 429 `rate_limited` ("recording rate
 # limit", Retry-After 1, at once, no queue). Other limits on the same paths: 20 audio requests per 10 s, global browse 2 / play 4 slots with a 5 s wait.
 CIRCUIT_CAP = 8
 CIRCUIT_REFUSED = 503
@@ -281,7 +281,7 @@ JS_OFFER_ONLY = """async ({room, csrf}) => {
   try { body = await r.json(); } catch (e) { body = null; }
   (window.__sidPcs = window.__sidPcs || []).push(pc);
   return {status: r.status, sess_id: body && body.sess_id ? body.sess_id : null, code: body && body.code ? body.code : (body && typeof body.type === 'string' ? (body.type.split('/').filter(Boolean).pop() || null) : null),
-          retry_after: r.headers.get('retry-after')};
+          retry_after: r.headers.get('retry-after'), detail: body && typeof body.detail === 'string' ? body.detail.slice(0, 120) : null};
 }"""
 
 JS_ALIVE_START = """({ids, csrf}) => {

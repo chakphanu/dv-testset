@@ -37,13 +37,14 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+from dvtest import refusals
 from dvtest import webload as wl
 
 OFFER_PATH = "/api/v1/rtc/offer"
 ALIVE_PATH = "/api/v1/rtc/alive"
 CLOSE_PATH = "/api/v1/rtc/close"
 CONNECT_TIMEOUT_S = 20.0
-OFFER_RETRIES = 3               # an offer refused 503 "WebRTC capacity reached" is sent again at most this many times
+OFFER_RETRIES = 3               # an offer refused for capacity (503 `unavailable` with a Retry-After) is sent again at most this many times
 RETRY_MIN_S = 1.1               # at least: the edge counts joins in a 1 s window (5 per window, edge/webrtc settings joins_per_second)
 SLOW_S = 1.0                    # a web request slower than this is reported (WEBSTALL1)
 SLOW_KEEP = 200                 # slow requests kept per run
@@ -105,9 +106,20 @@ def read_cgroup():
 
 # ====================================================================== worker
 
-def is_capacity_refusal(status, text):
-    """An offer the service refused for capacity: 503 with the detail "WebRTC capacity reached" (a join window, a cap; the reply does not say which)."""
-    return status == 503 and "capacity reached" in (text or "")
+def is_capacity_refusal(status, text, headers=None):
+    """An offer the service refused for capacity: 503, problem code `unavailable`, a positive Retry-After (dvtest.refusals.is_capacity_refusal). The detail
+    text is not judged: the fix image names the limit in it ("WebRTC join window capacity reached"), the image before it says "WebRTC capacity reached";
+    a body without a code still falls back to the old text rule."""
+    return refusals.is_capacity_refusal(status, text, headers)
+
+
+def plan_offsets(listeners, burst=False):
+    """Seconds after the start at which each offer goes out. Normally paced under the per-address join gate (1/s, burst 5). `burst` sends them ALL at once
+    (a deliberate burst of joins for the edge's join window case, cases/test_web_load.py test_join_burst_counts_join_window); the caller keeps the
+    count small (the per-login budget of the generator is 7 requests at once, the per-address gate allows 5)."""
+    if burst:
+        return [0.0] * listeners
+    return wl.paced_offsets(listeners, wl.RTC_IP_RATE, wl.RTC_IP_BURST)
 
 
 def retry_delay(headers):
@@ -335,7 +347,7 @@ class Worker:
             reply, t_offer = await self.offer(slot, lst, client, offer_sdp)
             if reply.status != 200:
                 lst.error = "offer HTTP %d %s" % (reply.status, reply.text()[:120].replace("\n", " "))
-                if lst.retries and is_capacity_refusal(reply.status, reply.text()):
+                if lst.retries and is_capacity_refusal(reply.status, reply.text(), getattr(reply, "headers", None)):
                     lst.exhausted = True
                     self.emit(ev="exhausted", j=lst.j, tries=lst.retries)
                 self.emit(ev="failed", j=lst.j, why=lst.error)
@@ -388,7 +400,7 @@ class Worker:
                 lst.client, lst.pc = locals().get("client"), pc
 
     async def offer(self, slot, lst, client, offer_sdp):
-        """POST the offer; a 503 "WebRTC capacity reached" is sent again (at most OFFER_RETRIES times, after max(Retry-After, RETRY_MIN_S)),
+        """POST the offer; a capacity refusal (503 `unavailable` with a Retry-After; the detail text, which names the limit on the fix image, is only recorded) is sent again (at most OFFER_RETRIES times, after max(Retry-After, RETRY_MIN_S)),
         which also spreads a burst that a stalled service released at once over more than one join window. Returns (reply, the monotonic
         time the last attempt went out). Each retry is an event, so the run's retry share is judged by the case."""
         loop = asyncio.get_running_loop()
@@ -397,11 +409,12 @@ class Worker:
             t_offer = time.monotonic()
             reply = await loop.run_in_executor(
                 self.pool, lambda: client.request("POST", OFFER_PATH, json_body={"sdp": offer_sdp, "room": slot["room"]}, pace=False))
-            if lst.retries >= OFFER_RETRIES or not is_capacity_refusal(reply.status, reply.text()):
+            headers = getattr(reply, "headers", None)
+            if lst.retries >= OFFER_RETRIES or not is_capacity_refusal(reply.status, reply.text(), headers):
                 return reply, t_offer
             lst.retries += 1
-            wait = retry_delay(getattr(reply, "headers", None))
-            self.emit(ev="retry", j=lst.j, n=lst.retries, wait=round(wait, 2))
+            wait = retry_delay(headers)
+            self.emit(ev="retry", j=lst.j, n=lst.retries, wait=round(wait, 2), detail=refusals.problem_detail(reply.text()))
             await asyncio.sleep(wait)
 
     async def release(self, lst, client, pc):
@@ -562,6 +575,7 @@ class Job:
         self.t_first_offer = None
         self.error = None
         self.retried = {}                   # j -> offers sent again (WEBLOAD retry)
+        self.refused_details = collections.Counter()    # detail text of each refusal that was retried -> count (recorded, never judged)
         self.exhausted = set()              # j whose retries were all refused
         self.slow = []                      # web requests slower than SLOW_S: {m, p, d, t}
         self.slow_count = 0
@@ -574,6 +588,7 @@ class Job:
                     "failures": sorted(set(self.failed.values()))[:5], "ready": self.ready,
                     "results": len(self.results), "closed": self.closed, "error": self.error,
                     "retried": len(self.retried), "retries": sum(self.retried.values()), "exhausted": len(self.exhausted),
+                    "refused_details": dict(self.refused_details),
                     "slow_count": self.slow_count, "slow": list(self.slow),
                     "elapsed_s": round(time.time() - self.started, 1)}
 
@@ -605,7 +620,7 @@ class Server:
                 offsets = sorted(row["offset"] for row in slot_rows)
             else:
                 slot_rows = [{"j": s.index, "login": s.login, "account": s.account, "room": s.room} for s in wl.slots(listeners)]
-                offsets = wl.paced_offsets(listeners, wl.RTC_IP_RATE, wl.RTC_IP_BURST)
+                offsets = plan_offsets(listeners, burst=bool(req.get("burst")))
                 for row, off in zip(slot_rows, offsets):
                     row["offset"] = off
             accounts = req["accounts"]
@@ -651,6 +666,8 @@ class Server:
                     job.failed[ev["j"]] = str(ev.get("why", ""))[:200]
                 elif kind == "retry":
                     job.retried[ev["j"]] = ev.get("n", 1)
+                    if ev.get("detail"):
+                        job.refused_details[str(ev["detail"])[:120]] += 1
                 elif kind == "exhausted":
                     job.exhausted.add(ev["j"])
                 elif kind == "slow":

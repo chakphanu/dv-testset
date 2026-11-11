@@ -434,3 +434,111 @@ def test_generator_observations_never_raise(monkeypatch):
     summary = {"listeners": 1}
     case.generator_observations(summary, Gen(), 1)
     assert "generator_observations_error" in summary and "offer_retries" not in summary
+
+
+# ---------------------------------------------------------------- WEBSTALL1 fix image: refusal counters in the load summary, slow requests as failures
+
+def test_retry_stats_carry_the_refusal_details():
+    st = ws.retry_stats({"retried": 2, "retries": 3, "exhausted": 0, "refused_details": {"WebRTC join window capacity reached": 3}}, 200)
+    assert st["refused_details"] == {"WebRTC join window capacity reached": 3}
+    assert "refused_details" not in ws.retry_stats({"retried": 0}, 200)
+
+
+def slow(*rows):
+    return ws.slow_stats({"slow_count": len(rows), "slow": [{"m": m, "p": p, "d": d, "t": t} for m, p, d, t in rows]}, ())
+
+
+def test_slow_problems_exempt_only_the_deliberate_register_delay():
+    assert ws.slow_problems(None) == [] and ws.slow_problems(ws.slow_stats({}, ())) == []
+    only_register = slow(("POST", "/api/v1/auth/register", 2.05, 10.0))
+    assert ws.slow_problems(only_register) == []
+    mixed = slow(("POST", "/api/v1/auth/register", 2.05, 10.0), ("POST", "/api/v1/rtc/offer", 1.4, 11.0), ("GET", "/health", 1.1, 12.0))
+    got = ws.slow_problems(mixed)
+    assert len(got) == 2 and "POST /api/v1/rtc/offer took 1.40 s" in got[0] and got[1].startswith("GET /health")
+    login = slow(("POST", "/api/v1/auth/session", 1.2, 5.0))
+    assert len(ws.slow_problems(login)) == 1                           # a login is not exempt: its audit record is best effort and off the worker
+
+
+def test_slow_problems_say_when_requests_were_counted_but_not_kept():
+    status = {"slow_count": ws.SLOW_ITEMS + 5, "slow": [{"m": "GET", "p": "/x", "d": 1.5, "t": float(i)} for i in range(ws.SLOW_ITEMS + 5)]}
+    got = ws.slow_problems(ws.slow_stats(status, ()))
+    assert len(got) == ws.SLOW_ITEMS + 1 and "5 more slow requests" in got[-1]
+
+
+def complete_record():
+    from dvtest import metrics, refusals as rf
+    lines = ["%s{proc=\"webrtc\",reason=\"%s\"} 0" % (rf.EDGE_FAMILY, r) for r in rf.EDGE_REASONS]
+    lines += ["%s{proc=\"web\",reason=\"%s\"} 0" % (rf.WEB_FAMILY, r) for r in rf.WEB_REASONS]
+    snap = rf.snapshot(metrics.parse("\n".join(lines) + "\n"))
+    return rf.record(snap, snap)
+
+
+def test_fix_problems_only_with_the_switch(monkeypatch):
+    import test_web_load as case
+    summary = {"refusals": complete_record(), "slow_requests": slow(("GET", "/health", 1.5, 1.0))}
+    monkeypatch.delenv("DVT_WEBSTALL1FIX", raising=False)
+    assert case.fix_problems(summary) == []                                     # the current image: a FINDING only
+    monkeypatch.setenv("DVT_WEBSTALL1FIX", "on")
+    got = case.fix_problems(summary)
+    assert len(got) == 1 and got[0].startswith("slow web request: GET /health")
+    assert case.fix_problems({"refusals": complete_record(), "slow_requests": {"count": 0}}) == []
+    missing = case.fix_problems({"slow_requests": None})
+    assert missing == ["the refusal counters: were not recorded"]
+    absent = {"refusals": {"shape_problems": ["dv_web_rtc_refused_total is not exposed"]}}
+    assert case.fix_problems(absent) == ["the refusal counters: dv_web_rtc_refused_total is not exposed"]
+
+
+def test_record_refusals_reads_both_families_before_and_after(monkeypatch):
+    import test_web_load as case
+    from dvtest import refusals as rf
+    monkeypatch.setattr(case.refusals, "settled", lambda read, **kw: (read(), True))
+    zero = complete_record()["after"]
+    moved = {"edge": dict(zero["edge"], join_window=2.0), "web": dict(zero["web"], join_window=2.0, login_circuits=1.0)}
+    monkeypatch.setattr(case.refusals, "read", lambda ctl: moved)
+    summary = {"offer_retries": {"retries": 2, "exhausted": 0, "refused_details": {"WebRTC join window capacity reached": 2}}}
+    case.record_refusals(summary, zero, object())
+    rec = summary["refusals"]
+    assert rec["before"] == zero and rec["after"] == moved and rec["settled"] is True
+    assert rec["moved"] == {"edge": {"join_window": 2.0}, "web": {"join_window": 2.0, "login_circuits": 1.0}}
+    assert rec["generator_saw"] == {"retries": 2, "exhausted": 0, "details": {"WebRTC join window capacity reached": 2}}
+    assert "join_window +2" in rf.line(rec) and rec["shape_problems"] == []
+
+
+def test_report_prints_the_refusal_line():
+    import test_web_load as case
+    import io
+    from contextlib import redirect_stdout
+    summary = {"listeners": 3, "edge": {"window_s": 1.0}, "refusals": complete_record()}
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        case.report("x", summary, [])
+    assert "refusals edge(dv_edge_webrtc_offer_refused_total): none; web(dv_web_rtc_refused_total): none" in buf.getvalue()
+
+
+def test_the_join_burst_case_skips_without_the_switch_or_the_window(monkeypatch):
+    import test_web_load as case
+
+    class Target:
+        out = "/nonexistent-out"
+    args = dict(load_gen=None, load_ready=True, rig_control=None, target=Target(), load_accounts=None, web_base_url="", web_ca="")
+    monkeypatch.delenv("DVT_WEBSTALL1FIX", raising=False)
+    with pytest.raises(pytest.skip.Exception) as info:
+        case.test_join_burst_counts_join_window(**args)
+    assert "DVT_WEBSTALL1FIX=on" in str(info.value)
+    monkeypatch.setenv("DVT_WEBSTALL1FIX", "on")
+    monkeypatch.delenv("DVT_SUT_CONFIG_EXTRA", raising=False)
+    with pytest.raises(pytest.skip.Exception) as info:
+        case.test_join_burst_counts_join_window(**args)
+    assert "join-window.toml" in str(info.value)
+
+
+def test_rendered_config_text_is_empty_when_the_file_is_absent(tmp_path):
+    import test_web_load as case
+
+    class Target:
+        out = str(tmp_path)
+    assert case.rendered_config_text(Target()) == ""
+    path = tmp_path / "xlxd-config" / "xlxd-sut"
+    path.mkdir(parents=True)
+    (path / "dv-router.toml").write_text("[edges.webrtc]\njoins_per_second = 1\n", encoding="utf-8")
+    assert "joins_per_second" in case.rendered_config_text(Target())
