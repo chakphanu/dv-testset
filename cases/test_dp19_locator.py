@@ -54,6 +54,14 @@ def leaked_locator_rows(rows):
     return [r for r in rows if r.get("spatial") is True or str(r.get("body", "")).strip() in VALID_BODIES]
 
 
+def transit_public_info(nonce=None):
+    """The public base's locator status of DP19-b: a valid locator status that DP19-a has NOT sent. The worker deduplicates the same frame (source, destination, information field)
+    heard within 30 s (`dv_pkt_rf_duplicates_total`), and DP19-a sends `N0LOP-3>...:>IO91SX/- locator6` shortly before: the first rig run on wip-a31709a repeated it and the transit never
+    happened (duplicates +1, no packet at the aprsc). Another SSID and a text with a nonce make it a different frame."""
+    nonce = int(time.time()) % 10000 if nonce is None else nonce
+    return ">IO91SX/- gate%04d" % nonce
+
+
 def word_of(info):
     """The distinguishing last word of a status information field (it stays in the status text)."""
     return info.lstrip(">").rsplit(" ", 1)[-1]
@@ -111,13 +119,13 @@ def test_dp19_b_locator_status_is_not_gated_to_aprsis_for_a_private_base(rig, ta
     if not shape.igate:
         pytest.skip("no transit path edge:ax25/rf-a -> edge:aprsis: add rig/config/dv-router/dp15-aprsis.toml and dp7-rf-igate.toml")
     base = private_base(shape)
-    gated = {"plain": ">On the air gated", "lookalike": aprs.LOCATOR_LOOKALIKES["leading_space"], "public_locator": aprs.LOCATOR_VALID["six"]}
+    gated = {"plain": ">On the air gated", "lookalike": aprs.LOCATOR_LOOKALIKES["leading_space"], "public_locator": transit_public_info()}
     with aprsc_login(aprsc) as tester:
         mark = tester.mark()
         sp.send_rf(rf, base + "-5", gated["plain"], kinds=("status",))
         sp.send_rf(rf, base + "-6", gated["lookalike"], kinds=("status",))
         if shape.positions:
-            sp.send_rf(rf, PUBLIC_BASE + "-3", gated["public_locator"], kinds=("status",))
+            sp.send_rf(rf, PUBLIC_BASE + "-4", gated["public_locator"], kinds=("status",))
         for name, info in sorted(gated.items()):
             if name == "public_locator" and not shape.positions:
                 continue

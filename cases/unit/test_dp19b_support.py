@@ -226,6 +226,16 @@ def test_there_is_no_accounts_down_case_and_no_switch_any_more():
     assert "ACCOUNTS_DOWN" not in compose
 
 
+def test_the_transit_public_locator_is_never_a_frame_dp19_a_sent():
+    """wip-a31709a first run of DP19-b after DP19-a reached its end: the identical frame was deduplicated (dv_pkt_rf_duplicates_total +1) and never transited."""
+    import test_dp19_locator as t19
+    from dvtest.proto import aprs
+    info = t19.transit_public_info(1234)
+    assert info == ">IO91SX/- gate1234" and aprs.is_locator_status(info) and info != aprs.LOCATOR_VALID["six"]
+    assert info not in set(aprs.LOCATOR_VALID.values()) | set(aprs.LOCATOR_LOOKALIKES.values())
+    assert t19.transit_public_info(1) != t19.transit_public_info(2) and aprs.is_locator_status(t19.transit_public_info())
+
+
 def test_the_locator_leak_check_does_not_reclassify_a_sanitized_look_alike():
     """wip-a31709a first run: `> IO91SX/- space` (a leading space, an ORDINARY status) is public as `IO91SX/- space` with spatial false; classifying that body again made it look like a leak."""
     import test_dp19_locator as t19
