@@ -204,7 +204,9 @@ it now collects the public and the admin problems and fails at the end, so one r
   status that refills the window comes every 250 ms. After the header the window is 6 frames until the first status arrives (up to 250 ms), then at most 10 per status (40 frames per second against 50 sent): the queue
   of 16 is full at the 23rd word. This is the documented policy and not a bug of the adapter against its own text, but it cannot carry a real-time over of more than about 0.45 s. The case was sized wrong:
   `TX_FRAMES["dstar"]` is 22 (0.44 s, two superframe boundaries), a drop there is a problem, with the count and the sent index of the gap in the message. Two more numbers from the same run:
-  RIF5-LONG-dstar wrote 117 of 150 words (3 s, 22 percent lost, `frames_total{dir=tx,result=dropped}` grew by 39 over the run), LONG-dmr 147 of 150 words (burst 36 lost), LONG-ysf all.
+  RIF5-LONG-dstar wrote 117 of 150 words (3 s, 22 percent lost), LONG-dmr 147 of 150 words (burst 36 lost), LONG-ysf all. The hub metrics snapshots `control/8-N.out` of the run (hub counters, read
+  by the cases; times in `control/control.log`) give `frames_total{dir=tx,result=dropped}`: 0 -> 32 at the G1 restart (the 32 frames of the over inside the guard, refused by the fence), +4 during the three short TX overs, +35 during the three
+  LONG overs (8-3 to 8-10), 71 at the end (the 39 of M1 is the baseline of 32 to 71, not LONG alone). No per-case timeline of the status replies and the space values was written: see "What the run left behind".
   FC1 is for the DV-Router team (U1 is on their list): on a real modem the same cap (10 frames in flight, 250 ms status) gives the same 40 frames per second ceiling.
 
 ### 3. TX-ysf: first SET_MODE is 00, word 0 differs (HARNESS)
@@ -235,13 +237,26 @@ finishes a stream whose `last_rx_ns` is 200 ms old). A damaged copy produces no 
 valid burst whatever the modem delivers. The two statements cannot both have an effect; either 7.3 should say the refresh is only the hub's and the over ends at 200 ms, or the core's silence must be fed
 by the damaged copy. The assertion is kept (a listener hears the over end 0.20 s after the last valid burst; wanted: after the last copy), the message names SILENCE, and a RECORD line gives the number.
 
+### What the run left behind (for the flow-control analysis)
+
+Written to `out/<run>/`: `rif5.txt` and `pytest.log` (the same RECORD / FINDING lines: frames written, words sent and written, native frames and span per LONG case), `junit.xml` (per case time), `control/8-N.out` with
+`control/control.log` (16 hub metrics snapshots, cumulative per-port counters, no per-case label: the snapshot times map to the cases by `junit.xml` order). **Not written anywhere:** the fake's log of the host frames
+with their times (`Rif5Modem.frames`, in memory), the status replies it sent and the space values in them, and the host queue depth. With the fake as it is, a timeline needs a new recorder in `Rif5Modem._handle` (frame
+time and type) and `status_payload` (time and the three space bytes) written to `out/<run>/rif5-flow-<case>.jsonl`; not built.
+
+The fake (`dvtest/mmdvm_modem.py:70-71, 337-343`; our own choice, no firmware line cited): capacity 10 frames D-STAR, 10 per DMR slot, 8 YSF; play-out per host frame D-STAR header 80 ms, data and EOT 20 ms, DMR burst 60 ms, YSF
+frame 100 ms. Space is computed from the clock at every read: `busy_until` grows by the play-out time of each frame written (`_enqueue`, line 335) and `space = capacity - round((busy_until - now) / air time)` (line 343), so it
+is freed continuously at the air rate, and the status reply (`Rif5Modem.status_payload`, `dvtest/mmdvm_serial.py:336-342`) reports the value at that instant: payload `mode, flags, 0, D-STAR, DMR1, DMR2, YSF` = frame offsets 3, 4, 5, 6,
+7, 8, 9 (radio.md 7.1). The status interval is the host's (250 ms, `rif5.POLL_S`); the fake answers each GET_STATUS at once. The in-flight limits 10 / 3 / 2 and the prefill are the host's (radio.md lines 665-669, `core.rs:990-996`).
+
 ### Findings that were not failures
 
 * **F1, SET_CONFIG bytes 15, 16, 18, 19 are 128 (HARNESS).** radio.md 7.1 (lines 622-627): "12-16 mode levels, 17 reserved, 18/19 POCSAG/FM levels" and "levels use integer (percent * 255 + 50) / 100": these are the P25, NXDN, POCSAG
   and FM levels and 128 is pct(50), the default level of the other mode levels. The document gives no percent for them (a small gap in the text). `judge_open` records the values and writes a FINDING only for a value that
   is not pct(50).
-* **F2, `frames_total{dir=tx,result=ok}` 290 against 284 logged (HARNESS, probable).** The 284 were the native frames of the six room overs the cases tallied; the counter is "byte-link acceptance" of everything the host
-  wrote since the restart of G1. M1 now counts every native frame the fake logged since the counters' baseline and records the frames by type; a remaining difference is a real FINDING.
+* **F2, `frames_total{dir=tx,result=ok}` 290 against 284 logged (UNSURE).** The tally covered exactly the six room overs, and the metrics snapshots show the excess in both phases: `ok` 76 after the three short TX overs
+  (72 native frames logged) and 290 after the LONG overs (212 more logged, 214 counted), so a tally error does not explain it. M1 now counts every native frame the fake logged since the counters' baseline and records the frames by type
+  (SET_MODE claims and idles are written to the byte link too); a remaining difference stays a FINDING for DV-Router (is `ok` only native frames?).
 * **F3, LONG-dmr "voice burst 36 is voice" (consequence of FC1).** One burst (words 108 to 110, sent burst 36) was dropped; the next written burst is sent burst 37 (a B) and carries no sync, correctly. The judge assumed
   written index equals sent index. It now takes the letter from the burst of the words sent.
 
