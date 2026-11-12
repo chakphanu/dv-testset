@@ -263,7 +263,8 @@ class Rif5Modem(mm.VirtualModem):
         self.naks = []
         self.lockout = False
         # bounded event log for the flow-control timeline (rif5.timeline_lines): ("frame", mono, ftype, length, first payload byte or None)
-        # for every host frame but GET_STATUS, ("status", mono, mode, flags, D-STAR space, DMR1 space, DMR2 space, YSF space) for every valid reply
+        # for every host frame but GET_STATUS, ("status", mono, mode, flags, D-STAR space, DMR1 space, DMR2 space, YSF space, fifo bytes or None) for
+        # every valid reply, ("fw", mono, event, detail dict) for every event of the firmware-like model (dvtest/mmdvm_fw.py, DVT_RIF5FW)
         self.events = deque(maxlen=EVENT_LIMIT)
 
     # --- the host's frames ---
@@ -288,7 +289,7 @@ class Rif5Modem(mm.VirtualModem):
             if self.status_mode == "valid":
                 body = self.status_payload(now)
                 with self.lock:
-                    self.events.append(("status", now, body[0], body[1], body[3], body[4], body[5], body[6]))
+                    self.events.append(("status", now, body[0], body[1], body[3], body[4], body[5], body[6], self.fifo_bytes(now)))
                 self.send(GET_STATUS, body)
             elif self.status_mode == "short":
                 self.send(GET_STATUS, self.status_payload(now)[:10])
@@ -318,7 +319,7 @@ class Rif5Modem(mm.VirtualModem):
             else:
                 self.cw_until = now + 0.05 * cw_bits(host.payload)
         elif ftype in TX_TYPES["dstar"] + TX_TYPES["dmr"] + TX_TYPES["ysf"]:
-            self._native(ftype, now)
+            self._native(ftype, now, host.payload)
         elif ftype in DMR_OTHER:
             self.send(ACK, bytes((ftype,)))
         else:
@@ -328,7 +329,7 @@ class Rif5Modem(mm.VirtualModem):
         self.naks.append((time.monotonic(), ftype, reason))
         self.send(NAK, bytes((ftype, reason)))
 
-    def _native(self, ftype, now):
+    def _native(self, ftype, now, payload=b""):
         own = MODE_DSTAR if ftype in TX_TYPES["dstar"] else MODE_DMR if ftype == DMR_DATA2 else MODE_YSF
         if not self.enabled_mask & (1 << (own - 1)) or self.mode not in (MODE_IDLE, own):
             self._nak(ftype, NAK_NOT_ACCEPTED)
@@ -370,6 +371,10 @@ class Rif5Modem(mm.VirtualModem):
     def mark(self):
         """A monotonic time to cut the log with (host_frames(since=...))."""
         return time.monotonic()
+
+    def fifo_bytes(self, now=None):
+        """The bytes in the TX FIFO per mode key (the firmware-like model only; the fill model has none)."""
+        return None
 
     def events_between(self, since, until=None):
         """The timeline events (see `events`) with since <= time < until."""

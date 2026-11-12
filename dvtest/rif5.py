@@ -55,6 +55,31 @@ def gate_on(environ):
     return str(environ.get(GATE, "")).strip().lower() == "on"
 
 
+ENV_FW = "DVT_RIF5FW"                   # on: the fake modem is firmware-like (dvtest/mmdvm_fw.py): FIFO bytes, preamble, NAK 5, underrun
+ENV_FW_PROFILE = "DVT_RIF5FW_PROFILE"   # mmdvm (default) or hs: the FIFO sizes and the D-STAR preamble of that board
+ENV_FW_DELAY = "DVT_RIF5FW_TXDELAY_MS"  # the TX delay of the preamble; unset: the SET_CONFIG value of the row (0-500)
+ENV_J = "DVT_RIF5J"                     # on: the image has RIF5j (flow control, O3 frequencies, RXD silence fill): the fix-image cases run
+
+
+def _switch(environ, name):
+    return str(environ.get(name, "")).strip().lower() == "on"
+
+
+def fw_on(environ):
+    return _switch(environ, ENV_FW)
+
+
+def j_on(environ):
+    return _switch(environ, ENV_J)
+
+
+def fw_settings(environ):
+    """(profile, tx_delay_ms or None) of the firmware-like fake from the environment."""
+    profile = str(environ.get(ENV_FW_PROFILE, "") or "mmdvm").strip().lower()
+    raw = str(environ.get(ENV_FW_DELAY, "") or "").strip()
+    return profile, (int(raw) if raw.isdigit() else None)
+
+
 # --- the port row of the rendered config -----------------------------------------------------------------------------
 
 def _addr(text):
@@ -459,6 +484,9 @@ def compare_ysf_words(sent, got):
             findings.append("b2 of %d of %d words is not the documented map (+1.0 dB in, -0.4 dB out); first (index, sent b2, got b2, wanted b2): %s; "
                             "steps seen %s" % (len(check["bad"]), n, check["bad"][0][:4], facts["b2_steps"]))
     facts["extra_words"] = max(0, len(got) - len(sent))
+    if len(got) > len(sent):
+        facts["extra_first_hex"] = got[len(sent)].hex()
+        facts["extra_all_equal"] = len(set(got[len(sent):])) == 1
     return Verdict(problems, findings, facts)
 
 
@@ -511,6 +539,7 @@ def dmr_damaged_copy(src, dst, color_code):
 
 
 EDGE_SILENCE_S = 0.2                    # radio.md 4.4: SILENCE = 200 ms for the radio edge (ten units); crates/edge/radio/src/protocol.rs
+RXD_J_END_S = (0.2, 0.5)               # RIF5j: the room over ends 300 ms after the last damaged copy (a rig margin of one tick and the packet path)
 NATIVE_OVER_TIMEOUT_S = 0.3             # radio.md 7.1: an RF over also ends 300 ms without a native frame (hub.rs `dv_last_ns`)
 
 
@@ -627,12 +656,18 @@ _MODE_OF_TYPE = {ms.DSTAR_HEADER: "dstar", ms.DSTAR_DATA: "dstar", ms.DSTAR_EOT:
 
 def timeline_lines(events, t0, sent=None, summary=None, max_lines=TIMELINE_MAX_LINES):
     """JSON-ready dicts, in time order, for the events of Rif5Modem.events of one case. Times `t` are seconds since `t0` (monotonic, the case start).
+    Every line also carries the fields of the format DV-Router proposes (design-276 1.8): `dir` (`h2m` host to modem, `m2h` modem to host), `type`, `len`,
+    `event` (`write`, `pop`, `preamble_start`, `preamble_end`, `underrun`, `nak`, `status`, plus `tx_off`, `sent`), `tx` (the TX flag) and, with the
+    firmware-like fake only, `fifo_bytes` per mode key.
 
-      {"ev": "frame", "t", "type", "mode", "len"}   a frame the host wrote to the modem (GET_STATUS left out); SET_MODE also has "arg" (the mode byte,
-                                                    hex: 00 idle, 01 D-STAR, 02 DMR, 03 YSF)
-      {"ev": "status", "t", "mode", "flags", "space": {"dstar", "dmr1", "dmr2", "ysf"}}   a GET_STATUS reply the fake sent, the free space as reported
-      {"ev": "sent", "t", "index", "est": true}      a word the room side sent; `sent` is (start, end, count): the time is ESTIMATED as an even spread
-                                                    over the talk (the client paces 20 ms per frame), not observed
+      {"ev": "frame", "t", "dir": "h2m", "event": "write", "type", "mode", "len"}   a frame the host wrote to the modem (GET_STATUS left out); SET_MODE
+                                                    also has "arg" (the mode byte, hex: 00 idle, 01 D-STAR, 02 DMR, 03 YSF)
+      {"ev": "status", "t", "dir": "m2h", "event": "status", "type": "GET_STATUS", "len": 20, "mode", "flags", "tx", "space": {"dstar", "dmr1", "dmr2",
+       "ysf"}, "space_triple": [dstar, dmr2, ysf], "fifo_bytes"?}   a GET_STATUS reply the fake sent, the free space as reported
+      {"ev": "fw", "t", "event", ...}                 the firmware-like fake (DVT_RIF5FW): `write` / `pop` / `nak` with the FIFO bytes, `preamble_start`
+                                                    (`duration_ms`), `preamble_end`, `tx_off` (the FIFO ran dry), `underrun` (`dry_s`)
+      {"ev": "sent", "t", "event": "sent", "index", "est": true}   a word the room side sent; `sent` is (start, end, count): the time is ESTIMATED as an even
+                                                    spread over the talk (the client paces 20 ms per frame), not observed
       {"ev": "summary", ...}                          the case's own numbers (`summary`), last line
     Anything beyond `max_lines` is cut with a {"ev": "truncated", "lines": n} line before the summary."""
     out = []
@@ -640,17 +675,25 @@ def timeline_lines(events, t0, sent=None, summary=None, max_lines=TIMELINE_MAX_L
         kind, t = event[0], round(event[1] - t0, 4)
         if kind == "frame":
             _, _, ftype, length, first = event
-            row = {"ev": "frame", "t": t, "type": ms.name_of(ftype), "mode": _MODE_OF_TYPE.get(ftype), "len": length}
+            row = {"ev": "frame", "t": t, "dir": "h2m", "event": "write", "type": ms.name_of(ftype), "mode": _MODE_OF_TYPE.get(ftype), "len": length}
             if ftype == ms.SET_MODE and first is not None:
                 row["arg"] = "%02x" % first
             out.append(row)
         elif kind == "status":
-            _, _, mode, flags, d, m1, m2, y = event
-            out.append({"ev": "status", "t": t, "mode": mode, "flags": flags, "space": {"dstar": d, "dmr1": m1, "dmr2": m2, "ysf": y}})
+            mode, flags, d, m1, m2, y = event[2:8]
+            row = {"ev": "status", "t": t, "dir": "m2h", "event": "status", "type": "GET_STATUS", "len": 20, "mode": mode, "flags": flags, "tx": bool(flags & 1),
+                   "space": {"dstar": d, "dmr1": m1, "dmr2": m2, "ysf": y}, "space_triple": [d, m2, y]}
+            if len(event) > 8 and event[8] is not None:
+                row["fifo_bytes"] = event[8]
+            out.append(row)
+        elif kind == "fw":
+            row = {"ev": "fw", "t": t, "event": event[2]}
+            row.update(event[3])
+            out.append(row)
     if sent:
         start, end, count = sent
         step = (end - start) / count if count else 0.0
-        out += [{"ev": "sent", "t": round(start - t0 + i * step, 4), "index": i, "est": True} for i in range(count)]
+        out += [{"ev": "sent", "t": round(start - t0 + i * step, 4), "event": "sent", "index": i, "est": True} for i in range(count)]
     out.sort(key=lambda row: row["t"])
     if len(out) > max_lines:
         cut = len(out) - max_lines
@@ -658,3 +701,26 @@ def timeline_lines(events, t0, sent=None, summary=None, max_lines=TIMELINE_MAX_L
     if summary is not None:
         out.append(dict(summary, ev="summary"))
     return out
+
+
+def status_cadence_keyed(frames, t0, t1, median_max=0.065, longest_max=0.12):
+    """GET_STATUS intervals while the modem is keyed (from the first native frame `t0` to the last `t1`, monotonic seconds). design-276 1.5 F2: the
+    fixed image polls every 50 ms while keyed or draining (idle stays 250 ms). Judged: at least 8 intervals, median at most `median_max`, longest at
+    most `longest_max` (the unit test of DV-Router asserts 60 ms in virtual time; the rig adds the tick and scheduling)."""
+    times = [f.mono for f in frames if f.ftype == ms.GET_STATUS and t0 <= f.mono <= t1]
+    gaps = sorted(b - a for a, b in zip(times, times[1:]))
+    if len(gaps) < 8:
+        return verdict(["only %d GET_STATUS intervals while keyed, wanted 8 or more (a 3 s over at 50 ms has about 60)" % len(gaps)], polls=len(times))
+    median, longest = gaps[len(gaps) // 2], gaps[-1]
+    problems = []
+    if median > median_max:
+        problems.append("median GET_STATUS interval %.3f s while keyed, the fixed image polls every 0.050 s (design-276 F2)" % median)
+    if longest > longest_max:
+        problems.append("longest GET_STATUS interval %.3f s while keyed" % longest)
+    return verdict(problems, polls=len(times), median=round(median, 3), shortest=round(gaps[0], 3), longest=round(longest, 3))
+
+
+def has_series(table, family, **labels):
+    """True when a counters() table has a sample of `family` whose labels contain `labels` (a zero counts: the radio families keep their complete fixed
+    label sets, status.md "Radio port telemetry"). None table: False."""
+    return bool(table) and any(key[0] == family and all((k, v) in key[1:] for k, v in labels.items()) for key in table)

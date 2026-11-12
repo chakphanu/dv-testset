@@ -167,6 +167,18 @@ def link():
     edge.sock.close()
 
 
+@pytest.fixture
+def fwlink():
+    from dvtest import mmdvm_fw
+    transport = ms.PinnedUdp(("127.0.0.1", 0), ("127.0.0.1", 1))
+    edge = Edge(transport.sock.getsockname())
+    transport.peer = edge.addr
+    modem = mmdvm_fw.FwRif5Modem(transport, profile="mmdvm", tx_delay_ms=0).start()
+    yield modem, edge
+    modem.stop()
+    edge.sock.close()
+
+
 def status_fields(payload):
     """The fields the adapter reads from a version 2 status payload (radio.md 7.1 and core status.rs offsets): mode 0, flags 1, spaces 3 / 5 / 6."""
     return {"mode": payload[0], "flags": payload[1], "dstar": payload[3], "dmr": payload[5], "ysf": payload[6]}
@@ -224,8 +236,36 @@ def test_the_event_log_keeps_frames_and_status_replies_for_the_timeline(link):
     assert events[0][3:] == (1, 1)                                                                          # length 1, argument 01
     assert [e[3] for e in events if e[0] == "frame"] == [1, 41, 12]
     status = [e for e in events if e[0] == "status"][-1]
-    assert status[2:] == (reply[0], reply[1], reply[3], reply[4], reply[5], reply[6])
+    assert status[2:8] == (reply[0], reply[1], reply[3], reply[4], reply[5], reply[6]) and status[8] is None
     assert modem.events_between(time.monotonic() + 1) == []
+
+
+def test_firmware_like_modem_reports_bytes_over_unit_and_keys_after_a_preamble(fwlink):
+    modem, edge = fwlink
+    version, status = edge.open()
+    s = status_fields(status.payload)
+    assert (s["dstar"], s["dmr"], s["ysf"]) == (28, 10, 33) and status.payload[4] == 10                  # MMDVM idle values; DMR slot 1 fixed
+    t0 = modem.mark()
+    edge.write(ms.SET_MODE, b"\x01")
+    edge.read(ms.ACK)
+    edge.write(ms.DSTAR_HEADER, rf.dstar_header("N0TEST", rpt1="N0CALL G", rpt2="N0CALL B", flags=(0, 0, 0)))
+    edge.write(ms.DSTAR_DATA, bytes(12))
+    edge.write(ms.GET_STATUS)
+    s = status_fields(edge.read(ms.GET_STATUS).payload)
+    assert s["flags"] & 1 and s["dstar"] == (370 - 42 - 13) // 13                                      # preamble running (TX on), nothing popped yet
+    time.sleep(0.75)                                                                                    # 500 ms preamble (tx delay 0) + 142 ms header + 20 ms
+    edge.write(ms.GET_STATUS)
+    s = status_fields(edge.read(ms.GET_STATUS).payload)
+    assert s["dstar"] == 28 and not s["flags"] & 1                                                      # both frames played, the FIFO ran dry, PTT off
+    events = modem.events_between(t0)
+    names = [e[2] for e in events if e[0] == "fw"]
+    assert names[:2] == ["write", "preamble_start"] and "preamble_end" in names and names.count("pop") == 2 and "tx_off" in names
+    assert [e[8] for e in events if e[0] == "status"][-1] == {"dstar": 0, "dmr2": 0, "ysf": 0}
+    # D-STAR data with TX off keys without a preamble, the first frame leaves at once; 28 more fit, the rest is the firmware's NAK 5
+    for _ in range(40):
+        edge.write(ms.DSTAR_DATA, bytes(12))
+    assert edge.read(ms.NAK, timeout=1.0).payload == bytes((ms.DSTAR_DATA, ms.NAK_FULL))
+    assert 5 <= len([n for n in modem.naks if n[2] == ms.NAK_FULL]) <= 12
 
 
 def test_a_frame_in_idle_selects_its_mode_and_a_disabled_mode_is_refused(link):

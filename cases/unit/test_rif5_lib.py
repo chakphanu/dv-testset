@@ -413,7 +413,11 @@ def test_timeline_lines_order_fields_and_bound(tmp_path):
     assert by[("frame", "DSTAR_DATA")]["mode"] == "dstar" and "arg" not in by[("frame", "DSTAR_DATA")]
     assert by[("sent", 1)]["est"] is True and by[("sent", 1)]["t"] == 0.02
     status = [l for l in lines if l["ev"] == "status"][0]
-    assert status == {"ev": "status", "t": 0.0, "mode": 1, "flags": 1, "space": {"dstar": 6, "dmr1": 10, "dmr2": 10, "ysf": 8}}
+    assert {k: status[k] for k in ("ev", "t", "mode", "flags", "space")} == {"ev": "status", "t": 0.0, "mode": 1, "flags": 1,
+                                                                            "space": {"dstar": 6, "dmr1": 10, "dmr2": 10, "ysf": 8}}
+    # the fields of DV-Router's proposed format (design-276 1.8) are added, ours stay
+    assert status["dir"] == "m2h" and status["event"] == "status" and status["tx"] is True and status["space_triple"] == [6, 10, 8]
+    assert by[("frame", "DSTAR_DATA")]["dir"] == "h2m" and by[("frame", "DSTAR_DATA")]["event"] == "write"
     # bounded: the first lines are kept, the cut is named, the summary stays last
     many = [("frame", 100.0 + i * 0.001, ms.DSTAR_DATA, 12, 0) for i in range(50)]
     cut = rif5.timeline_lines(many, 100.0, summary={"x": 1}, max_lines=10)
@@ -431,6 +435,36 @@ def test_write_timeline_writes_json_lines_under_the_run_dir(tmp_path):
     assert path == tmp_path / "rif5" / "timeline-LONG-dstar.jsonl"
     rows = [json.loads(line) for line in path.read_text().splitlines()]
     assert [r["ev"] for r in rows] == ["sent", "frame", "sent", "summary"] and rows[1]["type"] == "DSTAR_EOT"
+
+
+def test_switches_and_settings_of_the_firmware_like_fake_and_the_fix_image_cases():
+    assert not rif5.fw_on({}) and not rif5.j_on({}) and rif5.fw_on({"DVT_RIF5FW": " ON "}) and rif5.j_on({"DVT_RIF5J": "on"})
+    assert not rif5.fw_on({"DVT_RIF5FW": "1"}) and not rif5.j_on({"DVT_RIF5J": "off"})
+    assert rif5.fw_settings({}) == ("mmdvm", None)
+    assert rif5.fw_settings({"DVT_RIF5FW_PROFILE": "HS", "DVT_RIF5FW_TXDELAY_MS": "250"}) == ("hs", 250)
+    assert rif5.fw_settings({"DVT_RIF5FW_TXDELAY_MS": "x"}) == ("mmdvm", None)
+
+
+def test_status_cadence_keyed_wants_the_fast_poll():
+    fast = [hf(10.0 + 0.05 * i, ms.GET_STATUS) for i in range(40)]
+    v = rif5.status_cadence_keyed(fast, 10.0, 12.0)
+    assert v.problems == [] and v.facts["median"] == pytest.approx(0.05, abs=0.001) and v.facts["polls"] == 40
+    slow = [hf(10.0 + 0.25 * i, ms.GET_STATUS) for i in range(12)]
+    assert "median GET_STATUS interval 0.250" in " ".join(rif5.status_cadence_keyed(slow, 10.0, 13.0).problems)
+    gap = fast[:20] + fast[28:]                                                     # 0.45 s without a poll
+    assert "longest" in " ".join(rif5.status_cadence_keyed(gap, 10.0, 12.0).problems)
+    assert "only 3" in " ".join(rif5.status_cadence_keyed(fast[:4], 10.0, 12.0).problems)
+    assert rif5.status_cadence_keyed(fast, 20.0, 21.0).problems                    # polls outside the window do not count
+
+
+def test_has_series_counts_a_zero_and_needs_the_label():
+    table = rif5.counters(METRICS)
+    assert table is not None
+    assert rif5.has_series(table, "dv_edge_radio_port_total", result="up")
+    assert not rif5.has_series(table, "dv_edge_radio_modem_total", result="tx_underrun") and not rif5.has_series(None, "x")
+    more = dict(table)
+    more[("dv_edge_radio_modem_total", ("proc", "radio"), ("result", "tx_underrun"))] = 0.0
+    assert rif5.has_series(more, "dv_edge_radio_modem_total", result="tx_underrun")
 
 
 def test_observer_fields_are_the_nineteen_of_the_document():

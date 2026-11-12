@@ -66,6 +66,13 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
                      MMDVM modem (dvtest/mmdvm_serial.py) on the UDP byte port <tester>:3340 <-> <sut>:3341 of rig/config/dv-router/rif5-mmdvm-udp.toml
                      (DVT_SUT_CONFIG_EXTRA; native launch): D-STAR, DMR and YSF overs in both directions, the open dialogue, the startup guard and a
                      silent modem; off or unset: the cases skip naming this switch (docs/rif5-cases.md)
+  DVT_RIF5FW         on: the RIF5 fake modem is firmware-like (dvtest/mmdvm_fw.py, design-276 1.2 / 1.9): TX FIFO in bytes per board, space = free / unit,
+                     a TX-delay preamble before the first frame, NAK 5 on overflow, PTT off and an `underrun` event when the FIFO runs dry mid-over;
+                     DVT_RIF5FW_PROFILE mmdvm (default) or hs, DVT_RIF5FW_TXDELAY_MS 0-500 (default: the row's SET_CONFIG value); off or unset: the
+                     fill-model fake (docs/rif5-cases.md "The firmware-like fake")
+  DVT_RIF5J          on: the image has DV-Router RIF5j (fast status poll while keyed, host queue in airtime, tx_underrun, O3 frequencies, RXD silence fill):
+                     the cases for that image run (RIF5-J-*, and the RXD / O3 assertions of the fix); off or unset: the assertions for the current image
+                     (docs/rif5-cases.md "Cases for the fix image")
   DVT_FLK10          on: FLK10, dv-edge-webrtc refuses an offer whose media section has a missing, repeated, empty,
                      over-16-byte or duplicate a=mid (403 forbidden); the cases of cases/test_web_rtc_mid.py skip naming
                      this switch without it (needs an image with DV-Router 98c88b2, wip-bd3ceb9; docs/web-mid-cases.md)

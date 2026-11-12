@@ -589,6 +589,13 @@ services:
       # on for DV-Router RIF5 (c017e491 or later, the mmdvm-serial radio adapter) with rig/config/dv-router/rif5-mmdvm-udp.toml in DVT_SUT_CONFIG_EXTRA:
       # cases/test_rif5_mmdvm_serial.py plays a fake MMDVM modem on the UDP byte port (docs/rif5-cases.md); the cases skip with a reason without it
       DVT_RIF5: ${DVT_RIF5:-}
+      # RIF5j (design-276): DVT_RIF5FW=on makes the fake modem firmware-like (FIFO bytes per board, TX-delay preamble, NAK 5, underrun; dvtest/mmdvm_fw.py;
+      # DVT_RIF5FW_PROFILE mmdvm|hs, DVT_RIF5FW_TXDELAY_MS 0-500); DVT_RIF5J=on adds the cases for an image with the flow-control fix, the O3 frequencies and the
+      # RXD silence fill (docs/rif5-cases.md "The firmware-like fake" and "Cases for the fix image"). Unset: the fill-model fake and the current-image cases.
+      DVT_RIF5FW: ${DVT_RIF5FW:-}
+      DVT_RIF5FW_PROFILE: ${DVT_RIF5FW_PROFILE:-}
+      DVT_RIF5FW_TXDELAY_MS: ${DVT_RIF5FW_TXDELAY_MS:-}
+      DVT_RIF5J: ${DVT_RIF5J:-}
       # SECRELOAD1 / SECRELOAD2 (cases/test_secret_reload.py): on = the APRS-IS edge and the image rule are EXPECTED, so a missing series or route
       # fails instead of skipping. Not passing them made the strict mode inert in every rig run (cases/unit/test_tester_env.py guards the class).
       DVT_SECRELOAD1: ${DVT_SECRELOAD1:-}
