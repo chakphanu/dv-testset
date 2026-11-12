@@ -9,9 +9,11 @@ import pytest
 
 from dvtest import mmdvm_rf as rf
 from dvtest import mmdvm_serial as ms
-from dvtest import rif5, sut_config
+from dvtest import crossaudio, rif5, sut_config
 from dvtest.audio import signals
 from dvtest.proto import dmr as dmrp
+from dvtest.proto import nxdn
+from dvtest.proto import ysf as ysfp
 
 pytestmark = pytest.mark.unit
 
@@ -137,6 +139,18 @@ def test_judge_open_accepts_the_documented_dialogue_and_names_every_difference()
     assert "SET_FREQ, SET_CONFIG, GET_STATUS" in " ".join(rif5.judge_open(rif5.dialogues(log)[0], p).problems)
 
 
+def test_unstated_level_bytes_are_a_finding_only_when_they_are_not_the_default_level():
+    p = port()
+    v = rif5.judge_open(rif5.dialogues(open_log())[0], p)
+    assert v.problems == [] and v.findings == [] and v.facts["unstated_level_bytes"] == {15: 128, 16: 128, 18: 128, 19: 128}
+    assert ms.pct(50) == 128
+    _, want = rif5.expected_setup(p)
+    cfg = bytearray(build_config(want))
+    cfg[18] = 77
+    v = rif5.judge_open(rif5.dialogues(open_log(config=bytes(cfg)))[0], p)
+    assert v.problems == [] and "(18, 77)" in " ".join(v.findings)
+
+
 def test_status_cadence():
     polls = [hf(0.25 * i, ms.GET_STATUS) for i in range(20)]
     v = rif5.status_cadence(polls)
@@ -258,6 +272,138 @@ def test_judge_tx_ysf():
     log = ysf_tx(w)
     assert "header and" in " ".join(rif5.judge_tx_ysf(log[:-1], sent, "N0TEST").problems) or "terminator" in " ".join(rif5.judge_tx_ysf(log[:-1], sent, "N0TEST").problems)
     assert set(rif5.JUDGE_TX) == {"dstar", "dmr", "ysf"}
+
+
+def dstar_dropped(words, dropped, mode_frames=()):
+    """The frames of an over in which the host queue dropped the sent words at `dropped`: the slow data carries the sync at the POSITION of the word in
+    the over (mode/dstar.rs tx_data), not at the index of the frame."""
+    items = [(ms.SET_MODE, bytes((1,))), (ms.DSTAR_HEADER, rf.dstar_header("N0TEST", rpt1="N0CALL G", rpt2="N0CALL B", ur="CQCQCQ", flags=(0, 0, 0)))]
+    for i, w in enumerate(words):
+        if i not in dropped:
+            items.append((ms.DSTAR_DATA, w + (rf.DSTAR_SYNC if i % 21 == 0 else rf.DSTAR_NULL_SLOW)))
+    items.append((ms.DSTAR_EOT, b""))
+    return timed(items)
+
+
+def test_align_tells_a_dropped_word_from_a_changed_one():
+    assert rif5.align([b"a", b"b", b"c", b"d"], [b"a", b"c", b"d"]) == [0, 2, 3]
+    assert rif5.align([b"a", b"b", b"c"], [b"a", b"x", b"c"]) == [0, None, 2]
+    assert rif5.align([b"a", b"b"], []) == []
+
+
+def test_judge_tx_dstar_dropped_words_keep_the_sync_at_the_position_of_the_word():
+    w = words("dstar", 50)
+    log = dstar_dropped(w, {23, 24, 25})                  # the first rig run: 47 of 50 words written, the first gap at word 23
+    strict = rif5.judge_tx_dstar(log, w, "N0TEST")
+    assert strict.problems and "voice word 23 written to the modem differs" in strict.problems[0]
+    assert not any("sync triple" in p for p in strict.problems)           # frame 42 of the stream is position 45: no sync belongs there
+    assert strict.facts["voice_dropped"] == 3
+    lossy = rif5.judge_tx_dstar(log, w, "N0TEST", lossy=True)
+    assert lossy.problems == [] and len(lossy.findings) == 1 and lossy.facts["voice_written"] == 47
+    # the sync at the position, not at the written index: sync missing on the frame that carries word 42
+    bad = [f if not (f.ftype == ms.DSTAR_DATA and f.payload[:9] == w[42]) else f._replace(payload=f.payload[:9] + b"\x01\x02\x03") for f in log]
+    problems = " ".join(rif5.judge_tx_dstar(bad, w, "N0TEST", lossy=True).problems)
+    assert "position 42" in problems and "sync triple" in problems
+    # a word dropped at the end is a gap of the tail
+    short = rif5.judge_tx_dstar(dstar_dropped(w, set(range(40, 50))), w, "N0TEST", lossy=True)
+    assert short.problems == [] and short.facts["voice_dropped"] == 10
+
+
+def dmr_dropped(words_, dropped_bursts):
+    up = rf.dmr_keyup(words_, 1023008, 4017, colour_code=1)
+    head, voice, term = up[0], up[1:-1], up[-1]
+    items = [(ms.SET_MODE, bytes((2,)))] + [(ms.DMR_DATA2, bytes((0,)) + head[1][1:])] * 8
+    items += [(ms.DMR_DATA2, bytes((0,)) + v[1][1:]) for i, v in enumerate(voice) if i not in dropped_bursts]
+    items += [(ms.DMR_DATA2, bytes((0,)) + term[1][1:])] * 3
+    return timed(items, gap=0.06)
+
+
+def test_judge_tx_dmr_a_dropped_burst_does_not_renumber_the_letters():
+    w = words("dmr", 60)                                   # 20 bursts, A at 0, 6, 12, 18
+    sent = rf.padded_frames("dmr", w)
+    log = dmr_dropped(w, {4})                              # burst E dropped: the written bursts keep the letters of the bursts they carry
+    v = rif5.judge_tx_dmr(log, sent, 1023008, 4017, 1, lossy=True)
+    assert v.problems == [] and v.facts["voice_dropped"] == 3 and len(v.findings) == 1
+    strict = rif5.judge_tx_dmr(log, sent, 1023008, 4017, 1)
+    assert strict.problems and "voice word 12" in " ".join(strict.problems)
+    # burst 36 of the first rig run: the burst written at index 36 is the sent burst 37, a B, and carries no voice sync
+    assert not any("voice sync" in p for p in v.problems)
+
+
+def with_modes(log, *extra):
+    """The frames of `log` after its SET_MODE, with extra (offset seconds from the first native frame, payload) SET_MODEs inserted."""
+    first = next(f for f in log if f.ftype not in (ms.SET_MODE,))
+    out = list(log)
+    for dt, payload in extra:
+        out.append(hf(first.mono + dt, ms.SET_MODE, payload))
+    return sorted(out, key=lambda f: f.mono)
+
+
+def test_judge_tx_a_leading_idle_is_the_hang_of_the_previous_over():
+    w = words("ysf", 15)
+    sent = rf.padded_frames("ysf", w)
+    log = ysf_tx(w)
+    # the first rig run, YSF after DMR: SET_MODE 00 first, then the claim
+    lead = with_modes(log, (-0.05, b"\x00"))
+    v = rif5.judge_tx_ysf([f for f in lead if not (f.ftype == ms.SET_MODE and f.payload == b"\x03")] + [hf(lead[0].mono + 0.1, ms.SET_MODE, b"\x03")], sent, "N0TEST")
+    assert v.problems == [] and v.facts["leading_idle_s"]
+    # an idle plus the claim, in order
+    ok = rif5.judge_tx_ysf(sorted(log + [hf(log[0].mono - 0.3, ms.SET_MODE, b"\x00")], key=lambda f: f.mono), sent, "N0TEST")
+    assert ok.problems == [] and ok.facts["leading_idle_s"][0] >= 0.3
+    # another mode's claim before ours, no claim at all
+    odd = rif5.judge_tx_ysf(sorted(log + [hf(log[0].mono - 0.3, ms.SET_MODE, b"\x02")], key=lambda f: f.mono), sent, "N0TEST")
+    assert "before the claim" in " ".join(odd.problems)
+    assert "no SET_MODE 03" in " ".join(rif5.judge_tx_ysf([f for f in log if f.ftype != ms.SET_MODE], sent, "N0TEST").problems)
+    # an idle in the middle of the stream
+    mid = rif5.judge_tx_ysf(sorted(log + [hf(log[3].mono + 0.01, ms.SET_MODE, b"\x00")], key=lambda f: f.mono), sent, "N0TEST")
+    assert "never interrupts a stream" in " ".join(mid.problems)
+
+
+def stepped(frames, steps=rif5.YSF_GAIN_STEPS):
+    """The words as a YSF listener hears them: only b2 mapped by the named steps."""
+    out = []
+    for f in frames:
+        bits = nxdn.from_dmr(f)
+        out.append(nxdn.to_dmr(nxdn.set_gain_index(bits, crossaudio.mapped_gain(nxdn.gain_index(bits), steps))))
+    return out
+
+
+def test_compare_ysf_words_accepts_the_documented_gain_steps_and_only_those_bits():
+    sent = words("ysf", 30)
+    heard = stepped(sent)
+    assert heard != sent                                                   # the first rig run: word 0 differed
+    v = rif5.compare_ysf_words(sent, heard)
+    assert v.problems == [] and v.findings == [] and v.facts["voice_written"] == 30 and v.facts["extra_words"] == 0
+    # the same words unchanged are not the documented map: a finding, not a problem
+    same = rif5.compare_ysf_words(sent, sent)
+    assert same.problems == [] and same.findings and "documented map" in same.findings[0]
+    # another map (only the ingress step) is a finding with the histogram of the steps
+    other = rif5.compare_ysf_words(sent, stepped(sent, ("p10",)))
+    assert other.problems == [] and other.findings and other.facts["b2_steps"]
+    # a bit other than b2 is a problem
+    broken = list(heard)
+    bits = bytearray(nxdn.from_dmr(broken[4]))
+    bits[0] ^= 0x80
+    broken[4] = nxdn.to_dmr(bytes(bits))
+    bad = rif5.compare_ysf_words(sent, broken)
+    assert bad.problems and "word 4" in bad.problems[0]
+    # fewer words, more words
+    assert "29 voice words, 30 sent" in " ".join(rif5.compare_ysf_words(sent, heard[:29]).problems)
+    more = rif5.compare_ysf_words(sent, heard + stepped([bytes(ysfp.SILENCE)] * 5))
+    assert more.problems == [] and more.facts["extra_words"] == 5
+
+
+def test_judge_tx_ysf_takes_the_gain_steps_and_names_the_extra_end_frame():
+    w = words("ysf", 15)
+    sent = rf.padded_frames("ysf", w)
+    heard = stepped(w) + stepped([bytes(ysfp.SILENCE)] * 5)              # 20 words written, as the first rig run: voice_written 20 of 15 sent
+    v = rif5.judge_tx_ysf(ysf_tx(heard), sent, "N0TEST")
+    assert v.problems == [] and v.findings == [] and v.facts["voice_written"] == 20 and v.facts["extra_words"] == 5
+
+
+def test_observer_fields_are_the_nineteen_of_the_document():
+    assert len(rif5.OBSERVER_FIELDS) == 19 and {"rx_freq_hz", "tx_freq_hz"} <= set(rif5.OBSERVER_FIELDS)
+    assert rif5.EDGE_SILENCE_S < rif5.NATIVE_OVER_TIMEOUT_S
 
 
 # ------------------------------------------------------------------ the modem goes silent

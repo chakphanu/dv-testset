@@ -14,12 +14,13 @@ Sources are cited as "radio.md 7.1" (DV-Router docs/design/radio.md at c017e491,
 document refers to it.
 """
 import types
-from collections import namedtuple
+from collections import Counter, namedtuple
 
-from . import metrics
+from . import crossaudio, metrics
 from . import mmdvm_rf as rf
 from . import mmdvm_serial as ms
 from .proto import dmr as dmrp
+from .proto import nxdn
 
 Verdict = namedtuple("Verdict", "problems findings facts")
 
@@ -31,6 +32,11 @@ ROOMS = {"dstar": "P", "dmr": "Q", "ysf": "R"}
 MODEM_PORT = 3340                       # the tester side of the UDP byte port ([[edges.radio.port]] udp)
 EDGE_PORT = 3341                        # the SUT side (udp_bind)
 CHILD = "dv-edge-radio"                 # the launcher child (admin status launcher.children[].name)
+LEVEL_OFFSETS_UNSTATED = (15, 16, 18, 19)   # SET_CONFIG v2: P25, NXDN, POCSAG, FM levels (radio.md 7.1 names them as levels, gives no percent)
+DEFAULT_LEVEL_PERCENT = 50
+# the observer fields of a port row (radio.md 12.3 RadioPortInfo scope obs, status.md "Radio port telemetry"; fabric OBSERVER_FIELDS)
+OBSERVER_FIELDS = ("name", "kind", "module", "pattern", "modes", "mode", "duplex", "tx", "band", "state", "tx_state", "cos", "ptt", "phys_busy",
+                   "fence", "guard_ms", "rssi_dbm", "rx_freq_hz", "tx_freq_hz")
 GUARD_S = 13.0                          # radio.md 10.4 rule 4: G, the startup guard
 POLL_S = 0.25                           # radio.md 7.1: GET_STATUS every 250 ms
 INACTIVE_S = 2.0                        # radio.md 7.1: 2000 ms without a valid status after Up gives Down
@@ -135,7 +141,7 @@ def wire(f):
 def judge_open(dialogue, port):
     """The open dialogue of radio.md 7.1: GET_VERSION first, then SET_FREQ, then SET_CONFIG (v2, 40 B), then GET_STATUS; the two setup frames
     carry the row's values at the documented offsets; no voice or CW ID byte before the first status."""
-    problems, findings = [], []
+    problems, findings, facts_open = [], [], {}
     if not dialogue.versions:
         return verdict(["no GET_VERSION in the dialogue"])
     if len(dialogue.versions) > VERSION_TRIES:
@@ -168,8 +174,15 @@ def judge_open(dialogue, port):
                 problems.append("SET_CONFIG differs at (offset, got, wanted): %s" % diff)
             if not got[3] & 0x80:
                 problems.append("SET_CONFIG lacks the simplex flag 0x80 (radio.md 7.1: both versions always set it)")
-            unnamed = [(at, got[at]) for at in (15, 16, 18, 19)]
-            findings.append("SET_CONFIG bytes the document does not give a value for (offset, value): %s" % unnamed)
+            # radio.md 7.1: 12-16 are mode levels, 18 / 19 the POCSAG / FM levels, and "levels use (percent * 255 + 50) / 100". The percent of the
+            # P25, NXDN, POCSAG and FM levels is not stated; the default level of the other mode levels is 50 %, pct(50) = 128. A value that is
+            # that default is consistent with the level rule (a RECORD fact); anything else is a FINDING.
+            unnamed = [(at, got[at]) for at in LEVEL_OFFSETS_UNSTATED]
+            odd = [(at, value) for at, value in unnamed if value != ms.pct(DEFAULT_LEVEL_PERCENT)]
+            facts_open["unstated_level_bytes"] = dict(unnamed)
+            if odd:
+                findings.append("SET_CONFIG level bytes the document gives no percent for (offset, value): %s; the default level 50 %% would be %d" % (
+                    odd, ms.pct(DEFAULT_LEVEL_PERCENT)))
     before = []
     for f in dialogue.frames:
         if f.ftype == ms.GET_STATUS:
@@ -178,7 +191,7 @@ def judge_open(dialogue, port):
             before.append(ms.name_of(f.ftype))
     if before:
         problems.append("frames %s before the first GET_STATUS (radio.md 7.1: no frame transmits voice during open)" % before)
-    return verdict(problems, findings, versions=len(dialogue.versions), statuses=len(dialogue.statuses))
+    return verdict(problems, findings, versions=len(dialogue.versions), statuses=len(dialogue.statuses), **facts_open)
 
 
 def status_cadence(frames, since=None, until=None):
@@ -226,14 +239,44 @@ def _native(frames, types_):
     return [f for f in frames if f.ftype in types_]
 
 
-def _prefix_check(label, sent, got, problems, facts):
+def align(sent, got):
+    """For each word of `got`, in order, the index of the word of `sent` it equals (searched forward from the previous match), or None for a word
+    that is not in `sent` after the previous match (a changed word). The host queue of the adapter drops the OLDEST words of a mode when it holds more
+    than 16 (radio.md 7.1 "Flow control"), so a long over reaches the modem as a subsequence of the words sent: this is the alignment that tells a
+    dropped word (a gap in the indices) from a changed one (None) and gives every written frame the position of the word it carries."""
+    out, at = [], 0
+    for word in got:
+        found = next((j for j in range(at, len(sent)) if sent[j] == word), None)
+        out.append(found)
+        if found is not None:
+            at = found + 1
+    return out
+
+
+def _word_check(label, sent, got, problems, findings, facts, lossy=False):
+    """The words written to the modem against the words sent. A changed word is always a problem. A word missing (dropped by the host queue) is a
+    problem for a short over (`lossy` False: the over fits what the flow control carries) and a FINDING for a long one. Returns align(sent, got)."""
     sent, got = list(sent), list(got)
     facts["%s_sent" % label], facts["%s_written" % label] = len(sent), len(got)
-    first = next((i for i in range(min(len(sent), len(got))) if sent[i] != got[i]), None)
-    if first is not None:
-        problems.append("%s word %d written to the modem differs from the one sent" % (label, first))
-    elif len(got) < len(sent):
-        problems.append("%d %s words written, %d sent (the first %d agree)" % (len(got), label, len(sent), len(got)))
+    index = align(sent, got)
+    changed = [i for i, j in enumerate(index) if j is None]
+    kept = [j for j in index if j is not None]
+    last = kept[-1] if kept else -1
+    seen = set(kept)
+    gaps = [j for j in range(last + 1) if j not in seen]
+    tail = len(sent) - 1 - last if not changed else 0
+    if changed:
+        problems.append("%s word %d written to the modem differs from the one sent" % (label, changed[0]))
+    if gaps:
+        facts["%s_dropped" % label] = len(gaps) + tail
+        text = ("%s word %d written to the modem differs from the one sent: %d sent word(s) are not written before the end of the over, first at sent "
+                "index %d (the host queue drops the oldest words when it holds more than 16, radio.md 7.1 flow control)" % (label, gaps[0], len(gaps), gaps[0]))
+        (findings if lossy else problems).append(text)
+    elif tail > 0 and not changed:
+        facts["%s_dropped" % label] = tail
+        text = "%d %s words written, %d sent (the first %d agree)" % (len(got), label, len(sent), len(got))
+        (findings if lossy else problems).append(text)
+    return index
 
 
 def _foreign(frames, mode, problems):
@@ -245,23 +288,44 @@ def _foreign(frames, mode, problems):
                         "simplex DMR sends no START, ABORT or SHORTLC, radio.md 7.3)" % (stray, mode))
 
 
-def _first_mode(frames, mode, problems):
+def _first_mode(frames, mode, problems, facts=None):
+    """radio.md 7.2: the circuit claims its mode with SET_MODE before PTT. A SET_MODE 00 may come BEFORE the claim: "a multi-mode modem returns to
+    idle (SET_MODE 0) after its TX buffer has drained and the hang expired", and that hang of the PREVIOUS over (hang.net_mode_secs) can end while
+    the next over starts. Anything else before the claim is a problem, and so is an idle between the claim and the last native frame ("mode switching
+    never interrupts a stream")."""
     modes = [f for f in frames if f.ftype == ms.SET_MODE]
-    if not modes or modes[0].payload != bytes((ms.MODE_ID[mode],)):
-        problems.append("the first SET_MODE is %s, wanted %02x (the circuit claims its mode first, radio.md 7.2)" %
-                        (modes[0].payload.hex() if modes else "absent", ms.MODE_ID[mode]))
+    want = bytes((ms.MODE_ID[mode],))
+    claim = next((f for f in modes if f.payload == want), None)
+    if claim is None:
+        problems.append("no SET_MODE %02x among the SET_MODE frames %s (the circuit claims its mode first, radio.md 7.2)" % (
+            ms.MODE_ID[mode], [f.payload.hex() for f in modes]))
         return
-    first_native = next((f for f in frames if f.ftype in ms.TX_TYPES[mode]), None)
-    if first_native is not None and modes[0].mono > first_native.mono:
+    leading = [f for f in modes if f.mono < claim.mono]
+    odd = [f for f in leading if f.payload != bytes((ms.MODE_IDLE,))]
+    if odd:
+        problems.append("SET_MODE %s written before the claim %02x: only an idle (00, the hang of the previous over) may precede it (radio.md 7.2)" % (
+            [f.payload.hex() for f in odd], ms.MODE_ID[mode]))
+    if leading and facts is not None:
+        facts["leading_idle_s"] = [round(claim.mono - f.mono, 3) for f in leading]
+    natives = [f for f in frames if f.ftype in ms.TX_TYPES[mode]]
+    if natives and claim.mono > natives[0].mono:
         problems.append("a %s frame was written before SET_MODE" % mode)
+    inside = [f for f in modes if f.mono > claim.mono and natives and f.mono < natives[-1].mono and f.payload == bytes((ms.MODE_IDLE,))]
+    if inside:
+        problems.append("SET_MODE 00 written %.2f s before the last native frame of the over (radio.md 7.2: mode switching never interrupts a stream)" % (
+            natives[-1].mono - inside[0].mono))
 
 
-def judge_tx_dstar(frames, sent, my, station=STATION, rpt_module="B"):
+def judge_tx_dstar(frames, sent, my, station=STATION, rpt_module="B", lossy=False):
     """A D-STAR over from the room: SET_MODE 1, one header (41 B, repeater flag clear, RPT2 = station + RF module, RPT1 = station + G, UR CQCQCQ,
-    MY the talker, CRC), the 9 byte voice words in order with the sync triple on frame 0 of every 21, one EOT (radio.md 7.1, 7.3; the
-    wire literal of DV-Router's own test crates/router/tests/real_children/radio/mmdvm.rs TX_HEADER)."""
+    MY the talker, CRC), the 9 byte voice words in order with the sync triple on the frames whose position in the over is 0 mod 21, one EOT
+    (radio.md 7.1, 7.3; the wire literal of DV-Router's own test crates/router/tests/real_children/radio/mmdvm.rs TX_HEADER).
+
+    The position of a frame is the position of the word it carries in the words SENT (mode/dstar.rs `tx_data(.., position)` takes the position of the
+    unit in the over, not the number of frames written): when the host queue drops words (`lossy`, a long over) the frame written at index 42 is not
+    the one at position 42. `lossy` False: a dropped word is a problem (the over was sized to fit the flow control); True: a FINDING."""
     problems, findings, facts = [], [], {}
-    _first_mode(frames, "dstar", problems)
+    _first_mode(frames, "dstar", problems, facts)
     _foreign(frames, "dstar", problems)
     headers = _native(frames, (ms.DSTAR_HEADER,))
     data = _native(frames, (ms.DSTAR_DATA,))
@@ -285,12 +349,14 @@ def judge_tx_dstar(frames, sent, my, station=STATION, rpt_module="B"):
     bad_len = [len(f.payload) for f in data if len(f.payload) != 12]
     if bad_len:
         problems.append("D-STAR data frames of %s bytes, native size 12" % sorted(set(bad_len)))
-    voice = [bytes(f.payload[:9]) for f in data if len(f.payload) == 12]
-    _prefix_check("voice", sent, voice, problems, facts)
-    for i, f in enumerate(data):
-        if i % 21 == 0 and len(f.payload) == 12 and bytes(f.payload[9:]) != rf.DSTAR_SYNC:
-            problems.append("data frame %d (frame 0 of a superframe) carries slow data %s, not the sync triple 55 2D 16 (radio.md 7.3)" %
-                            (i, f.payload[9:].hex()))
+    whole = [f for f in data if len(f.payload) == 12]
+    voice = [bytes(f.payload[:9]) for f in whole]
+    index = _word_check("voice", sent, voice, problems, findings, facts, lossy)
+    for i, f in enumerate(whole):
+        position = index[i] if index[i] is not None else i          # a changed word is a problem already; judge it where it stands
+        if position % 21 == 0 and bytes(f.payload[9:]) != rf.DSTAR_SYNC:
+            problems.append("data frame %d (position %d in the over, frame 0 of a superframe) carries slow data %s, not the sync triple 55 2D 16 "
+                            "(radio.md 7.3)" % (i, position, f.payload[9:].hex()))
             break
     if len(eots) != 1:
         problems.append("%d D-STAR EOT frames, one per normal end (radio.md 10.3)" % len(eots))
@@ -307,12 +373,13 @@ def burst_center(burst):
     return rf._burst_center(bytes(burst))
 
 
-def judge_tx_dmr(frames, sent, src, dst, color_code, headers_n=8, terminators_n=3):
+def judge_tx_dmr(frames, sent, src, dst, color_code, headers_n=8, terminators_n=3, lossy=False):
     """A DMR over from the room (radio.md 7.3 "Built DMR simplex"): SET_MODE 2, every frame `E0 25 1A 00` + a 33 B burst, eight voice LC headers
     (MS data sync, LC group src -> dst, the row's colour code), the voice bursts A to F (A with the MS voice sync, three words per burst),
-    three terminators with LC; no slot 1 or duplex control."""
+    three terminators with LC; no slot 1 or duplex control. The letter of a burst is that of the burst of the words SENT it carries (a burst the host
+    queue dropped leaves a gap in the letters, it does not renumber the next one); `lossy` as in judge_tx_dstar."""
     problems, findings, facts = [], [], {}
-    _first_mode(frames, "dmr", problems)
+    _first_mode(frames, "dmr", problems, facts)
     _foreign(frames, "dmr", problems)
     bursts = _native(frames, (ms.DMR_DATA2,))
     short = sorted({len(f.payload) for f in bursts if len(f.payload) != 34})
@@ -345,9 +412,13 @@ def judge_tx_dmr(frames, sent, src, dst, color_code, headers_n=8, terminators_n=
     if any(k != "data" for k in lead) or any(k != "data" for k in tail) or len(kinds) < headers_n + terminators_n:
         problems.append("the over is not %d data bursts, voice bursts, %d data bursts: %s" % (headers_n, terminators_n, kinds))
     voice_kinds = kinds[headers_n:len(kinds) - terminators_n] if len(kinds) >= headers_n + terminators_n else []
+    index = _word_check("voice", sent, slot["voice"], problems, findings, facts, lossy)
     for i, k in enumerate(voice_kinds):
-        if (i % 6 == 0) != (k == "voice_sync"):
-            problems.append("voice burst %d is %s, burst A of a superframe (index %% 6 == 0) alone carries the voice sync" % (i, k))
+        first = index[3 * i] if 3 * i < len(index) and index[3 * i] is not None else 3 * i
+        letter_index = first // 3                                   # the burst of the words sent that this burst carries
+        if (letter_index % 6 == 0) != (k == "voice_sync"):
+            problems.append("voice burst %d (burst %d of the words sent) is %s, burst A of a superframe (index %% 6 == 0) alone carries the voice sync" % (
+                i, letter_index, k))
             break
     for f in good[:headers_n] + good[-terminators_n:]:
         if burst_center(f.payload[1:]) != int.from_bytes(rf.MS_DATA_SYNC, "big"):
@@ -356,7 +427,38 @@ def judge_tx_dmr(frames, sent, src, dst, color_code, headers_n=8, terminators_n=
     voice_bursts = good[headers_n:len(good) - terminators_n] if len(good) >= headers_n + terminators_n else []
     if voice_bursts and burst_center(voice_bursts[0].payload[1:]) != int.from_bytes(rf.MS_VOICE_SYNC, "big"):
         problems.append("burst A does not carry the MS voice sync 7F 7D 5D D5 7D FD (radio.md 7.3)")
-    _prefix_check("voice", sent, slot["voice"], problems, facts)
+    return Verdict(problems, findings, facts)
+
+
+YSF_GAIN_STEPS = ("p10", "m04")         # YSF ingress +1.0 dB, YSF egress -0.4 dB (decisions D1, RIF5 D3; media-format.md YSF)
+
+
+def compare_ysf_words(sent, got):
+    """The YSF voice words written to the modem (TX) or heard by a YSF client (RX) against the words sent.
+
+    A YSF over does not come back bit exact: the YSF ingress steps the AMBE+2 gain index b2 by +1.0 dB and the egress by -0.4 dB (DV-Router
+    decisions.md D1, and for the radio edge RIF5 D3: "the existing 49-bit to 72-bit layout and YSF gain-index steps only"; echo.md: "the talker hears
+    every AMBE+2 bit unchanged except the gain index b2"; the same rule is dvtest/proto/ysf.py's and cases/test_clients2.py's). Problems: a word
+    that differs in any bit but b2, fewer words than sent. A b2 that is not the documented map (dvtest.crossaudio P10 then M04) is a FINDING, with
+    the histogram of the steps in the facts: the radio.md sections for RIF5 name the steps only by reference. Words after the sent ones are a fact."""
+    sent, got = list(sent), list(got)
+    problems, findings, facts = [], [], {}
+    facts["voice_sent"], facts["voice_written"] = len(sent), len(got)
+    n = min(len(sent), len(got))
+    other = [i for i in range(n) if nxdn.without_gain(nxdn.from_dmr(sent[i])) != nxdn.without_gain(nxdn.from_dmr(got[i]))]
+    if other:
+        problems.append("voice word %d written to the modem differs from the one sent in a bit other than the gain index b2 (%d of %d words differ)" % (
+            other[0], len(other), n))
+    elif len(got) < len(sent):
+        problems.append("%d voice words, %d sent (the first %d agree but for b2)" % (len(got), len(sent), len(got)))
+    steps = Counter(nxdn.gain_index(nxdn.from_dmr(got[i])) - nxdn.gain_index(nxdn.from_dmr(sent[i])) for i in range(n))
+    facts["b2_steps"] = {str(k): v for k, v in sorted(steps.items())}
+    if not other:
+        check = crossaudio.gain_check(sent[:n], got[:n], YSF_GAIN_STEPS)
+        if check["bad"]:
+            findings.append("b2 of %d of %d words is not the documented map (+1.0 dB in, -0.4 dB out); first (index, sent b2, got b2, wanted b2): %s; "
+                            "steps seen %s" % (len(check["bad"]), n, check["bad"][0][:4], facts["b2_steps"]))
+    facts["extra_words"] = max(0, len(got) - len(sent))
     return Verdict(problems, findings, facts)
 
 
@@ -364,7 +466,7 @@ def judge_tx_ysf(frames, sent, src, lo_dev=False):
     """A YSF V/D mode 2 over from the room (radio.md 7.3 "Built YSF"): SET_MODE 3, frames `E0 7C 20 00` + 120 B, one header and one terminator,
     FICH data type 2 (V/D mode 2), the Dev flag the row's `ysf.lo_dev`, five 9 byte words per voice frame, the header names the talker."""
     problems, findings, facts = [], [], {}
-    _first_mode(frames, "ysf", problems)
+    _first_mode(frames, "ysf", problems, facts)
     _foreign(frames, "ysf", problems)
     native = _native(frames, (ms.YSF_DATA,))
     short = sorted({len(f.payload) for f in native if len(f.payload) != 121})
@@ -390,7 +492,10 @@ def judge_tx_ysf(frames, sent, src, lo_dev=False):
     for item in decoded["headers"][:1]:
         if (item["src"] or "").strip() != src:
             problems.append("the header names %r as the source, the talker is %r" % ((item["src"] or "").strip(), src))
-    _prefix_check("voice", sent, decoded["voice"], problems, facts)
+    words = compare_ysf_words(sent, decoded["voice"])
+    problems += words.problems
+    findings += words.findings
+    facts.update(words.facts)
     return Verdict(problems, findings, facts)
 
 
@@ -405,6 +510,7 @@ def dmr_damaged_copy(src, dst, color_code):
     return bytes((0x41,)) + rf.data_burst(lc, rf.DT_VOICE_LC_HEADER, (color_code + 1) % 16)
 
 
+EDGE_SILENCE_S = 0.2                    # radio.md 4.4: SILENCE = 200 ms for the radio edge (ten units); crates/edge/radio/src/protocol.rs
 NATIVE_OVER_TIMEOUT_S = 0.3             # radio.md 7.1: an RF over also ends 300 ms without a native frame (hub.rs `dv_last_ns`)
 
 

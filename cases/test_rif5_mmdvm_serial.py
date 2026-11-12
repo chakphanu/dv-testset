@@ -21,7 +21,8 @@ GAPs: docs/rif5-cases.md. Pure judgements: dvtest/rif5.py, the modem and the env
 Gate: DVT_RIF5=on (rig/compose.yml passes it to the tester); every case skips with the reason otherwise. Needs DVT_SUT_PROFILE=dvrouter, native launch
 and rig/config/dv-router/rif5-mmdvm-udp.toml in DVT_SUT_CONFIG_EXTRA. With --profile web (web.toml:admin.toml) the cases read the port state and G1 can
 restart the edge; the rig control channel gives the metrics. A difference the documents do not settle is a FINDING line in out/<run>/rif5.txt, never an
-assertion. NOT RUN ON A RIG: written offline against DV-Router c017e491 (the unit tests cover the encoders, the modem and the judges).
+assertion. Written offline against DV-Router c017e491, first rig run on dv-router:wip-7b0fca8 (docs/rif5-cases.md, "First rig run"); the unit tests cover the
+encoders, the modem and the judges.
 """
 import os
 import time
@@ -43,7 +44,10 @@ pytestmark = pytest.mark.rig
 ROOT = Path(__file__).resolve().parents[1]
 SNIPPET = ROOT / "rig" / "config" / "dv-router" / "rif5-mmdvm-udp.toml"
 KINDS = ("dstar", "dmr", "ysf")
-TX_FRAMES = {"dstar": 50, "dmr": 18, "ysf": 15}      # 1.0 s, one DMR superframe, three YSF frames: what the 250 ms poll lets the host keep in flight
+# What the flow control of radio.md 7.1 carries without a drop. D-STAR: 22 frames (0.44 s) cover frame 0 of two superframes; the first rig run (50
+# frames, 1.0 s) lost words from word 23 on: the first status that refills the window comes up to 250 ms after PTT, the header costs 4 of the 10 frames
+# in flight, and the host queue (16, oldest dropped) overflows at the 23rd word of a real-time over. One DMR superframe, three YSF frames.
+TX_FRAMES = {"dstar": 22, "dmr": 18, "ysf": 15}
 RX_SECONDS = 3.0
 LONG_FRAMES = 150                                    # 3 s
 OPEN_WAIT_S = 150.0                                  # the edge retries a failed open with a backoff of up to 60 s
@@ -98,7 +102,7 @@ def ctx(rig, target):
                         "dv-edge-radio running (rif5-mmdvm-udp.toml in DVT_SUT_CONFIG_EXTRA, tx_ack exact), and does it send from %s:%d?" % (
                             OPEN_WAIT_S, port.peer[0], port.peer[1], len(modem.host_frames()), transport.foreign, port.bind[0], port.bind[1]))
         time.sleep(1.0)
-        yield SimpleNamespace(target=target, port=port, modem=modem, ip=target.xlxd_sut, control=control, baseline=None, config_seen=seen)
+        yield SimpleNamespace(target=target, port=port, modem=modem, ip=target.xlxd_sut, control=control, baseline=None, baseline_t=None, config_seen=seen)
     finally:
         modem.stop()
 
@@ -166,6 +170,7 @@ def ready(ctx, web, case):
         note(ctx.target, case, "FINDING", "the host did not give the modem back to idle (SET_MODE 0) within 30 s of its last mode claim")
     if ctx.baseline is None and ctx.control is not None:
         ctx.baseline = counters_now(ctx)
+        ctx.baseline_t = modem.mark()
 
 
 def report(ctx, case, verdict):
@@ -190,7 +195,7 @@ def test_g1_nothing_is_written_to_the_modem_during_the_startup_guard(ctx, web, a
     t_restart = modem.mark()
     status = restart_radio_edge(admin)
     assert status == 200, "POST children/%s/restart answered HTTP %d, want 200" % (rif5.CHILD, status)
-    ctx.baseline = None                                           # a new process: its counters start at zero
+    ctx.baseline, ctx.baseline_t = None, None                     # a new process: its counters start at zero
     cfg = modem.wait_configured_after(t_restart, 90.0)
     assert cfg is not None, "the restarted edge did not open the modem again within 90 s"
     # the fence as the public state shows it, as early as it can be read
@@ -267,24 +272,36 @@ def test_o3_port_row_in_the_status(ctx, web, admin_factory):
     note(ctx.target, case, "RECORD", "public row: %s" % row)
     want = {"kind": "mmdvm-serial", "pattern": "mmdvm-host", "duplex": False, "state": "up", "band": "70cm", "rx_freq_hz": ctx.port.rx_freq,
             "tx_freq_hz": ctx.port.tx_freq}
+    problems = []
     wrong = {k: (row.get(k), v) for k, v in want.items() if row.get(k) != v}
-    assert not wrong, "public row differs (got, wanted): %s" % wrong
-    assert sorted(row.get("modes") or []) == ["dmr", "dstar", "ysf"], "modes %r" % (row.get("modes"),)
-    assert row.get("tx") in ("on", True), "tx %r for a port with tx = true" % (row.get("tx"),)
+    if wrong:
+        # radio.md 12.3 (RadioPortInfo, scope obs) and status.md "Radio port telemetry" list rx_freq_hz and tx_freq_hz among the observer fields
+        problems.append("public row differs (got, wanted): %s; observer fields of the document missing from the row: %s" % (
+            wrong, sorted(f for f in rif5.OBSERVER_FIELDS if f not in row)))
+    if sorted(row.get("modes") or []) != ["dmr", "dstar", "ysf"]:
+        problems.append("modes %r" % (row.get("modes"),))
+    if row.get("tx") not in ("on", True):
+        problems.append("tx %r for a port with tx = true" % (row.get("tx"),))
     for hidden in ("firmware", "modem", "down_reason", "physical"):
         if hidden in row:
             note(ctx.target, case, "FINDING", "the public (observer) row carries the admin-only field %r" % hidden)
+    # the admin part runs whatever the public row said, so that one run reports both
     operator = admin_for(admin_factory, "operator")
     if operator is None:
         note(ctx.target, case, "RECORD", "no operator session: the admin fields were not read")
-        return
-    admin = admin_row(operator, ctx.port.name)
-    assert admin is not None, "the port is not in radio_edges[].radio.ports[] of GET /api/v1/admin/clients"
-    note(ctx.target, case, "RECORD", "admin row: %s" % admin)
-    assert admin.get("firmware") == ctx.modem.text, "firmware %r, the modem said %r" % (admin.get("firmware"), ctx.modem.text)
-    modem = admin.get("modem") or {}
-    assert modem.get("protocol") == 2, "modem.protocol %r, the modem speaks version 2" % (modem.get("protocol"),)
-    assert admin.get("down_reason") is None and admin.get("physical") == ctx.port.physical
+    else:
+        admin = admin_row(operator, ctx.port.name)
+        if admin is None:
+            problems.append("the port is not in radio_edges[].radio.ports[] of GET /api/v1/admin/clients")
+        else:
+            note(ctx.target, case, "RECORD", "admin row: %s" % admin)
+            if admin.get("firmware") != ctx.modem.text:
+                problems.append("firmware %r, the modem said %r" % (admin.get("firmware"), ctx.modem.text))
+            if (admin.get("modem") or {}).get("protocol") != 2:
+                problems.append("modem.protocol %r, the modem speaks version 2" % ((admin.get("modem") or {}).get("protocol"),))
+            if admin.get("down_reason") is not None or admin.get("physical") != ctx.port.physical:
+                problems.append("down_reason %r, physical %r (wanted None and %r)" % (admin.get("down_reason"), admin.get("physical"), ctx.port.physical))
+    assert not problems, "%s: %s" % (case, problems)
 
 
 # ---------------------------------------------------------------- RIF5-TX: room to modem
@@ -298,11 +315,12 @@ def rx_kwargs(kind, port):
     return {"src": rif5.STATION}
 
 
-def judge_tx(kind, log, sent, ident, port):
+def judge_tx(kind, log, sent, ident, port, lossy=False):
+    """The judge of the mode. `lossy`: a long over, where the host queue may drop words (a FINDING, radio.md 7.1 flow control)."""
     if kind == "dstar":
-        return rif5.judge_tx_dstar(log, sent, ident, rif5.STATION, port.rpt_module)
+        return rif5.judge_tx_dstar(log, sent, ident, rif5.STATION, port.rpt_module, lossy=lossy)
     if kind == "dmr":
-        return rif5.judge_tx_dmr(log, sent, ident, port.dmr_tg, port.color_code)
+        return rif5.judge_tx_dmr(log, sent, ident, port.dmr_tg, port.color_code, lossy=lossy)
     return rif5.judge_tx_ysf(log, sent, ident, port.ysf_lo_dev)
 
 
@@ -372,13 +390,22 @@ def test_rx_modem_to_room(kind, ctx, web):
     assert got and len(overs) == 1, "%s: the client heard %d overs, wanted one" % (case, len(overs))
     over = overs[0]
     assert over.idents == [wanted], "%s: the talker is %s, the modem's RF source is %s" % (case, over.idents, wanted)
-    compare = echo.compare_payload(ku.voice, over.frames)
-    note(ctx.target, case, "RECORD", "voice words sent %d, heard %d, first difference %s, extra %d, missing %d" % (
-        len(ku.voice), len(over.frames), compare.first_diff, len(compare.extra), compare.missing))
-    if compare.extra:
-        note(ctx.target, case, "FINDING", "%d voice words after the %d the modem sent (a pad or an end marker of the egress)" % (len(compare.extra), len(ku.voice)))
-    assert compare.prefix_ok and not compare.missing, "%s: the words heard differ from the words the modem sent (first difference at %s, %d missing)" % (
-        case, compare.first_diff, compare.missing)
+    if kind == "ysf":
+        # a YSF over is not bit exact through the room: ingress +1.0 dB and egress -0.4 dB step only the gain index b2 (decisions D1, RIF5 D3)
+        words = rif5.compare_ysf_words(ku.voice, over.frames)
+        for line in words.findings:
+            note(ctx.target, case, "FINDING", line)
+        note(ctx.target, case, "RECORD", "voice words sent %d, heard %d, extra %d, b2 steps %s" % (
+            len(ku.voice), len(over.frames), words.facts["extra_words"], words.facts["b2_steps"]))
+        assert not words.problems, "%s: %s" % (case, words.problems)
+    else:
+        compare = echo.compare_payload(ku.voice, over.frames)
+        note(ctx.target, case, "RECORD", "voice words sent %d, heard %d, first difference %s, extra %d, missing %d" % (
+            len(ku.voice), len(over.frames), compare.first_diff, len(compare.extra), compare.missing))
+        if compare.extra:
+            note(ctx.target, case, "FINDING", "%d voice words after the %d the modem sent (a pad or an end marker of the egress)" % (len(compare.extra), len(ku.voice)))
+        assert compare.prefix_ok and not compare.missing, "%s: the words heard differ from the words the modem sent (first difference at %s, %d missing)" % (
+            case, compare.first_diff, compare.missing)
     assert over.ended, "%s: the over did not end on the client side" % case
     time.sleep(1.5)
     echoed = [ms.name_of(f.ftype) for f in ctx.modem.host_frames(since, types=rif5.RF_TYPES)]
@@ -391,7 +418,10 @@ def test_rx_dmr_damaged_copies_refresh_the_over_timeout(ctx, web):
     the firmware still tracks the carrier and sends LOST2 itself", and 7.1: an RF over ends 300 ms without a native frame. The modem plays a DMR over
     of ten voice bursts and then ten header copies with a wrong colour code, 100 ms apart, and no terminator. If the copies refresh the timeout the
     over stays open until the last copy and ends 300 ms after it (about 1.3 s after the last valid burst); if they did not, it would end 300 ms after
-    the last valid burst."""
+    the last valid burst.
+
+    First rig run (docs/rif5-cases.md, "First rig run", RXD): the over ended 0.20 s after the last valid burst, the radio edge's own SILENCE of radio.md 4.4
+    (200 ms without a unit; a damaged copy delivers none). PRODUCT finding: the assertion stays."""
     case = "RIF5-RXD"
     ready(ctx, web, case)
     kw = rx_kwargs("dmr", ctx.port)
@@ -419,8 +449,13 @@ def test_rx_dmr_damaged_copies_refresh_the_over_timeout(ctx, web):
         after_valid, after_last, rif5.NATIVE_OVER_TIMEOUT_S))
     compare = echo.compare_payload(ku.voice, over.frames)
     assert compare.prefix_ok and not compare.missing, "%s: the voice words heard differ from the words sent" % case
+    # radio.md 4.4 gives the radio edge SILENCE = 200 ms (ten units): the core ends an ingress stream that delivers no UNIT for 200 ms, and a damaged
+    # copy delivers none. An end at about 0.20 s after the last valid burst is that timer, not the 300 ms native-over timeout of the hub.
+    note(ctx.target, case, "RECORD", "end %.3f s after the last valid burst; the document's radio edge SILENCE is %.1f s, the hub's native-over timeout %.1f s" % (
+        after_valid, rif5.EDGE_SILENCE_S, rif5.NATIVE_OVER_TIMEOUT_S))
     assert after_valid >= (t_last - t_valid) - 0.05, "%s: the over ended %.2f s after the last valid burst, before the damaged copies stopped (%.2f s): " \
-        "the damaged copies did not refresh the native-over timeout" % (case, after_valid, t_last - t_valid)
+        "the damaged copies did not refresh the native-over timeout of radio.md 7.3 (the room over ends with the radio edge SILENCE of radio.md 4.4, %.1f s " \
+        "without a unit)" % (case, after_valid, t_last - t_valid, rif5.EDGE_SILENCE_S)
     assert after_last <= 3.0, "%s: the over ended %.2f s after the last copy, the timeout is 0.3 s" % (case, after_last)
     TALLY["rx"] += 1
 
@@ -470,13 +505,13 @@ def test_long_over_is_recorded(kind, ctx, web):
     start and an end and that no corrupted word was written."""
     case = "RIF5-LONG-%s" % kind
     log, since, sent, ident = tx_over(ctx, web, kind, LONG_FRAMES, "rif5-long", case)
-    verdict = judge_tx(kind, log, sent, ident, ctx.port)
+    verdict = judge_tx(kind, log, sent, ident, ctx.port, lossy=True)
     TALLY["long"] += 1
     native = [f for f in log if f.ftype in ms.TX_TYPES[kind]]
     span = native[-1].mono - native[0].mono if native else 0.0
     note(ctx.target, case, "RECORD", "native frames %d over %.2f s; %s" % (len(native), span, ", ".join("%s=%s" % kv for kv in sorted(verdict.facts.items()))))
     check_naks(ctx, case, since)
-    for problem in verdict.problems:
+    for problem in verdict.problems + verdict.findings:
         note(ctx.target, case, "FINDING", problem)
     TALLY["tx_native_frames"] += len(native)
     assert native, "%s: no native frame was written" % case
@@ -649,10 +684,19 @@ def test_m1_counters_account_for_the_overs(ctx, web):
         problems.append("ptt key / unkey grew by %s / %s, %d room overs were sent" % (grown["ptt_key"], grown["ptt_unkey"], tx_overs))
     if not grown["frames_rx_ok"]:
         problems.append("frames_total{dir=rx,result=ok} did not move although %d RF overs were accepted" % rx_overs)
-    native = TALLY["tx_native_frames"]
-    if grown["frames_tx_ok"] != native:
-        note(ctx.target, case, "FINDING", "frames_total{dir=tx,result=ok} grew by %s, the modem logged %d native frames of the room overs (the document: ok is "
-                                          "byte-link acceptance)" % (grown["frames_tx_ok"], native))
+    # Every frame the fake logged since the counters' baseline (the restart of G1), not only those of the overs the cases tallied: the document says
+    # ok is byte-link acceptance, so the comparison is with all frames the host wrote to the byte link in that time. Native frames first; then all
+    # types, so that a difference can be read against the SET_MODE and other control frames of the run.
+    since = ctx.baseline_t
+    written = ctx.modem.host_frames(since) if since is not None else []
+    native_types = tuple(sorted({t for types in ms.TX_TYPES.values() for t in types}))
+    native = [f for f in written if f.ftype in native_types]
+    by_type = Counter(ms.name_of(f.ftype) for f in written if f.ftype not in (ms.GET_STATUS, ms.GET_VERSION))
+    note(ctx.target, case, "RECORD", "frames the host wrote since the baseline (status polls left out): native %d, by type %s; tallied native frames of the "
+                                    "room overs %d" % (len(native), dict(by_type), TALLY["tx_native_frames"]))
+    if since is not None and grown["frames_tx_ok"] != len(native):
+        note(ctx.target, case, "FINDING", "frames_total{dir=tx,result=ok} grew by %s, the modem logged %d native frames since the baseline (all types %s; the "
+                                          "document: ok is byte-link acceptance)" % (grown["frames_tx_ok"], len(native), dict(by_type)))
     if TALLY["long"]:
         note(ctx.target, case, "RECORD", "frames_total{dir=tx,result=dropped} grew by %s over the whole run (the 3 s overs of RIF5-LONG are the likely source)" %
              grown["frames_tx_dropped"])
