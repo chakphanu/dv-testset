@@ -192,6 +192,32 @@ def test_txcnt1_delayed_is_bounded_by_the_copies():
     assert dc.txcnt1_problems(22, 22) == []
     bad = dc.txcnt1_problems(8932, 22)
     assert len(bad) == 1 and "8932" in bad[0] and "22" in bad[0]
+    assert len(dc.txcnt1_problems(8932, 22, 3, 0)) == 1                      # the per-tick defect fails the upper bound only
+
+
+def test_txcnt1_upper_bound_allows_the_copies_queued_at_the_start():
+    assert dc.txcnt1_problems(24, 22, 0, 2) == []                           # 2 copies queued at the baseline were first held inside the run
+    assert len(dc.txcnt1_problems(25, 22, 0, 2)) == 1
+    assert len(dc.txcnt1_problems(23, 22, 0, None)) == 1                    # unreadable gauge: the plain bound
+
+
+def test_txcnt1_lower_bound_every_ttl_expiry_was_held():
+    # run R shape on a fixed image: 22 copies, sent 8, dropped_queue 4, dropped_ttl 3, 7 queued: delayed between 3 and 22
+    assert dc.txcnt1_problems(3, 22, 3, 0) == []
+    assert dc.txcnt1_problems(10, 22, 3, 0) == []
+    bad = dc.txcnt1_problems(2, 22, 3, 0)
+    assert len(bad) == 1 and "dropped_ttl" in bad[0] and "at least 3" in bad[0]
+    assert dc.txcnt1_problems(1, 22, 3, 2) == []                            # 2 queued at the start may have been held before the baseline
+    assert len(dc.txcnt1_problems(0, 22, 3, 2)) == 1
+    assert dc.txcnt1_problems(0, 22, 3, None) == []                         # baseline unreadable: no lower bound
+    assert len(dc.txcnt1_problems(30, 22, 30, 0)) == 1 and len(dc.txcnt1_problems(1, 22, 30, 0)) == 1   # both bounds named when both fail
+
+
+def test_edge_drops_reads_the_reason_counter_without_a_port():
+    smp = samples('dv_edge_drops_total{reason="rf_fenced",proc="e"} 4\ndv_edge_drops_total{reason="rf_fenced",proc="e2"} 1\n'
+                  'dv_edge_drops_total{reason="end_dropped"} 9\ndv_edge_rf_tx_total{port="rf-a",kind="beacon",result="rf_fenced"} 7\n')
+    assert dc.edge_drops(smp, "rf_fenced") == 5                              # not a dv_edge_rf_tx_total result
+    assert dc.edge_drops(smp, "nope") == 0 and dc.edge_drops([], "rf_fenced") == 0
 
 
 def test_queue_gauge_and_dropped_totals_read_the_hub_text():
@@ -255,6 +281,10 @@ def test_conservation_terms_name_every_term_and_the_difference():
         assert part in line, (part, line)
     assert "unaccounted 1" in dc.conservation_terms({}, 11, delta, 1, 3)
     assert "unreadable" in dc.conservation_terms({}, 10, delta, None, 3)
+    # rf_fenced is recorded next to the terms, never part of the equation: 0 on an image without it, same unaccounted either way
+    assert "rf_fenced edge drops (recorded, not in the equation: it overlaps sent / dropped_ttl / the queue gauge) 0" in line
+    with_fenced = dc.conservation_terms({("beacon", "generated"): 1, ("object", "generated"): 9}, 10, delta, 1, 3, None, 6)
+    assert "gauge) 6" in with_fenced and "unaccounted 0" in with_fenced
 
 
 def test_rf_events_keys_stamps_and_ignores_other_frames():
@@ -317,7 +347,7 @@ class Hub:
 
 
 def fake_run(shp, origin, delta, queue=0, base_queue=0, lines=None, events=()):
-    return SimpleNamespace(shape=shp, port="rf-a", interval=600, wait=1.0, delta=delta, origin=origin, base={}, base_origin={}, base_worker={}, base_queue=base_queue,
+    return SimpleNamespace(shape=shp, port="rf-a", interval=600, wait=1.0, delta=delta, origin=origin, base={}, base_origin={}, base_worker={}, base_fenced=0, base_queue=base_queue,
                            queue_now=queue, aprsc_lines=lines, aprsc_why="no aprsc", events=list(events))
 
 
@@ -360,6 +390,37 @@ def test_the_conservation_case_polls_until_the_counters_settle(monkeypatch):
     trf.test_dp18_o_strict_every_generated_copy_is_accounted_for(None, NOTE, Hub(text(5, 3, 0)), run)
     with pytest.raises(pytest.skip.Exception, match="not computable"):
         trf.test_dp18_o_strict_every_generated_copy_is_accounted_for(None, NOTE, Hub(text(5, 3, 2)), fake_run(shape_with(ports_beacon=("rf-a", "rf-b")), {}, {}))
+
+
+def test_the_txcnt1_case_records_every_input_and_applies_both_bounds(monkeypatch):
+    shp = shape_with()
+    notes = []
+    monkeypatch.setattr(trf, "note", lambda *a: notes.append(a[-1]))
+    monkeypatch.delenv("DVT_TXCNT1", raising=False)
+    run = fake_run(shp, {}, {}, base_queue=0)
+    run.times = [1.0] * 8
+    origin = 'dv_pkt_origin_total{kind="beacon",result="generated"} 2\ndv_pkt_origin_total{kind="object",result="generated"} 20\n'
+
+    def text(delayed, ttl=3, fenced=0):
+        return (origin + 'dv_edge_rf_tx_total{port="rf-a",kind="object",result="delayed"} %d\ndv_edge_rf_tx_total{port="rf-a",kind="object",result="dropped_ttl"} %d\n'
+                'dv_edge_rf_tx_total{port="rf-a",kind="object",result="sent"} 8\ndv_edge_rf_queue{port="rf-a"} 7\n'
+                'dv_edge_drops_total{reason="rf_fenced"} %d\n' % (delayed, ttl, fenced))
+
+    with pytest.raises(pytest.skip.Exception, match="DVT_TXCNT1=on"):
+        trf.test_dp18_o_txcnt1_delayed_counts_frames_not_ticks(None, NOTE, Hub(text(10)), run)
+    monkeypatch.setenv("DVT_TXCNT1", "on")
+    trf.test_dp18_o_txcnt1_delayed_counts_frames_not_ticks(None, NOTE, Hub(text(10, fenced=2)), run)
+    assert len(notes) == 1 and "delayed delta 10; copies expected 22; dropped_ttl 3;" in notes[0] and "sent 8" in notes[0] and "rf_fenced edge drops 2" in notes[0]
+    assert "queue gauge base 0 now 7 delta 7" in notes[0] and "frames at the TNC 8" in notes[0]
+    trf.test_dp18_o_txcnt1_delayed_counts_frames_not_ticks(None, NOTE, Hub(text(3)), run)           # delayed == dropped_ttl
+    trf.test_dp18_o_txcnt1_delayed_counts_frames_not_ticks(None, NOTE, Hub(text(22)), run)          # delayed == copies
+    with pytest.raises(AssertionError, match="8932"):
+        trf.test_dp18_o_txcnt1_delayed_counts_frames_not_ticks(None, NOTE, Hub(text(8932)), run)
+    with pytest.raises(AssertionError, match="at least 3"):
+        trf.test_dp18_o_txcnt1_delayed_counts_frames_not_ticks(None, NOTE, Hub(text(2)), run)
+    run.base_queue = None                                                                           # no baseline: the lower bound is not asserted
+    trf.test_dp18_o_txcnt1_delayed_counts_frames_not_ticks(None, NOTE, Hub(text(2)), run)
+    assert "none (queue base unreadable)" in notes[-1]
 
 
 def test_floor_and_aprsc_cases(monkeypatch):

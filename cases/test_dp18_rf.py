@@ -434,6 +434,7 @@ def objects_run(request, target, hub, admin_session):
     base_origin = dc.origin_counts(samples)
     base_queue = dc.queue_len(samples, port)
     base_worker = dc.worker_rf_counts(samples)
+    base_fenced = dc.edge_drops(samples, "rf_fenced")
     aprsc_host, aprsc_why = None, ""
     try:
         aprsc_host = request.getfixturevalue("aprsc")
@@ -467,7 +468,7 @@ def objects_run(request, target, hub, admin_session):
     queue_now = dc.queue_len(samples, port)
     return types.SimpleNamespace(shape=shp, port=port, interval=interval, wait=wait, uptime=uptime, frames=frames, objs=objs, beacons=beacons, events=events,
                                  times=times, gaps=dc.spread_gaps(times), delta=delta, origin=origin, base_queue=base_queue, queue_now=queue_now,
-                                 aprsc_lines=lines, aprsc_why=aprsc_why, base=base, base_origin=base_origin, base_worker=base_worker)
+                                 aprsc_lines=lines, aprsc_why=aprsc_why, base=base, base_origin=base_origin, base_worker=base_worker, base_fenced=base_fenced)
 
 
 def test_dp18_o_object_copies_are_spread_and_drops_are_counted(rig, target, hub, objects_run):
@@ -549,15 +550,19 @@ def test_dp18_o_strict_every_generated_copy_is_accounted_for(rig, target, hub, o
             break
         time.sleep(5.0)
     worker = {k: v - run.base_worker.get(k, 0) for k, v in dc.worker_rf_counts(samples).items() if v - run.base_worker.get(k, 0)}
-    note(target, "DP18-o", "RECORD", "strict conservation: " + dc.conservation_terms(origin, copies, delta, run.base_queue, queue, worker))
+    fenced = dc.edge_drops(samples, "rf_fenced") - run.base_fenced
+    note(target, "DP18-o", "RECORD", "strict conservation: " + dc.conservation_terms(origin, copies, delta, run.base_queue, queue, worker, fenced))
     assert not problems, "; ".join(problems)
 
 
 def test_dp18_o_txcnt1_delayed_counts_frames_not_ticks(rig, target, hub, objects_run):
-    """DVT_TXCNT1=on (DV-Router unit TXCNT1). `dv_edge_rf_tx_total{result=delayed}` is +1 when a frame is delayed, so a frame is delayed at most
-    once and the delta summed over the classes of the port is at most the RF copies expected (the generated copies). On wip-125de6f it counted every
-    scheduler re-check of a held frame (run R of DP18-o: +8932 in 27 minutes with 7 frames waiting): this case FAILS there, which is why it is
-    switch-gated. `delayed` stays out of the conservation sum (it is not terminal). Same observation as the DP18-o cases, no extra run."""
+    """DVT_TXCNT1=on (DV-Router unit TXCNT1, commit 7710756, data.md 10.8 "Built (TXCNT1)"). `dv_edge_rf_tx_total{result=delayed}` counts the FIRST
+    hold of one queued copy, once whatever the number of dispatch polls or hold-reason changes; it is not terminal and not part of the conservation.
+    Over the delta summed over the classes of the port: UPPER delayed <= RF copies expected (+ the copies already queued at the start, the gauge
+    baseline), LOWER delayed >= dropped_ttl (- the baseline queue): a copy that expired waited its whole TTL, so it was held (see
+    dc.txcnt1_problems for why still-queued, dropped_queue and sent copies give no lower bound). On wip-125de6f it counted every scheduler re-check
+    (run R of DP18-o: +8932 in 27 minutes with 7 frames waiting): this case FAILS there, which is why it is switch-gated. rf_fenced is recorded
+    (dv_edge_drops_total, not a result of this counter). Same observation as the DP18-o cases, no extra run."""
     if not dc.txcnt1_on():
         pytest.skip("DP18-o txcnt1 needs the switch DVT_TXCNT1=on (it fails on the images that count every scheduler re-check: docs/dp18-cases.md)")
     run = objects_run
@@ -571,9 +576,14 @@ def test_dp18_o_txcnt1_delayed_counts_frames_not_ticks(rig, target, hub, objects
     if copies is None:
         pytest.skip("delayed bound not computable: %s" % why)
     delayed = dc.result_total(delta, "delayed")
-    note(target, "DP18-o", "RECORD", "txcnt1: delayed delta %d; copies expected %d; frames at the TNC %d; dv_edge_rf_queue delta %s" % (
-        delayed, copies, len(run.times), queue_delta))
-    problems = dc.txcnt1_problems(delayed, copies)
+    ttl = dc.result_total(delta, "dropped_ttl")
+    fenced = dc.edge_drops(samples, "rf_fenced") - run.base_fenced
+    note(target, "DP18-o", "RECORD", "txcnt1: delayed delta %d; copies expected %d; dropped_ttl %d; dropped_queue %d; sent %d; sent_over_budget %d; simulated %d; "
+         "queue gauge base %s now %s delta %s; frames at the TNC %d; rf_fenced edge drops %d (recorded, no bound); bounds: %s <= delayed <= copies + queue base" % (
+             delayed, copies, ttl, dc.result_total(delta, "dropped_queue"), dc.result_total(delta, "sent"), dc.result_total(delta, "sent_over_budget"),
+             dc.result_total(delta, "simulated"), run.base_queue, queue, queue_delta, len(run.times), fenced,
+             "dropped_ttl - queue base" if run.base_queue is not None else "none (queue base unreadable)"))
+    problems = dc.txcnt1_problems(delayed, copies, ttl, run.base_queue)
     assert not problems, "; ".join(problems)
 
 

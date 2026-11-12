@@ -334,13 +334,36 @@ def txcnt1_on(env=None):
     return env.get(ENV_TXCNT1, "") == "on"
 
 
-def txcnt1_problems(delayed, copies):
-    """Problems of 'delayed counts frames, not ticks': a frame is delayed at most once, so the delayed delta summed over the classes of the
-    port cannot exceed the RF copies expected (the generated copies). Empty list when it holds."""
-    if delayed > copies:
-        return ["dv_edge_rf_tx_total{result=delayed} grew by %d for %d RF copies: it counts scheduler re-checks, not frames (each frame is delayed at most once)" % (
-            delayed, copies)]
-    return []
+def txcnt1_problems(delayed, copies, dropped_ttl=0, queue_base=None):
+    """Problems of 'delayed counts queued copies once, not dispatch polls' (DV-Router 7710756, data.md 10.8 "Built (TXCNT1)": the first
+    observed hold of one queued copy, at most once whatever the number of dispatch polls or hold-reason changes; never added to either side of
+    the conservation). Two bounds, both over the delta summed over the classes of the port:
+      upper: delayed <= copies + queue_base. Each copy generated in the run is held at most once; a copy already queued at the start (the
+             gauge dv_edge_rf_queue, `queue_base`, None counts as 0) may be held for the first time inside the run.
+      lower: delayed >= dropped_ttl - queue_base, only when queue_base is known. A copy removed as dropped_ttl waited its whole class TTL in the
+             queue; a dispatch that releases nothing records a wait for every queued copy and a release sets busy_until / gap_until so the
+             next dispatch holds the rest (scheduler.rs dispatch / record_wait), so such a copy was held. The copies queued at the start may
+             have been held before the start (counted before the baseline), hence the `queue_base` allowance.
+    Not bounded (the code does not prove a hold): copies still queued at the end (just enqueued, not yet polled), dropped_queue (rejected or
+    evicted at enqueue) and sent (released at its first poll). Empty list when both hold."""
+    base = queue_base or 0
+    problems = []
+    if delayed > copies + base:
+        problems.append("dv_edge_rf_tx_total{result=delayed} grew by %d for %d RF copies (+ %d already queued at the start): it counts scheduler "
+                        "polls, not queued copies (each copy is held, and counted, at most once)" % (delayed, copies, base))
+    if queue_base is not None and delayed < dropped_ttl - queue_base:
+        problems.append("dv_edge_rf_tx_total{result=delayed} grew by only %d but %d copies expired in the queue (dropped_ttl; %d were already "
+                        "queued at the start): a copy that waited its whole TTL was held, so delayed must be at least %d" % (
+                            delayed, dropped_ttl, queue_base, dropped_ttl - queue_base))
+    return problems
+
+
+def edge_drops(samples, reason):
+    """Sum of dv_edge_drops_total{reason=<reason>} over every series (the edge process counters carry no port label), 0 without a series.
+    `rf_fenced` is read here (since DV-Router 7710756 one event per frame refused or discarded because of an RF fence); it is NOT a
+    dv_edge_rf_tx_total result and not a term of the scheduler conservation (data.md 10.8: the scheduler reservation of a fenced copy stays
+    charged, so the same copy is also counted sent or dropped_ttl, or is still in the queue gauge; refusals while fenced never reach the scheduler)."""
+    return int(sum(s.value for s in samples if s.name == "dv_edge_drops_total" and s.labels.get("reason") == reason))
 
 
 def queue_len(samples, port):
@@ -406,21 +429,23 @@ def worker_rf_counts(samples):
     return out
 
 
-def conservation_terms(origin_delta, copies, rf_delta, queue_base, queue_now, worker_delta=None):
+def conservation_terms(origin_delta, copies, rf_delta, queue_base, queue_now, worker_delta=None, fenced_delta=0):
     """One line with EVERY term of the conservation check, so that a mismatch shows exactly which terms differ: generated per kind and result
     (no_rf_edge included), copies expected, then per RF result (sent, simulated, sent_over_budget, delayed, every dropped_*), no_rf_edge as its own
     term, the queue gauge at the start and now, the unaccounted difference (None when the gauge is unreadable) and, recorded only, the worker-side
-    RF output counters (dedupe, rate, not_heard, drops) that a copy can also be lost at before the scheduler."""
+    RF output counters (dedupe, rate, not_heard, drops) that a copy can also be lost at before the scheduler, and, recorded only,
+    dv_edge_drops_total{reason=rf_fenced} (`fenced_delta`, 0 on an image without it): it overlaps the scheduler results (see edge_drops)."""
     queue_delta = None if queue_base is None or queue_now is None else queue_now - queue_base
     terminal = result_total(rf_delta, "sent") + result_total(rf_delta, "simulated") + result_total(rf_delta, "sent_over_budget") + dropped_total(rf_delta)
     no_rf = no_rf_edge_total(origin_delta)
     dropped = {r: n for (_k, r), n in sorted(rf_delta.items()) if r.startswith("dropped_")}
     gen = {"%s/%s" % k: v for k, v in sorted(origin_delta.items())}
     return ("origin %s; copies expected %s; sent %d simulated %d sent_over_budget %d delayed(not terminal) %d dropped %s (sum %d); terminal %d; "
-            "no_rf_edge %d; queue gauge start %s now %s delta %s; unaccounted %s; worker-side counters (recorded, not in the equation) %s" % (
+            "no_rf_edge %d; queue gauge start %s now %s delta %s; unaccounted %s; worker-side counters (recorded, not in the equation) %s; "
+            "rf_fenced edge drops (recorded, not in the equation: it overlaps sent / dropped_ttl / the queue gauge) %d" % (
                 gen, copies, result_total(rf_delta, "sent"), result_total(rf_delta, "simulated"), result_total(rf_delta, "sent_over_budget"),
                 result_total(rf_delta, "delayed"), dropped, dropped_total(rf_delta), terminal, no_rf, queue_base, queue_now, queue_delta,
-                "unreadable (gauge has no series)" if queue_delta is None else copies - terminal - no_rf - queue_delta, worker_delta or {}))
+                "unreadable (gauge has no series)" if queue_delta is None else copies - terminal - no_rf - queue_delta, worker_delta or {}, fenced_delta))
 
 
 def rf_events(tnc_frames, ax25_mod):
