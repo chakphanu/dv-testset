@@ -553,6 +553,30 @@ def test_dp18_o_strict_every_generated_copy_is_accounted_for(rig, target, hub, o
     assert not problems, "; ".join(problems)
 
 
+def test_dp18_o_txcnt1_delayed_counts_frames_not_ticks(rig, target, hub, objects_run):
+    """DVT_TXCNT1=on (DV-Router unit TXCNT1). `dv_edge_rf_tx_total{result=delayed}` is +1 when a frame is delayed, so a frame is delayed at most
+    once and the delta summed over the classes of the port is at most the RF copies expected (the generated copies). On wip-125de6f it counted every
+    scheduler re-check of a held frame (run R of DP18-o: +8932 in 27 minutes with 7 frames waiting): this case FAILS there, which is why it is
+    switch-gated. `delayed` stays out of the conservation sum (it is not terminal). Same observation as the DP18-o cases, no extra run."""
+    if not dc.txcnt1_on():
+        pytest.skip("DP18-o txcnt1 needs the switch DVT_TXCNT1=on (it fails on the images that count every scheduler re-check: docs/dp18-cases.md)")
+    run = objects_run
+    samples = metrics.parse(hub.text())
+    now = dc.rf_tx_counts(samples, run.port)
+    delta = {k: v - run.base.get(k, 0) for k, v in now.items() if v - run.base.get(k, 0)}
+    origin = {k: v - run.base_origin.get(k, 0) for k, v in dc.origin_counts(samples).items() if v - run.base_origin.get(k, 0)}
+    queue = dc.queue_len(samples, run.port)
+    queue_delta = None if queue is None or run.base_queue is None else queue - run.base_queue
+    copies, why = dc.copies_expected(origin, run.shape, run.port)
+    if copies is None:
+        pytest.skip("delayed bound not computable: %s" % why)
+    delayed = dc.result_total(delta, "delayed")
+    note(target, "DP18-o", "RECORD", "txcnt1: delayed delta %d; copies expected %d; frames at the TNC %d; dv_edge_rf_queue delta %s" % (
+        delayed, copies, len(run.times), queue_delta))
+    problems = dc.txcnt1_problems(delayed, copies)
+    assert not problems, "; ".join(problems)
+
+
 def test_dp18_o_f_the_same_report_is_not_sent_twice_within_the_interval(rig, target, objects_run):
     """The interval floor (600 s) at the RF side (data.md 9.5: at most once per interval, no catch-up burst). The HMS stamp of an object is the time
     the report was generated, so two frames of ONE object at the TNC must have stamps at least interval - 2 s apart however long the queue held the

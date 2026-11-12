@@ -180,6 +180,20 @@ def test_strict_switch_reads_only_the_value_on():
     assert dc.strict_on({}) is False
 
 
+def test_txcnt1_switch_reads_only_the_value_on():
+    assert dc.txcnt1_on({"DVT_TXCNT1": "on"}) is True
+    for value in ("", "1", "true", "ON", "off"):
+        assert dc.txcnt1_on({"DVT_TXCNT1": value}) is False
+    assert dc.txcnt1_on({}) is False
+
+
+def test_txcnt1_delayed_is_bounded_by_the_copies():
+    assert dc.txcnt1_problems(0, 22) == []
+    assert dc.txcnt1_problems(22, 22) == []
+    bad = dc.txcnt1_problems(8932, 22)
+    assert len(bad) == 1 and "8932" in bad[0] and "22" in bad[0]
+
+
 def test_queue_gauge_and_dropped_totals_read_the_hub_text():
     text = ('dv_edge_rf_queue{port="rf-a",proc="x"} 3\ndv_edge_rf_queue{port="rf-b"} 9\n'
             'dv_edge_rf_tx_total{port="rf-a",kind="beacon",result="dropped_queue"} 2\n'

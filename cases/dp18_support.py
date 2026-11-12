@@ -324,6 +324,25 @@ def strict_on(env=None):
     return env.get(ENV_STRICT, "") == "on"
 
 
+ENV_TXCNT1 = "DVT_TXCNT1"
+
+
+def txcnt1_on(env=None):
+    """True when DVT_TXCNT1=on: the image counts dv_edge_rf_tx_total{result=delayed} once per delayed FRAME (the DV-Router unit TXCNT1), not
+    once per scheduler re-check of a held frame. Off by default: on wip-125de6f the counter grew with every tick (+8932 in 27 minutes with 7 frames waiting)."""
+    env = os.environ if env is None else env
+    return env.get(ENV_TXCNT1, "") == "on"
+
+
+def txcnt1_problems(delayed, copies):
+    """Problems of 'delayed counts frames, not ticks': a frame is delayed at most once, so the delayed delta summed over the classes of the
+    port cannot exceed the RF copies expected (the generated copies). Empty list when it holds."""
+    if delayed > copies:
+        return ["dv_edge_rf_tx_total{result=delayed} grew by %d for %d RF copies: it counts scheduler re-checks, not frames (each frame is delayed at most once)" % (
+            delayed, copies)]
+    return []
+
+
 def queue_len(samples, port):
     """The gauge dv_edge_rf_queue{port} (frames queued for the physical transmitter of the port, data.md 10.8) or None without a series."""
     hits = [s for s in samples if s.name == "dv_edge_rf_queue" and s.labels.get("port") == port]

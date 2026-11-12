@@ -52,6 +52,10 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
   DVT_SUT_PROFILE    behaviour rule for the sut: xlxd (default, sut == ref) or a
                      dvtest/specs/<name>.py spec
   DVT_SUT_DIVERGENCES  legacy: declared divergences of the sut (dvtest/divergences.py)
+  DVT_DP18STRICT     on: the strict DP18-o cases (aprsis leg with rf_ports, counter conservation, strict floor;
+                     cases/dp18_support.py, docs/dp18-cases.md "Strict"); off or unset: they skip
+  DVT_TXCNT1         on: DP18-o txcnt1, dv_edge_rf_tx_total{result=delayed} counts frames, not scheduler re-checks
+                     (needs an image with the DV-Router unit TXCNT1; fails on wip-125de6f; docs/dp18-cases.md "Strict")
 """
 import ipaddress
 import os
