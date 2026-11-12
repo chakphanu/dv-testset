@@ -56,6 +56,12 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
                      cases/dp18_support.py, docs/dp18-cases.md "Strict"); off or unset: they skip
   DVT_TXCNT1         on: DP18-o txcnt1, dv_edge_rf_tx_total{result=delayed} counts frames, not scheduler re-checks
                      (needs an image with the DV-Router unit TXCNT1; fails on wip-125de6f; docs/dp18-cases.md "Strict")
+  DVT_TXCNT1B        on: DV-Router 051a4516 (TXCNT1b, not in an image yet): the strict DP18-o conservation adds the
+                     cancellation term dv_edge_drops_total{reason=rf_fenced} (a fence or stop drains the scheduler
+                     entries, every copy has one terminal result), and the case test_dp18_o_txcnt1b_result_labels
+                     asserts the dv_edge_rf_tx_total result labels are the documented eight (no dropped_budget,
+                     dropped_quota or dropped_gap); off or unset: the conservation is the older equation and the
+                     label case skips (docs/dp18-cases.md "Strict")
   DVT_FLK10          on: FLK10, dv-edge-webrtc refuses an offer whose media section has a missing, repeated, empty,
                      over-16-byte or duplicate a=mid (403 forbidden); the cases of cases/test_web_rtc_mid.py skip naming
                      this switch without it (needs an image with DV-Router 98c88b2, wip-bd3ceb9; docs/web-mid-cases.md)

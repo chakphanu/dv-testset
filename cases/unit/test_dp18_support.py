@@ -392,6 +392,57 @@ def test_the_conservation_case_polls_until_the_counters_settle(monkeypatch):
         trf.test_dp18_o_strict_every_generated_copy_is_accounted_for(None, NOTE, Hub(text(5, 3, 2)), fake_run(shape_with(ports_beacon=("rf-a", "rf-b")), {}, {}))
 
 
+def test_the_conservation_case_uses_the_txcnt1b_equation_only_under_its_switch(monkeypatch):
+    shp = shape_with()
+    notes = []
+    monkeypatch.setattr(trf, "note", lambda *a: notes.append(a[-1]))
+    monkeypatch.setenv("DVT_DP18STRICT", "on")
+    clock = {"t": 0.0}
+    monkeypatch.setattr(trf.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(trf.time, "sleep", lambda s: clock.__setitem__("t", clock["t"] + s))
+
+    def text(fenced):
+        return ('dv_pkt_origin_total{kind="beacon",result="generated"} 5\ndv_edge_rf_tx_total{port="rf-a",kind="beacon",result="sent"} 3\n'
+                'dv_edge_rf_queue{port="rf-a"} 0\ndv_edge_drops_total{reason="rf_fenced"} %d\n' % fenced)
+
+    run = fake_run(shp, {}, {})
+    # 5 copies, 3 sent, nothing queued: 2 copies are unaccounted
+    monkeypatch.delenv("DVT_TXCNT1B", raising=False)
+    with pytest.raises(AssertionError, match="2 unaccounted"):
+        trf.test_dp18_o_strict_every_generated_copy_is_accounted_for(None, NOTE, Hub(text(2)), run)           # rf_fenced does not count without the switch
+    assert "recorded, not in the equation" in notes[-1] and "TXCNT1b" not in notes[-1]
+    monkeypatch.setenv("DVT_TXCNT1B", "on")
+    clock["t"] = 0.0
+    trf.test_dp18_o_strict_every_generated_copy_is_accounted_for(None, NOTE, Hub(text(2)), run)             # exactly the two canceled copies
+    assert "TXCNT1b equation" in notes[-1] and "unaccounted after the term 0" in notes[-1]
+    trf.test_dp18_o_strict_every_generated_copy_is_accounted_for(None, NOTE, Hub(text(3)), run)             # one post-release refusal in the aggregate: slack
+    assert "unaccounted after the term -1" in notes[-1]
+    clock["t"] = 0.0
+    with pytest.raises(AssertionError, match="0 <= unaccounted <= 1"):
+        trf.test_dp18_o_strict_every_generated_copy_is_accounted_for(None, NOTE, Hub(text(1)), run)
+    assert clock["t"] >= 45.0
+
+
+def test_the_txcnt1b_label_case_skips_without_its_switch_and_names_a_removed_label(monkeypatch):
+    shp = shape_with()
+    notes = []
+    monkeypatch.setattr(trf, "note", lambda *a: notes.append(a[-1]))
+    run = fake_run(shp, {}, {})
+    good = "\n".join('dv_edge_rf_tx_total{port="rf-a",kind="beacon",result="%s"} 1' % r for r in dc.TXCNT1B_RESULTS) + "\n"
+    monkeypatch.delenv("DVT_TXCNT1B", raising=False)
+    with pytest.raises(pytest.skip.Exception, match="DVT_TXCNT1B=on"):
+        trf.test_dp18_o_txcnt1b_result_labels_are_the_documented_set(None, NOTE, Hub(good), run)
+    monkeypatch.setenv("DVT_TXCNT1B", "on")
+    trf.test_dp18_o_txcnt1b_result_labels_are_the_documented_set(None, NOTE, Hub(good), run)
+    assert "dropped_too_long" in notes[-1]
+    trf.test_dp18_o_txcnt1b_result_labels_are_the_documented_set(None, NOTE, Hub(good + 'dv_edge_rf_tx_total{port="rf-b",kind="text",result="delayed"} 0\n'), run)
+    with pytest.raises(AssertionError, match="dropped_budget, dropped_gap"):
+        trf.test_dp18_o_txcnt1b_result_labels_are_the_documented_set(
+            None, NOTE, Hub(good + 'dv_edge_rf_tx_total{port="rf-b",kind="text",result="dropped_budget"} 0\ndv_edge_rf_tx_total{port="rf-b",kind="text",result="dropped_gap"} 0\n'), run)
+    with pytest.raises(pytest.skip.Exception, match="no dv_edge_rf_tx_total series"):
+        trf.test_dp18_o_txcnt1b_result_labels_are_the_documented_set(None, NOTE, Hub("dv_edge_rf_queue{port=\"rf-a\"} 0\n"), run)
+
+
 def test_the_txcnt1_case_records_every_input_and_applies_both_bounds(monkeypatch):
     shp = shape_with()
     notes = []
@@ -421,6 +472,55 @@ def test_the_txcnt1_case_records_every_input_and_applies_both_bounds(monkeypatch
     run.base_queue = None                                                                           # no baseline: the lower bound is not asserted
     trf.test_dp18_o_txcnt1_delayed_counts_frames_not_ticks(None, NOTE, Hub(text(2)), run)
     assert "none (queue base unreadable)" in notes[-1]
+
+
+def test_txcnt1b_switch_reads_only_the_value_on():
+    assert dc.txcnt1b_on({"DVT_TXCNT1B": "on"}) is True
+    for value in ("", "1", "true", "ON", "off"):
+        assert dc.txcnt1b_on({"DVT_TXCNT1B": value}) is False
+    assert dc.txcnt1b_on({"DVT_TXCNT1": "on"}) is False and dc.txcnt1b_on({}) is False      # independent of the TXCNT1 switch
+
+
+def test_txcnt1b_label_set_is_the_documented_eight():
+    assert set(dc.TXCNT1B_RESULTS) == {"sent", "simulated", "sent_over_budget", "delayed", "dropped_ttl", "dropped_queue", "dropped_exceeds_quota", "dropped_too_long"}
+    assert set(dc.TXCNT1B_REMOVED) == {"dropped_budget", "dropped_quota", "dropped_gap"} and not set(dc.TXCNT1B_REMOVED) & set(dc.TXCNT1B_RESULTS)
+    smp = samples('dv_edge_rf_tx_total{port="rf-a",kind="beacon",result="sent"} 4\ndv_edge_rf_tx_total{port="rf-b",kind="text",result="dropped_ttl"} 0\n'
+                  'dv_edge_rf_tx_total{port="rf-a",kind="beacon",result="sent"} 1\ndv_edge_rf_queue{port="rf-a"} 3\ndv_edge_drops_total{reason="rf_fenced"} 2\n')
+    assert dc.rf_tx_result_labels(smp) == ["dropped_ttl", "sent"] and dc.rf_tx_result_labels([]) == []
+    assert dc.result_label_problems(dc.rf_tx_result_labels(smp)) == [] and dc.result_label_problems(dc.TXCNT1B_RESULTS) == [] and dc.result_label_problems([]) == []
+    old = dc.result_label_problems(["sent", "dropped_budget", "dropped_gap", "delayed"])
+    assert len(old) == 1 and "dropped_budget, dropped_gap" in old[0] and "dropped_quota" not in old[0]
+    mixed = dc.result_label_problems(["dropped_quota", "rf_fenced", "sent"])                # rf_fenced is a drops reason, not a result of this counter
+    assert len(mixed) == 2 and "dropped_quota" in mixed[0] and "'rf_fenced'" in mixed[1]
+
+
+def test_txcnt1b_conservation_adds_the_cancellation_term_as_an_upper_bound():
+    delta = {("beacon", "sent"): 4, ("beacon", "dropped_queue"): 3, ("beacon", "dropped_ttl"): 1, ("beacon", "delayed"): 5}     # terminal 8
+    # 12 copies, 8 terminal, 1 still queued: 3 unaccounted
+    assert len(dc.conservation_problems(12, delta, 1)) == 1                                  # the older equation: unchanged, a mismatch
+    assert "3 unaccounted" in dc.conservation_problems(12, delta, 1)[0]
+    assert dc.conservation_problems(12, delta, 1, 0, None) == dc.conservation_problems(12, delta, 1)
+    assert dc.conservation_problems(12, delta, 1, 0, 3) == []                                # exact: three copies canceled by a fence
+    assert dc.conservation_problems(12, delta, 1, 0, 5) == []                                # post-release refusals also count in the aggregate
+    bad = dc.conservation_problems(12, delta, 1, 0, 2)
+    assert len(bad) == 1 and "3 unaccounted" in bad[0] and "rf_fenced" in bad[0] and "0 <= unaccounted <= 2" in bad[0]
+    assert dc.conservation_problems(9, delta, 1, 0, 0) == []
+    over = dc.conservation_problems(8, delta, 1, 0, 3)                                       # 8 copies but 8 terminal + 1 queued: over-accounted, negative
+    assert len(over) == 1 and "-1 unaccounted" in over[0]
+    assert dc.conservation_problems(8, delta, 0, 0, 0) == []                                 # balanced, nothing canceled
+    assert dc.conservation_problems(10, delta, 0, 2, 0) == []                                # no_rf_edge is its own term
+    assert dc.conservation_problems(7, delta, None, 0, 9) != [] and dc.conservation_problems(12, delta, None, 0, 9) == []        # no gauge: terminal <= copies only
+
+
+def test_txcnt1b_terms_line_names_the_cancellation_term_and_the_slack():
+    delta = {("beacon", "sent"): 4, ("beacon", "dropped_queue"): 3, ("beacon", "dropped_ttl"): 1}
+    origin = {("beacon", "generated"): 12}
+    plain = dc.conservation_terms(origin, 12, delta, 1, 2, None, 5)
+    assert "recorded, not in the equation" in plain and "unaccounted 3;" in plain and "TXCNT1b" not in plain
+    line = dc.conservation_terms(origin, 12, delta, 1, 2, None, 1, True)
+    assert "TXCNT1b cancellation term" in line and "rf_fenced edge drops (TXCNT1b cancellation term, upper bound: the aggregate also counts post-release and non-copy refusals) 1" in line
+    assert line.endswith("unaccounted after the term 2") and "unaccounted 3;" in line
+    assert dc.conservation_terms(origin, 12, delta, None, 2, None, 1, True).endswith("unaccounted after the term unreadable")
 
 
 def test_floor_and_aprsc_cases(monkeypatch):
@@ -461,7 +561,8 @@ def test_the_floor_snippet_has_three_reports_with_rf_copies_and_the_compose_pass
     shp = dc.origin_shape(rendered(["dp15-aprsis.toml", "dp18-rf.toml", "dp18-rf-floor.toml"]))
     assert [r.kind for r in shp.reports] == ["beacon", "object", "object"] and all(r.rf_ports == ["rf-a"] and r.interval_s == 600 for r in shp.reports)
     assert [r.first_due_s for r in shp.reports] == [600.0, 635.0, 670.0] and len({r.name for r in shp.objects}) == 2
-    assert "DVT_DP18STRICT: ${DVT_DP18STRICT:-}" in (ROOT / "rig" / "compose.yml").read_text()
+    compose = (ROOT / "rig" / "compose.yml").read_text()
+    assert "DVT_DP18STRICT: ${DVT_DP18STRICT:-}" in compose and "DVT_TXCNT1B: ${DVT_TXCNT1B:-}" in compose
 
 
 # ---------------------------------------------------------------- the admin config API helpers

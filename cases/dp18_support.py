@@ -358,6 +358,42 @@ def txcnt1_problems(delayed, copies, dropped_ttl=0, queue_base=None):
     return problems
 
 
+ENV_TXCNT1B = "DVT_TXCNT1B"
+
+# dv_edge_rf_tx_total{result}: the fixed label set of DV-Router 051a4516 (TXCNT1b), docs/design/data.md 10.8 item 8 and the table of
+# 13.1 ("result = sent, simulated, sent_over_budget, delayed, dropped_ttl, dropped_queue, dropped_exceeds_quota, dropped_too_long").
+TXCNT1B_RESULTS = ("sent", "simulated", "sent_over_budget", "delayed", "dropped_ttl", "dropped_queue", "dropped_exceeds_quota", "dropped_too_long")
+# Labels TXCNT1b removed: such frames wait (counted `delayed`) and an expired hold is dropped_ttl.
+TXCNT1B_REMOVED = ("dropped_budget", "dropped_quota", "dropped_gap")
+
+
+def txcnt1b_on(env=None):
+    """True when DVT_TXCNT1B=on: the image is DV-Router 051a4516 (TXCNT1b) or later: every scheduler-submitted RF copy ends in exactly one counted
+    result (a fence or stop drains the scheduler entries too and counts the cancellation once in dv_edge_drops_total{reason=rf_fenced}) and the
+    result label set of dv_edge_rf_tx_total lost dropped_budget, dropped_quota and dropped_gap. Off by default: older images keep their verdicts."""
+    env = os.environ if env is None else env
+    return env.get(ENV_TXCNT1B, "") == "on"
+
+
+def rf_tx_result_labels(samples):
+    """Sorted set of every `result` label of any dv_edge_rf_tx_total series (any port, any kind, whatever the value) on the hub."""
+    return sorted({s.labels.get("result", "") for s in samples if s.name == "dv_edge_rf_tx_total"})
+
+
+def result_label_problems(seen, allowed=TXCNT1B_RESULTS):
+    """Problems of 'the result labels seen are a subset of the documented set' (051a4516). `seen` is an iterable of labels. The removed
+    labels are named apart so that a failure says which TXCNT1b change is missing."""
+    seen = sorted(set(seen))
+    problems = []
+    removed = [r for r in seen if r in TXCNT1B_REMOVED]
+    if removed:
+        problems.append("dv_edge_rf_tx_total still carries the removed result label(s) %s (051a4516: such frames wait as `delayed` and an expired hold is dropped_ttl)" % ", ".join(removed))
+    other = [r for r in seen if r not in allowed and r not in TXCNT1B_REMOVED]
+    if other:
+        problems.append("dv_edge_rf_tx_total carries result label(s) %s outside the documented set %s" % (", ".join(repr(r) for r in other), ", ".join(allowed)))
+    return problems
+
+
 def edge_drops(samples, reason):
     """Sum of dv_edge_drops_total{reason=<reason>} over every series (the edge process counters carry no port label), 0 without a series.
     `rf_fenced` is read here (since DV-Router 7710756 one event per frame refused or discarded because of an RF fence); it is NOT a
@@ -392,19 +428,32 @@ def copies_expected(origin_delta, shape, port):
     return total, ""
 
 
-def conservation_problems(copies, rf_delta, queue_delta, no_rf_edge=0):
+def conservation_problems(copies, rf_delta, queue_delta, no_rf_edge=0, canceled=None):
     """Problems of generated copies == sent + simulated + sent_over_budget + dropped_* + no_rf_edge + still queued, on one port. `no_rf_edge`
     is dv_pkt_origin_total{result=no_rf_edge}: since DV-Router d3c6e531 (DP18b) one count per RF copy the worker withheld (no AX.25 edge,
     port unavailable, reporter call differs); `delayed` is not terminal (the frame is still queued). queue_delta is the change of
-    dv_edge_rf_queue since the start, None when the gauge has no series: then only 'accounted <= copies' can be checked."""
+    dv_edge_rf_queue since the start, None when the gauge has no series: then only 'accounted <= copies' can be checked.
+    `canceled` (None = the pre-TXCNT1b equation, exactly as before) is the DVT_TXCNT1B=on term of DV-Router 051a4516 (data.md 10.8: generated =
+    sent + dropped_* + canceled before release + still queued): the delta of dv_edge_drops_total{reason=rf_fenced}. That aggregate also counts
+    released permits refused after release (already `sent`) and non-copy frames refused while fenced (status.md: "only the queued cancellation
+    cohort belongs in this sum"), which a black box cannot separate, so the term is an upper bound: 0 <= unaccounted <= canceled, and it is
+    exact (unaccounted == canceled) whenever no such extra refusal happened, in particular when canceled is 0."""
     terminal = result_total(rf_delta, "sent") + result_total(rf_delta, "simulated") + result_total(rf_delta, "sent_over_budget") + dropped_total(rf_delta)
     accounted = terminal + no_rf_edge
     if queue_delta is None:
         return ["accounted results %d (terminal %d + no_rf_edge %d) exceed the %d generated copies" % (accounted, terminal, no_rf_edge, copies)] if accounted > copies else []
-    if copies != accounted + queue_delta:
-        return ["%d copies generated, %d accounted (sent %d, simulated %d, sent_over_budget %d, dropped %d, no_rf_edge %d) + %d still queued = %d: %d unaccounted" % (
-            copies, accounted, result_total(rf_delta, "sent"), result_total(rf_delta, "simulated"), result_total(rf_delta, "sent_over_budget"),
-            dropped_total(rf_delta), no_rf_edge, queue_delta, accounted + queue_delta, copies - accounted - queue_delta)]
+    unaccounted = copies - accounted - queue_delta
+    detail = "sent %d, simulated %d, sent_over_budget %d, dropped %d, no_rf_edge %d" % (
+        result_total(rf_delta, "sent"), result_total(rf_delta, "simulated"), result_total(rf_delta, "sent_over_budget"), dropped_total(rf_delta), no_rf_edge)
+    if canceled is None:
+        if unaccounted:
+            return ["%d copies generated, %d accounted (%s) + %d still queued = %d: %d unaccounted" % (
+                copies, accounted, detail, queue_delta, accounted + queue_delta, unaccounted)]
+        return []
+    if unaccounted < 0 or unaccounted > canceled:
+        return ["%d copies generated, %d accounted (%s) + %d still queued = %d: %d unaccounted, but dv_edge_drops_total{reason=rf_fenced} (the TXCNT1b "
+                "cancellation term, an upper bound) is %d: expected 0 <= unaccounted <= %d" % (
+                    copies, accounted, detail, queue_delta, accounted + queue_delta, unaccounted, canceled, canceled)]
     return []
 
 
@@ -429,23 +478,28 @@ def worker_rf_counts(samples):
     return out
 
 
-def conservation_terms(origin_delta, copies, rf_delta, queue_base, queue_now, worker_delta=None, fenced_delta=0):
+def conservation_terms(origin_delta, copies, rf_delta, queue_base, queue_now, worker_delta=None, fenced_delta=0, txcnt1b=False):
     """One line with EVERY term of the conservation check, so that a mismatch shows exactly which terms differ: generated per kind and result
     (no_rf_edge included), copies expected, then per RF result (sent, simulated, sent_over_budget, delayed, every dropped_*), no_rf_edge as its own
     term, the queue gauge at the start and now, the unaccounted difference (None when the gauge is unreadable) and, recorded only, the worker-side
     RF output counters (dedupe, rate, not_heard, drops) that a copy can also be lost at before the scheduler, and, recorded only,
-    dv_edge_drops_total{reason=rf_fenced} (`fenced_delta`, 0 on an image without it): it overlaps the scheduler results (see edge_drops)."""
+    dv_edge_drops_total{reason=rf_fenced} (`fenced_delta`, 0 on an image without it): it overlaps the scheduler results (see edge_drops).
+    With `txcnt1b` (DVT_TXCNT1B=on) rf_fenced is the cancellation term of the equation and the line says so, with the slack left after it."""
     queue_delta = None if queue_base is None or queue_now is None else queue_now - queue_base
     terminal = result_total(rf_delta, "sent") + result_total(rf_delta, "simulated") + result_total(rf_delta, "sent_over_budget") + dropped_total(rf_delta)
     no_rf = no_rf_edge_total(origin_delta)
     dropped = {r: n for (_k, r), n in sorted(rf_delta.items()) if r.startswith("dropped_")}
     gen = {"%s/%s" % k: v for k, v in sorted(origin_delta.items())}
-    return ("origin %s; copies expected %s; sent %d simulated %d sent_over_budget %d delayed(not terminal) %d dropped %s (sum %d); terminal %d; "
-            "no_rf_edge %d; queue gauge start %s now %s delta %s; unaccounted %s; worker-side counters (recorded, not in the equation) %s; "
-            "rf_fenced edge drops (recorded, not in the equation: it overlaps sent / dropped_ttl / the queue gauge) %d" % (
+    unaccounted = None if queue_delta is None else copies - terminal - no_rf - queue_delta
+    head = ("origin %s; copies expected %s; sent %d simulated %d sent_over_budget %d delayed(not terminal) %d dropped %s (sum %d); terminal %d; "
+            "no_rf_edge %d; queue gauge start %s now %s delta %s; unaccounted %s; worker-side counters (recorded, not in the equation) %s; " % (
                 gen, copies, result_total(rf_delta, "sent"), result_total(rf_delta, "simulated"), result_total(rf_delta, "sent_over_budget"),
                 result_total(rf_delta, "delayed"), dropped, dropped_total(rf_delta), terminal, no_rf, queue_base, queue_now, queue_delta,
-                "unreadable (gauge has no series)" if queue_delta is None else copies - terminal - no_rf - queue_delta, worker_delta or {}, fenced_delta))
+                "unreadable (gauge has no series)" if unaccounted is None else unaccounted, worker_delta or {}))
+    if txcnt1b:
+        return head + ("rf_fenced edge drops (TXCNT1b cancellation term, upper bound: the aggregate also counts post-release and non-copy refusals) %d; "
+                       "unaccounted after the term %s" % (fenced_delta, "unreadable" if unaccounted is None else unaccounted - fenced_delta))
+    return head + "rf_fenced edge drops (recorded, not in the equation: it overlaps sent / dropped_ttl / the queue gauge) %d" % fenced_delta
 
 
 def rf_events(tnc_frames, ax25_mod):

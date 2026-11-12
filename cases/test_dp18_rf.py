@@ -531,8 +531,12 @@ def test_dp18_o_strict_every_generated_copy_is_accounted_for(rig, target, hub, o
     """DVT_DP18STRICT=on. Conservation on the RF port: the RF copies the worker generated (dv_pkt_origin_total{result=generated}, one per report and
     named RF port) equal sent + simulated + sent_over_budget + dropped_* of dv_edge_rf_tx_total{port} plus no_rf_edge (since d3c6e531 one count per withheld RF copy) plus the frames still queued (the change of the
     gauge dv_edge_rf_queue{port}); `delayed` is not terminal. The counters are published every 10 s, so the sums are re-read for up to 45 s. Terms
-    that cannot be read are recorded (a missing gauge: only terminal <= generated is checked; a report that names another port: skipped)."""
+    that cannot be read are recorded (a missing gauge: only terminal <= generated is checked; a report that names another port: skipped).
+    DVT_TXCNT1B=on (DV-Router 051a4516, data.md 10.8: generated = sent + dropped_* + canceled before release + still queued) adds the cancellation
+    term dv_edge_drops_total{reason=rf_fenced} as an upper bound on the unaccounted copies (dc.conservation_problems); without it the equation is
+    exactly the one above and rf_fenced is only recorded (older images leave a fenced copy queued, so it would count twice)."""
     strict_or_skip("DP18-o conservation")
+    txcnt1b = dc.txcnt1b_on()
     run = objects_run
     end = time.monotonic() + 45.0
     while True:
@@ -545,13 +549,14 @@ def test_dp18_o_strict_every_generated_copy_is_accounted_for(rig, target, hub, o
         copies, why = dc.copies_expected(origin, run.shape, run.port)
         if copies is None:
             pytest.skip("conservation not computable: %s" % why)
-        problems = dc.conservation_problems(copies, delta, queue_delta, dc.no_rf_edge_total(origin))
+        fenced = dc.edge_drops(samples, "rf_fenced") - run.base_fenced
+        problems = dc.conservation_problems(copies, delta, queue_delta, dc.no_rf_edge_total(origin), fenced if txcnt1b else None)
         if not problems or time.monotonic() > end:
             break
         time.sleep(5.0)
     worker = {k: v - run.base_worker.get(k, 0) for k, v in dc.worker_rf_counts(samples).items() if v - run.base_worker.get(k, 0)}
-    fenced = dc.edge_drops(samples, "rf_fenced") - run.base_fenced
-    note(target, "DP18-o", "RECORD", "strict conservation: " + dc.conservation_terms(origin, copies, delta, run.base_queue, queue, worker, fenced))
+    note(target, "DP18-o", "RECORD", "strict conservation%s: " % (" (TXCNT1b equation)" if txcnt1b else "")
+         + dc.conservation_terms(origin, copies, delta, run.base_queue, queue, worker, fenced, txcnt1b))
     assert not problems, "; ".join(problems)
 
 
@@ -584,6 +589,21 @@ def test_dp18_o_txcnt1_delayed_counts_frames_not_ticks(rig, target, hub, objects
              dc.result_total(delta, "simulated"), run.base_queue, queue, queue_delta, len(run.times), fenced,
              "dropped_ttl - queue base" if run.base_queue is not None else "none (queue base unreadable)"))
     problems = dc.txcnt1_problems(delayed, copies, ttl, run.base_queue)
+    assert not problems, "; ".join(problems)
+
+
+def test_dp18_o_txcnt1b_result_labels_are_the_documented_set(rig, target, hub, objects_run):
+    """DVT_TXCNT1B=on (DV-Router 051a4516, data.md 10.8 item 8 and 13.1). Every `result` label of dv_edge_rf_tx_total on the hub (any port, any kind)
+    belongs to the documented set sent, simulated, sent_over_budget, delayed, dropped_ttl, dropped_queue, dropped_exceeds_quota, dropped_too_long;
+    dropped_budget, dropped_quota and dropped_gap were removed (budget, quota and gap holds wait as `delayed`, an expired hold is dropped_ttl). Same
+    observation as the other DP18-o cases (the fixture makes sure the RF port has run), no extra run."""
+    if not dc.txcnt1b_on():
+        pytest.skip("DP18-o txcnt1b labels need the switch DVT_TXCNT1B=on (an older image still exports the removed labels: docs/dp18-cases.md)")
+    seen = dc.rf_tx_result_labels(metrics.parse(hub.text()))
+    note(target, "DP18-o", "RECORD", "txcnt1b: dv_edge_rf_tx_total result labels seen %s; documented %s" % (seen, list(dc.TXCNT1B_RESULTS)))
+    if not seen:
+        pytest.skip("the hub has no dv_edge_rf_tx_total series, so the label set cannot be checked")
+    problems = dc.result_label_problems(seen)
     assert not problems, "; ".join(problems)
 
 
