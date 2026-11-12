@@ -258,11 +258,14 @@ lengths and space bytes). Built by `rif5.timeline_lines` from the fake's event l
 
 | `ev` | fields | meaning |
 |------|--------|---------|
-| `frame` | `t`, `type` (`DSTAR_DATA`, `SET_MODE`, ...), `mode` (`dstar` / `dmr` / `ysf` or null), `len` (payload bytes), `arg` (SET_MODE only: the mode byte in hex) | a frame the host wrote to the modem; GET_STATUS is left out (the status lines cover it) |
-| `status` | `t`, `mode`, `flags`, `space` = `{dstar, dmr1, dmr2, ysf}` | a GET_STATUS reply the fake sent, the free space per mode as reported (payload bytes 3, 4, 5, 6 = frame offsets 6, 7, 8, 9); the fake computes it at that instant from the play-out (`mmdvm_modem.py:337-343`) |
-| `sent` | `t`, `index`, `est` (true) | a word the room side sent. The time is ESTIMATED: the words spread evenly over the talk call (start to end without its 0.5 s tail); the case does not see the client's packets |
+| `frame` | `t`, `dir` (`h2m`), `event` (`write`), `type` (`DSTAR_DATA`, `SET_MODE`, ...), `mode` (`dstar` / `dmr` / `ysf` or null), `len` (payload bytes), `arg` (SET_MODE only: the mode byte in hex) | a frame the host wrote to the modem; GET_STATUS is left out (the status lines cover it) |
+| `status` | `t`, `dir` (`m2h`), `event` (`status`), `type` (`GET_STATUS`), `len` (20), `mode`, `flags`, `tx` (the TX flag), `space` = `{dstar, dmr1, dmr2, ysf}`, `space_triple` = `[dstar, dmr2, ysf]`, `fifo_bytes` (DVT_RIF5FW only) | a GET_STATUS reply the fake sent, the free space per mode as reported (payload bytes 3, 4, 5, 6 = frame offsets 6, 7, 8, 9); the fake computes it at that instant from the play-out (`mmdvm_modem.py:337-343`) |
+| `fw` | `t`, `event` (`write`, `pop`, `nak`, `preamble_start`, `preamble_end`, `tx_off`, `underrun`) and per event `type`, `fifo_bytes`, `duration_ms`, `air_ms`, `reason`, `dry_s`, `end_frame` | the firmware-like fake (DVT_RIF5FW) only: see "The firmware-like fake"; a past event carries the time it happened |
+| `sent` | `t`, `event` (`sent`), `index`, `est` (true) | a word the room side sent. The time is ESTIMATED: the words spread evenly over the talk call (start to end without its 0.5 s tail); the case does not see the client's packets |
 | `truncated` | `lines` | lines cut beyond the bound |
 | `summary` | `case`, `facts` (the judge's numbers: `voice_sent`, `voice_written`, `voice_dropped`, `leading_idle_s`, ...), `problems`, `findings`, `frames_total` | last line. The `frames_total` ok / dropped deltas are NOT read by these cases (the hub metrics lag up to 10 s); the cumulative counters of the run are in `control/8-N.out` with `control/control.log` |
+
+The `dir` / `type` / `len` / `event` / `fifo_bytes` / `tx` names and the `event` values are those DV-Router proposes (design-276 1.8); our own fields stay.
 
 Reading it: the frames written against the `sent` lines and the `status` lines show how many frames the host put on the byte link between two replies, and the space it saw when it did. Mind that D-STAR, DMR and YSF
 numbers are not alike: only the D-STAR loss has been measured so far.
@@ -279,6 +282,65 @@ numbers are not alike: only the D-STAR loss has been measured so far.
   written index equals sent index. It now takes the letter from the burst of the words sent.
 
 Re-run (the same command as the run, only the RIF5 file; add `-k` to narrow): see "Run it". Expected after the fixes: 19 passed, O3 and RXD failing as PRODUCT items until DV-Router answers.
+
+## The firmware-like fake and the cases for the fix image (RIF5j)
+
+DV-Router analysed FC1, O3 and RXD (`design-276`, unit RIF5j) and accepted all three as its own. Its fix (a later image): a 50 ms status poll while keyed or draining, in-flight caps 10 / 4 / 3 counted by poll
+sequence, a host queue of 1.7 s airtime that drops to a D-STAR sync or DMR burst A, a `tx_underrun` result of `dv_edge_radio_modem_total`, both frequencies in the public row, damaged DMR / YSF frames inside an open
+over becoming codec silence, radio-edge `SILENCE` 400 ms. Two new switches, both off by default: **without them every case, every verdict and the fake are exactly what the first run used** (the current image gives the
+same results as before).
+
+| Switch | Effect |
+|--------|--------|
+| `DVT_RIF5FW=on` | the fake modem is firmware-like (below). Optional `DVT_RIF5FW_PROFILE=mmdvm` (default) or `hs`, `DVT_RIF5FW_TXDELAY_MS=0..500` (default: the row's SET_CONFIG value, 100 ms in the snippet) |
+| `DVT_RIF5J=on` | the image has RIF5j: RIF5-J-LONG runs, RIF5-O3 and RIF5-RXD get the assertions of the fix (they keep the current ones, which the fix image also meets) |
+
+Both are passed to the tester by `rig/compose.yml` (`cases/unit/test_tester_env.py` guards it) and documented in `dvtest/target.py`.
+
+### The firmware-like fake (`dvtest/mmdvm_fw.py`, DVT_RIF5FW=on)
+
+Under the switch `Rif5Modem` is replaced by `FwRif5Modem`; the dialogue, NAKs for mode and enables, the RF key-up and the silence faults are the parent's. The TX path is `FwModel`, pure and in virtual time (`cases/unit/test_mmdvm_fw.py`).
+The numbers are design-276 1.2 and 1.9 (their file:line are in the module docstring; `M/` = MMDVM `1aa1034`, `HS/` = MMDVM_HS `bf66faf`). They come from source, not from a measurement: DV-Router's RIF13 checks H3 (idle space per board) and H4
+(preamble length) confirm them on boards.
+
+| What | MMDVM (default) | MMDVM_HS (`DVT_RIF5FW_PROFILE=hs`) |
+|------|-----------------|------------------------------------|
+| TX FIFO, D-STAR / DMR slot 2 / YSF | 370 / 370 / 4000 bytes | 1000 / 875 / 1500 bytes |
+| stored per frame | D-STAR header 42, data 13, EOT 1; DMR 33; YSF 120 bytes (a frame that does not fit: NAK 5) | same |
+| space in the status = free bytes / unit | 13 / 35 / 120: idle 28 / 10 / 33; DMR slot 1 byte fixed 10 | idle 76 / 25 / 12; slot 1 fixed 25 |
+| a frame leaves the FIFO | when its play-out starts: one per air time (D-STAR header 141.7 ms, data 20, EOT 30; DMR 60; YSF 100) | same |
+| TX-delay preamble (TX off, a frame at the head, FIFO not consumed) | D-STAR header 500 ms + tx delay; DMR and YSF 500 ms + tx delay; at most 1 s; D-STAR data after TX went off: none | D-STAR 250 ms + tx delay, DMR and YSF as MMDVM |
+| TX flag in the status | on from the first write (preamble) until the FIFO runs dry | same |
+| underrun | PTT off when the FIFO is dry; a frame of the same mode within 1 s of that, when the last frame played was not an EOT / terminator, is an `underrun` event (`dry_s`); the next frame keys again, with a new preamble for DMR, YSF and a D-STAR header | same |
+
+The 1 s underrun window and the end-frame test (D-STAR EOT, DMR data burst, YSF FICH FI 2) are our rule, not a firmware's. Events (`write`, `pop`, `nak`, `preamble_start`, `preamble_end`, `tx_off`, `underrun`) go to the
+timeline as `fw` lines with the FIFO bytes. Not modelled: RSSI, the sample buffer, DMR fill bursts, lockout, a host that stops polling.
+
+Against the CURRENT image this fake is a probe, not a verdict: the host there caps 10 / 3 / 2 frames per 250 ms status, so the modem runs dry and the timeline shows `underrun` events and `tx_off` lines inside the over. The existing
+cases do not assert them (they run with the verdicts of the first run, plus whatever the preamble does to their timing).
+
+### Cases for the fix image (`DVT_RIF5J=on`, with `DVT_RIF5FW=on` for the full check)
+
+What each asserts (design-276 1.8 "Rig (dv-testset), what RIF5 should assert after the fix"):
+
+| Case | Asserts |
+|------|---------|
+| RIF5-J-LONG (`test_j_long_overs_are_lossless`, about 1 minute) | a 3 s over from the room in D-STAR, DMR, YSF, judged strictly (no `lossy`): 150 of 150 voice words written in order and byte exact (YSF but for the b2 gain steps), the D-STAR sync at positions 0 mod 21, DMR burst A at 0 mod 6, no NAK; GET_STATUS while keyed: median 0.065 s at most (the fix polls every 50 ms), longest 0.12 s; with `DVT_RIF5FW=on` no `underrun` / `nak` event of the fake (without it a RECORD says the underrun is not modelled); over the three overs `frames_total{dir=tx,result=dropped}` grew by 0, `modem_total{result=tx_underrun}` is exported and grew by 0 (hub counters read 11 s before and 12 s after; needs the rig control channel, else a RECORD). Timelines `timeline-J-LONG-<mode>.jsonl` |
+| RIF5-O3 | (the existing case, which already asserts both frequencies) plus: the public row has exactly the 19 observer fields |
+| RIF5-RXD | (the existing assertions hold on the fix image) plus: the over ends 0.2 to 0.5 s after the last damaged copy (300 ms native-over timeout; the radio edge `SILENCE` is 400 ms), and exactly 30 words follow the 30 sent (3 silence units for each of the 10 copies), all one word; a RECORD names that word against the rig's DMR pad word |
+
+Not built: a forced-underrun case (a network gap of 1.5 s mid-over, `tx_underrun` exactly 1: the room clients of the rig cannot pause inside one talk; design-276 TL6 covers it in the core), the DMR 13 / YSF 5 bound of the
+silence fill (R2: the exact count of fills before the LOST is not stated), `modem-side over lasts the network over + E` (E unknown until RIF13 H1), the YSF extra frame (RIF5k). Also not run against hardware: the fill of damaged
+frames needs a real firmware that delivers them (real firmware filters a wrong colour code itself, `M/DMRDMORX.cpp:132-180`).
+
+Run on the fix image (the command of "Run it", with the two switches):
+
+```sh
+DVT_RIF5J=on DVT_RIF5FW=on DVT_RIF5=on DVT_SUT_NAME=dv-router DVT_SUT_CONFIG_EXTRA=$R/web.toml:$R/admin.toml:$R/totp-required.toml:$R/rif5-mmdvm-udp.toml \
+  scripts/run.sh -m rig --capture --profile web -- cases/test_rif5_mmdvm_serial.py -rA
+```
+
+With `DVT_RIF5FW_PROFILE=hs` the same with the HS board's sizes. The other environment (`XLXD_SUT_IMAGE`, `DVT_SUT_LAUNCH=native`, ...) is that of "Run it".
 
 ## GAPs, things not driven black-box, and predictions
 

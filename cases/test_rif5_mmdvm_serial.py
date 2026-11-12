@@ -35,6 +35,7 @@ import pytest
 
 from dvtest import echo, rif5, sut_config
 from dvtest import mmdvm_rf as rf
+from dvtest import mmdvm_fw
 from dvtest import mmdvm_serial as ms
 from dvtest.control import RigControl
 from rif5_support import (Member, admin_row, last_dialogue, note, public_row, quiesce, restart_radio_edge, settle_idle, wait_for, wait_unfenced,
@@ -50,6 +51,7 @@ KINDS = ("dstar", "dmr", "ysf")
 # in flight, and the host queue (16, oldest dropped) overflows at the 23rd word of a real-time over. One DMR superframe, three YSF frames.
 TX_FRAMES = {"dstar": 22, "dmr": 18, "ysf": 15}
 RX_SECONDS = 3.0
+RXD_COPIES = 10                                      # damaged header copies of RIF5-RXD
 LONG_FRAMES = 150                                    # 3 s
 OPEN_WAIT_S = 150.0                                  # the edge retries a failed open with a backoff of up to 60 s
 TALLY = Counter()                                    # what the cases did, for RIF5-M1
@@ -93,7 +95,13 @@ def ctx(rig, target):
         transport = ms.PinnedUdp(port.peer, port.bind)
     except OSError as exc:
         pytest.fail("cannot bind the modem side of the UDP byte port %s:%d: %s" % (port.peer[0], port.peer[1], exc))
-    modem = ms.Rif5Modem(transport).start()
+    if rif5.fw_on(os.environ):
+        profile, delay = rif5.fw_settings(os.environ)
+        modem = mmdvm_fw.FwRif5Modem(transport, profile=profile, tx_delay_ms=delay).start()
+        note(target, "setup", "RECORD", "DVT_RIF5FW=on: the fake modem is firmware-like (profile %s, TX delay %s, dvtest/mmdvm_fw.py)" % (
+            profile, "from SET_CONFIG" if delay is None else "%d ms" % delay))
+    else:
+        modem = ms.Rif5Modem(transport).start()
     control = RigControl(Path(target.out) / "control") if os.environ.get("DVT_RIG_CONTROL") == "1" else None
     if not seen:
         note(target, "setup", "RECORD", "rendered config not visible in out/: the snippet's own values are assumed (%s)" % (port.modes,))
@@ -279,6 +287,10 @@ def test_o3_port_row_in_the_status(ctx, web, admin_factory):
         # radio.md 12.3 (RadioPortInfo, scope obs) and status.md "Radio port telemetry" list rx_freq_hz and tx_freq_hz among the observer fields
         problems.append("public row differs (got, wanted): %s; observer fields of the document missing from the row: %s" % (
             wrong, sorted(f for f in rif5.OBSERVER_FIELDS if f not in row)))
+    if rif5.j_on(os.environ) and (set(row) != set(rif5.OBSERVER_FIELDS)):
+        # RIF5j (design-276 2): the public port row has exactly the 19 observer fields, the two frequencies among them
+        problems.append("public row keys differ from the 19 observer fields: missing %s, extra %s" % (
+            sorted(set(rif5.OBSERVER_FIELDS) - set(row)), sorted(set(row) - set(rif5.OBSERVER_FIELDS))))
     if sorted(row.get("modes") or []) != ["dmr", "dstar", "ysf"]:
         problems.append("modes %r" % (row.get("modes"),))
     if row.get("tx") not in ("on", True):
@@ -442,7 +454,7 @@ def test_rx_dmr_damaged_copies_refresh_the_over_timeout(ctx, web):
     air, voice, count = ctx.modem.build_keyup("dmr", frames=frames, **kw)
     valid = air[:-1]                                              # header and the ten voice bursts, the real terminator dropped
     bad = rif5.dmr_damaged_copy(kw["src"], kw["dst"], kw["colour_code"])
-    air = valid + [(rf.DMR_DATA2, bad, 100.0)] * 10
+    air = valid + [(rf.DMR_DATA2, bad, 100.0)] * RXD_COPIES
     listener = Member(ctx.ip, "dmr", rif5.ROOMS["dmr"], 1, listen=True)
     try:
         ku = ctx.modem.play_air("dmr", air, voice, count)
@@ -470,6 +482,20 @@ def test_rx_dmr_damaged_copies_refresh_the_over_timeout(ctx, web):
         "the damaged copies did not refresh the native-over timeout of radio.md 7.3 (the room over ends with the radio edge SILENCE of radio.md 4.4, %.1f s " \
         "without a unit)" % (case, after_valid, t_last - t_valid, rif5.EDGE_SILENCE_S)
     assert after_last <= 3.0, "%s: the over ended %.2f s after the last copy, the timeout is 0.3 s" % (case, after_last)
+    if rif5.j_on(os.environ):
+        # RIF5j (design-276 3.3): a frame the modem delivered inside the open over that the framer rejects becomes codec silence for its airtime (3 units
+        # per DMR burst), the room over ends with the hub's 300 ms native-over timeout after the last copy (the radio edge SILENCE is 400 ms, a backstop)
+        problems = []
+        silence = compare.extra
+        if not rif5.RXD_J_END_S[0] <= after_last <= rif5.RXD_J_END_S[1]:
+            problems.append("the over ended %.2f s after the last damaged copy, wanted %.2f to %.2f s (300 ms native-over timeout)" % ((after_last,) + rif5.RXD_J_END_S))
+        if len(silence) != 3 * RXD_COPIES:
+            problems.append("%d words after the 30 sent, wanted %d (3 silence units for each of the %d damaged copies)" % (len(silence), 3 * RXD_COPIES, RXD_COPIES))
+        elif len(set(silence)) != 1:
+            problems.append("the %d extra words are not one silence word: %d different" % (len(silence), len(set(silence))))
+        note(ctx.target, case, "RECORD", "RIF5j: end %.3f s after the last copy; %d extra words, distinct %d, the first %s; the rig DMR pad word is %s" % (
+            after_last, len(silence), len(set(silence)), silence[0].hex() if silence else None, rf.PAD_WORD["dmr"].hex()))
+        assert not problems, "%s: %s" % (case, problems)
     TALLY["rx"] += 1
 
 
@@ -530,6 +556,64 @@ def test_long_over_is_recorded(kind, ctx, web):
     TALLY["tx_native_frames"] += len(native)
     assert native, "%s: no native frame was written" % case
     assert verdict.facts.get("voice_written", 0) > 0 or kind == "dmr" and verdict.facts.get("voice_bursts", 0) > 0, "%s: no voice written" % case
+
+
+# ---------------------------------------------------------------- RIF5-J: the image with the RIF5j fix (DVT_RIF5J=on)
+
+def test_j_long_overs_are_lossless(ctx, web):
+    """design-276 1.8, "Rig (dv-testset), what RIF5 should assert after the fix". A 3 s over from the room in each mode (RIF5-LONG's, but strict): all 150
+    voice words written in order and byte-exact (YSF but for the b2 gain steps), the D-STAR sync at position 0 mod 21, the DMR burst A at 0 mod 6, no NAK
+    from the fake, GET_STATUS every 50 ms while keyed (median 0.065 s at most), no `underrun` event of the firmware-like fake (DVT_RIF5FW=on; without
+    it the fill model cannot run dry and that check is a RECORD), and over the three overs the hub counters: `frames_total{dir=tx,result=dropped}`
+    grew by 0, `modem_total{result=tx_underrun}` exists and grew by 0. Timelines: out/<run>/rif5/timeline-J-LONG-<mode>.jsonl."""
+    if not rif5.j_on(os.environ):
+        pytest.skip("DVT_RIF5J is not on: this case is for an image with DV-Router RIF5j (design-276; docs/rif5-cases.md \"Cases for the fix image\")")
+    case = "RIF5-J-LONG"
+    problems = []
+    firmware = hasattr(ctx.modem, "fw")
+    before = None
+    if ctx.control is not None:
+        ready(ctx, web, case)
+        time.sleep(11.0)                                          # the hub metrics are up to 10 s old: a baseline that holds everything before the overs
+        before = counters_now(ctx)
+    natives = 0
+    for kind in KINDS:
+        sub = "%s-%s" % (case, kind)
+        log, since, sent, ident = tx_over(ctx, web, kind, LONG_FRAMES, "rif5-jlong", sub)
+        verdict = judge_tx(kind, log, sent, ident, ctx.port)                   # strict: a dropped word is a problem
+        native = [f for f in log if f.ftype in ms.TX_TYPES[kind]]
+        natives += len(native)
+        keyed = rif5.status_cadence_keyed(log, native[0].mono, native[-1].mono) if native else rif5.verdict(["no native frame was written"])
+        naks = [(ms.name_of(n[1]), n[2]) for n in ctx.modem.naks if n[0] >= since]
+        fw = ctx.modem.fw_events(since, names=("underrun", "nak")) if firmware else None
+        timeline(ctx, sub, since, verdict)
+        span = native[-1].mono - native[0].mono if native else 0.0
+        note(ctx.target, sub, "RECORD", "native frames %d over %.2f s; %s; status while keyed %s; fake underrun events %s" % (
+            len(native), span, ", ".join("%s=%s" % kv for kv in sorted(verdict.facts.items())), keyed.facts,
+            "not modelled (DVT_RIF5FW is off)" if fw is None else len(fw)))
+        for line in verdict.findings:
+            note(ctx.target, sub, "FINDING", line)
+        problems += ["%s: %s" % (kind, p) for p in verdict.problems + keyed.problems]
+        if naks:
+            problems.append("%s: the modem had to NAK frames of the host: %s" % (kind, naks[:4]))
+        if fw:
+            problems.append("%s: the firmware-like fake logged %s" % (kind, [(round(t - since, 3), e, d.get("dry_s")) for t, e, d in fw[:4]]))
+    if before is None:
+        note(ctx.target, case, "RECORD", "no control channel: the counters of dropped frames and tx_underrun were not read")
+    else:
+        time.sleep(12.0)
+        after = counters_now(ctx)
+        if not rif5.has_series(after, "dv_edge_radio_modem_total", result="tx_underrun"):
+            problems.append("dv_edge_radio_modem_total{result=tx_underrun} is not exported (the fixed result label set of the fix)")
+        for label, family, labels in (("dropped", "dv_edge_radio_frames_total", {"dir": "tx", "result": "dropped"}),
+                                      ("tx_underrun", "dv_edge_radio_modem_total", {"result": "tx_underrun"})):
+            grown = rif5.delta(before, after, family, **labels)
+            note(ctx.target, case, "RECORD", "%s grew by %s over the three overs" % (label, grown))
+            if grown:
+                problems.append("%s grew by %s over the three overs of 150 words" % (label, grown))
+        ok = rif5.delta(before, after, "dv_edge_radio_frames_total", dir="tx", result="ok")
+        note(ctx.target, case, "RECORD", "frames_total{dir=tx,result=ok} grew by %s, the modem logged %d native frames" % (ok, natives))
+    assert not problems, "%s: %s" % (case, problems)
 
 
 # ---------------------------------------------------------------- RIF5-D: a modem that goes silent
