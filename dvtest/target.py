@@ -62,6 +62,10 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
                      asserts the dv_edge_rf_tx_total result labels are the documented eight (no dropped_budget,
                      dropped_quota or dropped_gap); off or unset: the conservation is the older equation and the
                      label case skips (docs/dp18-cases.md "Strict")
+  DVT_RIF5           on: DV-Router RIF5 (c017e491 or later), the `mmdvm-serial` radio adapter: cases/test_rif5_mmdvm_serial.py plays a fake
+                     MMDVM modem (dvtest/mmdvm_serial.py) on the UDP byte port <tester>:3340 <-> <sut>:3341 of rig/config/dv-router/rif5-mmdvm-udp.toml
+                     (DVT_SUT_CONFIG_EXTRA; native launch): D-STAR, DMR and YSF overs in both directions, the open dialogue, the startup guard and a
+                     silent modem; off or unset: the cases skip naming this switch (docs/rif5-cases.md)
   DVT_FLK10          on: FLK10, dv-edge-webrtc refuses an offer whose media section has a missing, repeated, empty,
                      over-16-byte or duplicate a=mid (403 forbidden); the cases of cases/test_web_rtc_mid.py skip naming
                      this switch without it (needs an image with DV-Router 98c88b2, wip-bd3ceb9; docs/web-mid-cases.md)

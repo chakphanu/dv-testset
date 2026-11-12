@@ -1,0 +1,201 @@
+<!-- SPDX-License-Identifier: MIT -->
+# DV-Router RIF5: the `mmdvm-serial` radio adapter against a fake MMDVM modem
+
+Status: written offline against DV-Router `c017e491` (RIF5 complete in software: S2 `fd58a4e` the adapter, its config keys and the D-STAR framer, S3 `43483ca` DMR simplex, S4 `c017e491`
+YSF; a damaged DMR frame refreshes the over timeout). **Nothing here has run on a rig.** What the unit tests prove: the envelope, the setup frames, the fake modem answering a host that
+speaks the adapter's dialogue, and every judgement over synthetic host logs (`cases/unit/test_mmdvm_serial.py`, `cases/unit/test_rif5_lib.py`).
+
+DV-Router's radio edge `dv-edge-radio` has a port kind `mmdvm-serial`. It talks the MMDVM modem host protocol over a byte port that is a serial device, a pty or a UDP socket pair. It is
+off unless a `[[edges.radio.port]]` of that kind is configured (`config.md:687-690`). The tester plays the modem on the UDP byte port: it answers the dialogue, records every frame the
+adapter writes (room to modem) and sends RF overs (modem to room). A protocol client of the room hears the second and keys the first.
+
+| File | What |
+|------|------|
+| `dvtest/mmdvm_serial.py` | the envelope (short and long form), the two setup frames read from the document, `Rif5Modem` (the fake modem: `VirtualModem` plus a 17 byte status, a log of every host frame with its time, silence, a short status, the firmware's NAKs), `PinnedUdp` |
+| `dvtest/rif5.py` | the judgements over a host frame log: open dialogue, status cadence, startup guard, an over per mode, a silent modem; the port row of a rendered config, the public / admin status rows, metric deltas |
+| `cases/test_rif5_mmdvm_serial.py`, `cases/rif5_support.py` | the rig cases (marker `rig`) and their helpers |
+| `rig/config/dv-router/rif5-mmdvm-udp.toml` | the config snippet (`DVT_SUT_CONFIG_EXTRA`) |
+| `cases/unit/test_mmdvm_serial.py`, `cases/unit/test_rif5_lib.py` | offline tests (`-m unit`) |
+
+Reused, not rewritten: the RF frame builders and decoders of `dvtest/mmdvm_rf.py` (D-STAR header with CRC, DMR LC bursts with BPTC / RS / Golay, YSF FICH / CSD / VCH), the key-up
+player and UDP transport of `dvtest/mmdvm_modem.py` (the virtual modem of `docs/mmdvm-stack-cases.md`, which answers the real MMDVMHost and is a version 2 modem with a 12 byte status:
+DV-Router needs 17, `status.rs:65`), the protocol clients of `dvtest/clients.py`, `dvtest/echo.py` for what a client heard, `dvtest/txguard.py` for the fence.
+
+## The config shape
+
+`rig/config/dv-router/rif5-mmdvm-udp.toml`, merged after the template (the template must not define `[edges.radio]` itself):
+
+```toml
+[edges.radio]
+enable = true
+callsign = "N0CALL"
+rules = "other"
+tx_enable = true
+tx_ack = "I am the control operator of N0CALL and accept responsibility for its transmissions"
+
+[[edges.radio.port]]
+name = "rif5-modem"
+kind = "mmdvm-serial"
+physical = "rif5-modem"
+tx = true
+band = "70cm"
+rx_freq = 434000000
+tx_freq = 434000000
+udp = "<TESTER_IP>:3340"          # the modem: the tester
+udp_bind = "<OWN_IP>:3341"        # the edge: the SUT
+modes = { dstar = "P", dmr = "Q", ysf = "R" }
+hang = { rf_mode_secs = 1, net_mode_secs = 1 }
+timers = { tot_secs = 180 }
+id = { mode = "none", interval_secs = 600 }
+dmr = { color_code = 1, tg = 4017 }
+```
+
+| Key | Why it is there | Source |
+|-----|-----------------|--------|
+| `[edges.radio] enable`, `callsign` | the edge is off by default; the callsign is required (3-8 letters and digits) and is the station of the RF identity | `config.md:689,701-702` |
+| `tx_enable`, `tx_ack`, `physical`, `tx = true`, `band`, `rx_freq`, `tx_freq` | room-to-modem frames are written only on a transmitting port; every gate of the document is met: master switch, the exact acknowledgement sentence, a physical id, an amateur band, RF frequencies inside it | `config.md:703-705,711,715,728-729`; `radio.md:893` (10.1) |
+| `rules = "other"`, `id = { mode = "none", interval_secs = 600 }`, `timers.tot_secs` | under `other` a transmitting row states its ID mode, interval and TOT itself; the ID is off so that no `SEND_CWID` follows an over (GAP below); DV-Router's own real-children test uses the same shape | `config.md:705,745,753-760`; `crates/router/tests/real_children/radio/mmdvm.rs` `config()` |
+| `kind = "mmdvm-serial"`, exactly one of `device` or `udp`, `udp` + `udp_bind` | the byte port; `udp` is the PEER (the modem), `udp_bind` the local bind; a datagram from any other address is dropped | `config.md:722-725,796-800`; `io.rs:287` |
+| `modes = { dstar = "P", dmr = "Q", ysf = "R" }` | one room per mode, the modules must differ; D-STAR, DMR simplex slot 2 and YSF V/D mode 2 are the built modes; the key `module` is forbidden on an MMDVM row | `config.md:712,727,815-817`; `radio.md:690-692` |
+| `hang` 1 s / 1 s | the smallest RF and network mode hang (1-60), so that the cases can change mode after a short wait; the defaults are 10 s and 3 s | `config.md:861-864`; `radio.md:696-697` |
+| `dmr = { color_code = 1, tg = 4017 }` | the colour code of every transmitted burst; the LC talk group of the transmitted headers (4017 is the talk group of room Q for the DMR clients of the rig, `dvtest.proto.dmr.module_tg("Q")`) | `config.md:843-845`; `radio.md:736` |
+| rooms P, Q, R | D-STAR client module P, DMR client TG 4001+16, YSF client DG-ID 10+17; the template serves A-Z | `dvtest/clients.py` |
+
+The tester binds `<TESTER_IP>:3340` and sends from there to `<OWN_IP>:3341`; the edge sends from `<OWN_IP>:3341` to `<TESTER_IP>:3340` and drops datagrams from any other source address.
+Changing anything in `[edges.radio]` restarts `dv-edge-radio` (`config.md:696`).
+
+## MMDVM protocol facts the modem and the judges use
+
+All from DV-Router `docs/design/radio.md` at `c017e491` unless a Rust file is named.
+
+| Fact | Source |
+|------|--------|
+| envelope: short `E0 LEN TYPE payload` (total 3-255), long `E0 00 L2 TYPE payload` (total 255 + L2); invalid LEN 1 and 2 and a zero L2 drop the `E0` and rescan; no checksum | `radio.md:586-592`; `frame.rs` |
+| types: GET_VERSION 00, GET_STATUS 01, SET_CONFIG 02, SET_MODE 03, SET_FREQ 04, SEND_CWID 0A, ACK 70, NAK 7F; D-STAR HEADER 10, DATA 11, LOST 12, EOT 13; DMR slot 2 DATA 1A, LOST 1B; YSF DATA 20, LOST 21 | `radio.md:594-600` |
+| version reply: v1 = byte 3 is 1 and a text from byte 4; v2 = byte 3 is 2, cap1 at 4 (D-STAR 01, DMR 02, YSF 04), cap2 at 5, CPU at 6, UDID at 7-22, text from 23; a missing requested mode is a capability mismatch | `radio.md:601-615`; `status.rs:119-150` |
+| open: settle 2000 ms, GET_VERSION (at most six attempts 1800 ms apart), SET_FREQ then SET_CONFIG with a 1000 ms ACK deadline and one retry each, then GET_STATUS and Up; a NAK or exhausted deadline is Down; no frame transmits voice during open; a reopened link repeats the whole dialogue | `radio.md:611-615`; `core.rs:338,466,498,882-892` |
+| polling: GET_STATUS every 250 ms; a valid status refreshes inactivity; 2000 ms without one after Up gives Down/inactive, closes the TX gate and requests link recovery; the shell reopens with 2 s doubling to 60 s | `radio.md:616-620`; `core.rs:910,924,285-286` |
+| SET_CONFIG v2 is 40 B, both versions always set the simplex flag 80; enables D-STAR 01, DMR 02, YSF 04; levels `(percent*255+50)/100`; DC `offset+128`; TX delay ms/10; colour code at frame 29, DMR delay 30, oscillator 80 at 31 | `radio.md:621-629`; `config.rs:209-255` |
+| SET_FREQ is 17 B `E0 11 04 00`, adjusted RX and TX Hz u32 LE, RF level, POCSAG Hz = adjusted TX | `radio.md:630-633`; `config.rs:257-266` |
+| status: v2 is 20 B (payload 17), mode at 3, flags at 4, D-STAR space 6, DMR slot 2 space 8, YSF space 9; a short status never refreshes inactivity | `radio.md:650-657`; `status.rs:65,83-113` |
+| native sizes: D-STAR header 41 B, data 12 B; DMR one control byte + 33 B; YSF one flag + 120 B; flow control: one frame per mode per 10 ms tick, space > 1 (D-STAR header > 4, costs 4), in flight at most D-STAR 10, DMR 3, YSF 2, host queue 16 per mode | `radio.md:665-675`; `core.rs:991-995` |
+| mode: the circuit claims its mode with SET_MODE before PTT; `WouldBlock` while another mode holds the modem (`mode_busy`); a normal TX end starts `hang.net_mode_secs`, the first RX frame of a mode `hang.rf_mode_secs`; a multi-mode modem returns to idle (SET_MODE 0) after the TX buffer drained and the hang expired | `radio.md:696-700,936-946` |
+| D-STAR RF: header flag `0x40` set, RPT1 = station padded to 7 + `dstar.rpt_module`, RPT2 = station + `G`; wrong RPT2 = `local_only`, bad CRC or RPT1 = `bad_header`; egress: flags clear, RPT1 = station + G, RPT2 = station + RF module, UR CQCQCQ, MY the talker, sync triple `55 2D 16` on frame 0 of each 21, one EOT | `radio.md:705-706`; `mode/dstar.rs:22-52,70-93` |
+| DMR RF: slot 2 only; control `41`/`42` header / terminator, `20` burst A, `1`-`5` B-F; egress: eight voice LC headers, A-F, three terminators, the row's colour code, MS data sync `D5 D7 F7 7F D7 57` on header and terminator, MS voice sync `7F 7D 5D D5 7D FD` on A, the envelope always `E0 25 1A 00`; no START, ABORT, SHORTLC | `radio.md:708-749`; `mode/dmr.rs:6-10` |
+| YSF RF: V/D mode 2 only; frame = flag + 120 B; egress `E0 7C 20 00` + 120 B, one header, one terminator, FICH Dev flag = `ysf.lo_dev` | `radio.md:753-791`; `mode/ysf.rs` |
+| a header or terminator copy that fails its checks inside an open over is ignored and refreshes the native-over timeout (300 ms without a native frame ends an RF over) | `radio.md:725-728`; `hub_dmr.rs:100-103`, `hub.rs:641` |
+| startup guard: a new observer transmits no earlier than G = 13 s after its first successful probe; the port shows `tx_state` `fenced`, `fence` `startup_guard`, `guard_ms`; no keying byte is written while the gate is closed | `radio.md:978,1008` (10.4 rule 4), `radio.md:700,1327`; `core.rs:230` (SET_MODE withheld without `rf_allowed`), `hub_dv.rs:7-25` |
+| status rows: `state` configured / up / down (observer), `down_reason` gone / protocol / inactive / closed / caps_mismatch, `firmware`, `modem` (admin only) | `radio.md:1323-1335`; `status.md:319-352` |
+| metrics: `dv_edge_radio_port_total{port,result=up\|down\|caps_mismatch}`, `dv_edge_radio_modem_total{result=open\|version_fail\|config_nak\|freq_nak\|inactive\|reopen\|drain_timeout}`, `dv_edge_radio_frames_total{dir,result}` (rx ok, short, mode_busy, unsupported, lost, bad_header, local_only; tx ok, dropped, nak), `dv_edge_radio_over_total`, `dv_edge_radio_ptt_total`, `dv_edge_radio_mode` | `radio.md:1253-1270`; `status.md:637-647`; `observe.rs:6-22`; `telemetry.rs:5-150` |
+
+## The fake modem
+
+`Rif5Modem` is a version 2 modem with the three DV capabilities. It answers GET_VERSION, GET_STATUS (17 byte payload: mode, flags, per-mode buffer space from a fill model, the TX flag while frames
+play out, the carrier-detect flag while an RF over plays), ACKs SET_FREQ, SET_CONFIG and SET_MODE (NAK 4 for a mode that is not enabled), accepts native frames (NAK 2 for a disabled mode or while
+another mode holds it, NAK 5 when its buffer has no room; a frame in idle selects its mode), takes SEND_CWID only from idle without an answer (NAK 5 otherwise) and NAKs a type it does not know with
+reason 1. Every frame the host writes is kept with its time, control frames included. `mute` stops all answers (the frames are still logged), `status_mode` `short` answers every poll with a
+10 byte status, `none` with nothing. It plays RF overs in real time (`keyup`, `play_air`) with the carrier-detect flag up. It is not a radio and not a firmware: the buffer is a fill model, there is
+no RSSI, and lockout is a flag a case may set (none does). Datagrams from an address other than the SUT's `udp_bind` are dropped, as the edge drops them.
+
+## Run it
+
+Needs an image with RIF5 (DV-Router `c017e491` or later), the native launch, and the web profile for the cases that read the port state and restart the edge (`totp-required.toml` because the
+admin step-up of the web fixtures starts from "first login = enrol", `docs/rig.md`; `data-ident.toml` is not needed: this unit has no data worker part).
+
+```sh
+R=rig/config/dv-router
+XLXD_SUT_IMAGE=<image with RIF5> DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-router DVT_SUT_LAUNCH=native DVT_SUT_GEN=compat1 \
+DVT_SUT_CONFIG=<template path> DVT_TRANSCODER_FAKE=1 DVT_RIF5=on \
+DVT_SUT_CONFIG_EXTRA=$R/web.toml:$R/admin.toml:$R/totp-required.toml:$R/rif5-mmdvm-udp.toml \
+  scripts/run.sh -m rig --capture --profile web -- cases/test_rif5_mmdvm_serial.py
+```
+
+About 12 minutes (estimate, one rig at a time): 3 for the rig and the web enrolment, up to 1.5 minutes for the first dialogue (the edge retries a failed open with a doubling backoff, up to 60 s,
+until the modem exists), the cases about 7 (G1 about 1 minute, O 20 s, TX 3 x 10 s, RX 3 x 12 s, RXD and RXR 2 minutes with the metrics waits, LONG 3 x 12 s, D3 10 s, D2 40 s, D1 60 s, M1 15 s).
+Without `--profile web` G1, O3 and the port-state assertions skip or fall back to the log (the fence is then waited out by time); without the rig control channel (`DVT_RIG_CONTROL=1` is set by
+`run.sh`) the metrics assertions skip. Without `DVT_RIF5=on`, or without the snippet in the rendered config, every case skips naming the missing piece. Notes: stdout and
+`out/<run>/rif5.txt` (`RECORD`, `FINDING`).
+
+## Cases
+
+Identities: the modem's RF source is `N0CALL` (DMR 1023007), the protocol client that keys the room is `N0TEST` (DMR 1023008), the listener of the RF cases is `N0TEST`. Callsigns, ids and talk groups
+are the synthetic ones of the rig.
+
+| Case | Test | Source | Expectation |
+|------|------|--------|-------------|
+| RIF5-G1 (c) | `test_g1_nothing_is_written_to_the_modem_during_the_startup_guard` | `radio.md:611-615,700,978,1008`; `core.rs:230` | after a restart of `dv-edge-radio` (admin API) the public row shows `tx_state` `fenced`, `fence` `startup_guard`, `guard_ms` an int or null; a 0.6 s D-STAR over from the room inside the guard; from the restart to 4 s after the guard no voice, EOT, CW ID or DMR control frame reaches the modem (a SET_MODE or other control frame in the window is a FINDING); the fence ends no earlier than about 13 s after the restart |
+| RIF5-O1 | `test_o1_open_dialogue` | `radio.md:611-633`; `config.rs` | GET_VERSION (at most 6, 1.8 s apart), SET_FREQ, SET_CONFIG, GET_STATUS in that order; SET_FREQ bytes equal the document's for the row; SET_CONFIG is 40 B, simplex flag, and the documented offsets (enables, TX delay, DC, levels, colour code, DMR delay, oscillator) carry the row's values, the others the zeros the document names; no voice or SET_MODE before the first status; the modem never had to NAK |
+| RIF5-O2 | `test_o2_status_poll_every_250_ms` | `radio.md:616-617` | median GET_STATUS interval 0.20-0.32 s, none above 0.8 s |
+| RIF5-O3 | `test_o3_port_row_in_the_status` | `radio.md:1318-1335`; `status.md:319-352` | public row: kind, pattern `mmdvm-host`, state `up`, band, modes, frequencies; admin row: `firmware` is the modem's text, `modem.protocol` 2, `down_reason` null, `physical` |
+| RIF5-TX-dstar (a) | `test_tx_room_to_modem[dstar]` | `radio.md:700,705-706,936-946`; `mode/dstar.rs:70-93` | a DExtra client keys module P with 50 frames: SET_MODE 1 first; one 41 B header (flags 0, RPT2 `N0CALL B`, RPT1 `N0CALL G`, UR `CQCQCQ`, MY the talker, CRC); 12 B data frames whose 9 B words are the words sent, in order, the sync triple on frames 0, 21, ...; one empty EOT after the last; nothing of another mode, no CW ID |
+| RIF5-TX-dmr (a) | `test_tx_room_to_modem[dmr]` | `radio.md:736-749`; `mode/dmr.rs:6-10` | a DMR client keys TG 4017 with 18 frames: SET_MODE 2 first; every frame `1A` with a 34 B payload and control byte 0; eight voice LC headers (group, src the talker, dst 4017, colour code 1, RS ok), burst A with the MS voice sync, headers / terminators with the MS data sync, six voice bursts (the words in order), three terminators; no `17 18 19 1C 1D 1E` |
+| RIF5-TX-ysf (a) | `test_tx_room_to_modem[ysf]` | `radio.md:753-791`; `mode/ysf.rs` | a YSF client keys DG-ID 27 with 15 frames: SET_MODE 3 first; frames `20` with a 121 B payload, flag 0; one header naming the talker, three V/D mode 2 frames (FICH data type 2, Dev flag `ysf.lo_dev`), one terminator; the words in order |
+| RIF5-RX-dstar (a) | `test_rx_modem_to_room[dstar]` | `radio.md:705`; `hub_dv.rs:128-166` | the modem plays a 3 s RF over (header `RPT1 N0CALL B`, `RPT2 N0CALL G`); a DExtra client on module P hears one over, talker `N0CALL`, 150 words equal to the words sent, the end; after the over no voice frame goes back to the modem |
+| RIF5-RX-dmr (a) | `test_rx_modem_to_room[dmr]` | `radio.md:710-735` | the modem plays a 3 s DMR over (LC header, A-F bursts with embedded LC, terminator, control bytes 41 / 20 / 1-5 / 42); a DMR client on TG 4017 hears one over from 1023007, the 150 words, the end; no echo to RF |
+| RIF5-RX-ysf (a) | `test_rx_modem_to_room[ysf]` | `radio.md:753-777` | the modem plays a 3 s V/D mode 2 over (header, 30 voice frames, terminator); a YSF client on DG-ID 27 hears one over from `N0CALL`, the words, the end; no echo to RF |
+| RIF5-RXD | `test_rx_dmr_damaged_copies_refresh_the_over_timeout` | `radio.md:725-728`; `hub_dmr.rs:100-103`, `hub.rs:641` | ten valid voice bursts, then ten header copies with a wrong colour code 100 ms apart and no terminator: the over stays open until the last copy and ends within 3 s after it (not 0.3 s after the last valid burst); the voice words are intact |
+| RIF5-RXR-local_only / bad_rpt1 / bad_crc | `test_rx_dstar_header_refused[...]` | `radio.md:705`; `mode/dstar.rs:23-52` | an RF over whose header has RPT2 not station + G (`local_only`), RPT1 not station + module or a bad CRC (`bad_header`): nothing reaches the room; `dv_edge_radio_frames_total{dir=rx,result=local_only\|bad_header}` grows (read for up to 30 s) |
+| RIF5-LONG-dstar / dmr / ysf | `test_long_over_is_recorded[...]` | `radio.md:665-671`; `core.rs:991-995` | a 3 s over from the room in each mode: RECORD of the frames written against the frames sent and a FINDING for every difference; asserts only that frames were written; see GAPs, "flow control" |
+| RIF5-D3 | `test_d3_a_gap_below_the_timeout_keeps_the_port_up` | `radio.md:616-620` | a modem silent for 1.0 s, then answering: no GET_VERSION in the next 7 s, the port stays `up` |
+| RIF5-D2 | `test_d2_a_short_status_does_not_refresh_inactivity` | `radio.md:616-620,656` | every poll answered with a 10 byte status: the public state shows `down`; the host's last poll is 1.4-2.3 s after the last valid status, then a reopen dialogue; `frames_total{dir=rx,result=short}` grows |
+| RIF5-D1 (b) | `test_d1_a_silent_modem_takes_the_port_down` | `radio.md:285,298,611-620,1332` | see "(b)" below |
+| RIF5-M1 | `test_m1_counters_account_for_the_overs` | `radio.md:1253-1270` | over the run (counters since the edge restart of G1, or since the first over): `over_total{dir=rx,result=started\|ended}` at least the RF overs accepted, `dir=tx result=started` and `ptt_total{key\|unkey}` at least the room overs, `frames_total{dir=rx,result=ok}` moved; `frames_total{dir=tx,result=ok}` against the native frames the modem logged is a FINDING when different |
+
+### (b) the port goes Down when the modem goes silent: the mechanism
+
+It is the status poll, not a transport timeout and not a byte count. Source: `radio.md:616-620` and `core.rs:910-924,285-286,886-892`.
+
+1. After Up the host sends GET_STATUS every 250 ms (the same poll feeds the modem's own watchdog). A **valid** status (version 2: at least 17 payload bytes) refreshes the inactivity time. A short status
+   or any other traffic does not (`radio.md:656`).
+2. When 2000 ms pass without a valid status the core fails with `PortDown::Inactive`: the TX gate closes, the link is closed (the UDP socket is released), the port is `Down`, reason `inactive`. Seen from
+   the modem: the polls go on for about 2 s after its last answer (about 7 unanswered polls) and then stop.
+3. The shell reopens the link after a backoff of 2 s doubling to 60 s, then runs the whole dialogue: settle 2 s, GET_VERSION up to six times 1.8 s apart. If the modem stays silent the sixth miss is a
+   second Down (`version_fail`, reason `protocol`) and the backoff doubles again. When the modem answers, the dialogue completes and the port is `Up` again.
+4. What status and metrics show: public state `procs[].radio.ports[]` with `state` `down` and `tx_state` `rx-only` (`radio.md:298`); the admin row (`GET /api/v1/admin/clients`, operator) `down_reason`
+   `inactive` (later `protocol`), `errors` and `reconnects`; `dv_edge_radio_modem_total{result=inactive}` and `dv_edge_radio_port_total{result=down}` grow (then `version_fail`, `reopen`, `open`
+   and `port_total{result=up}` after the recovery). The metrics reach the hub every 10 s.
+
+RIF5-D1 mutes the modem, reads the public state every 250 ms and the admin row for `down_reason`, waits for the first GET_VERSION and 12 s more (the six tries), judges the log (the last poll 1.4-2.3 s
+after the last answer, at least five unanswered polls, the next dialogue at least about 3.5 s after the last poll, the tries counted), then lets the modem answer and waits for the port to be `up` again
+(up to 120 s). The reopen delays walked (seconds between dialogues) are a RECORD.
+
+### (c) nothing is written to the modem during the startup guard
+
+The guard exists only after a start, so RIF5-G1 restarts `dv-edge-radio` through the admin API (`POST /api/v1/admin/children/dv-edge-radio/restart`, admin role, step-up; the same route RFSAFE1c uses for
+`dv-edge-ax25`). Window: from the restart to 4 s after the public state shows the fence gone. Judged: **no** SEND_CWID, D-STAR HEADER / DATA / LOST / EOT, DMR frame or control, YSF frame in the
+window. The dialogue frames (GET_VERSION, SET_FREQ, SET_CONFIG, GET_STATUS) are expected there; a SET_MODE or any other frame is a FINDING, because the document says "no keying bytes during a fence"
+(`radio.md:700,1008`) and the code withholds SET_MODE while the gate is closed (`core.rs:230`) but SET_MODE does not key. The over inside the guard is the same check as DV-Router's own test
+(`real_children/radio/mmdvm.rs`, "no RF-producing bytes during the startup guard" and "the guarded over never reaches RF later").
+
+## GAPs, things not driven black-box, and predictions
+
+* **Serial and pty byte ports.** The modem supports a pty (`dvtest/mmdvm_modem.py` `PtyTransport`) but a pty cannot cross containers and the rig has no shared device between the tester and the SUT
+  (`docs/mmdvm-stack-cases.md`). Only the UDP byte port is driven. The exclusive-open and by-id rules of `device` rows are not reachable.
+* **The startup guard needs the web profile.** Without `--profile web` and an admin account (`totp-required.toml`) G1 skips: the control channel's `kill-proc` does not list `dv-edge-radio`
+  (`dvtest/control.py`), and a modem Down / Up does not re-arm the fence (the fence is fabric state, not link state). No new control action was invented. A start that happens before the tester exists
+  cannot be observed from the first dialogue because the guard began at the start of the node.
+* **CW ID (`SEND_CWID`).** The snippet switches the ID off (`rules = "other"`, `id.mode = "none"`). The modem and the judge know the frame (NAK 5 outside idle, 50 ms per bit, 89 bits for N0CALL, TOT at least
+  5 s: `config.md:786-795`), but no case drives it; it would be a second snippet with `rules = "us"` and the default ID.
+* **Version 1 / `model = "mmdvm-hs"`.** The fake is a version 2 modem; the 26 B SET_CONFIG v1 layout, the v1 status and the HS name check are not covered. `duplex = true` is refused by the validator
+  (`radio.md:704`) and not tested here.
+* **Not driven:** the `mode_busy` results in both directions (a TX request while an RF over holds the modem, an RF frame of another mode while a TX holds it), the lockout flag and `use_cos_as_lockout`,
+  the overflow flags, a NAK while Up (a reset modem NAKs data with reason 2 and the port goes Down `protocol`), a version or capability mismatch (`caps_mismatch`), the 2500 ms drain timeout, DMR / YSF
+  late entry and FEC-damaged frames beyond RIF5-RXD, the data side (`dstar-slowdata`, `dmr-emb-lc`, `ysf-dch`), TOT, hang at the modem.
+* **Flow control (a prediction, recorded by RIF5-LONG).** The host keeps at most 10 D-STAR, 3 DMR and 2 YSF frames in flight, and refreshes its view of the modem's space only from the status, every 250 ms
+  (`core.rs:991-995,924`, `radio.md:665-671`). In 250 ms a modem plays 12.5 D-STAR frames (20 ms), 4.2 DMR bursts (60 ms) or 2.5 YSF frames (100 ms), so the host can keep a modem busy for 10 / 3 / 2 frames
+  per poll at most: a real-time over arrives at 50 / 16.7 / 10 frames per second against about 40 / 12 / 8 that can be sent, and the host queue (16 per mode, oldest dropped) overflows after a few seconds.
+  The cases of the TX direction therefore use short overs (1 s D-STAR, one DMR superframe, 3 YSF frames, the sizes of DV-Router's own tests) and RIF5-LONG records what a 3 s over does. This is read from the
+  code and the document, not seen; it may be a finding or the fake's fill model may differ from a firmware (the capacities of a real board are "awaiting rig tuning U1", `radio.md:669`).
+* **Backoff reset.** The document says "2 s doubling to 60 s" (`radio.md:619`); in `core.rs` the backoff is doubled at every failure (`core.rs:285-286`) and is initialised once (`core.rs:167`): no reset after a
+  successful open was found. RIF5-D1 records the dialogue delays; a modem that failed earlier in the run (an edge started long before the tester) can show a longer first reopen than 2 s + 2 s.
+* **Metrics need the control channel and 10 s.** The hub gets the radio families every 10 s. The counter assertions poll for up to 30 s; without `DVT_RIG_CONTROL=1` they skip.
+* **Frame counter semantics.** What `frames_total{dir=rx,result=ok}` counts exactly (whether the EOT is counted) and the equality of `tx ok` with the native frames the modem logged are not stated
+  exactly by the document; RIF5-M1 asserts only lower bounds and records the rest as FINDING.
+* **Not run on a rig.** Timing bounds (the 0.20-0.32 s median poll, the 1.4-2.3 s for the Down) have a margin for a loaded rig but are first guesses.
+
+## FINDING lines the cases can write (never assertions)
+
+SET_MODE or another control frame inside the guard window (G1); the SET_CONFIG bytes at offsets 15, 16, 18 and 19, to which the document gives no value (O1); the public row carrying an admin-only field (O3);
+NAK 5 from the fake's buffer model (TX); extra voice words after the words the modem sent (RX); the words missing in a 3 s over, with the counts (LONG); the number of GET_VERSION tries of a silent reopen
+when it is not six (D1); `frames_total{dir=rx,result=short}` not counting short statuses (D2); `frames_total{dir=tx,result=ok}` against the frames logged (M1); a fence that was already over when the
+over inside the guard ended (G1).

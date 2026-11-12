@@ -586,6 +586,9 @@ services:
       # on for an image with RFSAFE1c: cases/test_rfsafe1c.py asserts the launcher start in the hub's process rows, no session/update hint item in the feeds and
       # the shape of the probe failed log line (dvtest/rfsafe1c.py, docs/rfsafe1c-cases.md); the cases skip with a reason without it
       DVT_RFSAFE1C: ${DVT_RFSAFE1C:-}
+      # on for DV-Router RIF5 (c017e491 or later, the mmdvm-serial radio adapter) with rig/config/dv-router/rif5-mmdvm-udp.toml in DVT_SUT_CONFIG_EXTRA:
+      # cases/test_rif5_mmdvm_serial.py plays a fake MMDVM modem on the UDP byte port (docs/rif5-cases.md); the cases skip with a reason without it
+      DVT_RIF5: ${DVT_RIF5:-}
       # SECRELOAD1 / SECRELOAD2 (cases/test_secret_reload.py): on = the APRS-IS edge and the image rule are EXPECTED, so a missing series or route
       # fails instead of skipping. Not passing them made the strict mode inert in every rig run (cases/unit/test_tester_env.py guards the class).
       DVT_SECRELOAD1: ${DVT_SECRELOAD1:-}

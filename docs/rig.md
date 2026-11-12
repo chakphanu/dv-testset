@@ -433,6 +433,7 @@ another launch mode the variable draws a warning. Snippets in
 | `debug-log.toml` | `[log] level = "debug"`: debug lines of every SUT process in `out/<run>/logs/xlxd-sut.log` (chatty; short reruns only) |
 | `soak-edges.toml` | `[edges.nxdn]` (`enable`, `tg_modules = "31672:F"`) and `[edges.p25]` (`enable`, `server_module = "G"`, `server_tg = 31672`): the SUT's own NXDN (41400) and P25 (41000) client ports for the soak (`docs/web-soak-cases.md`); the template's own tables are merged key by key |
 | `mmdvm-edges.toml` | the same `[edges.nxdn]` and `[edges.p25]` values as `soak-edges.toml` (TG 31672 as NXDN module F and P25 module G) for the gateways of `--profile mmdvm`; `run.sh` adds it to a native launch with that profile unless it or `soak-edges.toml` is listed (`docs/mmdvm-stack-cases.md`) |
+| `rif5-mmdvm-udp.toml` | `[edges.radio]` with one `mmdvm-serial` port `rif5-modem` whose UDP byte port is the tester (`udp` `<TESTER_IP>:3340`, `udp_bind` `<OWN_IP>:3341`): D-STAR room P, DMR room Q (TG 4017), YSF room R, station N0CALL, `rules = "other"` with the ID off, mode hang 1 s; the tester plays a fake MMDVM modem (`cases/test_rif5_mmdvm_serial.py`, `DVT_RIF5=on`, `docs/rif5-cases.md`); the template must not define `[edges.radio]` |
 
 The XLX peer row names `xlxd-peer-sut` (`<NET>.12`, XLX998), not `xlxd-peer-ref`
 (`.13`): `xlxd-peer-sut` is configured to link with `xlxd-sut` (`.11`, XLX999),

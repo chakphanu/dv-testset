@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/rif5-cases.md): DV-Router's radio edge (dv-edge-radio) with ONE `mmdvm-serial` port whose
+# byte port is a UDP socket pair to the tester (DV-Router unit RIF5, docs/design/radio.md 7, config.md "[edges.radio]"). The tester plays a FAKE
+# MMDVM modem on <TESTER_IP>:3340 (dvtest/mmdvm_serial.py); the edge binds <OWN_IP>:3341 and accepts datagrams from that peer only.
+# No radio exists: nothing here keys a transmitter. The port is a transmitting port (tx = true) only because room-to-modem frames are written
+# to the modem on a transmitting port; every gate of config.md is satisfied the way the document asks (master gate, exact acknowledgement,
+# amateur band 70cm, an RF frequency inside it, a physical id).
+#
+# Three modes on one modem, one room each (the modes must serve different modules):
+#   D-STAR  room P   (DExtra client module P)
+#   DMR     room Q   (DMR client TG 4001 + 16 = 4017, dvtest.proto.dmr.module_tg("Q")), slot 2 simplex, colour code 1, LC talk group 4017
+#   YSF     room R   (YSF client DG-ID 10 + 17 = 27)
+# station callsign N0CALL; D-STAR RF module B (the default `dstar.rpt_module`): RF headers of the fake modem carry RPT1 `N0CALL B`, RPT2 `N0CALL G`.
+# hang: RF and network mode hang 1 s (the smallest the document allows, config.md "Hang key"), so that the cases can change mode after a short wait.
+# rules = "other": a transmitting row must then state id.mode, id.interval_secs and timers.tot_secs itself (config.md); the ID is switched off
+# (id.mode = "none") so that no SEND_CWID frame follows an over. DV-Router's own real-children test uses the same shape (rules other, id none).
+# It is a lab rule set for a modem that does not exist, not a statement about any licence.
+# Appended after the template: the template must not define [edges.radio] itself. Combine with the web profile (web.toml:admin.toml) for the
+# cases that read the port state (public state), the admin status and the edge restart; metrics need the rig control channel.
+[edges.radio]
+enable = true
+callsign = "N0CALL"
+rules = "other"
+tx_enable = true
+tx_ack = "I am the control operator of N0CALL and accept responsibility for its transmissions"
+
+[[edges.radio.port]]
+name = "rif5-modem"
+kind = "mmdvm-serial"
+physical = "rif5-modem"
+tx = true
+band = "70cm"
+rx_freq = 434000000
+tx_freq = 434000000
+udp = "<TESTER_IP>:3340"
+udp_bind = "<OWN_IP>:3341"
+modes = { dstar = "P", dmr = "Q", ysf = "R" }
+hang = { rf_mode_secs = 1, net_mode_secs = 1 }
+timers = { tot_secs = 180 }
+id = { mode = "none", interval_secs = 600 }
+dmr = { color_code = 1, tg = 4017 }
