@@ -144,7 +144,7 @@ Details, run commands and GAPs: `docs/web-refusals-cases.md`. In this file's cas
 * `DVT_WEBSTALL1FIX=on`: the case also FAILS when a family or a reason is missing, and when a web request other than `/auth/register` took longer than 1 s (the slow-request detector is a
   failure, not only FINDING WEBSTALL1). Off: unchanged (finding only), so the cases pass on the current image `wip-a31709a`.
 * `test_join_burst_counts_join_window`: four offers at once from the generator with the edge's join window set to 1 per second (`rig/config/dv-router/join-window.toml`), see the new file.
-  Run it alone: `DVT_WEBSTALL1FIX=on DVT_USRP_DYNAMIC=1 DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/join-window.toml ... scripts/run.sh -m rig --profile web,webload -- cases/test_web_load.py::test_join_burst_counts_join_window`
+  Run it alone: `DVT_WEBSTALL1FIX=on DVT_USRP_DYNAMIC=1 DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/totp-required.toml:rig/config/dv-router/join-window.toml ... scripts/run.sh -m rig --profile web,webload -- cases/test_web_load.py::test_join_burst_counts_join_window`
   (3 to 4 minutes). The full file runs without the snippet (about 17 minutes with the settled reads); the burst case then skips with the reason.
 
 ## Flood (short, bounded; MS9 limits)
