@@ -2,12 +2,13 @@
 """DP18 configuration refusals (docs/dp18-cases.md, "Configuration"): `dv-router config check` must refuse a bad node object or beacon
 (`[edges.aprsis.beacon]`, `[[edges.aprsis.objects]]`) with an error that names the field, and load the good ones. Host side, no rig, the same
 machinery as cases/test_dp11e_config.py: the rig template is rendered for gen compat1 with the snippets data-ident.toml, dp15-aprsis.toml and
-rig/config/dv-router/dp18-origin.toml (one mutation per case, dvtest/dp18cfg.py CONFIG_CASES) and checked in a throw-away container
+rig/config/dv-router/dp18-origin.toml, or for the RF copy rules dp18-rf.toml and dp18-rf-floor.toml (one mutation per case, dvtest/dp18cfg.py CONFIG_CASES) and checked in a throw-away container
 (`--network none`, dvtest.tools.config_check).
 
 Rules covered (aprsis_origin.rs): object name 1-9 printable ASCII bytes without outer spaces and not a station callsign (the gateway's own
 call excepted, case-insensitive), unique names, at most 16 objects, interval_secs 600-86400, lat and lon not both 0, frequency `ddd.dddMHz`,
-the comment as sent at most 43 bytes (objects: frequency + room + comment). Cases the source does not refuse are accept rows.
+the comment as sent at most 43 bytes (objects: frequency + room + comment); RF copies (`rf_ports`, DP18b): the named AX.25 port exists, is enabled
+and TX-capable, tx_enable is on, the station calls match, no duplicate port. Cases the source does not refuse are accept rows.
 
   DVT_CFGLOAD_IMAGE=<image with DP18> DVT_SUT_GEN=compat1 DVT_SUT_CONFIG=<template> \\
     scripts/contained.sh --name test -- python3 -m pytest -m cfgload cases/test_dp18_config.py
@@ -26,8 +27,6 @@ pytestmark = pytest.mark.cfgload
 
 ROOT = Path(__file__).resolve().parents[1]
 SNIPPETS = ROOT / "rig" / "config" / "dv-router"
-SNIPPET = SNIPPETS / "dp18-origin.toml"
-BASE_EXTRAS = ("data-ident.toml", "dp15-aprsis.toml")      # the data worker (carriers default to all) and the APRS-IS edge with its login
 
 
 @pytest.fixture(scope="module")
@@ -63,8 +62,7 @@ def results():
 
 @pytest.mark.parametrize("case", dp18cfg.CONFIG_CASES, ids=[c.id for c in dp18cfg.CONFIG_CASES])
 def test_dp18_config(case, image, template, results):
-    extras = [(SNIPPETS / name).read_text(encoding="utf-8") for name in BASE_EXTRAS]
-    extras.append(case.mutate(SNIPPET.read_text(encoding="utf-8")))
+    extras = dp18cfg.render_extras(case, lambda name: (SNIPPETS / name).read_text(encoding="utf-8"))
     rendered = sut_config.render(template, tcl.NET, extras=extras, gen=sut_config.COMPAT1)
     verdict, code = tcl.run_config_check(image, rendered, stand_in_text=dp18cfg.stand_in_text)
     assert "edges.aprsis.beacon" in rendered, "the snippet did not reach the rendered file"

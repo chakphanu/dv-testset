@@ -218,8 +218,23 @@ def test_conservation_is_exact_with_the_queue_and_names_the_unaccounted_frames()
     assert "exceed" in dc.conservation_problems(7, delta, None)[0]
 
 
+def test_no_rf_edge_is_its_own_conservation_term():
+    delta = {("beacon", "sent"): 4, ("beacon", "dropped_ttl"): 1}
+    assert dc.conservation_problems(8, delta, 1, no_rf_edge=2) == []                 # 4 + 1 + 2 withheld + 1 queued
+    bad = dc.conservation_problems(8, delta, 1, no_rf_edge=0)
+    assert len(bad) == 1 and "no_rf_edge 0" in bad[0] and "2 unaccounted" in bad[0]
+    assert dc.conservation_problems(7, delta, None, no_rf_edge=2) == []
+    assert "exceed" in dc.conservation_problems(6, delta, None, no_rf_edge=2)[0]
+    assert dc.no_rf_edge_total({("beacon", "no_rf_edge"): 2, ("object", "no_rf_edge"): 3, ("object", "generated"): 9}) == 5
+    smp = samples('dv_pkt_rf_downlink_total{kind="aprs-info",result="dedupe"} 2\ndv_pkt_rf_downlink_total{kind="aprs-info",result="rate",proc="w"} 1\n'
+                  'dv_pkt_rf_drop_total{reason="x"} 4\ndv_edge_rf_tx_total{port="rf-a",kind="beacon",result="sent"} 9\n')
+    assert dc.worker_rf_counts(smp) == {"downlink/dedupe": 2, "downlink/rate": 1, "drop/x": 4}
+
+
 def test_conservation_terms_name_every_term_and_the_difference():
     delta = {("beacon", "sent"): 4, ("beacon", "dropped_queue"): 3, ("beacon", "dropped_ttl"): 1, ("beacon", "delayed"): 5}
+    line = dc.conservation_terms({("beacon", "generated"): 1, ("object", "generated"): 9, ("object", "no_rf_edge"): 2}, 10, delta, 1, 3, {"downlink/dedupe": 1})
+    assert "no_rf_edge 2" in line and "'object/no_rf_edge': 2" in line and "'downlink/dedupe': 1" in line and "unaccounted -2" in line
     line = dc.conservation_terms({("beacon", "generated"): 1, ("object", "generated"): 9}, 10, delta, 1, 3)
     for part in ("'beacon/generated': 1", "'object/generated': 9", "copies expected 10", "sent 4", "simulated 0", "sent_over_budget 0",
                  "delayed(not terminal) 5", "'dropped_queue': 3", "'dropped_ttl': 1", "(sum 4)", "terminal 8", "queue gauge start 1 now 3 delta 2", "unaccounted 0"):
@@ -288,7 +303,7 @@ class Hub:
 
 
 def fake_run(shp, origin, delta, queue=0, base_queue=0, lines=None, events=()):
-    return SimpleNamespace(shape=shp, port="rf-a", interval=600, wait=1.0, delta=delta, origin=origin, base={}, base_origin={}, base_queue=base_queue,
+    return SimpleNamespace(shape=shp, port="rf-a", interval=600, wait=1.0, delta=delta, origin=origin, base={}, base_origin={}, base_worker={}, base_queue=base_queue,
                            queue_now=queue, aprsc_lines=lines, aprsc_why="no aprsc", events=list(events))
 
 
@@ -722,3 +737,60 @@ def test_dp18_r1_fence_view_bounds_follow_the_switch(monkeypatch):
     judged, seen = run(tmp, 22.0)                                               # lenient: a view that lags up to 24.5 s is recorded, not asserted
     assert judged.problems == [] and seen["max_wait_s"] == 30.0
     assert any("lenient (DVT_RFSAFE1B off)" in a[3] for a in notes)
+
+
+# ---------------------------------------------------------------- DP18-r3: a refused reload (DP18b)
+
+def run_r3(monkeypatch, cid, status, body, etag_after="e1", aprsis_after=None, doc_files=("dp15-aprsis.toml", "dp18-rf.toml", "dp18-rf-floor.toml"), writable=True):
+    monkeypatch.setattr(trf, "note", lambda *a: None)
+    monkeypatch.setattr(trf.time, "sleep", lambda s: None)
+    aprsis = [{"pid": 7, "restarts": 0}, aprsis_after or {"pid": 7, "restarts": 0}]
+    etags = iter([("e1", writable), (etag_after, True)])
+    monkeypatch.setattr(trf, "config_state", lambda sim: next(etags))
+    monkeypatch.setattr(trf, "aprsis_child_state", lambda sim: aprsis.pop(0))
+    ax = [{"pid": 3, "restarts": 0}, {"pid": 3, "restarts": 0}]
+    monkeypatch.setattr(trf, "children_state", lambda sim: ax.pop(0))
+    posted = []
+
+    class Admin:
+        def step_up(self):
+            pass
+
+        def path(self, s):
+            return "/api/v1/admin" + s
+
+        def post(self, path, body_, expect=None):
+            posted.append((path, body_))
+            return SimpleNamespace(status=status, text=lambda: body)
+
+    sim = SimpleNamespace(doc=rendered(list(doc_files)), admin_adm=Admin())
+    case = next(r for r in trf.RELOAD_REFUSALS if r[0] == cid)
+    trf.test_dp18_r3_a_reload_that_breaks_an_rf_copy_rule_is_refused(*case, None, SimpleNamespace(out="/nonexistent"), None, sim)
+    return posted
+
+
+def test_flow_r3_passes_on_a_refusal_with_the_launchers_diagnostic_and_nothing_moved(monkeypatch):
+    posted = run_r3(monkeypatch, "tx_off", 422, '{"errors":[{"path":"edges.aprsis.beacon.rf_ports","msg":"RF copy requires an enabled TX-capable AX.25 port"}]}')
+    path, body = posted[0]
+    assert path == "/api/v1/admin/config/changes" and body["ops"] == [{"op": "replace", "path": "/edges/ax25/port/0/tx", "value": False}] and body["base_etag"] == "e1"
+    posted = run_r3(monkeypatch, "callsign", 409, "RF copy requires the APRS-IS gateway and AX.25 station callsigns to match")
+    assert posted[0][1]["ops"][0]["path"] == "/edges/ax25/callsign" and posted[0][1]["ops"][0]["value"] == "N0TEST-6"
+
+
+def test_flow_r3_fails_when_accepted_or_the_diagnostic_or_the_state_differs(monkeypatch):
+    good = "RF copy requires an enabled TX-capable AX.25 port"
+    with pytest.raises(AssertionError, match="was accepted"):
+        run_r3(monkeypatch, "tx_off", 200, '{"status":"applied"}')
+    with pytest.raises(AssertionError, match="launcher's diagnostic"):
+        run_r3(monkeypatch, "tx_off", 422, '{"error":"bad"}')
+    with pytest.raises(AssertionError, match="etag"):
+        run_r3(monkeypatch, "tx_off", 422, good, etag_after="e2")
+    with pytest.raises(AssertionError, match="APRS-IS child changed"):
+        run_r3(monkeypatch, "tx_off", 422, good, aprsis_after={"pid": 9, "restarts": 1})
+
+
+def test_flow_r3_skips_without_rf_copies_or_a_writable_config(monkeypatch):
+    with pytest.raises(pytest.skip.Exception, match="no object or beacon with rf_ports"):
+        run_r3(monkeypatch, "tx_off", 422, "x", doc_files=("dp15-aprsis.toml", "dp18-rf.toml", "dp18-origin.toml"))
+    with pytest.raises(pytest.skip.Exception, match="DVT_SUT_CONFIG_RW=1"):
+        run_r3(monkeypatch, "tx_off", 422, "x", writable=False)

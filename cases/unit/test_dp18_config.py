@@ -23,15 +23,47 @@ def doc_of(case_id):
     return tomllib.loads(CASE[case_id].mutate(text()))["edges"]["aprsis"]
 
 
+def read(name):
+    return (SNIPPET.parent / name).read_text()
+
+
+TOKENS = (("<DP15_TX_ENABLE>", "true"), ("<REQUIRE_IDENT>", "false"), ("<TESTER_IP>", "192.0.2.30"), ("<NET>", "192.0.2"))
+
+
+def parsed(texts):
+    for t in texts:
+        for a, b in TOKENS:
+            t = t.replace(a, b)
+        yield tomllib.loads(t)
+
+
 def test_every_mutation_applies_and_stays_toml():
-    base = text()
     assert len({c.id for c in dc.CONFIG_CASES}) == len(dc.CONFIG_CASES)
     for case in dc.CONFIG_CASES:
-        mutated = case.mutate(base)
-        tomllib.loads(mutated)
-        assert (mutated != base) == (case.id != "accept-baseline"), case.id
+        plain = dc.render_extras(dc.types.SimpleNamespace(part=case.part, mutate=lambda t: t), read)
+        mutated = dc.render_extras(case, read)
+        list(parsed(mutated))
+        assert (mutated != plain) == (case.id not in ("accept-baseline", "accept-rf-baseline")), case.id
         assert case.verdict in ("reject", "accept") and (case.verdict == "accept") == (case.key is None), case.id
-    assert sum(1 for c in dc.CONFIG_CASES if c.verdict == "reject") >= 20
+        assert case.part in ("origin", "rf", "floor"), case.id
+    assert sum(1 for c in dc.CONFIG_CASES if c.verdict == "reject") >= 25
+    assert sum(1 for c in dc.CONFIG_CASES if c.part != "origin") == 9
+
+
+def test_rf_copy_cases_edit_the_one_line_they_name():
+    plain = dc.render_extras(dc.types.SimpleNamespace(part="rf", mutate=lambda t: t), read)
+    rf = {c.id: dc.render_extras(c, read) for c in dc.CONFIG_CASES if c.part == "rf"}
+    assert set(rf) == {"rf-port-tx-off", "rf-tx-enable-off", "rf-ax25-disabled", "rf-callsign-mismatch"}
+    port = list(parsed(rf["rf-port-tx-off"]))[2]["edges"]["ax25"]["port"]
+    assert [p["tx"] for p in port] == [False, "simulate"]
+    assert list(parsed(rf["rf-tx-enable-off"]))[2]["edges"]["ax25"]["tx_enable"] is False
+    assert list(parsed(rf["rf-ax25-disabled"]))[2]["edges"]["ax25"]["enable"] is False
+    ax = list(parsed(rf["rf-callsign-mismatch"]))[2]["edges"]["ax25"]
+    assert ax["callsign"] == "N0TEST-6" and list(parsed(plain))[1]["edges"]["aprsis"]["callsign"] == "N0TEST-5"
+    docs = {c.id: list(parsed(dc.render_extras(c, read)))[3]["edges"]["aprsis"] for c in dc.CONFIG_CASES if c.part == "floor"}
+    assert docs["rf-port-unknown"]["beacon"]["rf_ports"] == ["rf-z"] and docs["rf-port-unknown"]["objects"][0]["rf_ports"] == ["rf-a"]
+    assert docs["rf-object-port-unknown"]["objects"][0]["rf_ports"] == ["rf-z"] and docs["rf-object-port-unknown"]["objects"][1]["rf_ports"] == ["rf-a"]
+    assert docs["rf-port-duplicate"]["beacon"]["rf_ports"] == ["rf-a", "rf-a"] and docs["accept-rf-simulated-port"]["beacon"]["rf_ports"] == ["rf-b"]
 
 
 def test_the_header_comments_do_not_confuse_the_split():

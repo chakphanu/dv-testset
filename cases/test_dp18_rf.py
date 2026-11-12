@@ -354,6 +354,55 @@ def test_dp18_r2_true_to_simulate_then_restore_from_history(rig, target, hub, re
     assert got, "after the restore the real port rf-a did not transmit the control text %r: the original file is not back" % control
 
 
+# ================================================================ DP18-r3: a reload that breaks an RF copy dependency is refused
+
+RELOAD_REFUSALS = (
+    ("tx_off", "port tx -> false", "/edges/ax25/port/%d/tx", False, "RF copy requires an enabled TX-capable AX.25 port"),
+    ("callsign", "AX.25 station call differs from the APRS-IS login", "/edges/ax25/callsign", "N0TEST-6",
+     "RF copy requires the APRS-IS gateway and AX.25 station callsigns to match"),
+)
+
+
+def aprsis_child_state(sim):
+    admin = sim.admin
+    resp = admin.get(admin.path("/status"), expect=None)
+    return dc.child_state(resp.json() if resp.status == 200 else {}, "dv-edge-aprsis")
+
+
+@pytest.mark.parametrize("cid,what,path,value,message", RELOAD_REFUSALS, ids=[r[0] for r in RELOAD_REFUSALS])
+def test_dp18_r3_a_reload_that_breaks_an_rf_copy_rule_is_refused(cid, what, path, value, message, rig, target, hub, reload_ctx):
+    """DP18b (DV-Router d3c6e531, config.md "What the children get"): the launcher validates the COMPLETE model on reload and refuses one that breaks a
+    cross-section rule, publishing nothing. With objects that have `rf_ports` (run R or F, dp18-rf.toml), a change through POST /api/v1/admin/config/changes
+    that disables the TX of rf-a or gives the AX.25 edge another station call is refused with the launcher's diagnostic; the configuration etag, the
+    APRS-IS child (same pid, restarts unchanged, up) and the AX.25 child (not restarted) stay. Needs DVT_SUT_CONFIG_RW=1 (else the skip names it)."""
+    sim, case = reload_ctx, "DP18-r3-" + cid
+    shp = dc.origin_shape(sim.doc)
+    if shp is None or not any(r.rf_ports for r in shp.reports):
+        pytest.skip("no object or beacon with rf_ports in this run: add dp18-rf.toml with dp18-rf-floor.toml (or dp18-rf-objects.toml) (docs/dp18-cases.md)")
+    admin = sim.admin_adm
+    etag, writable = config_state(sim)
+    if not writable:
+        pytest.skip("the configuration file is not writable (the single-file :ro mount of the rig): run with DVT_SUT_CONFIG_RW=1")
+    if "%d" in path:
+        path = path % dc.port_index(sim.doc, shp.reports[0].rf_ports[0])
+    aprsis0, ax0 = aprsis_child_state(sim), children_state(sim)
+    admin.step_up()
+    resp = admin.post(admin.path("/config/changes"), dc.replace_request(path, value, etag, "dvt DP18-r3 " + cid), expect=None)
+    if resp.status == 409 and "read_only" in resp.text():
+        pytest.skip("the configuration change answered 409 (read_only): run with DVT_SUT_CONFIG_RW=1. Reply: %s" % resp.text()[:200])
+    time.sleep(5.0)
+    etag_after, _w = config_state(sim)
+    aprsis1, ax1 = aprsis_child_state(sim), children_state(sim)
+    note(target, case, "RECORD", "%s: HTTP %d, body %s; etag %s -> %s; dv-edge-aprsis %s -> %s; %s %s -> %s" % (
+        what, resp.status, resp.text()[:400], etag, etag_after, aprsis0, aprsis1, txguard.AX25_CHILD, ax0, ax1))
+    assert resp.status >= 400 or "invalid" in resp.text().lower(), "the change was accepted (HTTP %d): %s" % (resp.status, resp.text()[:300])
+    assert message in resp.text(), "the refusal does not carry the launcher's diagnostic %r: HTTP %d %s" % (message, resp.status, resp.text()[:400])
+    assert etag_after == etag, "a refused change moved the configuration etag: %s -> %s" % (etag, etag_after)
+    assert aprsis1 and aprsis0 and aprsis1.get("pid") == aprsis0.get("pid") and (aprsis1.get("restarts") or 0) == (aprsis0.get("restarts") or 0), (
+        "the APRS-IS child changed after a refused reload: %s -> %s" % (aprsis0, aprsis1))
+    assert not dc.restarted(ax0, ax1), "the AX.25 child restarted after a refused reload: %s -> %s" % (ax0, ax1)
+
+
 # ================================================================ DP18-o: several RF objects on afsk1200-shared
 
 def strict_or_skip(what):
@@ -384,6 +433,7 @@ def objects_run(request, target, hub, admin_session):
     base = dc.rf_tx_counts(samples, port)
     base_origin = dc.origin_counts(samples)
     base_queue = dc.queue_len(samples, port)
+    base_worker = dc.worker_rf_counts(samples)
     aprsc_host, aprsc_why = None, ""
     try:
         aprsc_host = request.getfixturevalue("aprsc")
@@ -417,7 +467,7 @@ def objects_run(request, target, hub, admin_session):
     queue_now = dc.queue_len(samples, port)
     return types.SimpleNamespace(shape=shp, port=port, interval=interval, wait=wait, uptime=uptime, frames=frames, objs=objs, beacons=beacons, events=events,
                                  times=times, gaps=dc.spread_gaps(times), delta=delta, origin=origin, base_queue=base_queue, queue_now=queue_now,
-                                 aprsc_lines=lines, aprsc_why=aprsc_why, base=base, base_origin=base_origin)
+                                 aprsc_lines=lines, aprsc_why=aprsc_why, base=base, base_origin=base_origin, base_worker=base_worker)
 
 
 def test_dp18_o_object_copies_are_spread_and_drops_are_counted(rig, target, hub, objects_run):
@@ -454,7 +504,7 @@ def test_dp18_o_object_copies_are_spread_and_drops_are_counted(rig, target, hub,
 
 def test_dp18_o_strict_every_report_finds_both_edges(rig, target, objects_run):
     """DVT_DP18STRICT=on. `dv_pkt_origin_total{result=no_edge}` and `{result=no_rf_edge}` stay 0 (data.md 13.1: no_edge = the worker finds no APRS-IS
-    edge, no_rf_edge = RF copies selected and no AX.25 edge). KNOWN PRODUCT DEFECT on the images before the fix: dv-edge-aprsis exits with a configuration
+    edge, no_rf_edge = RF copies selected and no AX.25 edge). KNOWN PRODUCT DEFECT on the images before DP18b (DV-Router d3c6e531): dv-edge-aprsis exits with a configuration
     error as soon as `rf_ports` is set (crates/edge/aprsis/src/shell.rs validates the file with Config::default() plus only edges.aprsis, so the
     AX.25 port the copy names does not exist there); the worker then counts no_edge for every report and nothing reaches the aprsc."""
     strict_or_skip("DP18-o no_edge")
@@ -478,7 +528,7 @@ def test_dp18_o_strict_nothing_is_sent_over_budget(rig, target, objects_run):
 
 def test_dp18_o_strict_every_generated_copy_is_accounted_for(rig, target, hub, objects_run):
     """DVT_DP18STRICT=on. Conservation on the RF port: the RF copies the worker generated (dv_pkt_origin_total{result=generated}, one per report and
-    named RF port) equal sent + simulated + sent_over_budget + dropped_* of dv_edge_rf_tx_total{port} plus the frames still queued (the change of the
+    named RF port) equal sent + simulated + sent_over_budget + dropped_* of dv_edge_rf_tx_total{port} plus no_rf_edge (since d3c6e531 one count per withheld RF copy) plus the frames still queued (the change of the
     gauge dv_edge_rf_queue{port}); `delayed` is not terminal. The counters are published every 10 s, so the sums are re-read for up to 45 s. Terms
     that cannot be read are recorded (a missing gauge: only terminal <= generated is checked; a report that names another port: skipped)."""
     strict_or_skip("DP18-o conservation")
@@ -494,11 +544,12 @@ def test_dp18_o_strict_every_generated_copy_is_accounted_for(rig, target, hub, o
         copies, why = dc.copies_expected(origin, run.shape, run.port)
         if copies is None:
             pytest.skip("conservation not computable: %s" % why)
-        problems = dc.conservation_problems(copies, delta, queue_delta)
+        problems = dc.conservation_problems(copies, delta, queue_delta, dc.no_rf_edge_total(origin))
         if not problems or time.monotonic() > end:
             break
         time.sleep(5.0)
-    note(target, "DP18-o", "RECORD", "strict conservation: " + dc.conservation_terms(origin, copies, delta, run.base_queue, queue))
+    worker = {k: v - run.base_worker.get(k, 0) for k, v in dc.worker_rf_counts(samples).items() if v - run.base_worker.get(k, 0)}
+    note(target, "DP18-o", "RECORD", "strict conservation: " + dc.conservation_terms(origin, copies, delta, run.base_queue, queue, worker))
     assert not problems, "; ".join(problems)
 
 

@@ -239,14 +239,18 @@ def tx_mode(doc, name):
     return None if i is None else doc["edges"]["ax25"]["port"][i].get("tx", False)
 
 
+def replace_request(path, value, base_etag, comment):
+    """The body of POST /api/v1/admin/config/changes that replaces the value at the JSON pointer `path` (admin.md, openapi ChangesRequest:
+    base_etag, ops [{op, path, value}], mode, comment)."""
+    return {"base_etag": base_etag, "mode": "apply", "comment": comment, "ops": [{"op": "replace", "path": path, "value": value}]}
+
+
 def tx_change_request(index, value, base_etag, comment):
-    """The body of POST /api/v1/admin/config/changes that replaces `tx` of AX.25 port number `index` (admin.md, openapi ChangesRequest:
-    base_etag, ops [{op, path, value}], mode, comment, accept_pending_restart). The port's tx is restart class: the launcher
-    restarts the AX.25 edge, so accept_pending_restart stays false unless a response asks for it."""
+    """The body of POST /api/v1/admin/config/changes that replaces `tx` of AX.25 port number `index`. The port's tx is restart class: the
+    launcher restarts the AX.25 edge, so accept_pending_restart stays false unless a response asks for it."""
     if value not in (True, False, "simulate"):
         raise ValueError("tx is true, false or \"simulate\": %r" % (value,))
-    return {"base_etag": base_etag, "mode": "apply", "comment": comment,
-            "ops": [{"op": "replace", "path": "/edges/ax25/port/%d/tx" % index, "value": value}]}
+    return replace_request("/edges/ax25/port/%d/tx" % index, value, base_etag, comment)
 
 
 def etag_of(config_response):
@@ -346,33 +350,58 @@ def copies_expected(origin_delta, shape, port):
     return total, ""
 
 
-def conservation_problems(copies, rf_delta, queue_delta):
-    """Problems of generated copies == sent + simulated + sent_over_budget + dropped_* + still queued, on one port. `delayed` is not
-    terminal (the frame is still queued). queue_delta is the change of dv_edge_rf_queue since the start, None when the gauge has no series:
-    then only 'terminal <= copies' can be checked."""
+def conservation_problems(copies, rf_delta, queue_delta, no_rf_edge=0):
+    """Problems of generated copies == sent + simulated + sent_over_budget + dropped_* + no_rf_edge + still queued, on one port. `no_rf_edge`
+    is dv_pkt_origin_total{result=no_rf_edge}: since DV-Router d3c6e531 (DP18b) one count per RF copy the worker withheld (no AX.25 edge,
+    port unavailable, reporter call differs); `delayed` is not terminal (the frame is still queued). queue_delta is the change of
+    dv_edge_rf_queue since the start, None when the gauge has no series: then only 'accounted <= copies' can be checked."""
     terminal = result_total(rf_delta, "sent") + result_total(rf_delta, "simulated") + result_total(rf_delta, "sent_over_budget") + dropped_total(rf_delta)
+    accounted = terminal + no_rf_edge
     if queue_delta is None:
-        return ["terminal results %d exceed the %d generated copies" % (terminal, copies)] if terminal > copies else []
-    if copies != terminal + queue_delta:
-        return ["%d copies generated, %d terminal (sent %d, simulated %d, sent_over_budget %d, dropped %d) + %d still queued = %d: %d unaccounted" % (
-            copies, terminal, result_total(rf_delta, "sent"), result_total(rf_delta, "simulated"), result_total(rf_delta, "sent_over_budget"),
-            dropped_total(rf_delta), queue_delta, terminal + queue_delta, copies - terminal - queue_delta)]
+        return ["accounted results %d (terminal %d + no_rf_edge %d) exceed the %d generated copies" % (accounted, terminal, no_rf_edge, copies)] if accounted > copies else []
+    if copies != accounted + queue_delta:
+        return ["%d copies generated, %d accounted (sent %d, simulated %d, sent_over_budget %d, dropped %d, no_rf_edge %d) + %d still queued = %d: %d unaccounted" % (
+            copies, accounted, result_total(rf_delta, "sent"), result_total(rf_delta, "simulated"), result_total(rf_delta, "sent_over_budget"),
+            dropped_total(rf_delta), no_rf_edge, queue_delta, accounted + queue_delta, copies - accounted - queue_delta)]
     return []
 
 
-def conservation_terms(origin_delta, copies, rf_delta, queue_base, queue_now):
-    """One line with EVERY term of the conservation check, so that a mismatch shows exactly which terms differ: generated per kind and result,
-    copies expected, then per RF result (sent, simulated, sent_over_budget, delayed, every dropped_*), the queue gauge at the start and now, and the
-    unaccounted difference (None when the gauge is unreadable)."""
+def no_rf_edge_total(origin_delta):
+    """Sum over the kinds of dv_pkt_origin_total{result=no_rf_edge} in an origin delta map."""
+    return sum(n for (_k, r), n in origin_delta.items() if r == "no_rf_edge")
+
+
+def worker_rf_counts(samples):
+    """{'downlink/<result>': n, 'drop/<reason>': n} of the worker-side RF output counters a copy can also be lost at BEFORE the scheduler:
+    dv_pkt_rf_downlink_total{kind=aprs-info,result=not_heard|rate|dedupe} and dv_pkt_rf_drop_total{reason}. Recorded next to the conservation
+    terms (not part of the equation) so that an unaccounted difference can be matched against them."""
+    out = {}
+    for s in samples:
+        if s.name == "dv_pkt_rf_downlink_total":
+            key = "downlink/%s" % s.labels.get("result", "")
+        elif s.name == "dv_pkt_rf_drop_total":
+            key = "drop/%s" % s.labels.get("reason", "")
+        else:
+            continue
+        out[key] = out.get(key, 0) + int(s.value)
+    return out
+
+
+def conservation_terms(origin_delta, copies, rf_delta, queue_base, queue_now, worker_delta=None):
+    """One line with EVERY term of the conservation check, so that a mismatch shows exactly which terms differ: generated per kind and result
+    (no_rf_edge included), copies expected, then per RF result (sent, simulated, sent_over_budget, delayed, every dropped_*), no_rf_edge as its own
+    term, the queue gauge at the start and now, the unaccounted difference (None when the gauge is unreadable) and, recorded only, the worker-side
+    RF output counters (dedupe, rate, not_heard, drops) that a copy can also be lost at before the scheduler."""
     queue_delta = None if queue_base is None or queue_now is None else queue_now - queue_base
     terminal = result_total(rf_delta, "sent") + result_total(rf_delta, "simulated") + result_total(rf_delta, "sent_over_budget") + dropped_total(rf_delta)
+    no_rf = no_rf_edge_total(origin_delta)
     dropped = {r: n for (_k, r), n in sorted(rf_delta.items()) if r.startswith("dropped_")}
     gen = {"%s/%s" % k: v for k, v in sorted(origin_delta.items())}
     return ("origin %s; copies expected %s; sent %d simulated %d sent_over_budget %d delayed(not terminal) %d dropped %s (sum %d); terminal %d; "
-            "queue gauge start %s now %s delta %s; unaccounted %s" % (
+            "no_rf_edge %d; queue gauge start %s now %s delta %s; unaccounted %s; worker-side counters (recorded, not in the equation) %s" % (
                 gen, copies, result_total(rf_delta, "sent"), result_total(rf_delta, "simulated"), result_total(rf_delta, "sent_over_budget"),
-                result_total(rf_delta, "delayed"), dropped, dropped_total(rf_delta), terminal, queue_base, queue_now, queue_delta,
-                "unreadable (gauge has no series)" if queue_delta is None else copies - terminal - queue_delta))
+                result_total(rf_delta, "delayed"), dropped, dropped_total(rf_delta), terminal, no_rf, queue_base, queue_now, queue_delta,
+                "unreadable (gauge has no series)" if queue_delta is None else copies - terminal - no_rf - queue_delta, worker_delta or {}))
 
 
 def rf_events(tnc_frames, ax25_mod):

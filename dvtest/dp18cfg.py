@@ -38,8 +38,10 @@ def object_comment(frequency, room, comment):
     return " ".join(p for p in parts if p)
 
 
-def _case(cid, what, key, mutate, hint=None, verdict="reject"):
-    CONFIG_CASES.append(types.SimpleNamespace(id=cid, what=what, key=key, mutate=mutate, hint=hint, verdict=verdict))
+def _case(cid, what, key, mutate, hint=None, verdict="reject", part="origin"):
+    """`part` says which snippet `mutate` edits: "origin" (dp18-origin.toml, the base of the object and beacon rules), or, for the RF copy rules,
+    "rf" (dp18-rf.toml: the AX.25 edge) or "floor" (dp18-rf-floor.toml: the beacon and two objects with rf_ports); see render_extras."""
+    CONFIG_CASES.append(types.SimpleNamespace(id=cid, what=what, key=key, mutate=mutate, hint=hint, verdict=verdict, part=part))
 
 
 def _split(text):
@@ -64,6 +66,26 @@ def _sub(part, old, new):
             raise ValueError("anchor %r found %d times in the %s part" % (old, target.count(old), part))
         target = target.replace(old, new)
         return pre + target + obj if part == "beacon" else pre + beacon + target
+    return f
+
+
+def _sub_first(part, old, new):
+    """Like _sub, but the first occurrence in the part (several objects carry the same line)."""
+    def f(text):
+        pre, beacon, obj = _split(text)
+        target = beacon if part == "beacon" else obj
+        if old not in target:
+            raise ValueError("anchor %r not in the %s part" % (old, part))
+        target = target.replace(old, new, 1)
+        return pre + target + obj if part == "beacon" else pre + beacon + target
+    return f
+
+
+def _plain(old, new):
+    def f(text):
+        if text.count(old) != 1:
+            raise ValueError("anchor %r found %d times" % (old, text.count(old)))
+        return text.replace(old, new)
     return f
 
 
@@ -155,6 +177,37 @@ _case("accept-beacon-comment-43", "a beacon comment of exactly 43 bytes", None,
 # ---- the object count (16)
 _case("objects-17", "17 configured objects (the limit is 16)", "objects", _n_objects(17), hint="16")
 _case("accept-objects-16", "16 configured objects", None, _n_objects(16), verdict="accept")
+
+# ---- RF copies (rf_ports): the cross-section rules the launcher checks on the complete configuration (DV-Router d3c6e531, DP18b: the same
+# messages, now also on reload and by the edges' fabric client). Base: dp18-rf.toml (AX.25 edge N0TEST-5, rf-a tx true, rf-b simulate) and
+# dp18-rf-floor.toml (beacon and two objects with rf_ports = ["rf-a"]).
+RF_MSG = "RF copy requires an enabled TX-capable AX.25 port"
+_case("accept-rf-baseline", "the RF copy shape as shipped (dp18-rf.toml + dp18-rf-floor.toml) loads", None, lambda t: t, verdict="accept", part="floor")
+_case("accept-rf-simulated-port", "an RF copy to a simulated port (rf-b, tx = simulate) is accepted", None,
+      _sub_first("beacon", 'rf_ports = ["rf-a"]', 'rf_ports = ["rf-b"]'), verdict="accept", part="floor")
+_case("rf-port-unknown", "a beacon RF copy naming a port that does not exist", "rf_ports", _sub_first("beacon", 'rf_ports = ["rf-a"]', 'rf_ports = ["rf-z"]'), hint=RF_MSG, part="floor")
+_case("rf-object-port-unknown", "an object RF copy naming a port that does not exist", "objects[0].rf_ports",
+      _sub_first("object", 'rf_ports = ["rf-a"]', 'rf_ports = ["rf-z"]'), hint=RF_MSG, part="floor")
+_case("rf-port-duplicate", "an RF port named twice in one rf_ports", "rf_ports", _sub_first("beacon", 'rf_ports = ["rf-a"]', 'rf_ports = ["rf-a", "rf-a"]'), hint="duplicate RF port", part="floor")
+_case("rf-port-tx-off", "the named AX.25 port has tx = false", "rf_ports", _plain("\ntx = true\n", "\ntx = false\n"), hint=RF_MSG, part="rf")
+_case("rf-tx-enable-off", "[edges.ax25] tx_enable = false", "rf_ports", _plain("tx_enable = true", "tx_enable = false"), hint=RF_MSG, part="rf")
+_case("rf-ax25-disabled", "[edges.ax25] enable = false (the AX.25 port is disabled)", "rf_ports", _plain("[edges.ax25]\nenable = true", "[edges.ax25]\nenable = false"), hint=RF_MSG, part="rf")
+_case("rf-callsign-mismatch", "the AX.25 station call differs from the APRS-IS login", "rf_ports", _plain('callsign = "N0TEST-5"', 'callsign = "N0TEST-6"'),
+      hint="RF copy requires the APRS-IS gateway and AX.25 station callsigns to match", part="rf")
+
+
+def render_extras(case, read):
+    """The snippet texts to append after the template for one case, in order (pure; `read(name)` returns the text of a snippet of
+    rig/config/dv-router): data-ident.toml and dp15-aprsis.toml always; then dp18-origin.toml (part "origin"), or dp18-rf.toml and
+    dp18-rf-floor.toml (parts "rf" and "floor"), the part of the case mutated."""
+    out = [read("data-ident.toml"), read("dp15-aprsis.toml")]
+    if case.part == "origin":
+        out.append(case.mutate(read("dp18-origin.toml")))
+    else:
+        rf, floor = read("dp18-rf.toml"), read("dp18-rf-floor.toml")
+        out.append(case.mutate(rf) if case.part == "rf" else rf)
+        out.append(case.mutate(floor) if case.part == "floor" else floor)
+    return out
 
 
 def config_problems(case, verdict, exit_code):
