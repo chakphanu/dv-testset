@@ -401,6 +401,38 @@ def test_judge_tx_ysf_takes_the_gain_steps_and_names_the_extra_end_frame():
     assert v.problems == [] and v.findings == [] and v.facts["voice_written"] == 20 and v.facts["extra_words"] == 5
 
 
+def test_timeline_lines_order_fields_and_bound(tmp_path):
+    events = [("status", 100.00, 1, 1, 6, 10, 10, 8), ("frame", 100.01, ms.SET_MODE, 1, 1), ("frame", 100.02, ms.DSTAR_DATA, 12, 0x9e),
+              ("status", 100.25, 1, 1, 10, 10, 10, 8)]
+    lines = rif5.timeline_lines(events, 100.0, sent=(100.0, 100.04, 2), summary={"case": "RIF5-TX-dstar", "facts": {"voice_sent": 2}})
+    kinds = [l["ev"] for l in lines]
+    assert kinds[-1] == "summary" and kinds.count("sent") == 2 and kinds.count("status") == 2 and kinds.count("frame") == 2
+    assert [l["t"] for l in lines[:-1]] == sorted(l["t"] for l in lines[:-1])
+    by = {(l["ev"], l.get("type") or l.get("index")): l for l in lines}
+    assert by[("frame", "SET_MODE")]["arg"] == "01" and by[("frame", "SET_MODE")]["len"] == 1
+    assert by[("frame", "DSTAR_DATA")]["mode"] == "dstar" and "arg" not in by[("frame", "DSTAR_DATA")]
+    assert by[("sent", 1)]["est"] is True and by[("sent", 1)]["t"] == 0.02
+    status = [l for l in lines if l["ev"] == "status"][0]
+    assert status == {"ev": "status", "t": 0.0, "mode": 1, "flags": 1, "space": {"dstar": 6, "dmr1": 10, "dmr2": 10, "ysf": 8}}
+    # bounded: the first lines are kept, the cut is named, the summary stays last
+    many = [("frame", 100.0 + i * 0.001, ms.DSTAR_DATA, 12, 0) for i in range(50)]
+    cut = rif5.timeline_lines(many, 100.0, summary={"x": 1}, max_lines=10)
+    assert len(cut) == 12 and cut[-2] == {"ev": "truncated", "lines": 40} and cut[-1] == {"x": 1, "ev": "summary"}
+
+
+def test_write_timeline_writes_json_lines_under_the_run_dir(tmp_path):
+    import json
+    import sys
+    from types import SimpleNamespace
+    sys.path.insert(0, str(ROOT / "cases"))
+    from rif5_support import write_timeline
+    modem = SimpleNamespace(events_between=lambda since: [("frame", since + 0.5, ms.DSTAR_EOT, 0, None)])
+    path = write_timeline(SimpleNamespace(out=str(tmp_path)), "RIF5-LONG-dstar", modem, 10.0, (10.0, 11.0, 2), {"case": "RIF5-LONG-dstar"})
+    assert path == tmp_path / "rif5" / "timeline-LONG-dstar.jsonl"
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    assert [r["ev"] for r in rows] == ["sent", "frame", "sent", "summary"] and rows[1]["type"] == "DSTAR_EOT"
+
+
 def test_observer_fields_are_the_nineteen_of_the_document():
     assert len(rif5.OBSERVER_FIELDS) == 19 and {"rx_freq_hz", "tx_freq_hz"} <= set(rif5.OBSERVER_FIELDS)
     assert rif5.EDGE_SILENCE_S < rif5.NATIVE_OVER_TIMEOUT_S

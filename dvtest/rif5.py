@@ -616,3 +616,45 @@ def delta(before, after, family, **labels):
     def pick(table):
         return sum(v for key, v in table.items() if key[0] == family and all((k, w) in key[1:] for k, w in labels.items()))
     return pick(after) - pick(before)
+
+
+# --- the flow-control timeline of a TX case (out/<run>/rif5/timeline-<case>.jsonl) -----------------------------------------
+
+TIMELINE_MAX_LINES = 2500               # a 3 s over is a few hundred lines; a longer one keeps its first lines and says so
+_MODE_OF_TYPE = {ms.DSTAR_HEADER: "dstar", ms.DSTAR_DATA: "dstar", ms.DSTAR_EOT: "dstar", ms.DSTAR_LOST: "dstar", ms.DMR_DATA2: "dmr", ms.DMR_LOST2: "dmr",
+                 ms.YSF_DATA: "ysf", ms.YSF_LOST: "ysf"}
+
+
+def timeline_lines(events, t0, sent=None, summary=None, max_lines=TIMELINE_MAX_LINES):
+    """JSON-ready dicts, in time order, for the events of Rif5Modem.events of one case. Times `t` are seconds since `t0` (monotonic, the case start).
+
+      {"ev": "frame", "t", "type", "mode", "len"}   a frame the host wrote to the modem (GET_STATUS left out); SET_MODE also has "arg" (the mode byte,
+                                                    hex: 00 idle, 01 D-STAR, 02 DMR, 03 YSF)
+      {"ev": "status", "t", "mode", "flags", "space": {"dstar", "dmr1", "dmr2", "ysf"}}   a GET_STATUS reply the fake sent, the free space as reported
+      {"ev": "sent", "t", "index", "est": true}      a word the room side sent; `sent` is (start, end, count): the time is ESTIMATED as an even spread
+                                                    over the talk (the client paces 20 ms per frame), not observed
+      {"ev": "summary", ...}                          the case's own numbers (`summary`), last line
+    Anything beyond `max_lines` is cut with a {"ev": "truncated", "lines": n} line before the summary."""
+    out = []
+    for event in events:
+        kind, t = event[0], round(event[1] - t0, 4)
+        if kind == "frame":
+            _, _, ftype, length, first = event
+            row = {"ev": "frame", "t": t, "type": ms.name_of(ftype), "mode": _MODE_OF_TYPE.get(ftype), "len": length}
+            if ftype == ms.SET_MODE and first is not None:
+                row["arg"] = "%02x" % first
+            out.append(row)
+        elif kind == "status":
+            _, _, mode, flags, d, m1, m2, y = event
+            out.append({"ev": "status", "t": t, "mode": mode, "flags": flags, "space": {"dstar": d, "dmr1": m1, "dmr2": m2, "ysf": y}})
+    if sent:
+        start, end, count = sent
+        step = (end - start) / count if count else 0.0
+        out += [{"ev": "sent", "t": round(start - t0 + i * step, 4), "index": i, "est": True} for i in range(count)]
+    out.sort(key=lambda row: row["t"])
+    if len(out) > max_lines:
+        cut = len(out) - max_lines
+        out = out[:max_lines] + [{"ev": "truncated", "lines": cut}]
+    if summary is not None:
+        out.append(dict(summary, ev="summary"))
+    return out

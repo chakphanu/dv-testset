@@ -208,6 +208,26 @@ def test_modes_buffers_and_naks(link):
     assert [t for t, _ in modem.pairs("dstar")] == [ms.DSTAR_HEADER]
 
 
+def test_the_event_log_keeps_frames_and_status_replies_for_the_timeline(link):
+    modem, edge = link
+    edge.open()
+    t0 = modem.mark()
+    edge.write(ms.SET_MODE, b"\x01")
+    edge.read(ms.ACK)
+    edge.write(ms.DSTAR_HEADER, rf.dstar_header("N0TEST", rpt1="N0CALL G", rpt2="N0CALL B", flags=(0, 0, 0)))
+    edge.write(ms.DSTAR_DATA, bytes(12))
+    edge.write(ms.GET_STATUS)
+    reply = edge.read(ms.GET_STATUS).payload
+    events = modem.events_between(t0)
+    kinds = [(e[0], e[2]) for e in events if e[0] == "frame"]
+    assert kinds == [("frame", ms.SET_MODE), ("frame", ms.DSTAR_HEADER), ("frame", ms.DSTAR_DATA)]       # GET_STATUS itself is not an event
+    assert events[0][3:] == (1, 1)                                                                          # length 1, argument 01
+    assert [e[3] for e in events if e[0] == "frame"] == [1, 41, 12]
+    status = [e for e in events if e[0] == "status"][-1]
+    assert status[2:] == (reply[0], reply[1], reply[3], reply[4], reply[5], reply[6])
+    assert modem.events_between(time.monotonic() + 1) == []
+
+
 def test_a_frame_in_idle_selects_its_mode_and_a_disabled_mode_is_refused(link):
     modem, edge = link
     edge.open()

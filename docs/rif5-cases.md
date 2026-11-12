@@ -206,8 +206,9 @@ it now collects the public and the admin problems and fails at the end, so one r
   `TX_FRAMES["dstar"]` is 22 (0.44 s, two superframe boundaries), a drop there is a problem, with the count and the sent index of the gap in the message. Two more numbers from the same run:
   RIF5-LONG-dstar wrote 117 of 150 words (3 s, 22 percent lost), LONG-dmr 147 of 150 words (burst 36 lost), LONG-ysf all. The hub metrics snapshots `control/8-N.out` of the run (hub counters, read
   by the cases; times in `control/control.log`) give `frames_total{dir=tx,result=dropped}`: 0 -> 32 at the G1 restart (the 32 frames of the over inside the guard, refused by the fence), +4 during the three short TX overs, +35 during the three
-  LONG overs (8-3 to 8-10), 71 at the end (the 39 of M1 is the baseline of 32 to 71, not LONG alone). No per-case timeline of the status replies and the space values was written: see "What the run left behind".
-  FC1 is for the DV-Router team (U1 is on their list): on a real modem the same cap (10 frames in flight, 250 ms status) gives the same 40 frames per second ceiling.
+  LONG overs (8-3 to 8-10), 71 at the end (the 39 of M1 is the baseline of 32 to 71, not LONG alone). No per-case timeline of the status replies and the space values was written in that run (it is, from the next run: "The timeline").
+  FC1 is for the DV-Router team (U1 is on their list). **Only the D-STAR loss is measured** (117 of 150 words, 3 of 50 in the 1 s over). The ceilings of 40 / 12 / 8 frames per second that follow from "cap per 250 ms status" are
+  a reading of the document, not a fact: DMR wrote 147 of 150 words (3 per 250 ms would be 12 bursts/s against 16.7 needed, far more loss) and YSF wrote 155 of 150, so a simple cap per status does not explain them. The timeline is there to find out.
 
 ### 3. TX-ysf: first SET_MODE is 00, word 0 differs (HARNESS)
 
@@ -240,14 +241,31 @@ by the damaged copy. The assertion is kept (a listener hears the over end 0.20 s
 ### What the run left behind (for the flow-control analysis)
 
 Written to `out/<run>/`: `rif5.txt` and `pytest.log` (the same RECORD / FINDING lines: frames written, words sent and written, native frames and span per LONG case), `junit.xml` (per case time), `control/8-N.out` with
-`control/control.log` (16 hub metrics snapshots, cumulative per-port counters, no per-case label: the snapshot times map to the cases by `junit.xml` order). **Not written anywhere:** the fake's log of the host frames
-with their times (`Rif5Modem.frames`, in memory), the status replies it sent and the space values in them, and the host queue depth. With the fake as it is, a timeline needs a new recorder in `Rif5Modem._handle` (frame
-time and type) and `status_payload` (time and the three space bytes) written to `out/<run>/rif5-flow-<case>.jsonl`; not built.
+`control/control.log` (16 hub metrics snapshots, cumulative per-port counters, no per-case label: the snapshot times map to the cases by `junit.xml` order). **Not written in that run:** the fake's log of the host frames
+with their times (`Rif5Modem.frames`, in memory), the status replies it sent and the space values in them, and the host queue depth. From the next run the TX cases write it: "The timeline".
 
 The fake (`dvtest/mmdvm_modem.py:70-71, 337-343`; our own choice, no firmware line cited): capacity 10 frames D-STAR, 10 per DMR slot, 8 YSF; play-out per host frame D-STAR header 80 ms, data and EOT 20 ms, DMR burst 60 ms, YSF
 frame 100 ms. Space is computed from the clock at every read: `busy_until` grows by the play-out time of each frame written (`_enqueue`, line 335) and `space = capacity - round((busy_until - now) / air time)` (line 343), so it
 is freed continuously at the air rate, and the status reply (`Rif5Modem.status_payload`, `dvtest/mmdvm_serial.py:336-342`) reports the value at that instant: payload `mode, flags, 0, D-STAR, DMR1, DMR2, YSF` = frame offsets 3, 4, 5, 6,
 7, 8, 9 (radio.md 7.1). The status interval is the host's (250 ms, `rif5.POLL_S`); the fake answers each GET_STATUS at once. The in-flight limits 10 / 3 / 2 and the prefill are the host's (radio.md lines 665-669, `core.rs:990-996`).
+
+### The timeline (`out/<run>/rif5/timeline-<case>.jsonl`)
+
+Written by the short TX overs and the three LONG cases: `timeline-TX-dstar.jsonl`, `-TX-dmr`, `-TX-ysf`, `timeline-LONG-dstar.jsonl`, `-LONG-dmr`, `-LONG-ysf` (the notes file `rif5.txt` has a
+`RECORD ... timeline:` line per case). One JSON object per line, in time order, `t` in seconds since the case start (the tester's monotonic clock, taken just before the talker keys the room; no secrets: frame types,
+lengths and space bytes). Built by `rif5.timeline_lines` from the fake's event log (`Rif5Modem.events`, `events_between`), written by `cases/rif5_support.py write_timeline`; at most 2500 lines (the rest is cut with a
+`truncated` line), a 3 s over is a few hundred.
+
+| `ev` | fields | meaning |
+|------|--------|---------|
+| `frame` | `t`, `type` (`DSTAR_DATA`, `SET_MODE`, ...), `mode` (`dstar` / `dmr` / `ysf` or null), `len` (payload bytes), `arg` (SET_MODE only: the mode byte in hex) | a frame the host wrote to the modem; GET_STATUS is left out (the status lines cover it) |
+| `status` | `t`, `mode`, `flags`, `space` = `{dstar, dmr1, dmr2, ysf}` | a GET_STATUS reply the fake sent, the free space per mode as reported (payload bytes 3, 4, 5, 6 = frame offsets 6, 7, 8, 9); the fake computes it at that instant from the play-out (`mmdvm_modem.py:337-343`) |
+| `sent` | `t`, `index`, `est` (true) | a word the room side sent. The time is ESTIMATED: the words spread evenly over the talk call (start to end without its 0.5 s tail); the case does not see the client's packets |
+| `truncated` | `lines` | lines cut beyond the bound |
+| `summary` | `case`, `facts` (the judge's numbers: `voice_sent`, `voice_written`, `voice_dropped`, `leading_idle_s`, ...), `problems`, `findings`, `frames_total` | last line. The `frames_total` ok / dropped deltas are NOT read by these cases (the hub metrics lag up to 10 s); the cumulative counters of the run are in `control/8-N.out` with `control/control.log` |
+
+Reading it: the frames written against the `sent` lines and the `status` lines show how many frames the host put on the byte link between two replies, and the space it saw when it did. Mind that D-STAR, DMR and YSF
+numbers are not alike: only the D-STAR loss has been measured so far.
 
 ### Findings that were not failures
 

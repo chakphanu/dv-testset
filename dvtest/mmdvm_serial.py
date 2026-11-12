@@ -35,7 +35,7 @@ model of VirtualModem. Judgements over the log are in dvtest/rif5.py.
 import select
 import threading
 import time
-from collections import namedtuple
+from collections import deque, namedtuple
 
 from . import mmdvm_modem as mm
 
@@ -69,6 +69,7 @@ NAK_UNKNOWN, NAK_NOT_ACCEPTED, NAK_BAD_VALUE, NAK_FULL = 1, 2, 4, 5
 STATUS_V2_MIN = 17            # payload bytes of a valid version 2 status (frame total 20)
 FRAME_MAX_SHORT = 255
 READER_LIMIT = 512
+EVENT_LIMIT = 20000            # events kept for the timeline (about 30 minutes of polls)
 
 HostFrame = namedtuple("HostFrame", "t mono ftype payload")     # t wall clock, mono monotonic, payload without the envelope
 Frame = namedtuple("Frame", "ftype payload raw")
@@ -261,6 +262,9 @@ class Rif5Modem(mm.VirtualModem):
         self.cw_until = 0.0
         self.naks = []
         self.lockout = False
+        # bounded event log for the flow-control timeline (rif5.timeline_lines): ("frame", mono, ftype, length, first payload byte or None)
+        # for every host frame but GET_STATUS, ("status", mono, mode, flags, D-STAR space, DMR1 space, DMR2 space, YSF space) for every valid reply
+        self.events = deque(maxlen=EVENT_LIMIT)
 
     # --- the host's frames ---
     def _handle(self, ftype, payload):
@@ -268,6 +272,8 @@ class Rif5Modem(mm.VirtualModem):
         host = HostFrame(time.time(), now, ftype, bytes(payload))
         with self.lock:
             self.frames.append(host)
+            if ftype != GET_STATUS:
+                self.events.append(("frame", now, ftype, len(host.payload), host.payload[0] if host.payload else None))
         if ftype in mm.PLAYOUT_MS or ftype in (DSTAR_LOST, DMR_LOST2, YSF_LOST):
             kind = mm.MODE_OF_TYPE.get(ftype)
             with self.lock:
@@ -280,7 +286,10 @@ class Rif5Modem(mm.VirtualModem):
         elif ftype == GET_STATUS:
             self.counts["status"] += 1
             if self.status_mode == "valid":
-                self.send(GET_STATUS, self.status_payload(now))
+                body = self.status_payload(now)
+                with self.lock:
+                    self.events.append(("status", now, body[0], body[1], body[3], body[4], body[5], body[6]))
+                self.send(GET_STATUS, body)
             elif self.status_mode == "short":
                 self.send(GET_STATUS, self.status_payload(now)[:10])
         elif ftype == SET_FREQ:
@@ -361,6 +370,12 @@ class Rif5Modem(mm.VirtualModem):
     def mark(self):
         """A monotonic time to cut the log with (host_frames(since=...))."""
         return time.monotonic()
+
+    def events_between(self, since, until=None):
+        """The timeline events (see `events`) with since <= time < until."""
+        with self.lock:
+            items = list(self.events)
+        return [e for e in items if e[1] >= since and (until is None or e[1] < until)]
 
     def host_frames(self, since=None, until=None, types=None):
         with self.lock:

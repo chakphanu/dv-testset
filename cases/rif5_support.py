@@ -2,6 +2,7 @@
 """Rig helpers of cases/test_rif5_mmdvm_serial.py (docs/rif5-cases.md): the notes file, timed protocol clients on a room, waits on the fake
 modem's log, the readers of the port state (public state, admin clients) and the restart of dv-edge-radio. The pure part is dvtest/rif5.py and
 the fake modem dvtest/mmdvm_serial.py (unit tests cases/unit/test_rif5_lib.py, test_mmdvm_serial.py)."""
+import json
 import threading
 import time
 from pathlib import Path
@@ -182,3 +183,19 @@ def restart_radio_edge(admin):
 def wait_unfenced(web, name=rif5.PORT_NAME):
     """txguard.Result for the port: waits until the public state shows no fence."""
     return txguard.wait_unfenced(txguard.radio_reader(web, name), kind="radio")
+
+
+# ---------------------------------------------------------------- the flow-control timeline
+
+def write_timeline(target, case, modem, since, sent=None, summary=None):
+    """out/<run>/rif5/timeline-<case>.jsonl: the host frames, the status replies (space per mode) and the words sent, from `since` (monotonic) to now,
+    one JSON object per line, times relative to `since` (rif5.timeline_lines, docs/rif5-cases.md). No secret in it: frame types, lengths, space bytes.
+    Returns the path, or None when out/ cannot be written."""
+    lines = rif5.timeline_lines(modem.events_between(since), since, sent, summary)
+    path = Path(target.out) / "rif5" / ("timeline-%s.jsonl" % case.replace("RIF5-", "").replace("/", "_"))
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("".join(json.dumps(row, sort_keys=True, default=str) + "\n" for row in lines), encoding="utf-8")
+    except OSError:
+        return None
+    return path

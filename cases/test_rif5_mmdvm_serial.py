@@ -37,7 +37,8 @@ from dvtest import echo, rif5, sut_config
 from dvtest import mmdvm_rf as rf
 from dvtest import mmdvm_serial as ms
 from dvtest.control import RigControl
-from rif5_support import Member, admin_row, last_dialogue, note, public_row, quiesce, restart_radio_edge, settle_idle, wait_for, wait_unfenced
+from rif5_support import (Member, admin_row, last_dialogue, note, public_row, quiesce, restart_radio_edge, settle_idle, wait_for, wait_unfenced,
+                          write_timeline)
 
 pytestmark = pytest.mark.rig
 
@@ -331,7 +332,9 @@ def tx_over(ctx, web, kind, n, seed, case):
     talker = Member(ctx.ip, kind, rif5.ROOMS[kind], 1, listen=False)
     since = ctx.modem.mark()
     try:
+        t_talk = time.monotonic()
         talker.talk(frames, tail=0.5)
+        ctx.last_talk = (t_talk, time.monotonic() - 0.5, len(frames))       # the words are spread over the talk without its 0.5 s tail (an estimate)
         ident = talker.ident()
     finally:
         talker.close(settle=0.5)
@@ -352,6 +355,15 @@ def check_naks(ctx, case, since):
         case, [(ms.name_of(n[1]), n[2]) for n in other])
 
 
+def timeline(ctx, case, since, verdict):
+    """Write out/<run>/rif5/timeline-<case>.jsonl for the flow-control analysis (docs/rif5-cases.md, "The timeline") and name it in the notes."""
+    sent = getattr(ctx, "last_talk", None)
+    summary = {"case": case, "facts": verdict.facts, "problems": verdict.problems, "findings": verdict.findings,
+               "frames_total": "not read in the case: hub counters are in control/8-N.out (cumulative, 10 s old at most)"}
+    path = write_timeline(ctx.target, case, ctx.modem, since, sent, summary)
+    note(ctx.target, case, "RECORD", "timeline: %s" % (path if path is None else "rif5/" + path.name))
+
+
 @pytest.mark.parametrize("kind", KINDS)
 def test_tx_room_to_modem(kind, ctx, web):
     """(a) A protocol client keys the room of the mode; the modem receives SET_MODE for the mode, then the native frames: D-STAR header + data + EOT,
@@ -361,6 +373,7 @@ def test_tx_room_to_modem(kind, ctx, web):
     log, since, sent, ident = tx_over(ctx, web, kind, TX_FRAMES[kind], "rif5-tx", case)
     verdict = judge_tx(kind, log, sent, ident, ctx.port)
     report(ctx, case, verdict)
+    timeline(ctx, case, since, verdict)
     TALLY["tx"] += 1
     TALLY["tx_native_frames"] += len([f for f in log if f.ftype in ms.TX_TYPES[kind]])
     check_naks(ctx, case, since)
@@ -506,6 +519,7 @@ def test_long_over_is_recorded(kind, ctx, web):
     case = "RIF5-LONG-%s" % kind
     log, since, sent, ident = tx_over(ctx, web, kind, LONG_FRAMES, "rif5-long", case)
     verdict = judge_tx(kind, log, sent, ident, ctx.port, lossy=True)
+    timeline(ctx, case, since, verdict)
     TALLY["long"] += 1
     native = [f for f in log if f.ftype in ms.TX_TYPES[kind]]
     span = native[-1].mono - native[0].mono if native else 0.0
