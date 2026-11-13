@@ -27,6 +27,11 @@ instances in one throw-away container, each one's transmit audio relayed to the 
 one KISS port and read from the other:
 
     python3 -m dvtest.oracle_direwolf loop [--frames 6] [--gap 5]
+
+A fourth command makes Dire Wolf the oracle of the DIGI1 fill-in digipeater (docs/digi1-cases.md): node B of the same loop with MYCALL N0TEST-10 and
+`DIGIPEAT 0 0 ^WIDE1-1$ ^WIDE1-1$`, `DEDUPE 30`; node A sends the path, key and timeline vectors of dvtest/digi1_oracle.py and reads the repeats:
+
+    python3 -m dvtest.oracle_direwolf digi [--out vectors/direwolf/digi_oracle.json]
 """
 import argparse
 import json
@@ -388,6 +393,33 @@ def loop_verdict(result):
     return ok, lines
 
 
+def digi_main(out=None):
+    """Run the DIGI1 oracle job (docs/digi1-cases.md): write the vectors file and print one line per path vector; exit 1 when a vector
+    that Dire Wolf should treat like the model differs (a documented deviation is only listed)."""
+    from dvtest import digi1_oracle
+    steps = digi1_oracle.plan()
+    version = run_job({"mode": "versions"}).get("direwolf", "")
+    result = run_job(digi1_oracle.job(steps), timeout=digi1_oracle.JOB_TIMEOUT_S)
+    if result.get("error"):
+        print("error: %s" % result["error"])
+        return 1
+    doc = digi1_oracle.file_doc(result, steps, version)
+    digi1_oracle.write(doc, out or digi1_oracle.PATH)
+    by_case = {r["case"]: r for r in doc["records"]}
+    bad = 0
+    for step in steps:
+        g = step["vector"]
+        if g is None:
+            continue
+        problems, notes = digi1_oracle.oracle_problems(g, by_case[g.id])
+        verdict, text = digi1_oracle.compare_dw(g, by_case[g.id])
+        print("%-4s %-13s %s" % (g.id, verdict, text))
+        bad += len(problems)
+    print("timeline (0 10 29 31 45 s): %s" % digi1_oracle.timeline_outcomes(by_case))
+    print("digi oracle %s" % ("OK" if not bad else "DISAGREES with the model on %d vector(s)" % bad))
+    return 1 if bad else 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="oracle_direwolf", description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -399,7 +431,12 @@ def main(argv=None):
     loop.add_argument("--frames", type=int, default=6)
     loop.add_argument("--info-len", type=int, default=40)
     loop.add_argument("--gap", type=float, default=5.0, help="seconds between frames (a node is deaf for about its own air time)")
+    digi = sub.add_parser("digi", help="DIGI1 oracle: the path vectors, key vectors and the duplicate timeline through a Dire Wolf digipeater "
+                                       "(DIGIPEAT 0 0 ^WIDE1-1$ ^WIDE1-1$, DEDUPE 30) on the modem loop; writes vectors/direwolf/digi_oracle.json")
+    digi.add_argument("--out", default=None, help="vectors file (default vectors/direwolf/digi_oracle.json)")
     args = parser.parse_args(argv)
+    if args.cmd == "digi":
+        return digi_main(args.out)
     if args.cmd == "loop":
         result = run_job({"mode": "looptest", "frames": args.frames, "info_len": args.info_len, "gap": args.gap})
         ok, lines = loop_verdict(result)

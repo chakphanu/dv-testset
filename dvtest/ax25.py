@@ -299,6 +299,87 @@ def kiss_decode(stream):
     return KissDecoder().feed(stream)
 
 
+# ------------------------------------------------------------------ H bit and path handling (DIGI1, docs/digi1-cases.md)
+#
+# TNC2 text cannot say "hop 2 is used but hop 1 is not" (a `*` means "this hop and every hop before it"), and the DIGI1 path vectors
+# need exactly that (G10: non-contiguous H bits) and need the two reserved bits of a hop (G12: clear). So the cases build frames hop by
+# hop: a hop is a call text, or (text, h) or (text, h, reserved). The functions below only touch the 7 bytes of one hop; they are the
+# frame form of what a fill-in digipeater does (AX.25 v2.2 section 3.12) and are checked against hand-built bytes in
+# cases/unit/test_ax25_digi.py.
+
+def _hop_spec(item):
+    """(call, ssid, h, reserved) of one hop spec: 'CALL-S', ('CALL-S', h) or ('CALL-S', h, reserved)."""
+    if isinstance(item, str):
+        text, h, reserved = item, False, 0b11
+    elif len(item) == 2:
+        text, h, reserved = item[0], bool(item[1]), 0b11
+    else:
+        text, h, reserved = item[0], bool(item[1]), item[2]
+    call, ssid = split_call(text)
+    return call, ssid, h, reserved
+
+
+def build_ui(dest, src, digis=(), info=b"", *, cr_dest=True, cr_src=True, pid=PID_NO_L3, control=CONTROL_UI, src_reserved=0b11,
+             dest_reserved=0b11):
+    """AX.25 UI frame bytes (no FCS) with an explicit H bit and reserved bits per digipeater (see the section note). `dest` and `src` are
+    'CALL-S' texts, `digis` a sequence of hop specs, `info` bytes or str (Latin-1). More than 8 hops raise ValueError. The address
+    extension bit is set on the last address only. `cr_dest` / `cr_src` are the command/response bits (Dire Wolf sets both; a
+    hand-built v2 command frame has the destination set and the source clear)."""
+    hops = [_hop_spec(d) for d in digis]
+    if len(hops) > MAX_DIGIS:
+        raise ValueError("more than %d digipeaters" % MAX_DIGIS)
+    dcall, dssid = split_call(dest)
+    scall, sssid = split_call(src)
+    out = bytearray(encode_address(dcall, dssid, cr=cr_dest, last=False, reserved=dest_reserved))
+    out += encode_address(scall, sssid, cr=cr_src, last=not hops, reserved=src_reserved)
+    for i, (call, ssid, h, reserved) in enumerate(hops):
+        out += encode_address(call, ssid, cr=h, last=i == len(hops) - 1, reserved=reserved)
+    if isinstance(info, str):
+        info = info.encode("latin-1")
+    out += bytes([control, pid]) + bytes(info)
+    return bytes(out)
+
+
+def hops(frame):
+    """[(text, h, reserved)] of the digipeaters of a frame, in path order (h = has-been-repeated bit)."""
+    return [(d["text"], d["bit7"], d["reserved"]) for d in parse_frame(frame)["digis"]]
+
+
+def path_text(frame):
+    """The path with a `*` after EVERY hop whose H bit is set (not the TNC2 'last used only' convention), e.g. `SRC>DST,A*,B`; the
+    information field is not part of it. Use it in assertion messages: it shows non-contiguous H bits."""
+    f = parse_frame(frame)
+    return "%s>%s" % (f["src"]["text"], ",".join([f["dest"]["text"]] + ["%s%s" % (d["text"], "*" if d["bit7"] else "") for d in f["digis"]]))
+
+
+def first_unused_hop(frame):
+    """Index of the first digipeater whose H bit is clear, or None (no hops, or all used)."""
+    for i, d in enumerate(parse_frame(frame)["digis"]):
+        if not d["bit7"]:
+            return i
+    return None
+
+
+def replace_hop(frame, index, text):
+    """The frame with digipeater `index` replaced by `text`, H bit set and both reserved bits set, the address extension bit of that hop
+    kept: the one rewrite a fill-in digipeater makes (DIGI1, data.md 8.3). Every other byte is unchanged. IndexError when the frame
+    has no such hop."""
+    f = parse_frame(frame)
+    if not 0 <= index < len(f["digis"]):
+        raise IndexError("the frame has %d digipeaters, no hop %d" % (len(f["digis"]), index))
+    call, ssid = split_call(text)
+    offset = 14 + 7 * index
+    seven = encode_address(call, ssid, cr=True, last=bool(frame[offset + 6] & 1))
+    return bytes(frame[:offset]) + seven + bytes(frame[offset + 7:])
+
+
+def diff_offsets(a, b):
+    """Byte offsets at which two frames of equal length differ; ValueError for different lengths."""
+    if len(a) != len(b):
+        raise ValueError("frames of %d and %d bytes" % (len(a), len(b)))
+    return [i for i in range(len(a)) if a[i] != b[i]]
+
+
 # ------------------------------------------------------------------ DV-Router model (statements of its lead)
 #
 # Everything below models what the DV-Router lead STATED about its KISS / AX.25 adapter

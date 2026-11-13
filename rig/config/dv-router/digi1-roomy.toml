@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/digi1-cases.md): the AX.25 edge with the fill-in digipeater (DIGI1) and ROOM in the
+# budget, for the functional cases DIGI-R1, R2, R4 (path vectors, duplicate timeline, two fill-ins), R5 and the counters. Use it AFTER
+# data-ident.toml, INSTEAD of dp15-rf.toml, dp18-rf.toml and digi1.toml.
+#
+# Why a second shape: at the class defaults the digi class holds 10 s of airtime per 600 s, about 11 copies of an APRS frame, and the
+# functional cases send more than that in one run (24 path vectors, 5 key vectors, the timeline). A copy over the class budget waits and
+# expires (dropped_ttl), which is correct and is what DIGI-R3 measures on digi1.toml; here it would only make a vector look wrong.
+#
+#   tx_budget = { duty_pct = 20 }   the port holds 120 s per 600 s (design ceiling 25 %), the digi class 4/12 of it = 40 s, a source 25 % = 30 s
+#   tx_per_min = 30, tx_burst = 10  the packet bucket never waits in these cases
+#   digi = { enable = true }        dedupe_secs 30, ttl_secs 5, share 4 (all defaults)
+#
+# The tester plays the TNCs: <TESTER_IP>:8101 is rf-a (digipeating, TX), :8102 is rf-b (receive only, no digi: the "same port only" control).
+[edges.ax25]
+enable = true
+callsign = "N0TEST-10"
+tx_enable = true
+alias_calls = []
+
+[[edges.ax25.port]]
+name = "rf-a"
+kind = "kiss-tcp"
+host = "<TESTER_IP>"
+port = 8101
+channel = 0
+tx = true
+physical = "radio1"
+band = "2m"
+class = "afsk1200-shared"
+tx_budget = { duty_pct = 20 }
+tx_per_min = 30
+tx_burst = 10
+digi = { enable = true }
+reconnect = { min_secs = 1, max_secs = 5 }
+
+[[edges.ax25.port]]
+name = "rf-b"
+kind = "kiss-tcp"
+host = "<TESTER_IP>"
+port = 8102
+channel = 0
+tx = false
+reconnect = { min_secs = 1, max_secs = 5 }

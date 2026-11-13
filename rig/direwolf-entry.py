@@ -37,6 +37,13 @@ Jobs (field "mode"):
       a file holding ONE line of space separated hex bytes (an AX.25 frame without FCS;
       the hex input path of decode_aprs keeps the information bytes exact). Result per
       case: name, rc, output (its stdout, ANSI colour codes removed, Latin-1 text).
+  digi  {"mycall": "N0TEST-10", "extra": ["DIGIPEAT 0 0 ^WIDE1-1$ ^WIDE1-1$", "DEDUPE 30"], "steps": [{"name", "at", "frame_hex"}], "settle_s": 10}
+      the Dire Wolf digipeater as the oracle of the DIGI1 cases (docs/digi1-cases.md): the modem loop of looptest with the
+      configuration lines `extra` added to node B (the digipeater, MYCALL `mycall`). Client A sends each frame into A's KISS
+      port at `at` seconds after the start (A transmits, B demodulates and, if its rules say so, repeats; B's repeat is
+      demodulated by A and given to A's KISS clients). Result: sent [{name, t, frame_hex}] and heard [{t, frame_hex}] (frames
+      A's KISS port gave, t seconds after the start), b_heard (what B's KISS port gave: the frames B received), log_b. The
+      host side (dvtest/digi1_oracle.py) assigns a repeat to the step it follows.
   looptest  {"frames": 6, "info_len": 40}
       the modem loop without hardware, all on loopback of this one container: two Dire Wolf
       instances A (KISS 8001, audio in udp 7355) and B (KISS 8002, audio in udp 7356), each one's
@@ -437,7 +444,7 @@ def split_chunks(buf, size=UDP_CHUNK):
     return [buf[i:i + size] for i in range(0, cut, size)], buf[cut:]
 
 
-def loop_conf(mycall, kiss_port, audio_in, fifo, kisscopy=False):
+def loop_conf(mycall, kiss_port, audio_in, fifo, kisscopy=False, extra=()):
     """Dire Wolf configuration text of one loop node: audio in from the UDP port, audio out through the ALSA file
     plugin into `fifo`, one channel, 1200 baud AFSK, KISS TCP on `kiss_port` only (no AGW port; `KISSPORT 0`
     removes the built-in default 8001, which would otherwise stay next to the configured one)."""
@@ -445,6 +452,7 @@ def loop_conf(mycall, kiss_port, audio_in, fifo, kisscopy=False):
              "MODEM 1200", "AGWPORT 0", "KISSPORT 0", "KISSPORT %d" % kiss_port]
     if kisscopy:
         lines.append("KISSCOPY")
+    lines.extend(str(line) for line in extra)           # e.g. the digipeater rules of the job "digi"
     return "\n".join(lines) + "\n"
 
 
@@ -506,7 +514,8 @@ class Relay(threading.Thread):
 class LoopNode:
     """One Dire Wolf of the modem loop: the process (log through a pty), the FIFO, the relay to the peer."""
 
-    def __init__(self, name, mycall, kiss_port, audio_in, peer, kisscopy=False, workdir=LOOP_DIR, echo_log=False, speed=RELAY_SPEED, tap=False):
+    def __init__(self, name, mycall, kiss_port, audio_in, peer, kisscopy=False, workdir=LOOP_DIR, echo_log=False, speed=RELAY_SPEED, tap=False,
+                 extra=()):
         self.name, self.kiss_port, self.audio_in, self.peer = name, kiss_port, audio_in, peer
         self.workdir = workdir
         self.fifo = os.path.join(workdir, "tx-%s.raw" % name)
@@ -517,7 +526,7 @@ class LoopNode:
             os.unlink(self.fifo)
         os.mkfifo(self.fifo, 0o600)
         with open(self.conf, "w") as fh:
-            fh.write(loop_conf(mycall, kiss_port, audio_in, self.fifo, kisscopy))
+            fh.write(loop_conf(mycall, kiss_port, audio_in, self.fifo, kisscopy, extra))
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.peer_host, self.peer_port, self.target = peer[0], int(peer[1]), None
         self.tap_path = os.path.join(workdir, "tap-%s.raw" % name) if tap else None
@@ -700,6 +709,83 @@ def mode_looptest(job):
         b.stop()
 
 
+class KissStream:
+    """Incremental KISS decoder for the data frames of one TCP client: feed() returns the new frames (bytes without the type byte)."""
+
+    def __init__(self):
+        self.cur, self.inside, self.esc = bytearray(), False, False
+
+    def feed(self, raw):
+        out = []
+        for b in raw:
+            if b == 0xC0:
+                if self.inside and len(self.cur) > 1 and self.cur[0] == 0x00:
+                    out.append(bytes(self.cur[1:]))
+                self.cur, self.inside, self.esc = bytearray(), True, False
+            elif self.inside:
+                if self.esc:
+                    self.cur.append({0xDC: 0xC0, 0xDD: 0xDB}.get(b, b))
+                    self.esc = False
+                elif b == 0xDB:
+                    self.esc = True
+                else:
+                    self.cur.append(b)
+        return out
+
+
+def mode_digi(job):
+    """job "digi": see the module docstring. Node A (injector and observer) and node B (the digipeater under test, Dire Wolf
+    with the lines of `extra`) on the modem loop; all steps are sent at their `at` second, then `settle_s` seconds more."""
+    steps = sorted(job.get("steps") or [], key=lambda s: float(s["at"]))
+    settle = float(job.get("settle_s", 10.0))
+    a = LoopNode("a", "N0TEST-8", 8001, 7355, ("127.0.0.1", 7356), workdir=LOOP_DIR)
+    b = LoopNode("b", job.get("mycall", "N0TEST-10"), 8002, 7356, ("127.0.0.1", 7355), workdir=LOOP_DIR, extra=job.get("extra") or [])
+    sent, heard, b_heard = [], [], []
+    try:
+        a.start()
+        b.start()
+        if not (a.ready() and b.ready()):
+            return {"error": "a Dire Wolf did not open its KISS port", "log_a": clean(a.log.since(0)), "log_b": clean(b.log.since(0))}
+        ca, cb = kiss_connect(8001), kiss_connect(8002)
+        ta, tb = SockTail(ca), SockTail(cb)
+        da, db = KissStream(), KissStream()
+        pos_a = pos_b = 0
+        time.sleep(0.5)
+        start = time.time()
+
+        def poll():
+            nonlocal pos_a, pos_b
+            now = round(time.time() - start, 3)
+            chunk_a, chunk_b = ta.since(pos_a), tb.since(pos_b)
+            pos_a += len(chunk_a)
+            pos_b += len(chunk_b)
+            heard.extend({"t": now, "frame_hex": f.hex()} for f in da.feed(chunk_a))
+            b_heard.extend({"t": now, "frame_hex": f.hex()} for f in db.feed(chunk_b))
+
+        for step in steps:
+            while time.time() - start < float(step["at"]):
+                poll()
+                time.sleep(0.05)
+            frame = bytes.fromhex(step["frame_hex"])
+            sent.append({"name": step["name"], "t": round(time.time() - start, 3), "frame_hex": step["frame_hex"]})
+            ca.sendall(b"\xc0\x00" + frame.replace(b"\xdb", b"\xdb\xdd").replace(b"\xc0", b"\xdb\xdc") + b"\xc0")
+        end = time.time() + settle
+        while time.time() < end:
+            poll()
+            time.sleep(0.05)
+        for s in (ca, cb):
+            try:
+                s.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            s.close()
+        return {"sent": sent, "heard": heard, "b_heard": b_heard, "udp_drops": udp_drops(),
+                "log_a": clean(a.log.since(0))[-3000:], "log_b": clean(b.log.since(0))[-6000:]}
+    finally:
+        a.stop()
+        b.stop()
+
+
 def run_loop_service():
     """`entry.py loop`: one node of the loop, until SIGTERM. A Dire Wolf that exits is started again."""
     env = os.environ
@@ -727,7 +813,7 @@ def run_loop_service():
     return 0
 
 
-MODES = {"versions": mode_versions, "rx": mode_rx, "tx": mode_tx, "aprs": mode_aprs, "looptest": mode_looptest}
+MODES = {"versions": mode_versions, "rx": mode_rx, "tx": mode_tx, "aprs": mode_aprs, "looptest": mode_looptest, "digi": mode_digi}
 
 
 def main():

@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/digi1-cases.md): the AX.25 edge with the fill-in digipeater (DIGI1, DV-Router
+# 22994519 + 588ffb4c) at THE RATE FLOOR and the class defaults: DIGI-R3 (the flood) and, on this shape, DIGI-R5 and the counters.
+# Use it AFTER data-ident.toml, INSTEAD of dp15-rf.toml, dp18-rf.toml and digi1-roomy.toml (all define [edges.ax25]); it is the only
+# digi1 snippet with the room path (own message frames: the flood case posts a web text while the digi class is spent).
+#
+# The tester plays the TNCs (dvtest/kiss_tnc.py): <TESTER_IP>:8101 is rf-a (digipeating, TX), :8102 is rf-b (receive only, no digi). The
+# edge is the kiss-tcp CLIENT of both and reconnects within 1..5 s.
+#
+#   tx_per_min = 10, tx_burst = 3   exactly what the validator demands of a digipeating port (digi.enable is refused below either)
+#   tx_budget = {}                  the afsk1200-shared class defaults: 5 % duty per 600 s (30 s), 25 % per source, queue 8 + digi share 4 = 12,
+#                                   so the digi class holds 4/12 of 30 s = 10 s of airtime and 4 queued copies; digi TTL 5 s, window 30 s
+#   digi = { enable = true }        dedupe_secs 30, ttl_secs 5, share 4 (all defaults)
+#
+# Callsign N0TEST-10 is the station call (the docs say N0CALL-10); alias_calls is empty and no KISS server listener exists, so the own set
+# of the digipeater is only N0TEST-10. The Dire Wolf of the oracle (vectors/direwolf/digi_oracle.json) has MYCALL N0TEST-10 too.
+[edges.ax25]
+enable = true
+callsign = "N0TEST-10"
+tx_enable = true
+alias_calls = []
+
+[[edges.ax25.port]]
+name = "rf-a"
+kind = "kiss-tcp"
+host = "<TESTER_IP>"
+port = 8101
+channel = 0
+tx = true
+physical = "radio1"
+band = "2m"
+class = "afsk1200-shared"
+tx_budget = {}
+tx_per_min = 10
+tx_burst = 3
+digi = { enable = true }
+reconnect = { min_secs = 1, max_secs = 5 }
+
+[[edges.ax25.port]]
+name = "rf-b"
+kind = "kiss-tcp"
+host = "<TESTER_IP>"
+port = 8102
+channel = 0
+tx = false
+reconnect = { min_secs = 1, max_secs = 5 }
+
+# Own frames for DIGI-R3: room B text leaves rf-a as a group message `:XLX999B  :<text>` (class message, TTL 120 s) and has to wait for
+# the packet tokens that the digi copies take first.
+[[data.path]]
+name = "rf-out"
+from = "room:B"
+to = "edge:ax25/rf-a"
+types = ["text"]
+addressee = "XLX999B"
+min_ident = "session"
+per_min = 30
