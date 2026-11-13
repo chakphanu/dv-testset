@@ -172,6 +172,22 @@ def test_conservation_of_digi_copies():
     assert digi1.conservation_problems({"repeat": 0, "fenced": 2}, {}, 0, 0, 1)                         # digi{fenced} above rf_fenced
 
 
+def test_rejected_is_a_term_only_when_nothing_else_was_refused():
+    # dv_edge_rf_rejected_total has no port label and counts every class (answer-279 item 1): inexact = only an upper bound of the digi share
+    assert digi1.conservation_problems({"repeat": 5}, {"sent": 3}, rejected=2, queued=0, rejected_exact=True) == []
+    assert digi1.conservation_problems({"repeat": 5}, {"sent": 3}, rejected=1, queued=0, rejected_exact=True)
+    assert digi1.conservation_problems({"repeat": 5}, {"sent": 3}, rejected=1, queued=0, rejected_exact=False)          # 2 unaccounted, bound 1
+    assert digi1.conservation_problems({"repeat": 5}, {"sent": 3}, rejected=2, queued=0, rejected_exact=False) == []
+    assert digi1.conservation_problems({"repeat": 5}, {"sent": 5}, rejected=3, queued=0, rejected_exact=False) == []   # the refusals were of other classes
+    assert digi1.conservation_problems({"repeat": 5}, {"sent": 6}, rejected=3, queued=0, rejected_exact=False)          # more results than copies
+
+
+def test_g9_is_asserted_as_own_source_and_dire_wolf_is_information_only():
+    g9 = next(g for g in digi1.GOLDENS if g.id == "G9")
+    assert g9.result == "own_source" and g9.dw.startswith("differs") and "D10" in g9.dw
+    assert digi1.decide(digi1.golden_frame(g9), digi1.OURS)[0] == "own_source"
+
+
 def test_restart_counts_match_reset_and_continued():
     exp = {"fenced": 2, "repeat": 1, "duplicate": 1}
     before = {r: 0 for r in digi1.RESULTS}

@@ -62,6 +62,8 @@ SILENCE_S = 3.0                     # "no repeat": three times the time a repeat
 KEY_SILENCE_S = 2.0                 # the same for the eight key vectors
 SETTLE_S = 12.0                     # the edge publishes its counters about every 10 s
 COUNT_WAIT_S = 75.0
+FENCE_APPEAR_S = 25.0               # after a restart: how long to wait for the status view to show the new process's fence
+OWN_FINDING_S = 90.0                # DV-Router's measured worst wait of an own frame at 10 / 3 (data.md 8.3); above it is a finding, not a failure
 OWN_WAIT_S = 125.0                  # the message class TTL is 120 s
 ORACLE = digi1_oracle.load(root=str(ROOT))      # {} until `python3 -m dvtest.oracle_direwolf digi` has run and the file is committed
 SIX_KINDS = ("ident", "ack", "digi", "message", "position", "beacon")
@@ -131,7 +133,7 @@ def digi(request, target, hub, rf):
                     "DVT_SUT_CONFIG_EXTRA instead of dp15-rf.toml" % (PORT, "; ".join(shape.problems)))
     res = rf.tx_guard("DIGI1")
     if getattr(res, "state", "no_reader") not in ("unfenced", "clear"):
-        time.sleep(txguard.STARTUP_GUARD_S + 3.0)             # no way to read the fence: wait the longest guard there is
+        time.sleep(txguard.STARTUP_GUARD_S + 12.0)            # no way to read the fence: the guard runs 13 s from the first observer probe, not from the start
     base = settled(hub)
     ctx = types.SimpleNamespace(tnc=rf.a, other=rf.b, shape=shape, table=digi1.DedupeTable(), expected=digi1.Expected(), base=base,
                                 t0=time.monotonic(), rf=rf)
@@ -173,6 +175,15 @@ def sig(frame):
     bits are not compared: the oracle frames carry another information suffix)."""
     f = ax25.parse_frame(frame)
     return f["src"]["text"], f["dest"]["text"], tuple((d["text"], d["bit7"]) for d in f["digis"])
+
+
+def conserve(target, case, d_digi, d_tx, d_rej, queue, d_fenced):
+    """conservation_problems with dv_edge_rf_rejected_total (one series per edge for ALL classes, no port label; zero series are not exported, so an
+    absent series is 0): a term of the equation only when it did not move (nothing else was refused); when it moved it is recorded and only a bound."""
+    if d_rej:
+        note(target, case, "RECORD", "dv_edge_rf_rejected_total grew by %d: it counts refusals of every class (no port label, DIGI1b), so it is only an upper bound "
+             "of the digi refusals in the conservation" % d_rej)
+    return digi1.conservation_problems(d_digi, d_tx, d_rej, queue, d_fenced, rejected_exact=not d_rej)
 
 
 def terminal(tx):
@@ -407,13 +418,17 @@ def test_digi1_r3_flood_obeys_the_quotas_and_own_frames_survive(request, rig, ta
     note(target, case, "RECORD", "own frames: message sent %d, own frames dropped %s" % (sent_msg, own_bad or "none"))
     assert not problems, "flood bounds: %s" % "; ".join(problems)
     assert own is not None, "the own message frame never reached the TNC in %.0f s (message TTL 120 s)" % OWN_WAIT_S
-    assert own[0] - posted[0] < 120.0, "the own message took %.1f s, longer than its class TTL of 120 s" % (own[0] - posted[0])
+    wait_s = own[0] - posted[0]
+    if wait_s > OWN_FINDING_S:
+        note(target, case, "FINDING", "the own message frame waited %.1f s for the digi class (DV-Router measured 72 / 84 / 90 s in virtual time; the class TTL is 120 s): "
+             "inside the TTL, so the case passes, but over %.0f s is a finding for DIGI1b" % (wait_s, OWN_FINDING_S))
+    assert wait_s < 120.0, "the own message took %.1f s, longer than its class TTL of 120 s" % wait_s
     assert own[1]["src"] == STATION and own[1]["dst"] == EDGE_TOCALL, "own frame %s>%s" % (own[1]["src"], own[1]["dst"])
     assert not own_bad, "own frames were dropped by a digi flood: %s (a flood of eligible frames must not expire or evict the station's own frames)" % own_bad
     assert ok, "the counters did not settle in %.0f s: digi %s, tx %s, queue %s" % (COUNT_WAIT_S, d_digi, d_tx, after.queue)
     assert d_digi.get("repeat", 0) == len(plan) and sum(d_digi.values()) == len(plan), "dv_edge_digi_total grew by %s for %d eligible frames" % (
         {r: n for r, n in d_digi.items() if n}, len(plan))
-    cons = digi1.conservation_problems(d_digi, d_tx, after.rejected - before.rejected, after.queue or 0, after.fenced - before.fenced)
+    cons = conserve(target, case, d_digi, d_tx, after.rejected - before.rejected, after.queue or 0, after.fenced - before.fenced)
     assert not cons, cons
     accounted = {r: n for r, n in d_tx.items() if n}
     assert len(copies) == d_tx.get("sent", 0), "the TNC got %d copies but rf_tx{kind=digi,result=sent} is %s" % (len(copies), accounted)
@@ -447,7 +462,7 @@ def test_digi1_counters_and_conservation(rig, target, hub, digi):
     assert "digi" in now.kinds, "dv_edge_rf_tx_total has no kind=digi series after %d repeats" % exp.counts["repeat"]
     assert d_tx.get("sent", 0) == copies, "rf_tx{kind=digi,result=sent} grew by %d, the TNC saw %d copies" % (d_tx.get("sent", 0), copies)
     assert now.modem_tx - digi.base.modem_tx == len(written), "dv_edge_modem_total{result=tx} grew by %d, the TNC saw %d frames" % (now.modem_tx - digi.base.modem_tx, len(written))
-    cons = digi1.conservation_problems(d_digi, d_tx, now.rejected - digi.base.rejected, now.queue or 0, now.fenced - digi.base.fenced)
+    cons = conserve(target, case, d_digi, d_tx, now.rejected - digi.base.rejected, now.queue or 0, now.fenced - digi.base.fenced)
     assert not cons, cons
     assert d_digi.get("fenced", 0) == 0 and now.fenced - digi.base.fenced == 0, "a fence refused frames in a run without a restart: digi fenced %d, rf_fenced %d" % (
         d_digi.get("fenced", 0), now.fenced - digi.base.fenced)
@@ -458,8 +473,9 @@ def test_digi1_counters_and_conservation(rig, target, hub, digi):
 def test_digi1_r5_nothing_repeated_in_the_startup_guard(request, rig, target, hub, digi):
     """data.md 8.3 "TX off, a startup guard or any fence never permits repeating, and fenced frames are not remembered" / radio.md 10.4: the AX.25
     child is restarted through the audited admin API (POST /api/v1/admin/children/dv-edge-ax25/restart, as DP15-6g); the new process starts fenced
-    (startup_guard, about 13 s). As soon as it has reconnected to the fake TNC two eligible frames are heard INSIDE the guard (the fence is read after
-    the injection; a late attempt is repeated once with new keys). Asserted: not one data frame reaches the TNC during the guard or in the 2 s after
+    (startup_guard, about 13 s). As soon as it has reconnected to the fake TNC two eligible frames are heard INSIDE the guard (the frames are sent only after the
+    status view shows the fence, and the fence is read again after them; a late attempt is repeated once with new keys; the guard is 13 s from the first
+    successful observer probe, so nothing is slept). Asserted: not one data frame reaches the TNC during the guard or in the 2 s after
     it; after the guard the FIRST retry of the guarded frame IS repeated (a fenced candidate was not remembered: no `duplicate`), byte for byte; the
     same frame again is a duplicate. Counters of the new process: fenced 2, repeat 1, duplicate 1, and the fence refusals equal digi{fenced}
     (dv_edge_drops_total{reason=rf_fenced}); conservation. This case RESTARTS the edge and must be the last of its run."""
@@ -485,16 +501,34 @@ def test_digi1_r5_nothing_repeated_in_the_startup_guard(request, rig, target, hu
         t_restart = time.monotonic()
         assert tnc.wait(lambda t: t.connections > connections and len(t.startup_params(t.connections)) >= 5, 30.0), \
             "the restarted AX.25 edge did not reconnect to the fake TNC with its KISS parameters in 30 s"
+        # The guard is 13 s (2.5 + 10 + 0.5) from the COMPLETION of the edge's first successful observer probe, not from the process start
+        # (answer-279 item 4): do not sleep, read the fence from the status view and aim the frames from the observed fence start.
+        seen = None
+        end = time.monotonic() + FENCE_APPEAR_S
+        while time.monotonic() < end:
+            obs = reader()
+            if obs.scope:
+                pytest.fail("the admin clients route shows no `modem` object (credential or scope problem): %s" % (obs.keys,))
+            if obs.found and obs.fenced:
+                seen = (time.monotonic(), obs)
+                break
+            time.sleep(0.2)
+        if seen is None:
+            note(target, case, "RECORD", "attempt %d: no fence was seen in %.0f s after the restart (already over, or the stale row stayed unfenced); %s" % (
+                attempt, FENCE_APPEAR_S, "trying once more with new keys" if attempt == 1 else "giving up"))
+            continue
+        t_fence = seen[0]
         t1 = send(tnc, f1)
         time.sleep(0.4)
         t2 = send(tnc, f2)
         obs = reader()
-        note(target, case, "RECORD", "attempt %d: %.1f s after the restart returned the edge was connected; frames heard %.1f s and %.1f s after; fence now: %s, guard_ms %s" % (
-            attempt, t1 - t_restart, t1 - t_restart, t2 - t_restart, obs.fence if obs.found else "port row not found", obs.guard_ms if obs.found else None))
+        note(target, case, "RECORD", "attempt %d: fence first seen %.1f s after the restart returned (cause %s, guard_ms %s); frames heard %.2f s and %.2f s after that; fence after them: %s, guard_ms %s" % (
+            attempt, t_fence - t_restart, seen[1].fence, seen[1].guard_ms, t1 - t_fence, t2 - t_fence, obs.fence if obs.found else "port row not found",
+            obs.guard_ms if obs.found else None))
         if obs.found and obs.fenced:
             window = (f1, f2, t_restart)
             break
-        note(target, case, "RECORD", "attempt %d was too late (the port is not fenced); %s" % (attempt, "trying once more with new keys" if attempt == 1 else "giving up"))
+        note(target, case, "RECORD", "attempt %d: the fence ended before the frames were heard; %s" % (attempt, "trying once more with new keys" if attempt == 1 else "giving up"))
     if window is None:
         pytest.skip("could not inject inside the startup guard in two attempts (the fence was already over at the read)")
     f1, f2, t_restart = window
@@ -532,5 +566,5 @@ def test_digi1_r5_nothing_repeated_in_the_startup_guard(request, rig, target, hu
         d_digi, d_tx = digi1.delta(now.digi, before.digi), digi1.delta(now.tx, before.tx)
         d_rej, d_fenced = now.rejected - before.rejected, now.fenced - before.fenced
     assert d_fenced == exp["fenced"], "dv_edge_drops_total{reason=rf_fenced} counted %d, digi{fenced} is %d: a fenced candidate is counted once in both" % (d_fenced, exp["fenced"])
-    cons = digi1.conservation_problems(d_digi, d_tx, d_rej, now.queue or 0, d_fenced)
+    cons = conserve(target, case, d_digi, d_tx, d_rej, now.queue or 0, d_fenced)
     assert not cons, cons

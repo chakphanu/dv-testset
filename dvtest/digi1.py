@@ -37,7 +37,7 @@ INTERNET_BASES = ("TCPIP", "TCPXX", "I")
 Golden = namedtuple("Golden", "id what src dest hops info result replaced dw reserved cr_src ours")
 # result: one of RESULTS (what the edge decides); replaced: the index of the hop that becomes `ours` (None unless result == "repeat");
 # dw: "equal" (Dire Wolf with DIGIPEAT 0 0 ^WIDE1-1$ ^WIDE1-1$ gives the same: the same frame or silence) or "differs:<why>" (a documented
-# deviation of data.md 8.3 / design-271 5.7: recorded, never asserted); reserved: the reserved bits of the received via addresses;
+# deviation of data.md 8.3 / design-271 5.7 / lead decision D10: recorded, never asserted); reserved: the reserved bits of the received via addresses;
 # ours: the station callsign the vector is written for (G2b needs a station without SSID: not reachable in the rig, a GAP)
 
 def _g(gid, what, hops, result, replaced=None, src="N0TEST-9", dw="equal", reserved=0b11, ours=OURS, info=b">test", dest="APRS"):
@@ -54,7 +54,7 @@ GOLDENS = (
     _g("G6", "our call already used, WIDE1-1 next", [OURS + "*", "WIDE1-1"], "own_path"),
     _g("G7", "explicit routing: our call is the next unused hop", [OURS, "WIDE2-1"], "repeat", 0),
     _g("G8", "source N0TEST-7 (not in the own set), WIDE1-1 then WIDE2-2", ["WIDE1-1", "WIDE2-2"], "repeat", 0, src="N0TEST-7"),
-    _g("G9", "the source is our own call", ["WIDE1-1"], "own_source", src=OURS, dw="differs:Dire Wolf repeats its own explicit-routing frames"),
+    _g("G9", "the source is our own call", ["WIDE1-1"], "own_source", src=OURS, dw="differs:own source via WIDE1-1 is refused by lead decision D10, stricter than Dire Wolf (its answer to G9 as written is information only)"),
     _g("G10", "WIDE1-1 not used, the next hop used (non-contiguous H bits)", ["WIDE1-1", "N0TEST-1*"], "bad_path",
        dw="differs:Dire Wolf repeats, DV-Router refuses a non-contiguous path"),
     _g("G11", "WIDE1-1 then TCPIP (an Internet path)", ["WIDE1-1", "TCPIP"], "internet_path",
@@ -321,20 +321,31 @@ def restart_counts_match(before, after, expected):
     return None
 
 
-def conservation_problems(digi, tx, rejected=0, queued=0, rf_fenced=None):
-    """Problems of data.md 10.8 "for each digipeating port": digi{repeat} = pre-scheduler digi refusals (dv_edge_rf_rejected_total) + the
-    terminal rf_tx{kind=digi} results (sent, simulated, sent_over_budget, dropped_*; never delayed) + digi copies canceled by a fence +
-    digi copies still queued. `digi` and `tx` are DELTA maps ({result: n}); `queued` is the digi part of the queue gauge (the gauge counts
-    every class: pass the whole gauge when the port has no other traffic). `rf_fenced` is the delta of dv_edge_drops_total{reason=rf_fenced}
-    (None: not read): the canceled copies are at most what rf_fenced counts beyond digi{fenced}. Also digi{fenced} <= rf_fenced."""
+def conservation_problems(digi, tx, rejected=0, queued=0, rf_fenced=None, rejected_exact=True):
+    """Problems of data.md 10.8 "for each digipeating port": digi{repeat} = pre-scheduler digi refusals + the terminal rf_tx{kind=digi}
+    results (sent, simulated, sent_over_budget, dropped_*; never delayed) + digi copies canceled by a fence + digi copies still queued.
+    `digi` and `tx` are DELTA maps ({result: n}); `queued` is the digi part of the queue gauge (the gauge counts every class: pass the whole
+    gauge when the port has no other traffic). `rf_fenced` is the delta of dv_edge_drops_total{reason=rf_fenced} (None: not read): the canceled
+    copies are at most what rf_fenced counts beyond digi{fenced}. Also digi{fenced} <= rf_fenced.
+    `rejected` is the delta of dv_edge_rf_rejected_total, which has NO port label and counts the refusals of ALL classes of the edge
+    (answer-279 item 1; the missing label is the product item DIGI1b). With `rejected_exact` (the default; right when `rejected` is 0, i.e.
+    nothing else was refused, an absent series being 0) it is a term of the equation. With rejected_exact False it is only an UPPER BOUND on the
+    digi share of it: 0 <= unaccounted <= rejected + the fence slack."""
     problems = []
     repeat = digi.get("repeat", 0)
     terminal = sum(n for r, n in tx.items() if r in TERMINAL_TX)
-    unaccounted = repeat - rejected - terminal - queued
     slack = 0 if rf_fenced is None else max(0, rf_fenced - digi.get("fenced", 0))
+    if rejected_exact:
+        unaccounted = repeat - rejected - terminal - queued
+        counted = rejected
+    else:
+        unaccounted = repeat - terminal - queued
+        counted = 0
+        slack += rejected
     if unaccounted < 0 or unaccounted > slack:
-        problems.append("digi{repeat} = %d but rejected %d + terminal rf_tx{kind=digi} %d (%s) + still queued %d = %d: %d unaccounted (a fence can cancel at most %d)" % (
-            repeat, rejected, terminal, ", ".join("%s %d" % kv for kv in sorted(tx.items())) or "none", queued, rejected + terminal + queued, unaccounted, slack))
+        problems.append("digi{repeat} = %d but rejected %d%s + terminal rf_tx{kind=digi} %d (%s) + still queued %d = %d: %d unaccounted (a fence can cancel at most %d)" % (
+            repeat, rejected, "" if rejected_exact else " (all classes: only a bound)", terminal,
+            ", ".join("%s %d" % kv for kv in sorted(tx.items())) or "none", queued, counted + terminal + queued, unaccounted, slack))
     if rf_fenced is not None and digi.get("fenced", 0) > rf_fenced:
         problems.append("digi{fenced} = %d but dv_edge_drops_total{reason=rf_fenced} grew by only %d: every fenced candidate is also a fence refusal" % (
             digi.get("fenced", 0), rf_fenced))

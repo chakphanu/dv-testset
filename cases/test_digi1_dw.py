@@ -66,7 +66,7 @@ def shape(target, dw):
         pytest.skip("this case needs the roomy budget of digi1-dw.toml (rendered shape: %s)" % got.name)
     res = dw.tx_guard("DIGI1b") if getattr(dw, "tx_guard", None) else None
     if res is None or getattr(res, "state", "no_reader") not in ("unfenced", "clear"):
-        time.sleep(13.0 + 3.0)
+        time.sleep(25.0)                      # the guard is 13 s from the first successful observer probe, not from the start
     return got
 
 
