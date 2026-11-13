@@ -478,25 +478,188 @@ def test_rx_dmr_damaged_copies_refresh_the_over_timeout(ctx, web):
     # copy delivers none. An end at about 0.20 s after the last valid burst is that timer, not the 300 ms native-over timeout of the hub.
     note(ctx.target, case, "RECORD", "end %.3f s after the last valid burst; the document's radio edge SILENCE is %.1f s, the hub's native-over timeout %.1f s" % (
         after_valid, rif5.EDGE_SILENCE_S, rif5.NATIVE_OVER_TIMEOUT_S))
+    if rif5.j_on(os.environ):
+        # RIF5j (review-277 F5, a8692074 hub_dmr.rs): a burst whose slot type is a clean codeword of ANOTHER colour code is another station's, not a damaged
+        # copy of this over: no silence fill, no refresh. The copies of this case are exactly that (dmr_damaged_copy), so the over ends with the hub's 300 ms
+        # native-over timeout after the last VALID burst and nothing follows the sent words. The filled, refreshing copies are RIF5-J-RXD-garbled.
+        problems = []
+        if compare.extra:
+            problems.append("%d words follow the sent ones: a wrong colour code burst must not be filled" % len(compare.extra))
+        if not rif5.RXD_J_END_S[0] <= after_valid <= rif5.RXD_J_END_S[1]:
+            problems.append("the over ended %.2f s after the last valid burst, wanted %.2f to %.2f s: the wrong colour code copies must not refresh the timeout "
+                            "(damaged copies stopped %.2f s after it)" % ((after_valid,) + rif5.RXD_J_END_S + (t_last - t_valid,)))
+        assert not problems, "%s: %s" % (case, problems)
+        TALLY["rx"] += 1
+        return
     assert after_valid >= (t_last - t_valid) - 0.05, "%s: the over ended %.2f s after the last valid burst, before the damaged copies stopped (%.2f s): " \
         "the damaged copies did not refresh the native-over timeout of radio.md 7.3 (the room over ends with the radio edge SILENCE of radio.md 4.4, %.1f s " \
         "without a unit)" % (case, after_valid, t_last - t_valid, rif5.EDGE_SILENCE_S)
     assert after_last <= 3.0, "%s: the over ended %.2f s after the last copy, the timeout is 0.3 s" % (case, after_last)
-    if rif5.j_on(os.environ):
-        # RIF5j (design-276 3.3): a frame the modem delivered inside the open over that the framer rejects becomes codec silence for its airtime (3 units
-        # per DMR burst), the room over ends with the hub's 300 ms native-over timeout after the last copy (the radio edge SILENCE is 400 ms, a backstop)
-        problems = []
-        silence = compare.extra
-        if not rif5.RXD_J_END_S[0] <= after_last <= rif5.RXD_J_END_S[1]:
-            problems.append("the over ended %.2f s after the last damaged copy, wanted %.2f to %.2f s (300 ms native-over timeout)" % ((after_last,) + rif5.RXD_J_END_S))
-        if len(silence) != 3 * RXD_COPIES:
-            problems.append("%d words after the 30 sent, wanted %d (3 silence units for each of the %d damaged copies)" % (len(silence), 3 * RXD_COPIES, RXD_COPIES))
-        elif len(set(silence)) != 1:
-            problems.append("the %d extra words are not one silence word: %d different" % (len(silence), len(set(silence))))
-        note(ctx.target, case, "RECORD", "RIF5j: end %.3f s after the last copy; %d extra words, distinct %d, the first %s; the rig DMR pad word is %s" % (
-            after_last, len(silence), len(set(silence)), silence[0].hex() if silence else None, rf.PAD_WORD["dmr"].hex()))
-        assert not problems, "%s: %s" % (case, problems)
     TALLY["rx"] += 1
+
+
+def rx_tail_over(ctx, kind, air, voice, count, valid_n, copies_n, tail_s=10.0):
+    """Play `air` (the first `valid_n` frames valid, then `copies_n` damaged ones) and return what a listener of the room heard: a namespace with the
+    modem's play (`ku`), the over, the number of overs, the send time of the last valid frame and of each damaged copy."""
+    listener = Member(ctx.ip, kind, rif5.ROOMS[kind], 1, listen=True)
+    try:
+        ku = ctx.modem.play_air(kind, air, voice, count)
+        assert ku.wait(RX_SECONDS + 20) and ku.error is None, "the modem could not play the over: %s" % ku.error
+        wait_for(lambda: [o for o in listener.overs() if o.ended], tail_s)
+        time.sleep(0.6)
+        overs = listener.overs()
+    finally:
+        listener.close(settle=0.5)
+    return SimpleNamespace(ku=ku, overs=overs, over=overs[0] if overs else None, t_valid=ku.sent[valid_n - 1][0],
+                           t_copies=[ku.sent[valid_n + i][0] for i in range(copies_n)])
+
+
+@pytest.mark.parametrize("copies", (10, 14), ids=("copies10", "copies14_bound13"))
+def test_j_rx_dmr_garbled_copies_are_filled_and_bounded(copies, ctx, web):
+    """RIF5j (design-276 3.3 R1, R2; a8692074 hub_dv.rs `rf_fill`): a DMR header copy whose LC fails (right colour code, damaged BPTC: a frame the
+    firmware delivered) inside an open over is replaced by 3 codec silence units and refreshes the timeout. 10 copies, 100 ms apart, no terminator: 30 words
+    after the 30 sent, all one word, the over ends about 300 ms after the last copy (0.2 to 0.5 s). 14 copies: the 13th fill ends the over as LOST, so 39
+    words and the end within 0.2 s of the 13th copy (the 14th finds no open over)."""
+    if not rif5.j_on(os.environ):
+        pytest.skip("DVT_RIF5J is not on: this case is for an image with DV-Router RIF5j (docs/rif5-cases.md \"Cases for the fix image\")")
+    case = "RIF5-J-RXD-garbled-%d" % copies
+    ready(ctx, web, case)
+    kw = rx_kwargs("dmr", ctx.port)
+    frames = rf.canonical_frames("dmr", echo.make_frames("dmr", 30, "rif5-jrxd"))
+    air, voice, count = ctx.modem.build_keyup("dmr", frames=frames, **kw)
+    valid = air[:-1]
+    bad = rif5.dmr_garbled_copy(kw["src"], kw["dst"], kw["colour_code"])
+    got = rx_tail_over(ctx, "dmr", valid + [(rf.DMR_DATA2, bad, 100.0)] * copies, voice, count, len(valid), copies)
+    problems = rx_fill_problems(ctx, case, got, voice, per_copy=3, fills=min(copies, rif5.DMR_FILL_LIMIT), copies=copies, limit=rif5.DMR_FILL_LIMIT)
+    assert not problems, "%s: %s" % (case, problems)
+    TALLY["rx"] += 1
+
+
+def rx_fill_problems(ctx, case, got, sent_words, per_copy, fills, copies, limit):
+    """The judgement shared by the DMR and YSF fill cases: one over heard and ended, the sent words intact in front, `fills` x `per_copy` equal silence
+    words after them, the end at the right time (after the last copy +0.3 s, or within 0.2 s of the `limit`-th when there are more copies)."""
+    problems = []
+    if got.over is None or len(got.overs) != 1:
+        return ["the client heard %d overs, wanted one" % len(got.overs)]
+    over = got.over
+    compare = echo.compare_payload(sent_words, over.frames)
+    extra = compare.extra
+    bounded = copies >= limit
+    t_end_ref = got.t_copies[limit - 1] if bounded else got.t_copies[-1]
+    after = over.end - t_end_ref
+    note(ctx.target, case, "RECORD", "end %.3f s after the %s copy; %d extra words (wanted %d), distinct %d, the first %s" % (
+        after, "%d-th" % limit if bounded else "last", len(extra), fills * per_copy, len(set(extra)), extra[0].hex() if extra else None))
+    if not compare.prefix_ok or compare.missing:
+        problems.append("the sent words are not intact in front (first difference at %s, %d missing)" % (compare.first_diff, compare.missing))
+    if len(extra) != fills * per_copy:
+        problems.append("%d words after the sent ones, wanted %d (%d silence units for each of %d filled copies)" % (len(extra), fills * per_copy, per_copy, fills))
+    elif len(set(extra)) != 1:
+        problems.append("the %d words after the sent ones are not one silence word (%d different)" % (len(extra), len(set(extra))))
+    if not over.ended:
+        problems.append("the over did not end on the client side")
+    window = (-0.02, 0.2) if bounded else rif5.RXD_J_END_S
+    if not window[0] <= after <= window[1]:
+        problems.append("the over ended %.2f s after the %s copy, wanted %.2f to %.2f s (%s)" % (
+            after, "%d-th" % limit if bounded else "last", window[0], window[1],
+            "LOST at the bound" if bounded else "300 ms native-over timeout after the last refresh"))
+    return problems
+
+
+def test_j_rx_dmr_header_train_keeps_one_room_over(ctx, web):
+    """RIF5j F3 (review-277): MMDVMHost sends 8 voice LC headers in simplex (MH/DMRSlot.cpp:70), so the first voice burst comes 480 ms after the first
+    header, longer than the radio edge SILENCE. A valid header repeat of the open over now refreshes the edge core: one room over, all 150 voice words, no end
+    at 400 ms. The first rig run's overs had one header."""
+    if not rif5.j_on(os.environ):
+        pytest.skip("DVT_RIF5J is not on: this case is for an image with DV-Router RIF5j (docs/rif5-cases.md \"Cases for the fix image\")")
+    case = "RIF5-J-RXH-dmr"
+    ready(ctx, web, case)
+    listener = Member(ctx.ip, "dmr", rif5.ROOMS["dmr"], 1, listen=True)
+    try:
+        since = ctx.modem.mark()
+        ku = ctx.modem.keyup("dmr", seconds=RX_SECONDS, seed="rif5-jrxh", headers=8, **rx_kwargs("dmr", ctx.port))
+        assert ku.wait(RX_SECONDS + 20) and ku.error is None, "the modem could not play the over: %s" % ku.error
+        wait_for(lambda: [o for o in listener.overs() if o.ended], 10.0)
+        time.sleep(0.6)
+        overs = listener.overs()
+    finally:
+        listener.close(settle=0.5)
+    problems = []
+    if len(overs) != 1:
+        problems.append("the client heard %d overs, wanted one (8 headers, then 50 voice bursts)" % len(overs))
+    else:
+        compare = echo.compare_payload(ku.voice, overs[0].frames)
+        note(ctx.target, case, "RECORD", "overs heard: %s; voice words sent %d, heard %d, first difference %s, extra %d, missing %d" % (
+            [(round(o.end - o.start, 2), o.idents, len(o.frames), o.ended) for o in overs], len(ku.voice), len(overs[0].frames), compare.first_diff,
+            len(compare.extra), compare.missing))
+        if not (compare.prefix_ok and not compare.missing and not compare.extra):
+            problems.append("the words heard are not the %d sent (first difference %s, %d missing, %d extra)" % (
+                len(ku.voice), compare.first_diff, compare.missing, len(compare.extra)))
+        if not overs[0].ended:
+            problems.append("the over did not end on the client side")
+    echoed = [ms.name_of(f.ftype) for f in ctx.modem.host_frames(since, types=rif5.RF_TYPES)]
+    if echoed:
+        problems.append("the RF ingress circuit was echoed back to the modem: %s" % echoed[:6])
+    assert not problems, "%s: %s" % (case, problems)
+
+
+@pytest.mark.parametrize("bad", (4, 6), ids=("bad4", "bad6_bound5"))
+def test_j_rx_ysf_bad_frames_are_filled_and_bounded(bad, ctx, web):
+    """RIF5j (design-276 3.3, a8692074 hub_ysf.rs): a V/D mode 2 frame whose DCH fails its CRC inside an open over is replaced by 5 silence units. 6 good
+    frames, `bad` bad ones, then (bad 4) 6 good ones and the terminator: 20 equal silence words between the 30 and the 30 sent words (the bad frames' words
+    are not heard). Bad 6: the 5th fill ends the over as LOST, 25 silence words, the end within 0.2 s of the 5th bad frame (no terminator is sent)."""
+    if not rif5.j_on(os.environ):
+        pytest.skip("DVT_RIF5J is not on: this case is for an image with DV-Router RIF5j (docs/rif5-cases.md \"Cases for the fix image\")")
+    case = "RIF5-J-RXD-ysf-bad%d" % bad
+    ready(ctx, web, case)
+    words = rf.canonical_frames("ysf", echo.make_frames("ysf", 80 if bad == 4 else 60, "rif5-jrxy"))
+    air, voice, count = ctx.modem.build_keyup("ysf", frames=words, **rx_kwargs("ysf", ctx.port))
+    head, frames_, term = air[0], air[1:-1], air[-1]
+    damaged = [(t, rif5.ysf_dch_garbled(p), d) for t, p, d in frames_[6:6 + bad]]
+    if bad == 4:
+        play = [head] + frames_[:6] + damaged + frames_[10:] + [term]
+        valid_n = len(play)
+    else:
+        play = [head] + frames_[:6] + damaged
+        valid_n = 7
+    listener = Member(ctx.ip, "ysf", rif5.ROOMS["ysf"], 1, listen=True)
+    try:
+        ku = ctx.modem.play_air("ysf", play, voice, count)
+        assert ku.wait(RX_SECONDS + 20) and ku.error is None, "the modem could not play the over: %s" % ku.error
+        wait_for(lambda: [o for o in listener.overs() if o.ended], 10.0)
+        time.sleep(0.6)
+        overs = listener.overs()
+    finally:
+        listener.close(settle=0.5)
+    problems = []
+    if len(overs) != 1 or not overs[0].ended:
+        problems.append("the client heard %d overs (ended: %s), wanted one that ended" % (len(overs), [o.ended for o in overs]))
+    else:
+        heard = overs[0].frames
+        fills = 5 * (4 if bad == 4 else 5)
+        if bad == 4:
+            front, middle, back = heard[:30], heard[30:30 + fills], heard[30 + fills:]
+            checks = [rif5.compare_ysf_words(voice[:30], front), rif5.compare_ysf_words(voice[50:], back)]
+        else:
+            front, middle, back = heard[:30], heard[30:], []
+            checks = [rif5.compare_ysf_words(voice[:30], front)]
+        for check in checks:
+            problems += check.problems
+            for line in check.findings:
+                note(ctx.target, case, "FINDING", line)
+        if len(middle) != fills or len(set(middle)) != 1:
+            problems.append("%d words between the good frames, %d different, wanted %d equal silence words (5 for each filled frame)" % (
+                len(middle), len(set(middle)), fills))
+        if bad == 4 and len(back) != len(voice[50:]):
+            problems.append("%d words after the bad frames, %d sent" % (len(back), len(voice[50:])))
+        if bad == 6:
+            t5 = ku.sent[valid_n + 4][0]
+            after = overs[0].end - t5
+            note(ctx.target, case, "RECORD", "end %.3f s after the 5th bad frame" % after)
+            if not -0.02 <= after <= 0.2:
+                problems.append("the over ended %.2f s after the 5th bad frame, wanted within 0.2 s (LOST at the bound of 5)" % after)
+        note(ctx.target, case, "RECORD", "words heard %d, silence words %d, distinct %d, the first %s" % (
+            len(heard), len(middle), len(set(middle)), middle[0].hex() if middle else None))
+    assert not problems, "%s: %s" % (case, problems)
 
 
 VARIANTS = {"local_only": ({"rpt2": rif5.STATION.ljust(7) + "C"}, "local_only", "radio.md 7.3: a wrong RPT2 is local_only and never enters the room"),
@@ -594,6 +757,11 @@ def test_j_long_overs_are_lossless(ctx, web):
         for line in verdict.findings:
             note(ctx.target, sub, "FINDING", line)
         problems += ["%s: %s" % (kind, p) for p in verdict.problems + keyed.problems]
+        if kind == "dstar":
+            off = [t for t, _e, d in ctx.modem.fw_events(since, names=("tx_off",)) if d.get("end_frame")] if firmware else []
+            rel = rif5.release_view(ctx.modem.host_frames(since), off[-1] if off else None)
+            note(ctx.target, sub, "RECORD", "release after the EOT: %s" % rel.facts)
+            problems += ["dstar release: %s" % p for p in rel.problems]
         if naks:
             problems.append("%s: the modem had to NAK frames of the host: %s" % (kind, naks[:4]))
         if fw:
