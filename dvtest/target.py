@@ -82,6 +82,9 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
                      (docs/netthr1-cases.md)
   DVT_NETTHR1_DNS    on: the DNS cancel case D1 (needs DVT_SUT_RESOLV=30 on the host so that the SUT resolves through the tester, and the tester binds UDP 53)
   DVT_NETTHR1_SWEEPS number of proc-stat sweeps of the thread cases (default 4; each sweep reads every process name once)
+  DVT_FLK11          on: DV-Router caed3841, the echo admits an over by arrival order relative to a configuration change: cases/test_echo.py F11a / F11b (enable
+                     during an over does not join it, disable during an over finishes it and refuses the next); skip naming this switch without it
+                     (docs/echo-cases.md, "FLK11")
 """
 import ipaddress
 import os

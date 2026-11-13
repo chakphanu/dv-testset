@@ -70,8 +70,27 @@ talker and a second client of the same kind on module E (both timed by a drain t
 | E6 | `test_e6_floor_is_busy_during_the_replay` | a second talker keying 0.7 s into the replay gets nothing relayed (not one of its 60 frames), the replay itself is undisturbed (payload, length), and a human over 1.5 s after the replay is relayed in full |
 | E7a | `test_e7a_toggle_off_and_on` | `modules = { E = false }`: after the reload wait the next over is not replayed; back to `true`: the next over is replayed once, in the delay window |
 | E7b | `test_e7b_row_removed_while_playing` | `modules = {}` while a 4 s replay plays: the replay finishes or is cut and ends in an end of stream; a human over 2 s after the replay's last packet is relayed in full (the floor is free) and is not replayed; then the row is restored and a replay is seen again (the child respawns) |
+| F11a | `test_f11a_enable_during_an_over_does_not_join_it` | `DVT_FLK11=on`. E is off; a 10 s D-STAR over starts, the `[echo]` edit that turns E on is written 1.5 s in and is applied long before the over ends: the over (its Start arrived while disabled) is NOT replayed; the next over, started after the enable, is replayed once, 0.8 to 2.0 s after its end (echo.md: "turning it on accepts the next StreamStart; an over already on air is not joined"; "a StreamStart stamped disabled remains refused after an enable") |
+| F11b | `test_f11b_disable_during_an_over_finishes_it_and_refuses_the_next` | `DVT_FLK11=on`. E is on; the edit that turns E off lands 1.5 s into a 10 s over: that accepted over is replayed once, about 10 s long (+- 1 s); the next over, started after the disable, is not replayed (echo.md: "turning a module off finishes its accepted ... over, then ... refuses new overs") |
 | E8 | `test_e8_two_nodes_not_reachable` | skip with the reason below |
 | T | `test_zz_telemetry_counts_the_overs` | `dv_echo_overs_total{room, result}` moves by the overs the cases made: `played` within [made, made + unsure], `truncated` exactly, `short` at least (needs `DVT_RIG_CONTROL=1`; the hub refreshes every 10 s, the case polls up to 40 s and then waits one more period) |
+
+## FLK11: admission by arrival order (DV-Router caed3841; cases F11a, F11b)
+
+DV-Router `caed3841` makes the echo admit a StreamStart by whether its module was enabled when the start ARRIVED (the media callback snapshots the room's
+admission state from the same configuration watch the loop uses and holds that borrow through the bounded hand-off), not when the paced loop dequeues it;
+the loop applies a pending configuration under the same borrow before it dispatches any input, so a disable overtakes queued input and a continuous media
+stream never postpones a configuration change or a stop. The unit tests of the commit (`arrival_tests.rs`, `tap_tests.rs`) race the two inputs in one poll.
+
+What a black box can hold, and does (F11a, F11b), both on the second scale and both sides of one change: a Start that arrived disabled stays refused after the
+enable, and a Start accepted while enabled is finished after the disable and is the last one admitted. Run with `DVT_FLK11=on` and the E1 to E7 command above
+(the cases edit and restore the run's own rendered `dv-router.toml` like E3 / E7; about 2 minutes together; they sit before the telemetry case and add to its tally).
+
+GAP (not a case): the ordering inside ONE loop poll. The watcher polls the file every second and applies it after two equal polls, so the instant of the publication
+is not observable from outside, and the race window is the 20 ms of the paced loop: a Start would have to arrive within a few milliseconds of an unobservable
+instant, with a probability of about 2 percent per attempt even for a perfect aim. A stress that repeats edit-and-over pairs would need hundreds of 5 s overs per
+percent of coverage; the unit tests of the commit are the right tool. A deterministic hook would be the control action `hup xlxd-sut` (SIGHUP applies the file
+immediately, `docs/secreload-cases.md`) timed against a Start; its latency is still not known to the millisecond. Not built.
 
 ## E9 Echo return integrity, five kinds (`cases/test_echo_dstar_integrity.py`)
 

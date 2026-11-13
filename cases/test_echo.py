@@ -21,6 +21,7 @@ A difference the specification does not settle is a FINDING line in out/<run>/ec
 """
 import os
 import socket
+import threading
 import time
 from collections import Counter, namedtuple
 
@@ -642,6 +643,104 @@ def test_e7a_toggle_off_and_on(echo_rig, target):
     assert echo.in_window(on_replays[0].start - end_on, START_LOW, START_HIGH)
     note(target, "E7a", "RECORD", "edit applied within %.1f s (waited that long; the watcher polls every 1 s and wants two "
          "equal polls); the lower bound of the latency is not measured" % echo.reload_wait())
+
+
+# ---------------------------------------------------------------- FLK11: admission by arrival order relative to a config change
+# DV-Router caed3841 (echo.md, "Configuration and reload"): a StreamStart is admitted by whether the module was enabled when it ARRIVED, not when the paced
+# loop dequeues it; turning a module on accepts the next StreamStart and never joins an over already on air; turning it off finishes an accepted over and
+# refuses the next. The instant of the publication is internal (the watcher polls every second and wants two equal polls), so a Start within one loop
+# poll (20 ms) of it cannot be aimed at from outside (GAP, docs/echo-cases.md "FLK11"); these two cases hold the second-scale guarantees on both sides of
+# a change: a Start that arrived disabled stays refused after the enable, a Start accepted while enabled is finished after the disable.
+
+FRAMES_F11 = 500                    # 10 s: the edit lands about 1.5 s in and is applied (about 2 to 4 s) well before the over ends
+F11_EDIT_AT = 1.5
+
+
+def need_flk11():
+    if os.environ.get("DVT_FLK11") != "on":
+        pytest.skip("FLK11 (DV-Router caed3841): set DVT_FLK11=on for an image with the arrival-order admission (docs/echo-cases.md, FLK11)")
+
+
+def over_with_edit(scene, cfg, seed, **edit):
+    """One long D-STAR over; `edit` ([echo] keys of EchoCfg.apply) is written F11_EDIT_AT seconds after the first packet. Returns (over end, edit time)."""
+    stamp = {}
+
+    def flip():
+        time.sleep(F11_EDIT_AT)
+        cfg.apply(**edit)
+        stamp["t"] = time.monotonic()
+    th = threading.Thread(target=flip, daemon=True)
+    t0 = time.monotonic()
+    th.start()
+    scene.over(FRAMES_F11, seed)
+    th.join(10.0)
+    return scene.ends[-1], stamp.get("t", t0 + F11_EDIT_AT)
+
+
+def test_f11a_enable_during_an_over_does_not_join_it(echo_rig, target):
+    need_flk11()
+    cfg = need_cfg(echo_rig, "F11a edits the rendered TOML")
+    first, second, end1, end2, edit_t = [], [], None, None, None
+    try:
+        cfg.apply(modules={MODULE: False})
+        wait_reload()
+        scene = Scene(echo_rig.ip, "dstar")
+        try:
+            end1, edit_t = over_with_edit(scene, cfg, "f11a-live", modules={MODULE: True})
+            heard = scene.overs("listener")
+            live_ok = bool(heard) and heard[0].n_voice > 0
+            scene.until(end1 + echo_rig.delay + 3.0 + 1.5)
+            first = [o for o in scene.overs("listener") if o.start > end1 + 0.05]
+            applied_early = edit_t + echo.reload_wait() < end1 + 0.5
+            scene.over(FRAMES_E1, "f11a-next")
+            end2 = scene.ends[-1]
+            scene.until(end2 + echo_rig.delay + 3.0 + 1.5)
+            second = [o for o in scene.overs("listener") if o.start > end2 + 0.05]
+        finally:
+            scene.close()
+    finally:
+        cfg.restore()
+        wait_reload()
+    TALLY["played"] += len(second)
+    TALLY["played_maybe"] += len(first)
+    assert live_ok, "precondition: the over was not heard live"
+    assert applied_early, "precondition: the edit (at +%.1f s of a %d s over) cannot be certain to be applied before the over ends" % (F11_EDIT_AT, FRAMES_F11 // 50)
+    assert first == [], "E enabled in the middle of an over: the over (its Start arrived disabled) was replayed (%d overs after it)" % len(first)
+    assert len(second) == 1, "the next over, started after the enable, was replayed %d times, want 1" % len(second)
+    assert echo.in_window(second[0].start - end2, START_LOW, START_HIGH)
+    note(target, "F11a", "RECORD", "edit written %.1f s into a %d s over, the over was not joined; the next over was replayed once %.2f s after its end" % (
+        edit_t - (end1 - echo.over_seconds(FRAMES_F11)), FRAMES_F11 // 50, second[0].start - end2))
+
+
+def test_f11b_disable_during_an_over_finishes_it_and_refuses_the_next(echo_rig, target):
+    need_flk11()
+    cfg = need_cfg(echo_rig, "F11b edits the rendered TOML")
+    replays, later, end1, end2, edit_t = [], [], None, None, None
+    try:
+        cfg.apply(modules={MODULE: True})
+        wait_reload()
+        scene = Scene(echo_rig.ip, "dstar")
+        try:
+            end1, edit_t = over_with_edit(scene, cfg, "f11b-live", modules={MODULE: False})
+            scene.until(end1 + echo_rig.delay + echo.over_seconds(FRAMES_F11) + 3.0)
+            replays = [o for o in scene.overs("listener") if o.start > end1 + 0.05]
+            applied_early = edit_t + echo.reload_wait() < end1 + 0.5
+            scene.over(FRAMES_E1, "f11b-next")
+            end2 = scene.ends[-1]
+            scene.until(end2 + echo_rig.delay + 3.0 + 1.5)
+            later = [o for o in scene.overs("listener") if o.start > end2 + 0.05]
+        finally:
+            scene.close()
+    finally:
+        cfg.restore()
+        wait_reload()
+    TALLY["played"] += len(replays)
+    assert applied_early, "precondition: the edit cannot be certain to be applied before the over ends"
+    assert len(replays) == 1, "E disabled in the middle of an accepted over: %d replays of it, want 1 (the accepted over is finished)" % len(replays)
+    length = echo.duration(replays[0])
+    note(target, "F11b", "RECORD", "replay of the over that was on air at the disable: %.2f s, %d frames (sent %d)" % (length or 0, len(replays[0].frames), FRAMES_F11))
+    assert echo.in_window(length, echo.over_seconds(FRAMES_F11) - 1.0, echo.over_seconds(FRAMES_F11) + 1.0), "the replay lasts %.2f s, the over %.1f s" % (length or 0, echo.over_seconds(FRAMES_F11))
+    assert later == [], "the over after the disable was replayed (%d overs): the module still admitted a Start" % len(later)
 
 
 # ---------------------------------------------------------------- telemetry (before E7b: removing the last row stops the
