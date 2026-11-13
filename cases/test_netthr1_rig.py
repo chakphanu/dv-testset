@@ -588,7 +588,8 @@ def test_h2_login_slots(service, rig_control, sut, target, request):
             c = AdminClient(url, ca)
             c.hide(password)
             return c.request("POST", c.path("/session"), json_body={"user": user_name, "password": password}, pace=False)
-        after_ok = one
+        def after_ok():
+            return one(0)
     hash_ms = netthr1.hash_estimate_ms(login_ms, plain_ms)
     need = netthr1.concurrency_needed(hash_ms, 500.0, slots)
     n = 9                                                           # the per-address login burst is 10: nine leave one token spare
