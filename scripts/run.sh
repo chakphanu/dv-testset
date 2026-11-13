@@ -187,6 +187,9 @@
 # DVT_REQUIRE_IDENT, true or false, default true), <DP15_TX_ENABLE> (env
 # DVT_DP15_TX_ENABLE, true or false, default false) and <WEB_PROXY_IP> (<net>.90);
 # a plain [table] the template already has is merged key by key; docs/rig.md.
+# DVT_SUT_RESOLV=<octet>: /etc/resolv.conf of xlxd-sut names only <net>.<octet> (read-only file out/<utc>/xlxd-config/xlxd-sut/resolv.conf); the NETTHR1b
+# DNS cancel case sets 30 and runs dvtest.dnshole in the tester (a server that never answers a name outside .ok.). Names of compose services
+# (xlxd-peer-sut ...) do not resolve then: never together with the host-name peer snippets.
 # DVT_SUT_CONFIG_RW=1 (native launch): the rendered config is a copy in a directory that is mounted READ-WRITE at /etc/dv-router-rw
 # (the command line names /etc/dv-router-rw/dv-router.toml), so dv-svc-admin can replace it (the admin API writes a temporary file and
 # renames it over the config, which a read-only or single-file mount refuses). Only for the cases that apply a configuration through
@@ -303,6 +306,12 @@ esac
 case "${DVT_USRP_DYNAMIC:-}" in
   ''|1) ;;
   *) echo "run.sh: DVT_USRP_DYNAMIC must be 1 or unset" >&2; exit 2 ;;
+esac
+# DVT_SUT_RESOLV: host octet (1..254) of the ONE name server the sut's /etc/resolv.conf names, <net>.<octet> (NETTHR1b, docs/netthr1-cases.md
+# D1: the tester, 30, runs a DNS server that does not answer, dvtest/dnshole.py). Unset: the container's own resolver.
+case "${DVT_SUT_RESOLV:-}" in
+  ''|[1-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-4]) ;;
+  *) echo "run.sh: DVT_SUT_RESOLV must be a host octet 1..254" >&2; exit 2 ;;
 esac
 # DVT_SUT_LAUNCH: how a prebuilt xlxd-sut image starts. direct = its own
 # entrypoint with "CALLSIGN OWN_IP TRANSCODER_IP"; import = DEPRECATED (only
@@ -1040,6 +1049,11 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
       else
         printf '      - "%s/dv-router.toml:/etc/dv-router/dv-router.toml:ro"\n' "$cfg"
       fi
+    fi
+    # DVT_SUT_RESOLV: the sut's resolver is one rig address (read-only file; the docker embedded resolver is out of the path)
+    if [ "$svc" = xlxd-sut ] && [ -n "${DVT_SUT_RESOLV:-}" ]; then
+      printf 'nameserver %s.%s\n' "$net" "$DVT_SUT_RESOLV" > "$cfg/resolv.conf"
+      printf '      - "%s/resolv.conf:/etc/resolv.conf:ro"\n' "$cfg"
     fi
     if [ "$svc" = xlxd-sut ] && [ "$has_web" = 1 ]; then
       printf '      - "%s/%s/sut-state:/var/lib/dv"\n' "$DVT_ROOT" "$out"

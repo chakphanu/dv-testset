@@ -275,6 +275,8 @@ services:
     # the system under test may run many processes (DV-Router: launcher plus
     # about 25 children, 392 pids measured): own pids cap, still a cap
     pids_limit: ${DVT_PIDS_SUT:-1024}
+    # NETTHR1: DVT_CPUS_SUT caps the SUT alone (0.25 emulates a small board for the argon2 login time and the login-slot cases)
+    cpus: ${DVT_CPUS_SUT:-${DVT_CPUS_MEDIUM:-2}}
     mem_limit: ${DVT_MEM_SUT:-1g}
     memswap_limit: ${DVT_MEM_SUT:-1g}
     image: dvt-xlxd:${XLXD_SUT_DIR:-sut}
@@ -624,6 +626,15 @@ services:
       DVT_TXCNT1B: ${DVT_TXCNT1B:-}   # DV-Router 051a4516: TXCNT1b equation and result label set (docs/dp18-cases.md "Strict")
       # FLK10 (DV-Router 98c88b2, image wip-bd3ceb9): on = the mid cases of cases/test_web_rtc_mid.py apply; they skip naming the switch without it
       DVT_FLK10: ${DVT_FLK10:-}
+      # NETTHR1a/b (DV-Router fce97cd3, c8f9b4ed; image wip-eeb44b4; cases/test_netthr1_rig.py, docs/netthr1-cases.md): on = the cases apply (they skip naming the
+      # switch without it). DVT_NETTHR1_DNS=on adds the DNS cancel case (needs DVT_SUT_RESOLV=30 on the host: the tester runs the unanswering DNS server);
+      # DVT_PIDS_SUT / DVT_CPUS_SUT are the host caps of the SUT container, passed on so the cases can say which limit they ran under;
+      # DVT_NETTHR1_SWEEPS is the number of thread sweeps of the idle case
+      DVT_NETTHR1: ${DVT_NETTHR1:-}
+      DVT_NETTHR1_DNS: ${DVT_NETTHR1_DNS:-}
+      DVT_NETTHR1_SWEEPS: ${DVT_NETTHR1_SWEEPS:-4}
+      DVT_PIDS_SUT: ${DVT_PIDS_SUT:-}
+      DVT_CPUS_SUT: ${DVT_CPUS_SUT:-}
       DVT_K22_IDLE_S: ${DVT_K22_IDLE_S:-600}
       DVT_RELINK_SETTLE_S: ${DVT_RELINK_SETTLE_S:-}
       DVT_MAP_ROUTE_FALLBACK: ${DVT_MAP_ROUTE_FALLBACK:-}

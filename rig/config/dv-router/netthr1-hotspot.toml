@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: MIT
+# A COMPLETE template for DVT_SUT_CONFIG (not a snippet): the exact hotspot preset of DV-Router's K6b test (crates/router/tests/real_children/hotspot.rs) with
+# the rig tokens. No enable key: only the profile selects the children (dv-room[B], dv-edge-radio, dv-data-worker[pkt], dv-svc-iddb, dv-svc-status,
+# dv-svc-basemap, dv-svc-admin, dv-svc-web, plus the launcher = nine processes). Thread ceiling 95 (docs/design/deployment.md); derived fabric cap 38.
+# Run it WITHOUT --profile web (web.toml would add dv-edge-webrtc, which is not in the preset) and with no DVT_SUT_CONFIG_EXTRA.
+# The state dir is the container's /tmp (the persistent-state children are planned, nothing is kept). The argv of the rig names a callsign and a transcoder
+# address; whether the transcoder word adds a dv-codec-ambed child is recorded by the thread case (the process set decides which ceiling applies).
+schema = 1
+
+[node]
+profile = "hotspot"
+callsign = "N0CALL"
+bind_ip = "<OWN_IP>"
+rooms = "B"
+state_dir = "/tmp/dvt-hotspot-state"
+
+[edges.radio]
+callsign = "N0CALL"
+tx_enable = true
+rules = "other"
+tx_ack = "I am the control operator of N0CALL and accept responsibility for its transmissions"
+
+[[edges.radio.port]]
+name = "port1"
+kind = "null"
+module = "B"
+physical = "null-radio"
+tx = true
+band = "70cm"
+timers = { tot_secs = 180, tx_delay_ms = 0, tx_tail_ms = 0 }
+id = { mode = "none", interval_secs = 600 }

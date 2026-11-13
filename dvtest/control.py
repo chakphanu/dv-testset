@@ -70,10 +70,12 @@ PROC_STAT_NAMES = (
     "dv-edge-webrtc",           # the web load test: edge cpu and peak RSS
     "dv-edge-allstar",          # asl-edge: T11 reads the edge cpu under a NEW/POKE flood
     "dv-edge-aprsis", "dv-edge-ax25",                      # only when enabled
+    "dv-edge-radio", "dv-edge-link",                       # hotspot preset radio edge; native link uplink (NETTHR1b thread cases)
     "dv-room", "dv-data-worker",
     "dv-codec-ambed",           # only with a codec worker
     "dv-svc-status", "dv-svc-web", "dv-svc-admin", "dv-svc-iddb", "dv-svc-idsync", "dv-svc-callhome",
     "dv-svc-recorder",          # the svc ones only when enabled
+    "dv-svc-basemap", "dv-svc-echo",   # NETTHR1b thread ceilings (basemap 5, echo 4)
 )
 PROC_STAT_LIST = "list"
 PROC_STAT_ALLOWED = tuple(("xlxd-sut", name) for name in PROC_STAT_NAMES) + (("xlxd-sut", PROC_STAT_LIST),)

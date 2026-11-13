@@ -434,6 +434,8 @@ another launch mode the variable draws a warning. Snippets in
 | `soak-edges.toml` | `[edges.nxdn]` (`enable`, `tg_modules = "31672:F"`) and `[edges.p25]` (`enable`, `server_module = "G"`, `server_tg = 31672`): the SUT's own NXDN (41400) and P25 (41000) client ports for the soak (`docs/web-soak-cases.md`); the template's own tables are merged key by key |
 | `mmdvm-edges.toml` | the same `[edges.nxdn]` and `[edges.p25]` values as `soak-edges.toml` (TG 31672 as NXDN module F and P25 module G) for the gateways of `--profile mmdvm`; `run.sh` adds it to a native launch with that profile unless it or `soak-edges.toml` is listed (`docs/mmdvm-stack-cases.md`) |
 | `rif5-mmdvm-udp.toml` | `[edges.radio]` with one `mmdvm-serial` port `rif5-modem` whose UDP byte port is the tester (`udp` `<TESTER_IP>:3340`, `udp_bind` `<OWN_IP>:3341`): D-STAR room P, DMR room Q (TG 4017), YSF room R, station N0CALL, `rules = "other"` with the ID off, mode hang 1 s; the tester plays a fake MMDVM modem (`cases/test_rif5_mmdvm_serial.py`, `DVT_RIF5=on`, `docs/rif5-cases.md`); the template must not define `[edges.radio]` |
+| `netthr1-http-caps.toml` | `[web] max_file_streams = 1, login_slots = 1` and `[admin] max_file_streams = 2, login_slots = 2` (router defaults 16 / 4), `static_dir = "/var/lib/dv/netthr1-static"` for both (the tester writes sparse files above 8 MiB there); use with `--profile web`, after `web.toml` / `admin.toml` (NETTHR1b, `docs/netthr1-cases.md`, H1 to H4, T2) |
+| `netthr1-router.toml`, `netthr1-hotspot.toml` | COMPLETE templates for `DVT_SUT_CONFIG`, not snippets: the K6b router fixture (26 rooms, one usrp edge, ceiling 251) and the exact hotspot preset (ceiling 95); run WITHOUT `--profile web` and without extras (`docs/netthr1-cases.md`, T1) |
 
 The XLX peer row names `xlxd-peer-sut` (`<NET>.12`, XLX998), not `xlxd-peer-ref`
 (`.13`): `xlxd-peer-sut` is configured to link with `xlxd-sut` (`.11`, XLX999),
@@ -843,6 +845,13 @@ tester.
 * `scripts/run.sh --profile mmdvm` (use with `web` to read the public state) checks `.cache/mmdvmstack/MMDVMHost` exists (exit 2 otherwise) and gives the tester `DVT_MMDVM=on`,
   `DVT_MMDVM_STACK`, `DVT_MMDVM_MODEM_PORT` and the module / talk group variables. Free host numbers used: `.100` (`.98` to `.127` are free; `.128/25` is the load nodes).
 * The wire checker knows `.100` as a rig host (`CHECK_HOST_OFFSETS`); the modem traffic (tester <-> `.100`, UDP 3334 / 3335) is not on any captured service.
+
+## NETTHR1 knobs of the SUT container
+
+`DVT_PIDS_SUT` (default 1024) is the pids limit of `xlxd-sut` (a `docker --pids-limit`, the same as a cgroup `TasksMax`); `DVT_CPUS_SUT` (default 2, the medium value)
+is its cpu quota. Both are compose variables read by `scripts/run.sh` and passed on to the tester so that a case can record which limit it ran under.
+`DVT_SUT_RESOLV=<octet>` (host side only) writes a read-only `/etc/resolv.conf` with the single name server `<NET>.<octet>` into the SUT (`out/<run>/xlxd-config/xlxd-sut/resolv.conf`);
+the docker embedded resolver is then out of the path, and so are the compose service names (never together with the host-name peer snippets). Commands and times: `docs/netthr1-cases.md`.
 
 ## Environment of the tester
 

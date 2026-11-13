@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (NETTHR1b, docs/netthr1-cases.md, cases H1 to H4): small, DIFFERENT HTTP admission caps for web and admin, so that a
+# case can fill them with a few requests and can tell the two services apart. Use with --profile web (state dir /var/lib/dv) and after web.toml / admin.toml.
+#   web   max_file_streams = 1, login_slots = 1   (router defaults 16 / 4)
+#   admin max_file_streams = 2, login_slots = 2
+# static_dir: the tester writes sparse files larger than 8 MiB under $DVT_OUT/sut-state/netthr1-static/{shared,admin}/ (a streamed body takes one slot only
+# above 8 MiB); the directory does not exist when the SUT starts (a warning, no pages), the files are read per request. The real dashboard pages are not
+# served in this run: the API, which every case here uses, is.
+[web]
+max_file_streams = 1
+login_slots = 1
+static_dir = "/var/lib/dv/netthr1-static"
+
+[admin]
+max_file_streams = 2
+login_slots = 2
+static_dir = "/var/lib/dv/netthr1-static"

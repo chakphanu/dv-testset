@@ -76,6 +76,12 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
   DVT_FLK10          on: FLK10, dv-edge-webrtc refuses an offer whose media section has a missing, repeated, empty,
                      over-16-byte or duplicate a=mid (403 forbidden); the cases of cases/test_web_rtc_mid.py skip naming
                      this switch without it (needs an image with DV-Router 98c88b2, wip-bd3ceb9; docs/web-mid-cases.md)
+  DVT_NETTHR1        on: DV-Router NETTHR1a/b (fce97cd3 + c8f9b4ed, image wip-eeb44b4): cases/test_netthr1_rig.py (fabric session gauge and cap, the web / admin
+                     stream and login-slot caps, thread ceilings from `proc-stat`, the DNS cancel) and the host-side cases/test_netthr1_config.py (config check:
+                     derived cap, cap range, cap against the planned children, HTTP cap ranges); every case skips naming this switch without it
+                     (docs/netthr1-cases.md)
+  DVT_NETTHR1_DNS    on: the DNS cancel case D1 (needs DVT_SUT_RESOLV=30 on the host so that the SUT resolves through the tester, and the tester binds UDP 53)
+  DVT_NETTHR1_SWEEPS number of proc-stat sweeps of the thread cases (default 4; each sweep reads every process name once)
 """
 import ipaddress
 import os

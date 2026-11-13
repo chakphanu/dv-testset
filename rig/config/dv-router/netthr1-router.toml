@@ -1,0 +1,95 @@
+# SPDX-License-Identifier: MIT
+# A COMPLETE template for DVT_SUT_CONFIG (not a snippet): the full-room router fixture of DV-Router's K6b thread test (crates/router/tests/real_children,
+# start_node_options with all rooms) with the rig tokens: 26 rooms, ONE edge (usrp, one static endpoint), no registry (no dv-svc-iddb), status,
+# recorder, basemap, admin, web and the default data worker, plus the launcher = 34 processes. Thread ceiling 251 = 186 outside the Net scheduler + derived
+# cap 63 + 2 (docs/design/deployment.md "Process schedulers"). Run it WITHOUT --profile web (web.toml would add dv-edge-webrtc) and with no
+# DVT_SUT_CONFIG_EXTRA. State and recorder directories are the container's /tmp (nothing is kept). The rig argv names a callsign and a transcoder address;
+# whether the transcoder word adds a dv-codec-ambed child is recorded by the thread case (the process set decides which ceiling applies).
+# `[edges.mmdvm]` is the pre-c2465de spelling of the DMR Homebrew edge: the renderer turns it into edges.dmrhb for DVT_SUT_GEN=c2465de / compat1.
+schema = 1
+
+[node]
+callsign = "XLX999"
+bind_ip = "<OWN_IP>"
+rooms = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+state_dir = "/tmp/dvt-router-state"
+
+[ids]
+registry = false
+
+[admin]
+enable = true
+totp_required = false
+
+[callhome]
+enable = false
+
+[status]
+enable = true
+
+[recorder]
+dir = "/tmp/dvt-router-recordings"
+
+[edges.usrp]
+enable = true
+dynamic = false
+
+[[edges.usrp.endpoint]]
+module = "A"
+bind = "<OWN_IP>:34001"
+peer = "<TESTER_IP>:32001"
+callsign = "N0CALL"
+
+[edges.dextra]
+enable = false
+
+[edges.dplus]
+enable = false
+
+[edges.dcs]
+enable = false
+
+[edges.mmdvm]
+enable = false
+
+[edges.dmrplus]
+enable = false
+
+[edges.ysf]
+enable = false
+
+[edges.m17]
+enable = false
+
+[edges.g3]
+enable = false
+
+[edges.imrs]
+enable = false
+
+[edges.xlx]
+enable = false
+
+[edges.nxdn]
+enable = false
+
+[edges.p25]
+enable = false
+
+[edges.webrtc]
+enable = false
+
+[edges.allstar]
+enable = false
+
+[edges.aprsis]
+enable = false
+
+[edges.ax25]
+enable = false
+
+[edges.radio]
+enable = false
+
+[edges.link]
+enable = false
