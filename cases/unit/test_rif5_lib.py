@@ -467,6 +467,36 @@ def test_has_series_counts_a_zero_and_needs_the_label():
     assert rif5.has_series(more, "dv_edge_radio_modem_total", result="tx_underrun")
 
 
+def test_the_garbled_copies_are_damaged_but_the_wrong_colour_copy_is_a_clean_codeword():
+    garbled = rif5.dmr_garbled_copy(1023007, 4017, 1)
+    info = rf.decode_dmr([(ms.DMR_DATA2, garbled)])[2]["headers"]
+    assert garbled[0] == 0x41 and len(garbled) == 34 and info and info[0]["cc"] == 1 and info[0]["rs_ok"] is False        # the slot type is ours, the LC is not
+    other = rf.decode_dmr([(ms.DMR_DATA2, rif5.dmr_damaged_copy(1023007, 4017, 1))])[2]["headers"]
+    assert other[0]["cc"] == 2 and other[0]["rs_ok"] is True                                                              # another colour code, a valid LC
+    up = rf.ysf_keyup(words("ysf", 5), src="N0CALL")
+    good = up[1][1]
+    bad = rif5.ysf_dch_garbled(good)
+    assert len(bad) == len(good) == 121 and bad != good
+    assert ysfp.vd2_dch(good[31:]) is not None and ysfp.vd2_dch(bad[31:]) is None                                       # DCH CRC fails
+    assert ysfp.fich_decode(bad[6:31]) == ysfp.fich_decode(good[6:31]) and ysfp.vd2_frames(bad[31:]) == ysfp.vd2_frames(good[31:])      # FICH and VCH untouched
+    assert (rif5.DMR_FILL_LIMIT, rif5.YSF_FILL_LIMIT) == (13, 5)
+
+
+def test_release_view_wants_two_polls_after_an_eot_and_a_status_after_tx_off():
+    def log(polls, eot=10.0):
+        return [hf(eot, ms.DSTAR_EOT)] + [hf(t, ms.GET_STATUS) for t in polls]
+    fast_then_slow = [10.05, 10.10, 10.15, 10.40, 10.65]                  # release on the poll at 10.15, then 250 ms
+    v = rif5.release_view(log(fast_then_slow), tx_off_t=10.12)
+    assert v.problems == [] and v.facts["polls_after_eot"] == 3 and v.facts["release_poll_after_eot_s"] == 0.15 and v.facts["tx_off_after_eot_s"] == 0.12
+    # released on the first poll after the EOT: the barrier is missing
+    assert "first poll" in " ".join(rif5.release_view(log([10.05, 10.30, 10.55])).problems)
+    # slowing down before the fake's TX went off
+    assert "before the fake's TX went off" in " ".join(rif5.release_view(log(fast_then_slow), tx_off_t=10.3).problems)
+    # the fast poll never stopped, no EOT
+    assert "did not slow down" in " ".join(rif5.release_view(log([10.05, 10.10, 10.15, 10.20])).problems)
+    assert rif5.release_view([hf(1, ms.GET_STATUS)]).problems == ["no D-STAR EOT in the log"]
+
+
 def test_observer_fields_are_the_nineteen_of_the_document():
     assert len(rif5.OBSERVER_FIELDS) == 19 and {"rx_freq_hz", "tx_freq_hz"} <= set(rif5.OBSERVER_FIELDS)
     assert rif5.EDGE_SILENCE_S < rif5.NATIVE_OVER_TIMEOUT_S

@@ -238,6 +238,8 @@ class FwRif5Modem(ms.Rif5Modem):
         now = time.monotonic() if now is None else now
         with self.lock:
             tx = self.fw.tx_on(now) or now < self.cw_until
-            spaces = [self.fw.space(k, now) for k in ("dstar", "dmr1", "dmr2", "ysf")]
+            # a mode the SET_CONFIG did not enable reports no space (review-277: firmware 0); the DMR slot 1 byte stays the fixed value
+            enabled = {"dstar": 1, "dmr1": 0, "dmr2": 2, "ysf": 4}
+            spaces = [self.fw.space(k, now) if not enabled[k] or self.enabled_mask & enabled[k] else 0 for k in ("dstar", "dmr1", "dmr2", "ysf")]
         flags = (mm.FLAG_TX if tx else 0) | (mm.FLAG_CD if self.cd else 0) | (mm.FLAG_LOCKOUT if self.lockout else 0)
         return bytes((self.mode, flags, 0) + tuple(spaces)).ljust(ms.STATUS_V2_MIN, b"\x00")

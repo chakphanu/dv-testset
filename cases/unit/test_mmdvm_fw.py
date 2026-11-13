@@ -145,3 +145,16 @@ def test_a_real_time_feed_after_the_preamble_never_runs_dry_and_the_host_cap_of_
             q.write(ms.DSTAR_DATA, DATA, 0.5 + 0.25 * cycle)
     q.advance(10.0)
     assert q.counts["underrun"] >= 1
+
+
+def test_a_mode_the_set_config_did_not_enable_reports_no_space():
+    import socket
+    from dvtest import mmdvm_serial
+    transport = mmdvm_serial.PinnedUdp(("127.0.0.1", 0), ("127.0.0.1", 1))
+    modem = fw.FwRif5Modem(transport)
+    try:
+        assert list(modem.status_payload(1.0)[3:7]) == [28, 10, 10, 33]
+        modem.enabled_mask = 0b001                                          # D-STAR only
+        assert list(modem.status_payload(1.0)[3:7]) == [28, 10, 0, 0]       # DMR slot 1 stays the fixed byte
+    finally:
+        transport.sock.close()

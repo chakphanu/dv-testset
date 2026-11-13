@@ -539,6 +539,8 @@ def dmr_damaged_copy(src, dst, color_code):
 
 
 EDGE_SILENCE_S = 0.2                    # radio.md 4.4: SILENCE = 200 ms for the radio edge (ten units); crates/edge/radio/src/protocol.rs
+DMR_FILL_LIMIT = 13                     # RIF5j: silence fills in a row before the over ends as LOST (M/DMRDMORX.cpp:33,194-200; hub_dv.rs `rf_fill`)
+YSF_FILL_LIMIT = 5                      # (M/YSFRX.cpp:42,185-203)
 RXD_J_END_S = (0.2, 0.5)               # RIF5j: the room over ends 300 ms after the last damaged copy (a rig margin of one tick and the packet path)
 NATIVE_OVER_TIMEOUT_S = 0.3             # radio.md 7.1: an RF over also ends 300 ms without a native frame (hub.rs `dv_last_ns`)
 
@@ -724,3 +726,55 @@ def has_series(table, family, **labels):
     """True when a counters() table has a sample of `family` whose labels contain `labels` (a zero counts: the radio families keep their complete fixed
     label sets, status.md "Radio port telemetry"). None table: False."""
     return bool(table) and any(key[0] == family and all((k, v) in key[1:] for k, v in labels.items()) for key in table)
+
+
+def dmr_garbled_copy(src, dst, color_code):
+    """A voice LC header copy that the firmware would deliver (the right colour code and slot type, so the adapter does not take it for another station's
+    burst) whose BPTC / LC is destroyed: the first 12 bytes of the burst inverted. dvtest's own decoder reports `rs_ok` False for it. RIF5j: this is a
+    DAMAGED copy, filled with silence and refreshing the timeout; `dmr_damaged_copy` (another colour code, a clean codeword) is not."""
+    lc = dmrp.full_lc(dmrp.FLCO_GROUP, src, dst)
+    burst = bytearray(bytes((0x41,)) + rf.data_burst(lc, rf.DT_VOICE_LC_HEADER, color_code))
+    for i in range(1, 13):
+        burst[i] ^= 0xFF
+    return bytes(burst)
+
+
+def ysf_dch_garbled(payload):
+    """A YSF modem payload (flag + 120 B frame) whose DCH is destroyed: the first 5 bytes of each of the five 18 byte blocks of the V/D mode 2 payload
+    inverted, so the DCH CRC fails (`ysf.vd2_dch` is None) while sync, FICH and the VCH stay. The adapter takes it for a damaged frame of the open over."""
+    from .proto import ysf as ysfp
+    out = bytearray(payload)
+    base = 1 + ysfp.FRAME_SIZE - ysfp.PAYLOAD_SIZE
+    for block in range(ysfp.FRAMES_PER_PACKET):
+        for k in range(5):
+            out[base + ysfp.BLOCK_SIZE * block + k] ^= 0xFF
+    return bytes(out)
+
+
+def release_view(frames, tx_off_t=None, slow_gap_s=0.15):
+    """RIF5j F1 (review-277): after a D-STAR EOT the core releases the physical only on a status reply that is more than the SECOND poll after the EOT, and
+    only when the modem reports TX off, then the poll interval goes back to 250 ms. From the host frame log of an over: the polls after the last EOT
+    write, the last one before the cadence slows down (the poll whose reply released), and the numbers. Problems: fewer than two polls after the EOT up
+    to the release, a release poll sent before the fake's TX went off (`tx_off_t`, the firmware-like fake only), no slowing down at all."""
+    eots = [f for f in frames if f.ftype == ms.DSTAR_EOT]
+    if not eots:
+        return verdict(["no D-STAR EOT in the log"])
+    t_eot = eots[-1].mono
+    polls = [f.mono for f in frames if f.ftype == ms.GET_STATUS and f.mono > t_eot]
+    release = None
+    for i in range(len(polls) - 1):
+        if polls[i + 1] - polls[i] > slow_gap_s:
+            release = i
+            break
+    if release is None:
+        return verdict(["the status poll did not slow down after the EOT: %d polls, the last %.2f s after it" % (len(polls), (polls[-1] - t_eot) if polls else -1)],
+                       polls_after_eot=len(polls))
+    problems = []
+    n = release + 1
+    if n < 2:
+        problems.append("the physical was released on the first poll after the EOT (the release needs a reply to the second: review-277 F1 eot_barrier)")
+    t_release = polls[release]
+    if tx_off_t is not None and t_release < tx_off_t - 0.005:
+        problems.append("the cadence slowed down %.3f s before the fake's TX went off (the release needs a status with TX off)" % (tx_off_t - t_release))
+    return verdict(problems, polls_after_eot=n, release_poll_after_eot_s=round(t_release - t_eot, 3),
+                   tx_off_after_eot_s=None if tx_off_t is None else round(tx_off_t - t_eot, 3))
