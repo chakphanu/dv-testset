@@ -73,6 +73,12 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
   DVT_RIF5J          on: the image has DV-Router RIF5j (fast status poll while keyed, host queue in airtime, tx_underrun, O3 frequencies, RXD silence fill):
                      the cases for that image run (RIF5-J-*, and the RXD / O3 assertions of the fix); off or unset: the assertions for the current image
                      (docs/rif5-cases.md "Cases for the fix image")
+  DVT_DIGI1          on: the image has the DIGI1 fill-in digipeater (DV-Router 22994519 + 588ffb4c, wip-eeb44b4): cases/test_digi1.py plays fake KISS TNCs
+                     (rig/config/dv-router/digi1.toml = the rate floor 10 / 3 and the class defaults, digi1-roomy.toml = 20 % duty for the functional cases)
+                     and asserts DIGI-R1 to R5 (the path vectors G1 to G13, the duplicate window, the flood, two fill-ins, the startup guard) and
+                     dv_edge_digi_total{port,result} with kind digi on dv_edge_rf_tx_total; cases/test_digi1_dw.py repeats vectors through the Dire Wolf TNCs
+                     of profile dw (digi1-dw.toml); off or unset: every case skips naming this switch. The config refusals (cases/test_digi1_config.py,
+                     -m cfgload) need an image with DIGI1 but not this switch (docs/digi1-cases.md)
   DVT_FLK10          on: FLK10, dv-edge-webrtc refuses an offer whose media section has a missing, repeated, empty,
                      over-16-byte or duplicate a=mid (403 forbidden); the cases of cases/test_web_rtc_mid.py skip naming
                      this switch without it (needs an image with DV-Router 98c88b2, wip-bd3ceb9; docs/web-mid-cases.md)

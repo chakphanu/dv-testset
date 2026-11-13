@@ -588,6 +588,9 @@ services:
       # on for an image with RFSAFE1c: cases/test_rfsafe1c.py asserts the launcher start in the hub's process rows, no session/update hint item in the feeds and
       # the shape of the probe failed log line (dvtest/rfsafe1c.py, docs/rfsafe1c-cases.md); the cases skip with a reason without it
       DVT_RFSAFE1C: ${DVT_RFSAFE1C:-}
+      # on for DV-Router DIGI1 (22994519 + 588ffb4c, image dv-router:wip-eeb44b4): cases/test_digi1.py (fake TNCs) and cases/test_digi1_dw.py (profile dw) assert the
+      # OFF-by-default fill-in digipeater of the AX.25 edge with rig/config/dv-router/digi1.toml, digi1-roomy.toml or digi1-dw.toml (docs/digi1-cases.md); the cases skip with a reason without it
+      DVT_DIGI1: ${DVT_DIGI1:-}
       # on for DV-Router RIF5 (c017e491 or later, the mmdvm-serial radio adapter) with rig/config/dv-router/rif5-mmdvm-udp.toml in DVT_SUT_CONFIG_EXTRA:
       # cases/test_rif5_mmdvm_serial.py plays a fake MMDVM modem on the UDP byte port (docs/rif5-cases.md); the cases skip with a reason without it
       DVT_RIF5: ${DVT_RIF5:-}
