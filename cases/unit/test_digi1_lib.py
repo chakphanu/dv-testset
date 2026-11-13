@@ -289,3 +289,8 @@ def test_read_shape_reports_what_is_missing():
     doc["edges"]["ax25"]["port"][0]["tx_budget"] = {"duty_pct": 5}
     doc["edges"]["ax25"]["port"][0]["tx_per_min"] = 12
     assert digi1.read_shape(doc).name == "other"
+
+
+def test_rejected_by_result_reads_the_edge_wide_family():
+    s = [sample("dv_edge_rf_rejected_total", 1, result="expired"), sample("dv_edge_rf_rejected_total", 2, result="invalid", proc="ax25")]
+    assert digi1.rejected_by_result(s) == {"expired": 1, "invalid": 2} and digi1.rejected_by_result([]) == {}

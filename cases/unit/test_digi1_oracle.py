@@ -171,3 +171,17 @@ def test_the_committed_vectors_file_when_present_agrees_with_the_model():
         problems, _notes = digi1_oracle.oracle_problems(g, loaded[g.id])
         assert problems == [], problems
     assert digi1_oracle.timeline_outcomes(loaded) == ["repeat", "silent", "silent", "repeat", "silent"]
+
+
+def test_the_digi_job_runs_from_the_repository_copy_of_the_driver_not_the_baked_one():
+    from dvtest import oracle_direwolf
+    plain = oracle_direwolf.docker_argv("n")
+    mounted = oracle_direwolf.docker_argv("n", entry="/repo/rig/direwolf-entry.py")
+    assert "-v" not in plain and "/repo/rig/direwolf-entry.py:/direwolf/entry.py:ro" in mounted
+    assert mounted.index("-v") < mounted.index("--read-only") and mounted[-1] == oracle_direwolf.IMAGE
+    assert "digi" in entry.MODES                         # the job the image built before DIGI1 does not know (exit 2, empty stderr)
+
+
+def test_run_sh_does_not_add_the_dp15_dw_snippet_next_to_digi1_dw():
+    text = (ROOT / "scripts" / "run.sh").read_text()
+    assert "*:rig/config/dv-router/digi1-dw.toml:*) ;;" in text

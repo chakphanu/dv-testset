@@ -417,7 +417,14 @@ def test_digi1_r3_flood_obeys_the_quotas_and_own_frames_survive(request, rig, ta
     sent_msg = digi1.rf_tx_kind_result(sample_after, PORT, "message", "sent") - digi1.rf_tx_kind_result(sample_before, PORT, "message", "sent")
     note(target, case, "RECORD", "own frames: message sent %d, own frames dropped %s" % (sent_msg, own_bad or "none"))
     assert not problems, "flood bounds: %s" % "; ".join(problems)
-    assert own is not None, "the own message frame never reached the TNC in %.0f s (message TTL 120 s)" % OWN_WAIT_S
+    rej = {r: n - digi1.rejected_by_result(sample_before).get(r, 0) for r, n in digi1.rejected_by_result(sample_after).items()}
+    rej = {r: n for r, n in rej.items() if n}
+    if own is None and sent_msg:
+        note(target, case, "FINDING", "the own message frame was RELEASED by the scheduler (rf_tx{kind=message,result=sent} +%d) but never written to the modem: "
+             "dv_edge_rf_rejected_total grew by %s; the edge refuses a released copy whose own expiry has passed (tx.rs, TXCORE_EXPIRED), which is not a dropped_ttl" % (sent_msg, rej))
+        pytest.fail("the own message frame was lost after its scheduler release (sent +%d, nothing written, dv_edge_rf_rejected_total %s): an own-frame drop (DV-Router decision: "
+                    "an own-frame drop fails R3; product finding, the post-release expiry is shorter than the message class TTL)" % (sent_msg, rej))
+    assert own is not None, "the own message frame never reached the TNC in %.0f s (message TTL 120 s); rejected %s" % (OWN_WAIT_S, rej)
     wait_s = own[0] - posted[0]
     if wait_s > OWN_FINDING_S:
         note(target, case, "FINDING", "the own message frame waited %.1f s for the digi class (DV-Router measured 72 / 84 / 90 s in virtual time; the class TTL is 120 s): "

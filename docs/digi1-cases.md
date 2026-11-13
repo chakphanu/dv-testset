@@ -165,6 +165,16 @@ vectors from a throw-away container (`oracle_direwolf run`, `docs/direwolf-cases
 5. **G9** (`N0TEST-10>APRS,WIDE1-1`): `own_source`, NOT repeated (lead decision D10, stricter than Dire Wolf, which repeats its own frames only with explicit routing). Asserted for the edge; Dire Wolf's answer is recorded as
    information only, and the data.md 15.5 sentence "repeated by both" is not asserted (being corrected).
 
+## First rig run (wip-eeb44b4, testset 439e22e) and what was fixed
+
+| Run | Result | Triage |
+|-----|--------|--------|
+| A roomy | 30 passed, 1 skipped | good |
+| B floor, R3 | FAILED: the own message frame never reached the TNC | **PRODUCT (candidate)**: scheduler `rf_tx{kind=message,result=sent}` 1, no write (the TNC saw only the 13 digi copies), `dv_edge_rf_rejected_total{result=expired}` 1, no `dropped_*` for the own frame. The edge refuses a copy the scheduler released when its own `expires_ms` has passed (`tx.rs` TXCORE_EXPIRED), so an own frame is lost after waiting behind the flood although its class TTL is 120 s. Per DV-Router's decision an own-frame drop fails R3. Harness change: the failure now says so (FINDING + the `rejected` result labels) instead of "never reached the TNC" |
+| C Dire Wolf | ended in 16 s | **HARNESS**: `scripts/run.sh --profile dw` appends `dp15-rf-dw.toml` unless it is listed, next to `digi1-dw.toml` (two `[edges.ax25]` port sets: duplicate names, "7 error(s), not started"). run.sh now also accepts `digi1-dw.toml` as the DW snippet |
+| oracle | exit 2, empty stderr | **HARNESS**: `dvt-direwolf:local` has `entry.py` baked in from before the job `digi`, which answered `unknown mode` on stdout with exit 2. The oracle now bind-mounts the repository's `rig/direwolf-entry.py` read-only over it (no rebuild); an error now prints stdout too |
+| cfgload | 20 passed | good |
+
 ## Targeted unit tests run for this change
 
 `python3 -m pytest -m unit cases/unit/test_ax25_digi.py cases/unit/test_digi1_lib.py cases/unit/test_digi1_oracle.py cases/unit/test_digi1_cfg.py cases/unit/test_digi1_cases.py cases/unit/test_tester_env.py

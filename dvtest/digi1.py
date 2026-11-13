@@ -294,6 +294,15 @@ def rejected_total(samples):
     return sum(int(s.value) for s in samples if s.name == "dv_edge_rf_rejected_total")
 
 
+def rejected_by_result(samples):
+    """{result: n} of dv_edge_rf_rejected_total (invalid, disabled, too_long, airtime, overflow, expired, ...): one series per edge for all classes."""
+    out = {}
+    for s in samples:
+        if s.name == "dv_edge_rf_rejected_total":
+            out[s.labels.get("result", "")] = out.get(s.labels.get("result", ""), 0) + int(s.value)
+    return out
+
+
 def rf_fenced_total(samples):
     return sum(int(s.value) for s in samples if s.name == "dv_edge_drops_total" and s.labels.get("reason") == "rf_fenced")
 

@@ -80,7 +80,7 @@
 #                      .cache/direwolf, run scripts/pre-fetch-direwolf.sh once) for the DP15 RF cases of tier B
 #                      (cases/test_dp15_rf_dw.py, docs/dp15-cases.md): what one TNC transmits the other demodulates
 #                      (audio relayed over UDP, no hardware), no internet. Needs DVT_SUT_LAUNCH=native; adds
-#                      rig/config/dv-router/dp15-rf-dw.toml (the AX.25 edge with kiss-tcp ports to both) unless listed.
+#                      rig/config/dv-router/dp15-rf-dw.toml (the AX.25 edge with kiss-tcp ports to both) unless it or digi1-dw.toml is listed.
 #                      Use with web (--profile web,dw: the cases post room text through the web service). The tester
 #                      gets DVT_DW=on, DVT_DW_A, DVT_DW_B. RF transmit stays off unless DVT_DP15_TX_ENABLE=true (then
 #                      also name rig/config/dv-router/dp15-rf-out.toml in DVT_SUT_CONFIG_EXTRA)
@@ -453,6 +453,7 @@ if [ "$has_dw" = 1 ]; then
     || { echo "run.sh: .cache/direwolf missing; run scripts/pre-fetch-direwolf.sh" >&2; exit 2; }
   case ":${DVT_SUT_CONFIG_EXTRA:-}:" in
     *:rig/config/dv-router/dp15-rf-dw.toml:*) ;;
+    *:rig/config/dv-router/digi1-dw.toml:*) ;;       # DIGI1 tier B: its own [edges.ax25] for the same TNCs (a second one makes duplicate ports)
     *) DVT_SUT_CONFIG_EXTRA="${DVT_SUT_CONFIG_EXTRA:+$DVT_SUT_CONFIG_EXTRA:}rig/config/dv-router/dp15-rf-dw.toml" ;;
   esac
   export DVT_SUT_CONFIG_EXTRA

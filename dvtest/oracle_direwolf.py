@@ -357,28 +357,32 @@ def kissutil_records(result):
 
 # ------------------------------------------------------------------ container
 
-def docker_argv(name, image=IMAGE, env=None):
+def docker_argv(name, image=IMAGE, env=None, entry=None):
     """docker run words: stdin job, no network, the repository's resource limits, a
-    read-only root with a small tmpfs, no capabilities."""
+    read-only root with a small tmpfs, no capabilities. `entry` (a host path) is bind-mounted read-only over the image's
+    /direwolf/entry.py: the driver is baked into the image, so a job added after the image was built (the job `digi`) runs from
+    the repository's copy without a rebuild."""
+    mount = ["-v", "%s:/direwolf/entry.py:ro" % entry] if entry else []
     return (["docker", "run", "--rm", "-i", "--name", name, "--network", "none"]
-            + limits.docker_run_args(env)
+            + limits.docker_run_args(env) + mount
             + ["--read-only", "--tmpfs", "/tmp:rw,size=64m,mode=1777", "--cap-drop", "ALL",
                "--security-opt", "no-new-privileges", image])
 
 
-def run_job(job, image=IMAGE, timeout=RUN_TIMEOUT):
+def run_job(job, image=IMAGE, timeout=RUN_TIMEOUT, entry=None):
     """Run one job in a throw-away container; returns the parsed JSON result. A
     timed-out container is removed by name."""
     name = "dvt-direwolf-%d" % os.getpid()
     try:
-        done = subprocess.run(docker_argv(name, image), input=json.dumps(job).encode("ascii"),
+        done = subprocess.run(docker_argv(name, image, entry=entry), input=json.dumps(job).encode("ascii"),
                               capture_output=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired as exc:
         subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=30, check=False)
         tail = (exc.stderr or b"").decode("utf-8", "replace")[-300:]
         raise RuntimeError("dvt-direwolf job timed out after %d s; progress: %s" % (timeout, tail))
     if done.returncode != 0:
-        raise RuntimeError("dvt-direwolf exited %s: %s" % (done.returncode, done.stderr.decode("utf-8", "replace")[-500:]))
+        raise RuntimeError("dvt-direwolf exited %s: stderr %r, stdout %r" % (done.returncode, done.stderr.decode("utf-8", "replace")[-500:],
+                                                                         done.stdout.decode("utf-8", "replace")[-300:]))
     return json.loads(done.stdout.decode("utf-8"))
 
 
@@ -399,7 +403,8 @@ def digi_main(out=None):
     from dvtest import digi1_oracle
     steps = digi1_oracle.plan()
     version = run_job({"mode": "versions"}).get("direwolf", "")
-    result = run_job(digi1_oracle.job(steps), timeout=digi1_oracle.JOB_TIMEOUT_S)
+    entry = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "rig", "direwolf-entry.py")
+    result = run_job(digi1_oracle.job(steps), timeout=digi1_oracle.JOB_TIMEOUT_S, entry=entry)
     if result.get("error"):
         print("error: %s" % result["error"])
         return 1
