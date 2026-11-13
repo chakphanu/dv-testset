@@ -337,14 +337,34 @@ def judge_tx(kind, log, sent, ident, port, lossy=False):
     return rif5.judge_tx_ysf(log, sent, ident, port.ysf_lo_dev, lossy=lossy)
 
 
-def tx_over(ctx, web, kind, n, seed, case):
+def quiet_after_link(ctx, kind):
+    """A YSF client joins a module with a header (DG-ID) and a terminator 0.3 s apart (dvtest/proto/ysf.py `link`). DV-Router relays that voiceless
+    stream to the radio port, which keys the transmitter for it: SET_MODE 03, a preamble, a header, a terminator (rig run 20261113T052325Z, timelines:
+    two headers and two terminators in the TX-ysf window; the first frames of an RF over refused while the join keyed the port). Wait until the join's key-up
+    is over and the host gave the modem back to idle, so that the case sees only its own over. D-STAR and DMR joins do not reach RF."""
+    if kind != "ysf":
+        return
+    time.sleep(0.8)
+    if not settle_idle(ctx.modem, 30.0):
+        note(ctx.target, "setup", "FINDING", "the host did not give the modem back to idle within 30 s of a YSF client's join")
+
+
+def member(ctx, kind, module, index, listen):
+    """rif5_support.Member, then quiet_after_link."""
+    m = Member(ctx.ip, kind, module, index, listen=listen)
+    quiet_after_link(ctx, kind)
+    return m
+
+
+def tx_over(ctx, web, kind, n, seed, case, after_link=None):
     """One over of `n` frames from the protocol client N0TEST into the mode's room; returns (log since the start, frames sent, expected words, ident)."""
     ready(ctx, web, case)
     frames = echo.make_frames(kind, n, "%s-%s" % (seed, kind))
-    # the window starts BEFORE the client links: the second rig run showed the fake already in mode 03 at its first status of the YSF window, so a claim
-    # may be written between ready() and the talk; frames of the link phase are polls only
+    # a YSF client's join is a keyed over of its own (quiet_after_link waits it out); `after_link` runs between the join and the talk
+    talker = member(ctx, kind, rif5.ROOMS[kind], 1, listen=False)
+    if after_link is not None:
+        after_link()
     since = ctx.modem.mark()
-    talker = Member(ctx.ip, kind, rif5.ROOMS[kind], 1, listen=False)
     try:
         t_talk = time.monotonic()
         talker.talk(frames, tail=0.5)
@@ -412,7 +432,7 @@ def test_rx_modem_to_room(kind, ctx, web):
     over: the radio's identity, the voice words in order, the end. The RF ingress circuit is not echoed back to RF (radio.md 4.4, 7.2)."""
     case = "RIF5-RX-%s" % kind
     ready(ctx, web, case)
-    listener = Member(ctx.ip, kind, rif5.ROOMS[kind], 1, listen=True)
+    listener = member(ctx, kind, rif5.ROOMS[kind], 1, listen=True)
     try:
         since = ctx.modem.mark()
         ku = ctx.modem.keyup(kind, seconds=RX_SECONDS, seed="rif5-rx", **rx_kwargs(kind, ctx.port))
@@ -469,7 +489,7 @@ def test_rx_dmr_damaged_copies_refresh_the_over_timeout(ctx, web):
     valid = air[:-1]                                              # header and the ten voice bursts, the real terminator dropped
     bad = rif5.dmr_damaged_copy(kw["src"], kw["dst"], kw["colour_code"])
     air = valid + [(rf.DMR_DATA2, bad, 100.0)] * RXD_COPIES
-    listener = Member(ctx.ip, "dmr", rif5.ROOMS["dmr"], 1, listen=True)
+    listener = member(ctx, "dmr", rif5.ROOMS["dmr"], 1, listen=True)
     try:
         ku = ctx.modem.play_air("dmr", air, voice, count)
         assert ku.wait(RX_SECONDS + 20) and ku.error is None, "the modem could not play the over: %s" % ku.error
@@ -515,7 +535,7 @@ def test_rx_dmr_damaged_copies_refresh_the_over_timeout(ctx, web):
 def rx_tail_over(ctx, kind, air, voice, count, valid_n, copies_n, tail_s=10.0):
     """Play `air` (the first `valid_n` frames valid, then `copies_n` damaged ones) and return what a listener of the room heard: a namespace with the
     modem's play (`ku`), the over, the number of overs, the send time of the last valid frame and of each damaged copy."""
-    listener = Member(ctx.ip, kind, rif5.ROOMS[kind], 1, listen=True)
+    listener = member(ctx, kind, rif5.ROOMS[kind], 1, listen=True)
     try:
         ku = ctx.modem.play_air(kind, air, voice, count)
         assert ku.wait(RX_SECONDS + 20) and ku.error is None, "the modem could not play the over: %s" % ku.error
@@ -587,7 +607,7 @@ def test_j_rx_dmr_header_train_keeps_one_room_over(ctx, web):
         pytest.skip("DVT_RIF5J is not on: this case is for an image with DV-Router RIF5j (docs/rif5-cases.md \"Cases for the fix image\")")
     case = "RIF5-J-RXH-dmr"
     ready(ctx, web, case)
-    listener = Member(ctx.ip, "dmr", rif5.ROOMS["dmr"], 1, listen=True)
+    listener = member(ctx, "dmr", rif5.ROOMS["dmr"], 1, listen=True)
     try:
         since = ctx.modem.mark()
         ku = ctx.modem.keyup("dmr", seconds=RX_SECONDS, seed="rif5-jrxh", headers=8, **rx_kwargs("dmr", ctx.port))
@@ -635,7 +655,7 @@ def test_j_rx_ysf_bad_frames_are_filled_and_bounded(bad, ctx, web):
     else:
         play = [head] + frames_[:6] + damaged
         valid_n = 7
-    listener = Member(ctx.ip, "ysf", rif5.ROOMS["ysf"], 1, listen=True)
+    listener = member(ctx, "ysf", rif5.ROOMS["ysf"], 1, listen=True)
     try:
         ku = ctx.modem.play_air("ysf", play, voice, count)
         assert ku.wait(RX_SECONDS + 20) and ku.error is None, "the modem could not play the over: %s" % ku.error
@@ -754,9 +774,16 @@ def test_j_long_overs_are_lossless(ctx, web):
         time.sleep(11.0)                                          # the hub metrics are up to 10 s old: a baseline that holds everything before the overs
         before = counters_now(ctx)
     natives = 0
+    snaps = [("start", before)]
+
+    def snap(label):
+        if before is not None:
+            time.sleep(11.0)                                      # the hub metrics are up to 10 s old
+            snaps.append((label, counters_now(ctx)))
+
     for kind in KINDS:
         sub = "%s-%s" % (case, kind)
-        log, since, sent, ident = tx_over(ctx, web, kind, LONG_FRAMES, "rif5-jlong", sub)
+        log, since, sent, ident = tx_over(ctx, web, kind, LONG_FRAMES, "rif5-jlong", sub, after_link=(lambda: snap("ysf join")) if kind == "ysf" else None)
         verdict = judge_tx(kind, log, sent, ident, ctx.port)                   # strict: a dropped word is a problem
         native = [f for f in log if f.ftype in ms.TX_TYPES[kind]]
         natives += len(native)
@@ -771,30 +798,43 @@ def test_j_long_overs_are_lossless(ctx, web):
         for line in verdict.findings:
             note(ctx.target, sub, "FINDING", line)
         problems += ["%s: %s" % (kind, p) for p in verdict.problems + keyed.problems]
+        if naks:
+            problems.append("%s: the modem had to NAK frames of the host: %s" % (kind, naks[:4]))
+        if fw:
+            problems.append("%s: the firmware-like fake logged %s" % (kind, [(round(t - since, 3), e, d.get("dry_s")) for t, e, d in fw[:4]]))
         if kind == "dstar":
             off = [t for t, _e, d in ctx.modem.fw_events(since, names=("tx_off",)) if d.get("end_frame")] if firmware else []
             rel = rif5.release_view(ctx.modem.host_frames(since), off[-1] if off else None)
             note(ctx.target, sub, "RECORD", "release after the EOT: %s" % rel.facts)
             problems += ["dstar release: %s" % p for p in rel.problems]
-        if naks:
-            problems.append("%s: the modem had to NAK frames of the host: %s" % (kind, naks[:4]))
-        if fw:
-            problems.append("%s: the firmware-like fake logged %s" % (kind, [(round(t - since, 3), e, d.get("dry_s")) for t, e, d in fw[:4]]))
+        snap("%s over" % kind)
     if before is None:
         note(ctx.target, case, "RECORD", "no control channel: the counters of dropped frames and tx_underrun were not read")
     else:
-        time.sleep(12.0)
-        after = counters_now(ctx)
+        after = snaps[-1][1]
         if not rif5.has_series(after, "dv_edge_radio_modem_total", result="tx_underrun"):
             problems.append("dv_edge_radio_modem_total{result=tx_underrun} is not exported (the fixed result label set of the fix)")
-        for label, family, labels in (("dropped", "dv_edge_radio_frames_total", {"dir": "tx", "result": "dropped"}),
-                                      ("tx_underrun", "dv_edge_radio_modem_total", {"result": "tx_underrun"})):
-            grown = rif5.delta(before, after, family, **labels)
-            note(ctx.target, case, "RECORD", "%s grew by %s over the three overs" % (label, grown))
-            if grown:
-                problems.append("%s grew by %s over the three overs of 150 words" % (label, grown))
+        # per phase: dstar over, dmr over, the YSF client's join (a voiceless keyed over), the YSF over. The join is judged by nobody: its tx_underrun is a
+        # FINDING (rig run 20261113T052325Z: tx_underrun grew by 1 in the YSF phase, the fake logged none), the three overs of 150 words must show 0 and 0.
+        phases = (("dstar over", "start", "dstar over"), ("dmr over", "dstar over", "dmr over"), ("ysf join", "dmr over", "ysf join"),
+                  ("ysf over", "ysf join", "ysf over"))
+        table = dict(snaps)
+        for label, a, b in phases:
+            row = {}
+            for key, family, labels in (("dropped", "dv_edge_radio_frames_total", {"dir": "tx", "result": "dropped"}),
+                                        ("tx_underrun", "dv_edge_radio_modem_total", {"result": "tx_underrun"}),
+                                        ("ok", "dv_edge_radio_frames_total", {"dir": "tx", "result": "ok"})):
+                row[key] = rif5.delta(table.get(a), table.get(b), family, **labels)
+            note(ctx.target, case, "RECORD", "%s: counters grew by %s" % (label, row))
+            if label == "ysf join":
+                if row["tx_underrun"] or row["dropped"]:
+                    note(ctx.target, case, "FINDING", "the YSF client's join (header + terminator, no voice) was keyed to RF and the host counted %s" % row)
+            else:
+                for key in ("dropped", "tx_underrun"):
+                    if row[key]:
+                        problems.append("%s grew by %s during the %s of 150 words" % (key, row[key], label))
         ok = rif5.delta(before, after, "dv_edge_radio_frames_total", dir="tx", result="ok")
-        note(ctx.target, case, "RECORD", "frames_total{dir=tx,result=ok} grew by %s, the modem logged %d native frames" % (ok, natives))
+        note(ctx.target, case, "RECORD", "frames_total{dir=tx,result=ok} grew by %s over the whole case, the modem logged %d native frames of the overs" % (ok, natives))
     assert not problems, "%s: %s" % (case, problems)
 
 

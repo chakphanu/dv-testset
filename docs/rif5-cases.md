@@ -254,6 +254,28 @@ Default fake `out/20261113T032535Z` (4 failed: O3, TX-dstar, TX-ysf, RXD; the la
 The YSF extra words (RIF5k): `extra_first_hex` is `202222200000000000` in all five and it is exactly the all-zero 9 byte unit passed through the YSF egress step only (-0.4 dB, `crossaudio` M04), without the +1.0 dB ingress step: five all-zero frames,
 i.e. the padding of a partial last packet whose one unit is the end unit (media-format.md: "A partial last packet is padded with all-zero frames", "the end unit is not rendered" for the network YSF egress; the radio egress renders it as a fourth V/D mode 2 frame, 100 ms).
 
+### Third run: the fix image `dv-router:wip-eeb44b4` (testset `439e22e`, both boards), triage
+
+MMDVM `out/20261113T052325Z`, HS `out/20261113T052825Z`: 22 passed, 5 failed each, the same five: TX-ysf, RX-ysf, J-RXD-ysf-bad4, J-RXD-ysf-bad6, J-LONG. **All five have one harness cause: a YSF client's join.**
+`dvtest/proto/ysf.py link()` joins a module with a header (DG-ID) and a terminator 0.3 s apart; DV-Router relays that voiceless stream to the radio port, which keys the transmitter for it (SET_MODE 03, a 600 ms preamble in the
+firmware-like fake, a header, a terminator). The windows of the cases saw it: `timeline-TX-ysf.jsonl` has SET_MODE 03 at 0.307 s, a header at 0.309, a terminator at 0.609, then the real over (two headers, two terminators); the RF overs of the RX cases
+started while that key-up held the port, so the host refused their first frames (the YSF header and the first voice frame: `mode_busy`, 5 words missing, "voice word 0"). This also explains the second run: the claim 03 was written by the join,
+before the window, and the talk needed none (the mode was still held), and the `mode_busy=2` of RX-ysf. D-STAR and DMR joins do not reach RF. Fix: `quiet_after_link` waits out the join's key-up (0.8 s, then the host's idle SET_MODE) before a case
+takes its window or plays its RF over; J-LONG reads the hub counters per phase (dstar over, dmr over, the YSF join, the YSF over).
+
+| Failure | Class |
+|---------|-------|
+| TX-ysf "2 headers and 2 terminators" | HARNESS (the join's key-up inside the window) |
+| RX-ysf, bad4, bad6 "voice word 0, 5 words not written" and the silence counts shifted by 5 | HARNESS (the join held the port: the first frame refused) |
+| J-LONG "2 headers" (ysf) | HARNESS (as TX-ysf) |
+| J-LONG "tx_underrun grew by 1" | UNSURE: no `underrun` event of the fake in any of the three overs, D-STAR and DMR clean; the YSF phase includes the join's key-up (header, 0.3 s, terminator); the next run reads it per phase |
+
+What passed, for the closing of RIF5j: both boards, J-LONG D-STAR and DMR 150 of 150 words (D-STAR plus one zero end unit `000000000000000000`, 151 written), dropped 0, GET_STATUS while keyed median 0.06 s (longest 0.06), the D-STAR release 4 polls after the EOT
+and 0.03 s after the fake's TX went off, `frames_total{dir=tx,result=ok}` 249 against 249 native frames logged (the F2 difference of the first runs is gone), the fake logged no underrun and no NAK 5 in any J-LONG over; O3 with 19 fields; RXD (wrong colour code:
+no fill, no refresh); garbled DMR copies (10: 30 equal silence words, the end 0.31 s after the last copy; 14: 39 words, LOST 0.010 s after the 13th copy); the 8-header train (one over, 150 of 150); YSF bad6: LOST 0.008 s after the 5th bad frame.
+
+Re-run of the five, on the fix image: `-k "ysf or j_long"` (with `DVT_RIF5J=on DVT_RIF5FW=on`; also add `DVT_RIF5FW_PROFILE=hs` for the HS board).
+
 ### What the run left behind (for the flow-control analysis)
 
 Written to `out/<run>/`: `rif5.txt` and `pytest.log` (the same RECORD / FINDING lines: frames written, words sent and written, native frames and span per LONG case), `junit.xml` (per case time), `control/8-N.out` with
