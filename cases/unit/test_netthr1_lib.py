@@ -89,6 +89,10 @@ def test_derived_cap_documented_values():
     assert netthr1.derived_cap({"node": {"rooms": "A-D"}, "data": {"worker": [{"id": "a"}, {"id": "b"}]}}) == 42
     assert netthr1.derived_cap({"node": {"rooms": "A-Z"}, "transcoder": {"worker": [{"id": "ambed"}]}}) == 64
     assert netthr1.derived_cap({"node": {"rooms": "A-Z", "fabric_max_sessions": 9}}) == 9
+    # answer 8: the launch's transcoder address is one more worker row: hotspot 39, router 64
+    assert netthr1.derived_cap({"node": {"rooms": "B"}}, argv_workers=1) == 39
+    assert netthr1.derived_cap({"node": {"rooms": "A-Z"}}, argv_workers=1) == 64
+    assert 64 + 2 + 186 == 252 and 39 + 2 + 55 == 96                  # the totals at those caps
     huge = {"node": {"rooms": "A-Z"}, "data": {"worker": [{"id": str(i)} for i in range(100)]}}
     assert netthr1.derived_cap(huge) == 128                   # clamped
     assert netthr1.derived_cap({"node": {"rooms": ""}}) == 0 + 19 + 9 + 1 + 8

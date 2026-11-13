@@ -52,18 +52,18 @@ Ask (a) = thread ceilings under a cgroup `TasksMax` (T1 to T3). Ask (b) = the ti
 
 | Case | Config | Asserts | Document |
 |------|--------|---------|----------|
-| G1 | web profile | `dv_fabric_sessions{kind}` has exactly `open cap peak`, whole numbers, `open <= peak <= cap`; `cap` equals the derived default of the rendered config; `open` covers the children of the launcher (one allowed to be starting); more than two tool sessions above the children is a FINDING | status.md "Fabric session gauge" |
-| G1b | web profile | the admin status body carries `sessions {open, cap, peak}` somewhere (`summary.fabric` / `data.fabric` / `launcher.fabric`; the nesting is searched, not fixed) with the same cap | status.md, `status/testdata/contracts/README.md` |
+| G1 | web profile | `dv_fabric_sessions{kind}` has exactly `open cap peak`, whole numbers, `open <= peak <= cap`; `cap` equals the derived default of the rendered config; the cap includes the session of the codec worker that the rig's transcoder address spawns (derived cap + 1 when the file has no `[[transcoder.worker]]` row, answer 8); `open` covers the children of the launcher (one allowed to be starting); more than two tool sessions above the children is a FINDING | status.md "Fabric session gauge" |
+| G1b | web profile | `GET /api/v1/admin/status` has `launcher.fabric.sessions` and `live.fabric.sessions` {open, cap, peak}, both with the hub metrics' cap (polled: null until the launcher status exists); the public state does not carry it (a FINDING if it does) | status.md; DV-Router answer 6 |
 | G2 | web profile | `kill-proc dv-edge-xlx KILL`: the child is respawned, `open` is back within 1, `peak` did not fall, `cap` did not move | status.md ("`peak == cap` records saturation even after tools disconnect"), fabric.md |
 | G4 | web + `data-ident.toml` | two more `[[data.worker]]` rows fit: both spawn without a restart and the RUNNING cap does not move (a cap change is `pending_restart`) | config.md "Reload class is Refuse", `native/fabric_session_tests.rs` |
 | G3 | web + `data-ident.toml` | `cap + 5` more rows do not fit: the reload is invalid, NOT ONE new data worker is spawned, cap and peak unchanged; the text `cap N is below M required for K planned children plus 1 reserved session` is looked for in the admin status (a FINDING when absent) | config.md, `fabric_session_tests.rs` |
-| H0 | web profile | `dv_web_capacity_refused_total{reason}` exists with exactly `login_slots` and `file_streams`, zero-valued from the start, for web and admin (a hub label that cannot tell the two apart is a FINDING) | status.md "HTTP work admission" |
-| H1 web / admin | `netthr1-http-caps.toml` | with cap 1 (web) / 2 (admin): that many held bodies above 8 MiB (the tester holds a raw HTTP GET unread, 40 MiB sparse file in `static_dir`), the next two answer 503 + `Retry-After: 1` + `Cache-Control: no-store`; a HEAD of the file still answers 200; closing one stream frees a slot; the counter moves by exactly the 2 refusals, not for the other service or reason | admin.md, web.md, config.md, deployment.md |
-| H2 web / admin | `netthr1-http-caps.toml` | 9 concurrent logins at 1 (web) / 2 (admin) slots: only 200 / 429 / 503 (401 allowed for admin, whose password-only login answers 401 once TOTP is enrolled), every 503 has `Retry-After: 1`, at least one 503 when the measured hash is slow enough (otherwise SKIP with the reason: set `DVT_CPUS_SUT=0.25`), `login_slots` moves by exactly the 503 count, `file_streams` does not, a login afterwards still works (a busy refusal is not a failure and does not lock) | admin.md "Rate limits", web.md |
+| H0 | web profile | `dv_web_capacity_refused_total{reason}` exists with exactly `login_slots` and `file_streams`, zero-valued from the start; web and admin are told apart by the hub's `proc` label (`dv-svc-web` / `dv-svc-admin`), the family itself has only `reason` (answer 7) | status.md "HTTP work admission" |
+| H1 web / admin | `netthr1-http-caps.toml` | with cap 1 (web) / 2 (admin): that many held bodies above 8 MiB (the tester holds a raw HTTP GET unread, 40 MiB sparse file in the explicitly set `static_dir`, read per request even when created after the start, answer 9; only static bodies above 8 MiB count, never SSE, audio, tiles or UI files; admin serves `<static>/admin/x` at `/x`), the next two answer 503 + `Retry-After: 1` + `Cache-Control: no-store`; a HEAD of the file still answers 200; closing one stream frees a slot; the counter moves by exactly the 2 refusals, not for the other service or reason | admin.md, web.md, config.md, deployment.md |
+| H2 web / admin | `netthr1-http-caps.toml` | 9 concurrent logins at 1 (web) / 2 (admin) slots: only 200 / 429 / 503 (admin also 400 / 401 / 403: a correct password without a TOTP code on an enrolled account is TotpRequired, which hashes and takes per-address and global rate-limit tokens but is NOT a lockout failure, answer 12; no wrong code is ever sent; the tokens the burst took are charged to the client's Pacer), every 503 has `Retry-After: 1`, at least one 503 when the measured hash is slow enough (otherwise SKIP with the reason: set `DVT_CPUS_SUT=0.25`), `login_slots` moves by exactly the 503 count, `file_streams` does not, a login afterwards still works (a busy refusal is not a failure and does not lock) | admin.md "Rate limits", web.md |
 | H4 | any web run | median of 7 logins and of 7 requests that hash nothing (`/api/v1/public/state`); their difference is one argon2 hash as the rig sees it; recorded with `DVT_CPUS_SUT` in `out/<run>/web/netthr1-login-time.json` | deployment.md "Hotspot memory planning" (19 MiB per hash) |
-| T1 | any | `SWEEPS` sweeps of `proc-stat` over every process name: each process under its documented ceiling, the sum under the sum of ceilings (the headline 251 / 95 / 101 when the process set is the K6b one), no process gone, new or restarted | deployment.md "Process schedulers", crates/README.md "Process thread budgets" |
+| T1 | any | `SWEEPS` sweeps of `proc-stat` over every process name: each process under its documented ceiling, the sum under the sum of ceilings (the headline 251 / 95 / 101 plus one slot of cap, i.e. 252 / 96, when the process set is the K6b one). `dv-codec-ambed` (spawned by the transcoder address of the launch) is in no derivation (answer 8, NETTHR1c): left out of the counts and sums, its own peak thread count recorded as `codec_peak`, no process gone, new or restarted | deployment.md "Process schedulers", crates/README.md "Process thread budgets" |
 | T2 | `netthr1-http-caps.toml` | the same under logins at 1 per 1.1 s and held streams: web at most `7 + 1 + 1 = 9`, admin at most `7 + 2 + 2 = 11` (the old 27 would hide a cap that does nothing) | deployment.md |
-| T3 | pids limit at the ceiling | only when `DVT_PIDS_SUT` is the documented total + 1 (docker-init) + at most 2: nothing restarts, the sum stays under the limit - 1. A thread beyond a ceiling fails to spawn and shows as a restart (ask a) | testing.md "Set `TasksMax` from 95 ... 101" (deployment.md) |
+| T3 | pids limit at the ceiling | only when `DVT_PIDS_SUT` is the documented total at the running cap + the codec worker's `codec_peak` + 1 (docker-init) + at most 2: nothing restarts, the sum stays under the limit - 1. A thread beyond a ceiling fails to spawn and shows as a restart (ask a) | testing.md "Set `TasksMax` from 95 ... 101" (deployment.md) |
 | D1 | `DVT_NETTHR1_DNS=on`, `DVT_SUT_RESOLV=30` | the tester answers `*.ok.dvt.test` and never answers anything else. Five M17 peer rows are appended live (four never-answered names, one answered name) and the edge restarts. The first two hung lookups start together, the next two start at 4.6 to 5.9 s (the first two were cancelled at 5 s), the answered name is asked at 9.6 to 11.2 s (those were cancelled at 10 s); `dv-edge-m17` never has more than 6 threads (4 + 2 workers; one per row would be 9+); the answered peer is contacted by the SUT. c-ares alone would give up at about 6 s: the window 4.6 to 5.9 s tells the deadline from the library's own end | deployment.md ("Each running lookup is cancelled at 5 s ... Two dead names therefore release both workers by their deadlines"), fabric.md "Edge resolver shell", m17.md |
 
 ### FLK11 (`cases/test_echo.py`, `docs/echo-cases.md` "FLK11")
@@ -97,12 +97,15 @@ XLXD_SUT_IMAGE=dv-router:wip-eeb44b4 DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-ro
 ... DVT_CPUS_SUT=0.25 ... scripts/run.sh -m rig --profile web -- cases/test_netthr1_rig.py -k "h4 or h2"
 
 # 3. thread ceilings of the documented process sets, no web profile, no extras (each about 4 minutes); then the same with the pids limit at the ceiling (T3)
-#    router K6b fixture: 251 total  (DVT_PIDS_SUT=252 = 251 + docker-init)
-#    hotspot preset:      95 total  (DVT_PIDS_SUT=96)
+#    The launch's transcoder address spawns a dv-codec-ambed child (answer 8): the running cap is one higher (router 64, hotspot 39) and the child's own threads
+#    (codec_peak, printed by T1, expected 4 for the IO class) are in no budget. Totals at the running cap: router K6b 252, hotspot preset 96, any other set = the sum of
+#    its per-process ceilings (T1 prints it). T3 needs DVT_PIDS_SUT = that total + codec_peak + 1 (docker-init): router 257, hotspot 101 if codec_peak is 4; run T1 first
+#    and take the number from its RECORD line `peak ... threads each` and from netthr1-threads-T1.json (expected_total + codec_peak + 1).
 XLXD_SUT_IMAGE=dv-router:wip-eeb44b4 DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-router DVT_SUT_LAUNCH=native DVT_TRANSCODER_FAKE=1 DVT_NETTHR1=on \
   DVT_SUT_CONFIG=rig/config/dv-router/netthr1-router.toml  scripts/run.sh -m rig -- cases/test_netthr1_rig.py -k "g1 or t1"
-  # ... DVT_PIDS_SUT=252 DVT_SUT_CONFIG=rig/config/dv-router/netthr1-router.toml  ... -k "t3"
-  # ... DVT_SUT_CONFIG=rig/config/dv-router/netthr1-hotspot.toml ... -k "g1 or t1"      then DVT_PIDS_SUT=96 ... -k "t3"
+  # ... DVT_PIDS_SUT=257 DVT_SUT_CONFIG=rig/config/dv-router/netthr1-router.toml  ... -k "t3"
+  # ... DVT_SUT_CONFIG=rig/config/dv-router/netthr1-hotspot.toml ... -k "g1 or t1"      then DVT_PIDS_SUT=101 ... -k "t3"
+  # the rig template (<template>) is not a documented set: T1 judges the sum of its per-process ceilings; its T3 limit is expected_total + codec_peak + 1 from that T1 run
 
 # 4. the DNS cancel, default template (its M17 edge), no web profile, about 3 minutes
 XLXD_SUT_IMAGE=dv-router:wip-eeb44b4 DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-router DVT_SUT_LAUNCH=native DVT_TRANSCODER_FAKE=1 DVT_NETTHR1=on DVT_NETTHR1_DNS=on \
@@ -112,9 +115,9 @@ XLXD_SUT_IMAGE=dv-router:wip-eeb44b4 DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-ro
 DVT_FLK11=on ... DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/echo.toml scripts/run.sh -m rig --profile interlink -- cases/test_echo.py -k "f11 or e7a"
 ```
 
-What a run decides: a run of step 3 whose process set is not the documented one (the rig's argv names a transcoder address; if that adds a `dv-codec-ambed` child the set is no longer K6b and
-the case says so and judges the sum of the per-process ceilings, 4 threads more) is still a valid ceiling check, but not the headline 251 / 95. T3 asks for the SUT at the
-ceiling: if the container crash-loops at `ceiling + 1`, bisect upwards one at a time (252, 253, 254) and report where it stops restarting; that number is the answer to ask (a).
+What a run decides: T1 is a valid ceiling check for any process set (the sum of the per-process ceilings at the running cap, codec worker excluded); the headline 251 / 95 / 101
+(+1 cap slot) is asserted only for the documented sets. T3 asks for the SUT at the ceiling: if the container crash-loops at that limit, bisect upwards one at a time and report where it
+stops restarting; that number is the answer to ask (a).
 
 ## Ask (b): the time of one argon2 login hash on a small board
 
@@ -140,17 +143,21 @@ route without an install.
 | 2 | the link variant, ceiling 101 | `[[edges.link.uplink]]` needs a `secret_file` that exists (mode 0600) when the launcher starts; the rig has no fixture-secret mount for it (the AllStar edge has `asl-secrets`) | a `link-secrets` directory written by `run.sh` like `asl-secrets` and a `netthr1-hotspot-link.toml`; until then the two resolver workers are covered by M17 host-name rows (D1: 4 + 2 threads) |
 | 3 | the true peak of a short-lived thread burst (simultaneous child exits, group TERM / INT, the Net blockers) | `proc-stat` is a docker run per process name: sweeps are seconds apart; Tokio blocking threads live 10 s so most are seen, a closing-session blocker of a few milliseconds is not. The tester cannot send TERM / INT to the launcher (only `hup`) | T3 (kernel-enforced limit) and the `cgroup` action above |
 | 4 | TCP fallback of the DNS cancel | the unanswering server answers nothing, so no truncated reply moves the query to TCP | `dvtest/dnshole.py`: answer a name with TC=1 over UDP and accept the TCP connection without replying |
-| 5 | admin large-body cap path | the static tree of the admin mount (`/` on the admin host serves `admin/`) is a design reading; H1 tries `/netthr1-big.bin`, `/admin/netthr1-big.bin`, `/shared/netthr1-big.bin` with a HEAD and SKIPs naming the paths when none serves the file | confirm the mount with the DV-Router team (question 4) |
+| 5 | admin large-body cap path | settled by answer 9 (`<static>/admin/x` at `/x`); H1 probes `/netthr1-big.bin` then `/shared/netthr1-big.bin` with a HEAD and SKIPs naming the paths when none serves the file | none |
 | 6 | the K6b activity profile (60 s idle, a paced 10 s over, three large downloads per service, basemap refresh, link DNS, simultaneous child failures, group TERM / INT) | T2 covers logins and held streams only | extend T2 with a USRP or protocol over and `kill-proc` of several children at once |
 | 7 | the lost-update ordering inside ONE poll of the echo loop (FLK11) | the publication instant is internal; see `docs/echo-cases.md` "FLK11" | none (the unit tests of the commit) |
 | 8 | memory acceptance (`memory.peak`, OOM events, 400 MiB hotspot experiment) | the SUT cgroup files are not readable from the tester | the `cgroup` action above; `DVT_MEM_SUT=400m` is already a compose knob |
 
-## Questions for the DV-Router team
+## Answers of the DV-Router team (answer-279, applied)
 
-1. Where exactly does the gauge appear in the admin status body and in the hub state (`summary.fabric.sessions`, `launcher.fabric.sessions`, `data.fabric.sessions`)? G1b searches for a `sessions {open, cap, peak}` object anywhere.
-2. Which label tells `dv_web_capacity_refused_total` of dv-svc-web from dv-svc-admin on the hub's `/metrics` (`proc`?). H0 / H1 / H2 match `dv-svc-web` / `dv-svc-admin` in any label value and record a FINDING otherwise.
-3. The rig launches `--config FILE XLX999 <own> <transcoder>`: does the transcoder word create a `dv-codec-ambed` child when the file has no `[[transcoder.worker]]` row, and is it counted in the derived cap? It decides whether the hotspot and router templates reproduce the 95 / 251 process sets.
-4. Static mounts: is `<admin.static_dir>/admin/x` served at `/x` on the admin host, and `<web.static_dir>/shared/x` at `/shared/x` on the web host? Is a missing `static_dir` at start (the tester creates it later) read per request?
-5. Does adding or removing a `[[edges.m17.peers]]` row restart `dv-edge-m17` (Restart(child)), as D1 assumes?
-6. Is there, or could there be, a way to hold N fabric sessions open from outside the process set (a documented `dv-router` tool command or a test client binary in the image)? GAP 1 needs it.
-7. A busy login refusal: is the admin password-only login of an enrolled account counted as an authentication failure toward the lockout? H2 (admin) sends 9 such logins.
+6 gauge: `launcher.fabric.sessions` and `live.fabric.sessions` of the admin status, `dv_fabric_sessions{kind}` with `proc="dv-router"`, not in the public state (G1b). 7 `dv_web_capacity_refused_total` has only `reason`;
+web vs admin is the hub's `proc` label; `file_streams` counts static bodies above 8 MiB only (H0, H1). 8 the transcoder address spawns `dv-codec-ambed`, in no budget (NETTHR1c), cap +1 (G1, T1, T3). 9 an explicitly set
+`static_dir` is read live; the default directory absent at start is not (H1 sets it with `netthr1-http-caps.toml`); admin serves `<static>/admin/x` at `/x`. 10 an `[[edges.m17.peers]]` change restarts `dv-edge-m17` only (D1
+assumed exactly that). 11 no way to hold a fabric session from outside: GAP 1 stays; the only candidate is a stock Zenoh client connecting to the router endpoint (default `tcp/127.0.0.1:7447` in the SUT's own namespace,
+for example a tester-image container sharing the SUT namespace like `basemap-src`), UNVERIFIED by DV-Router. 12 a correct password without TOTP is TotpRequired, takes a login slot and rate-limit tokens, does not count
+towards the lockout (H2 admin).
+
+## Open questions for the DV-Router team
+
+1. The thread count of `dv-codec-ambed` (IO class, 4 expected): is it meant to join a budget (NETTHR1c)?
+2. Does a stock Zenoh client (python) get an admitted session identically to a launcher child (GAP 1)?

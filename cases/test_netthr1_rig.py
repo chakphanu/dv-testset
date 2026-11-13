@@ -12,7 +12,7 @@ to the web and admin services, the rendered dv-router.toml of the run (edited in
   H1  stream cap (web, admin) a streamed body > 8 MiB holds one slot; the next one is 503 + Retry-After 1 + no-store; small bodies and HEAD still answer;
                              the counter moves by the refusals; closing the first frees the slot
   H2  login slots (web)      concurrent logins beyond the slots wait 0.5 s then 503 + Retry-After 1; counted exactly; no lockout
-  H3  login slots (admin)    the same on the admin service (password only: the answers are 401 / 200, 503 and 429 are what is counted)
+  H3  login slots (admin)    the same on the admin service (password only: TotpRequired, not a lockout failure but it hashes and takes rate-limit tokens)
   H4  login time (ask b)     median login time, median of a request that hashes nothing, their difference = one argon2 hash as the rig sees it
   T1  thread ceilings idle   proc-stat threads of every process, N sweeps, against the documented ceilings; the headline 251 / 95 / 101 when the process set
                              is the documented one; no restart
@@ -133,10 +133,11 @@ def settled(read, step_s=11.0, budget_s=90.0):
 
 
 def service_of(labels):
-    """'web' or 'admin' from the label values of a dv_web_capacity_refused_total sample (the hub adds a proc / process label), else None."""
-    blob = " ".join(str(v) for k, v in labels.items() if k != "reason")
+    """'web' or 'admin' from the hub's `proc` label (the family itself has only `reason`; DV-Router answer 7: telemetry/web/dv-svc-web vs
+    telemetry/admin/dv-svc-admin), else None."""
+    proc = str(labels.get("proc", ""))
     for name in ("admin", "web"):
-        if "dv-svc-" + name in blob or blob.strip() == name or (" " + name) in (" " + blob):
+        if proc == "dv-svc-" + name:
             return name
     return None
 
@@ -192,8 +193,12 @@ def test_g1_gauge_shape_and_derived_cap(rig_control, sut, target):
     problems = netthr1.gauge_problems(kinds)
     assert not problems, "; ".join(problems)
     if sut["doc"]:
-        want = netthr1.derived_cap(sut["doc"])
-        assert kinds["cap"] == want, "cap %d, the formula over the rendered config gives %d" % (kinds["cap"], want)
+        children_now = launcher_children(rig_control.proc_list())
+        has_row = bool((sut["doc"].get("transcoder", {}) or {}).get("worker"))
+        argv_worker = 1 if (not has_row and any(c == netthr1.CODEC for _p, c in children_now)) else 0
+        want = netthr1.derived_cap(sut["doc"], argv_workers=argv_worker)
+        note(target, "G1", "RECORD", "derived cap %d (the transcoder address of the launch adds a worker row the file does not hold: %d)" % (want, argv_worker))
+        assert kinds["cap"] == want, "cap %d, the formula over the rendered config gives %d (argv worker %d)" % (kinds["cap"], want, argv_worker)
     else:
         note(target, "G1", "RECORD", "rendered config not visible: the derived cap is not compared")
     children = launcher_children(rig_control.proc_list())
@@ -205,15 +210,30 @@ def test_g1_gauge_shape_and_derived_cap(rig_control, sut, target):
 
 
 def test_g1b_status_body_carries_the_same_gauge(rig_control, admin_session, target):
-    """The admin status (and with it the hub state) carries fabric.sessions {open, cap, peak}; the nesting is not fixed by the document, so the body is searched."""
+    """DV-Router answer 6: GET /api/v1/admin/status has `launcher.fabric.sessions` (admin/config/status) and `live.fabric.sessions` (the hub summary);
+    the public state does not expose it. Null when the launcher status is not available yet (polled)."""
     client = admin_session("viewer")
-    body = client.get(client.path("/status"), expect=200).json()
-    got = netthr1.find_sessions(body)
+
+    def read():
+        body = client.get(client.path("/status"), expect=200).json()
+        launcher = ((body.get("launcher") or {}).get("fabric") or {}).get("sessions")
+        live = ((body.get("live") or {}).get("fabric") or {}).get("sessions")
+        return {"launcher": launcher, "live": live, "any": netthr1.find_sessions(body)}
+    got, ok = poll(read, lambda g: g["launcher"] is not None and g["live"] is not None, 60.0)
     kinds = read_gauge(rig_control)
-    note(target, "G1b", "RECORD", "status body gauge %s, hub metrics %s" % (got, kinds))
-    assert got is not None, "no sessions {open, cap, peak} anywhere in the admin status body"
-    assert got["cap"] == kinds["cap"]
-    assert got["peak"] >= got["open"]
+    note(target, "G1b", "RECORD", "launcher.fabric.sessions %s, live.fabric.sessions %s, hub metrics %s" % (got and got["launcher"], got and got["live"], kinds))
+    assert ok, "launcher.fabric.sessions / live.fabric.sessions missing in the admin status body (found anywhere: %s)" % (got and got["any"])
+    for name in ("launcher", "live"):
+        assert {"open", "cap", "peak"} <= set(got[name]), "%s.fabric.sessions has %s" % (name, sorted(got[name]))
+        assert got[name]["cap"] == kinds["cap"], "%s cap %s, hub metrics cap %s" % (name, got[name]["cap"], kinds["cap"])
+        assert got[name]["peak"] >= got[name]["open"]
+    public = web.WebClient(os.environ.get("DVT_WEB_URL") or "https://dvt-web", os.environ.get("DVT_WEB_CA") or str(Path(target.out) / "web" / web.CA_FILE), timeout=10)
+    try:
+        state = public.get("/api/v1/public/state", pace=False, expect=200).json()
+        if netthr1.find_sessions(state) is not None:
+            note(target, "G1b", "FINDING", "the PUBLIC state exposes fabric.sessions (the public allowlist omits it)")
+    except (web.WebError, OSError, ValueError) as exc:
+        note(target, "G1b", "RECORD", "public state not read: %s" % type(exc).__name__)
 
 
 def test_g2_peak_persists_and_open_recovers(rig_control, target):
@@ -390,7 +410,7 @@ def make_big_files(target):
 
 STREAM_TARGETS = {
     "web": dict(port=WEB_PORT, host="dvt-web", paths=["/shared/netthr1-big.bin"], cap=1),
-    "admin": dict(port=ADMIN_PORT, host="dvt-admin:8443", paths=["/netthr1-big.bin", "/admin/netthr1-big.bin", "/shared/netthr1-big.bin"], cap=2),
+    "admin": dict(port=ADMIN_PORT, host="dvt-admin:8443", paths=["/netthr1-big.bin", "/shared/netthr1-big.bin"], cap=2),
 }
 
 
@@ -551,7 +571,7 @@ def test_h2_login_slots(service, rig_control, sut, target, request):
         _, plain_ms = timed(lambda: probe.request("GET", probe.path("/health"), pace=False, expect=200))
         c0 = AdminClient(url, ca)
         c0.hide(password)
-        _, login_ms = timed(lambda: c0.request("POST", c0.path("/session"), json_body={"user": user_name, "password": password}, pace=False))
+        _, login_ms = timed(lambda: c0.request("POST", c0.path("/session"), json_body={"user": user_name, "password": password}))   # paced by the Pacer
 
         def one(_i):
             c = AdminClient(url, ca)
@@ -565,10 +585,14 @@ def test_h2_login_slots(service, rig_control, sut, target, request):
         slots, login_ms, plain_ms, hash_ms, need, n, os.environ.get("DVT_CPUS_SUT") or "unset"))
     time.sleep(12.0)                                                # the login buckets (1 per s, burst 10) refill
     results = burst(n, one)
+    for _ in range(n):                                              # the burst took n tokens of the per-address and global login limits: charge the client's own model too
+        web.PACER.wait("login")
     counts = tally(results)
     refused = [r for r in results if r[0] == 503]
     note(target, "H2-%s" % service, "RECORD", "statuses %s, %d refused, slowest %.0f ms" % (counts, len(refused), max(r[2] for r in results)))
-    allowed = {200, 401, 429, 503} if service == "admin" else {200, 429, 503}
+    # admin: a correct password without a TOTP code on an enrolled account is TotpRequired (DV-Router answer 12): it hashes (uses a slot), takes a token of the
+    # per-address and global login limits, and is NOT a failure toward the (account, address) lockout; a wrong code would count, so none is sent
+    allowed = {200, 400, 401, 403, 429, 503} if service == "admin" else {200, 429, 503}
     assert set(counts) <= allowed, "unexpected statuses %s (allowed %s)" % (counts, sorted(allowed))
     for status, retry, _ms in refused:
         assert retry == "1", "a 503 carried Retry-After %r, want 1" % retry
@@ -588,7 +612,7 @@ def test_h2_login_slots(service, rig_control, sut, target, request):
     assert delta.get((service, "file_streams"), 0) == 0
     time.sleep(2.0)
     last = after_ok()
-    assert last.status in (200, 401, 429), "a login after the burst answered HTTP %s: a busy refusal must not lock the account" % last.status
+    assert last.status in (200, 400, 401, 403, 429), "a login after the burst answered HTTP %s: a busy refusal must not lock the account" % last.status
     if service == "web":
         assert last.status != 401, "the correct password was refused after the burst"
 
@@ -607,7 +631,12 @@ def run_sweeps(control, n, gap_s):
 
 
 def judge(sut, kinds, sweeps, unreadable, target, case):
+    """Judge the sweeps against the documented ceilings. The codec worker the rig's transcoder address spawns (dv-codec-ambed) is in no derivation (answer 8,
+    NETTHR1c): it is left out of the counts, the sums and the profile match, and its own thread count is recorded. The running cap includes its session."""
     cap = kinds["cap"] if kinds else netthr1.derived_cap(sut["doc"] or {"node": {"rooms": "A-Z"}})
+    codec = [[dict(r) for r in sw if r["comm"] == netthr1.CODEC] for sw in sweeps]
+    sweeps = [[r for r in sw if r["comm"] != netthr1.CODEC] for sw in sweeps]
+    codec_peak = max([r["threads"] for sw in codec for r in sw] or [0])
     counts = netthr1.counts_of(sweeps[0])
     ceilings = ceilings_for(sut, cap, counts)
     profile = netthr1.profile_of(counts)
@@ -616,17 +645,23 @@ def judge(sut, kinds, sweeps, unreadable, target, case):
     expected, unknown = netthr1.expected_total(counts, web_http, admin_http, cap, dns)
     limit = expected if not unknown else None
     result = netthr1.analyse_sweeps(sweeps, ceilings, total_limit=limit)
+    result["codec_peak"] = codec_peak
+    note(target, case, "RECORD", "%s: %d process(es), peak %d threads each, in no budget and left out of the sums (NETTHR1c)" % (netthr1.CODEC, len(codec[0]), codec_peak))
     if profile:
         head = netthr1.headline(profile)
-        note(target, case, "RECORD", "process set is the documented profile %s: headline ceiling %d, sum of the per-process ceilings %d, cap %d" % (profile, head, expected, cap))
-        assert expected == head or cap != netthr1.PROFILES[profile][3], "the per-process ceilings sum to %d, the document says %d for %s" % (expected, head, profile)
+        documented_cap = netthr1.PROFILES[profile][3]
+        note(target, case, "RECORD", "process set is the documented profile %s: headline ceiling %d at cap %d; at the running cap %d the per-process ceilings sum to %d" % (
+            profile, head, documented_cap, cap, expected))
+        assert expected == head + (cap - documented_cap), "the per-process ceilings sum to %d at cap %d, the document says %d at cap %d for %s" % (
+            expected, cap, head, documented_cap, profile)
     else:
         note(target, case, "RECORD", "no documented profile matches this process set %s: the sum of the per-process ceilings is the limit (%s), the headline 251 / 95 / 101 does not apply" % (
             dict(sorted(counts.items())), expected))
-    note(target, case, "RECORD", "peak total %d (lower bound of the true peak: sweeps are seconds apart), per process %s, unreadable %s, no ceiling for %s" % (
+    note(target, case, "RECORD", "peak total %d without the codec worker (lower bound of the true peak: sweeps are seconds apart), per process %s, unreadable %s, no ceiling for %s" % (
         result["peak_total"], dict(sorted(result["peak_by_comm"].items())), unreadable, result["unknown"]))
     save_json(target, "netthr1-threads-%s.json" % case, {"profile": profile, "cap": cap, "expected_total": expected, "result": result, "counts": counts,
-                                                         "pids_limit": os.environ.get("DVT_PIDS_SUT") or "unset", "cpus_sut": os.environ.get("DVT_CPUS_SUT") or "unset"})
+                                                         "codec_peak": codec_peak, "pids_limit": os.environ.get("DVT_PIDS_SUT") or "unset",
+                                                         "cpus_sut": os.environ.get("DVT_CPUS_SUT") or "unset"})
     return result, profile, expected
 
 
@@ -690,7 +725,8 @@ def test_t2_thread_ceilings_under_load(rig_control, sut, target, request):
 
 
 def test_t3_nothing_restarts_under_a_pids_limit_at_the_ceiling(rig_control, sut, target):
-    """Ask (a). The SUT container runs with DVT_PIDS_SUT = the documented total (+ 1 for docker-init, + a spare of at most 2): a process that needs one thread more
+    """Ask (a). The SUT container runs with DVT_PIDS_SUT = the documented total at the RUNNING cap (cap + 2 + the other ceilings; the transcoder address adds a
+    session to the cap) + the codec worker's own threads (in no budget) + 1 for docker-init, + a spare of at most 2: a process that needs one thread more
     than its ceiling fails to spawn it and restarts (a new pid) or the launcher counts a restart. Skips unless the run is at the ceiling."""
     limit = os.environ.get("DVT_PIDS_SUT")
     if not limit or not limit.isdigit() or int(limit) >= 1024:
@@ -701,13 +737,14 @@ def test_t3_nothing_restarts_under_a_pids_limit_at_the_ceiling(rig_control, sut,
     result, profile, expected = judge(sut, kinds, sweeps, unreadable, target, "T3")
     if result["unknown"]:
         pytest.skip("no documented ceiling for %s: the limit cannot be set at the ceiling" % result["unknown"])
-    spare = int(limit) - expected
-    note(target, "T3", "RECORD", "pids limit %s, documented total %d, spare %d (docker-init takes 1)" % (limit, expected, spare))
+    codec = result["codec_peak"]
+    spare = int(limit) - expected - codec
+    note(target, "T3", "RECORD", "pids limit %s, documented total %d at the running cap, codec worker %d, spare %d (docker-init takes 1)" % (limit, expected, codec, spare))
     if not 1 <= spare <= 3:
-        pytest.skip("the limit %s is not at the ceiling %d (+1 init, spare up to 3): the run proves nothing about the ceiling" % (limit, expected))
+        pytest.skip("the limit %s is not at the ceiling %d + codec worker %d (+1 init, spare up to 3): the run proves nothing about the ceiling" % (limit, expected, codec))
     assert not result["violations"], "; ".join(result["violations"])
-    assert not result["restarts"], "a process restarted under pids_limit %s (documented total %d): %s" % (limit, expected, "; ".join(result["restarts"]))
-    assert result["peak_total"] <= int(limit) - 1
+    assert not result["restarts"], "a process restarted under pids_limit %s (documented total %d + codec worker %d): %s" % (limit, expected, codec, "; ".join(result["restarts"]))
+    assert result["peak_total"] + codec <= int(limit) - 1
 
 
 # ================================================================ D1: the DNS cancel

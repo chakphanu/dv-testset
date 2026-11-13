@@ -26,6 +26,7 @@ SWITCH = "DVT_NETTHR1"
 # ---------------------------------------------------------------- the numbers of the documents
 
 FABRIC_MIN, FABRIC_MAX = 4, 128           # config.md "Fabric session admission": 4..=128
+CODEC = "dv-codec-ambed"                  # the worker the rig's transcoder address spawns: in NO documented budget (tracked as NETTHR1c)
 SESSION_HEADROOM = 8                      # the margin of the derived default
 EDGE_KINDS, SERVICE_KINDS = 19, 9         # the registry the derived default counts (config.md)
 STREAMS_RANGE = (1, 64)                   # config.md: web.max_file_streams / admin.max_file_streams
@@ -155,16 +156,18 @@ def rooms_count(spec):
     return len(letters)
 
 
-def derived_cap(doc):
+def derived_cap(doc, argv_workers=0):
     """clamp(rooms + 19 edge kinds + 9 service kinds + data worker rows + transcoder worker rows + 8, 4, 128) of a parsed
     config (a dict from tomllib). The data worker term is the number of rows, and one (the default `pkt`) when there is none
-    (config.md; the fabric_session_tests of DV-Router count 41 for A-D without rows). The explicit key wins."""
+    (config.md; the fabric_session_tests of DV-Router count 41 for A-D without rows). The explicit key wins. `argv_workers`: the
+    transcoder address (third positional word of the rig launch) becomes one more worker row `ambed` that the file does not hold, so the running cap
+    is one higher (DV-Router answer 8: hotspot 39, router 64); give 1 when the file has no [[transcoder.worker]] row and a dv-codec-ambed child runs."""
     node = doc.get("node", {}) or {}
     if isinstance(node.get("fabric_max_sessions"), int):
         return node["fabric_max_sessions"]
     data_rows = len((doc.get("data", {}) or {}).get("worker", []) or []) or 1
     tc_rows = len((doc.get("transcoder", {}) or {}).get("worker", []) or [])
-    raw = rooms_count(node.get("rooms", "")) + EDGE_KINDS + SERVICE_KINDS + data_rows + tc_rows + SESSION_HEADROOM
+    raw = rooms_count(node.get("rooms", "")) + EDGE_KINDS + SERVICE_KINDS + data_rows + tc_rows + argv_workers + SESSION_HEADROOM
     return max(FABRIC_MIN, min(FABRIC_MAX, raw))
 
 
