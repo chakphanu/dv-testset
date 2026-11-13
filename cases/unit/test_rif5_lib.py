@@ -388,7 +388,7 @@ def test_compare_ysf_words_accepts_the_documented_gain_steps_and_only_those_bits
     bad = rif5.compare_ysf_words(sent, broken)
     assert bad.problems and "word 4" in bad.problems[0]
     # fewer words, more words
-    assert "29 voice words, 30 sent" in " ".join(rif5.compare_ysf_words(sent, heard[:29]).problems)
+    assert "29 voice words written, 30 sent" in " ".join(rif5.compare_ysf_words(sent, heard[:29]).problems)
     more = rif5.compare_ysf_words(sent, heard + stepped([bytes(ysfp.SILENCE)] * 5))
     assert more.problems == [] and more.facts["extra_words"] == 5
 
@@ -495,6 +495,44 @@ def test_release_view_wants_two_polls_after_an_eot_and_a_status_after_tx_off():
     # the fast poll never stopped, no EOT
     assert "did not slow down" in " ".join(rif5.release_view(log([10.05, 10.10, 10.15, 10.20])).problems)
     assert rif5.release_view([hf(1, ms.GET_STATUS)]).problems == ["no D-STAR EOT in the log"]
+
+
+def test_a_trailing_extra_word_is_a_fact_not_a_changed_word():
+    # the second rig run, TX-dstar: 22 sent, 23 written, "voice word 22 differs": the 23rd is the end unit the room renders, after the last sent word
+    w = words("dstar", 22)
+    end_unit = signals.prng_bytes("end-unit", 9)
+    v = rif5.judge_tx_dstar(dstar_tx(w + [end_unit]), w, "N0TEST")
+    assert v.problems == [] and v.facts["extra_words"] == 1 and v.facts["extra_first_hex"] == end_unit.hex() and v.facts["extra_all_equal"] is True
+    # a changed word inside, a changed LAST sent word (it looks like an extra, but then a sent word is missing) are still problems
+    broken = list(w)
+    broken[5] = end_unit
+    assert "word 5" in " ".join(rif5.judge_tx_dstar(dstar_tx(broken), w, "N0TEST").problems)
+    last = list(w)
+    last[-1] = end_unit
+    assert rif5.judge_tx_dstar(dstar_tx(last), w, "N0TEST").problems
+
+
+def test_compare_ysf_words_aligns_dropped_words_and_reads_the_extra_end_packet():
+    sent = words("ysf", 30)
+    heard = stepped(sent)
+    lossy = heard[:10] + heard[15:]                                        # one frame (5 words) dropped by the host queue
+    v = rif5.compare_ysf_words(sent, lossy, lossy=True)
+    assert v.problems == [] and v.findings and "not written" in v.findings[0] and v.facts["voice_dropped"] == 5
+    strict = rif5.compare_ysf_words(sent, lossy)
+    assert strict.problems and "word 10 written to the modem differs from the one sent: 5 sent word(s)" in strict.problems[0]
+    # the pairs after the gap are still judged on b2: no 'bit other than b2' complaint, steps are the documented ones
+    assert not any("other than the gain index" in p for p in v.problems + strict.problems[1:]) and v.facts["b2_steps"]
+    # the extra packet of the rig: five all-zero units that went through the egress step only (-0.4 dB), 202222200000000000
+    zero = nxdn.to_dmr(nxdn.set_gain_index(nxdn.from_dmr(bytes(9)), crossaudio.mapped_gain(0, ("m04",))))
+    assert zero.hex() == "202222200000000000"
+    extra = rif5.compare_ysf_words(sent, heard + [zero] * 5)
+    assert extra.problems == [] and extra.facts["extra_words"] == 5 and extra.facts["extra_first_hex"] == "202222200000000000" and extra.facts["extra_all_equal"]
+    # a bit other than b2 inside is still a problem, with the b2 wording
+    bad = list(heard)
+    bits = bytearray(nxdn.from_dmr(bad[7]))
+    bits[3] ^= 0x01
+    bad[7] = nxdn.to_dmr(bytes(bits))
+    assert "other than the gain index b2" in " ".join(rif5.compare_ysf_words(sent, bad).problems)
 
 
 def test_observer_fields_are_the_nineteen_of_the_document():

@@ -238,6 +238,22 @@ finishes a stream whose `last_rx_ns` is 200 ms old). A damaged copy produces no 
 valid burst whatever the modem delivers. The two statements cannot both have an effect; either 7.3 should say the refresh is only the hub's and the over ends at 200 ms, or the core's silence must be fed
 by the damaged copy. The assertion is kept (a listener hears the over end 0.20 s after the last valid burst; wanted: after the last copy), the message names SILENCE, and a RECORD line gives the number.
 
+### Second rig run (testset `a1e7952`, `dv-router:wip-7b0fca8`), triage
+
+Default fake `out/20261113T032535Z` (4 failed: O3, TX-dstar, TX-ysf, RXD; the last two as PRODUCT items), `DVT_RIF5FW=on` `out/20261113T032918Z` (the same plus RX-ysf). Timelines in `<run>/rif5/`.
+
+| # | Case | Class | Cause |
+|---|------|-------|-------|
+| 1 | TX-dstar "voice word 22 differs", 22 sent, 23 written | HARNESS (a regression of the alignment judge) | the 23rd data frame is a trailing word AFTER the last sent word (the end unit the room renders before the EOT); `_word_check` took it for a changed word. Trailing words are now `extra_words` with `extra_first_hex` |
+| 2 | TX-ysf "no SET_MODE 03 among ['00']" | UNSURE, window fixed | the only SET_MODE in the window is the 00 at the end of the hang (1.7 s); the fake already reported mode 03 at its first status (0.088 s), before the first YSF write (0.108 s), so a claim or a frame was written before the window opened. The window now starts before the client links. If the claim is still absent the next run says so: then it is a PRODUCT item |
+| 3a | FW, LONG-ysf b2 steps -24..+4 | HARNESS | 140 of 150 words written (the old image drops frames); the words were paired by index, so every pair after a drop was wrong. `compare_ysf_words` now aligns on everything but b2 (a dropped frame is a FINDING in LONG, a problem in the short overs) |
+| 3b | FW, LONG-ysf 30 frames over 7.16 s | not a fault | the model: 7 underruns, each key-up again with a 600 ms preamble (the old host feeds 2 YSF frames per 250 ms status against 100 ms per frame) |
+| 3c | FW only, RX-ysf 145 of 150 words | UNSURE (product counter) | `frames_total{dir=rx,result=mode_busy}` is 2 in the FW run, 0 in the default run (`control/8-3.out`): the host refused two RF frames (probably the header and the first voice frame, whose 5 words are the ones missing, the over then opening by late entry at FN 1; inferred from the counts, not seen) as mode_busy, i.e. it believed another mode or a TX held the modem. Nothing in the fake's RX path differs (RX is the parent's); the FW fake's TX flag does. M1 now writes a FINDING with the `mode_busy` growth, and the RX cases write timelines (status mode and flags before and during the over) to find the holder |
+| 4 | FW, LONG-dstar dropped 46 (default 32) | explained | the model keeps the modem silent for the 600 ms preamble (100 ms tx delay + 500 ms); at 50 frames per second 30 words arrive meanwhile and the 16-frame queue of the old image overflows earlier. The timeline has the 12 `underrun` events (every status cycle, about 260 ms); a RECORD line per case now counts them |
+
+The YSF extra words (RIF5k): `extra_first_hex` is `202222200000000000` in all five and it is exactly the all-zero 9 byte unit passed through the YSF egress step only (-0.4 dB, `crossaudio` M04), without the +1.0 dB ingress step: five all-zero frames,
+i.e. the padding of a partial last packet whose one unit is the end unit (media-format.md: "A partial last packet is padded with all-zero frames", "the end unit is not rendered" for the network YSF egress; the radio egress renders it as a fourth V/D mode 2 frame, 100 ms).
+
 ### What the run left behind (for the flow-control analysis)
 
 Written to `out/<run>/`: `rif5.txt` and `pytest.log` (the same RECORD / FINDING lines: frames written, words sent and written, native frames and span per LONG case), `junit.xml` (per case time), `control/8-N.out` with

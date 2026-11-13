@@ -334,15 +334,17 @@ def judge_tx(kind, log, sent, ident, port, lossy=False):
         return rif5.judge_tx_dstar(log, sent, ident, rif5.STATION, port.rpt_module, lossy=lossy)
     if kind == "dmr":
         return rif5.judge_tx_dmr(log, sent, ident, port.dmr_tg, port.color_code, lossy=lossy)
-    return rif5.judge_tx_ysf(log, sent, ident, port.ysf_lo_dev)
+    return rif5.judge_tx_ysf(log, sent, ident, port.ysf_lo_dev, lossy=lossy)
 
 
 def tx_over(ctx, web, kind, n, seed, case):
     """One over of `n` frames from the protocol client N0TEST into the mode's room; returns (log since the start, frames sent, expected words, ident)."""
     ready(ctx, web, case)
     frames = echo.make_frames(kind, n, "%s-%s" % (seed, kind))
-    talker = Member(ctx.ip, kind, rif5.ROOMS[kind], 1, listen=False)
+    # the window starts BEFORE the client links: the second rig run showed the fake already in mode 03 at its first status of the YSF window, so a claim
+    # may be written between ready() and the talk; frames of the link phase are polls only
     since = ctx.modem.mark()
+    talker = Member(ctx.ip, kind, rif5.ROOMS[kind], 1, listen=False)
     try:
         t_talk = time.monotonic()
         talker.talk(frames, tail=0.5)
@@ -367,13 +369,23 @@ def check_naks(ctx, case, since):
         case, [(ms.name_of(n[1]), n[2]) for n in other])
 
 
-def timeline(ctx, case, since, verdict):
+def timeline(ctx, case, since, verdict, talk=True):
     """Write out/<run>/rif5/timeline-<case>.jsonl for the flow-control analysis (docs/rif5-cases.md, "The timeline") and name it in the notes."""
-    sent = getattr(ctx, "last_talk", None)
+    sent = getattr(ctx, "last_talk", None) if talk else None
     summary = {"case": case, "facts": verdict.facts, "problems": verdict.problems, "findings": verdict.findings,
                "frames_total": "not read in the case: hub counters are in control/8-N.out (cumulative, 10 s old at most)"}
     path = write_timeline(ctx.target, case, ctx.modem, since, sent, summary)
     note(ctx.target, case, "RECORD", "timeline: %s" % (path if path is None else "rif5/" + path.name))
+    if hasattr(ctx.modem, "fw_events"):
+        # the firmware-like fake (DVT_RIF5FW): what it saw of the host's flow, in numbers (times in seconds since the window start)
+        events = ctx.modem.fw_events(since)
+        by = {}
+        for t, name, detail in events:
+            by.setdefault(name, []).append(round(t - since, 2))
+        under = by.get("underrun", [])
+        note(ctx.target, case, "RECORD", "fake: %d underrun(s) at %s, %d tx_off, %d preamble(s), %d NAK 5; the model's FIFO ran dry %s" % (
+            len(under), under[:6], len(by.get("tx_off", [])), len(by.get("preamble_start", [])), len(by.get("nak", [])),
+            "inside the over (the host did not keep the modem fed)" if under else "only at the end of the over"))
 
 
 @pytest.mark.parametrize("kind", KINDS)
@@ -415,6 +427,8 @@ def test_rx_modem_to_room(kind, ctx, web):
     assert got and len(overs) == 1, "%s: the client heard %d overs, wanted one" % (case, len(overs))
     over = overs[0]
     assert over.idents == [wanted], "%s: the talker is %s, the modem's RF source is %s" % (case, over.idents, wanted)
+    timeline(ctx, case, since, SimpleNamespace(facts={"voice_sent": len(ku.voice), "voice_heard": len(over.frames), "talker": over.idents},
+                                               problems=[], findings=[]), talk=False)
     if kind == "ysf":
         # a YSF over is not bit exact through the room: ingress +1.0 dB and egress -0.4 dB step only the gain index b2 (decisions D1, RIF5 D3)
         words = rif5.compare_ysf_words(ku.voice, over.frames)
@@ -933,7 +947,9 @@ def test_m1_counters_account_for_the_overs(ctx, web):
                         ("ptt_unkey", ("dv_edge_radio_ptt_total", {"result": "unkey"})),
                         ("frames_tx_ok", ("dv_edge_radio_frames_total", {"dir": "tx", "result": "ok"})),
                         ("frames_tx_dropped", ("dv_edge_radio_frames_total", {"dir": "tx", "result": "dropped"})),
-                        ("frames_rx_ok", ("dv_edge_radio_frames_total", {"dir": "rx", "result": "ok"}))):
+                        ("frames_rx_ok", ("dv_edge_radio_frames_total", {"dir": "rx", "result": "ok"})),
+                        ("frames_rx_mode_busy", ("dv_edge_radio_frames_total", {"dir": "rx", "result": "mode_busy"})),
+                        ("over_tx_mode_busy", ("dv_edge_radio_over_total", {"dir": "tx", "result": "mode_busy"}))):
         grown[key] = rif5.delta(ctx.baseline, after, labels[0], **labels[1])
     note(ctx.target, case, "RECORD", "tally %s; counter growth %s" % (dict(TALLY), grown))
     tx_overs, rx_overs = TALLY["tx"] + TALLY["long"], TALLY["rx"]
@@ -963,6 +979,11 @@ def test_m1_counters_account_for_the_overs(ctx, web):
     if since is not None and grown["frames_tx_ok"] != len(native):
         note(ctx.target, case, "FINDING", "frames_total{dir=tx,result=ok} grew by %s, the modem logged %d native frames since the baseline (all types %s; the "
                                           "document: ok is byte-link acceptance)" % (grown["frames_tx_ok"], len(native), dict(by_type)))
+    if grown.get("frames_rx_mode_busy") or grown.get("over_tx_mode_busy"):
+        # the second rig run (DVT_RIF5FW=on): 2 RF frames of RIF5-RX-ysf were refused as mode_busy (the host held another mode), 5 words lost
+        note(ctx.target, case, "FINDING", "the host refused frames as mode_busy: frames_total{dir=rx,result=mode_busy} grew by %s, over_total{dir=tx,"
+                                          "result=mode_busy} by %s (an RF frame arriving while the host holds another mode or is keyed)" % (
+                                              grown.get("frames_rx_mode_busy"), grown.get("over_tx_mode_busy")))
     if TALLY["long"]:
         note(ctx.target, case, "RECORD", "frames_total{dir=tx,result=dropped} grew by %s over the whole run (the 3 s overs of RIF5-LONG are the likely source)" %
              grown["frames_tx_dropped"])

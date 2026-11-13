@@ -280,16 +280,23 @@ def align(sent, got):
 
 def _word_check(label, sent, got, problems, findings, facts, lossy=False):
     """The words written to the modem against the words sent. A changed word is always a problem. A word missing (dropped by the host queue) is a
-    problem for a short over (`lossy` False: the over fits what the flow control carries) and a FINDING for a long one. Returns align(sent, got)."""
+    problem for a short over (`lossy` False: the over fits what the flow control carries) and a FINDING for a long one. Words AFTER the last sent word
+    that was found are `extra` (a fact, with the first one in hex): the end unit the room renders as a frame. Returns align(sent, got) (None for a
+    changed or an extra word)."""
     sent, got = list(sent), list(got)
     facts["%s_sent" % label], facts["%s_written" % label] = len(sent), len(got)
     index = align(sent, got)
-    changed = [i for i, j in enumerate(index) if j is None]
     kept = [j for j in index if j is not None]
     last = kept[-1] if kept else -1
+    last_pos = max((i for i, j in enumerate(index) if j is not None), default=-1)
+    changed = [i for i, j in enumerate(index) if j is None and i < last_pos]
+    extra = [i for i, j in enumerate(index) if j is None and i > last_pos]
+    if extra:
+        facts["extra_first_hex"] = got[extra[0]].hex()
+        facts["extra_all_equal"] = len({got[i] for i in extra}) == 1
     seen = set(kept)
     gaps = [j for j in range(last + 1) if j not in seen]
-    tail = len(sent) - 1 - last if not changed else 0
+    tail = len(sent) - 1 - last
     if changed:
         problems.append("%s word %d written to the modem differs from the one sent" % (label, changed[0]))
     if gaps:
@@ -299,7 +306,7 @@ def _word_check(label, sent, got, problems, findings, facts, lossy=False):
         (findings if lossy else problems).append(text)
     elif tail > 0 and not changed:
         facts["%s_dropped" % label] = tail
-        text = "%d %s words written, %d sent (the first %d agree)" % (len(got), label, len(sent), len(got))
+        text = "%d %s words written, %d sent (the first %d agree)" % (len(got) - len(extra), label, len(sent), len(got) - len(extra))
         (findings if lossy else problems).append(text)
     return index
 
@@ -458,39 +465,43 @@ def judge_tx_dmr(frames, sent, src, dst, color_code, headers_n=8, terminators_n=
 YSF_GAIN_STEPS = ("p10", "m04")         # YSF ingress +1.0 dB, YSF egress -0.4 dB (decisions D1, RIF5 D3; media-format.md YSF)
 
 
-def compare_ysf_words(sent, got):
+def compare_ysf_words(sent, got, lossy=False):
     """The YSF voice words written to the modem (TX) or heard by a YSF client (RX) against the words sent.
 
     A YSF over does not come back bit exact: the YSF ingress steps the AMBE+2 gain index b2 by +1.0 dB and the egress by -0.4 dB (DV-Router
     decisions.md D1, and for the radio edge RIF5 D3: "the existing 49-bit to 72-bit layout and YSF gain-index steps only"; echo.md: "the talker hears
-    every AMBE+2 bit unchanged except the gain index b2"; the same rule is dvtest/proto/ysf.py's and cases/test_clients2.py's). Problems: a word
-    that differs in any bit but b2, fewer words than sent. A b2 that is not the documented map (dvtest.crossaudio P10 then M04) is a FINDING, with
-    the histogram of the steps in the facts: the radio.md sections for RIF5 name the steps only by reference. Words after the sent ones are a fact."""
+    every AMBE+2 bit unchanged except the gain index b2"; the same rule is dvtest/proto/ysf.py's and cases/test_clients2.py's). The words are aligned
+    on everything but b2 (a word the host queue dropped leaves a gap, it does not shift the pairs after it). Problems: a word that differs in any bit but
+    b2, a word missing (a FINDING when `lossy`). A b2 that is not the documented map (dvtest.crossaudio P10 then M04) is a FINDING, with the histogram
+    of the steps in the facts. Words after the sent ones are a fact (`extra_words`, the first in hex)."""
     sent, got = list(sent), list(got)
     problems, findings, facts = [], [], {}
+    key = lambda w: nxdn.without_gain(nxdn.from_dmr(w))           # noqa: E731
+    skeys, gkeys = [key(w) for w in sent], [key(w) for w in got]
+    inner = []
+    index = _word_check("voice", skeys, gkeys, inner, findings, facts, lossy)
+    for line in inner:
+        problems.append(line.replace("differs from the one sent", "differs from the one sent in a bit other than the gain index b2", 1)
+                        if "differs from the one sent" in line and "not written" not in line else line)
     facts["voice_sent"], facts["voice_written"] = len(sent), len(got)
-    n = min(len(sent), len(got))
-    other = [i for i in range(n) if nxdn.without_gain(nxdn.from_dmr(sent[i])) != nxdn.without_gain(nxdn.from_dmr(got[i]))]
-    if other:
-        problems.append("voice word %d written to the modem differs from the one sent in a bit other than the gain index b2 (%d of %d words differ)" % (
-            other[0], len(other), n))
-    elif len(got) < len(sent):
-        problems.append("%d voice words, %d sent (the first %d agree but for b2)" % (len(got), len(sent), len(got)))
-    steps = Counter(nxdn.gain_index(nxdn.from_dmr(got[i])) - nxdn.gain_index(nxdn.from_dmr(sent[i])) for i in range(n))
+    facts.pop("extra_first_hex", None)
+    pairs = [(sent[j], got[i]) for i, j in enumerate(index) if j is not None]
+    steps = Counter(nxdn.gain_index(nxdn.from_dmr(g)) - nxdn.gain_index(nxdn.from_dmr(s)) for s, g in pairs)
     facts["b2_steps"] = {str(k): v for k, v in sorted(steps.items())}
-    if not other:
-        check = crossaudio.gain_check(sent[:n], got[:n], YSF_GAIN_STEPS)
+    if pairs and not any("differs" in p for p in problems):
+        check = crossaudio.gain_check([s for s, _ in pairs], [g for _, g in pairs], YSF_GAIN_STEPS)
         if check["bad"]:
             findings.append("b2 of %d of %d words is not the documented map (+1.0 dB in, -0.4 dB out); first (index, sent b2, got b2, wanted b2): %s; "
-                            "steps seen %s" % (len(check["bad"]), n, check["bad"][0][:4], facts["b2_steps"]))
-    facts["extra_words"] = max(0, len(got) - len(sent))
-    if len(got) > len(sent):
-        facts["extra_first_hex"] = got[len(sent)].hex()
-        facts["extra_all_equal"] = len(set(got[len(sent):])) == 1
+                            "steps seen %s" % (len(check["bad"]), len(pairs), check["bad"][0][:4], facts["b2_steps"]))
+    extra = [i for i, j in enumerate(index) if j is None and i > max((k for k, j in enumerate(index) if j is not None), default=-1)]
+    facts["extra_words"] = len(extra)
+    if extra:
+        facts["extra_first_hex"] = got[extra[0]].hex()
+        facts["extra_all_equal"] = len(set(got[i] for i in extra)) == 1
     return Verdict(problems, findings, facts)
 
 
-def judge_tx_ysf(frames, sent, src, lo_dev=False):
+def judge_tx_ysf(frames, sent, src, lo_dev=False, lossy=False):
     """A YSF V/D mode 2 over from the room (radio.md 7.3 "Built YSF"): SET_MODE 3, frames `E0 7C 20 00` + 120 B, one header and one terminator,
     FICH data type 2 (V/D mode 2), the Dev flag the row's `ysf.lo_dev`, five 9 byte words per voice frame, the header names the talker."""
     problems, findings, facts = [], [], {}
@@ -520,7 +531,7 @@ def judge_tx_ysf(frames, sent, src, lo_dev=False):
     for item in decoded["headers"][:1]:
         if (item["src"] or "").strip() != src:
             problems.append("the header names %r as the source, the talker is %r" % ((item["src"] or "").strip(), src))
-    words = compare_ysf_words(sent, decoded["voice"])
+    words = compare_ysf_words(sent, decoded["voice"], lossy)
     problems += words.problems
     findings += words.findings
     facts.update(words.facts)
