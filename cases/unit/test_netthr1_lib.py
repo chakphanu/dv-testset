@@ -122,7 +122,7 @@ def test_hotspot_template_is_the_k6b_preset():
 
 def test_http_caps_snippet_merges_into_web_and_admin():
     doc = tomllib.loads(render("netthr1-router.toml", extras=["netthr1-http-caps.toml"]))
-    assert netthr1.http_settings(doc) == ((1, 1), (2, 2))
+    assert netthr1.http_settings(doc) == ((1, 1), (2, 1))
     assert doc["web"]["static_dir"] == doc["admin"]["static_dir"] == "/var/lib/dv/netthr1-static"
     assert doc["admin"]["enable"] is True                      # the template's own keys stay
 
@@ -140,6 +140,9 @@ def test_hostname_rows():
                      "dextra": {"enable": True}}}
     assert netthr1.hostname_rows(doc) == {"m17": ["peer.example.invalid"], "link": ["localhost"]}
     assert netthr1.hostname_edges(doc) == ("dv-edge-link", "dv-edge-m17")
+    # m17 / link run the resolver workers for any row, xlx / nxdn / p25 only for host names
+    assert netthr1.hostname_edges({"edges": {"m17": {"peers": [{"host": "192.0.2.5"}]}}}) == ("dv-edge-m17",)
+    assert netthr1.hostname_edges({"edges": {"xlx": {"peer": [{"host": "192.0.2.5"}]}, "m17": {"enable": True}}}) == ()
 
 
 # ---------------------------------------------------------------- the gauge
@@ -150,6 +153,7 @@ def test_gauge_from_samples_and_problems():
             'dv_other{kind="open"} 1\n')
     kinds = netthr1.sessions_from_samples(metrics.parse(text))
     assert kinds == {"open": 12, "cap": 63, "peak": 14}
+    assert all(type(v) is int for v in kinds.values())
     assert netthr1.gauge_problems(kinds) == []
     assert netthr1.gauge_problems({"open": 15, "cap": 63, "peak": 14})[0].startswith("open 15 is above peak 14")
     assert "above cap" in netthr1.gauge_problems({"open": 1, "cap": 5, "peak": 6})[0]
@@ -166,6 +170,7 @@ def test_find_sessions_in_any_nesting():
 
 
 def test_reload_text_edits():
+    assert netthr1.data_worker_rows(1, "x", first="pkt") == "[[data.worker]]\nid = 'pkt'\n[[data.worker]]\nid = 'x01'\n"
     assert netthr1.data_worker_rows(2) == "[[data.worker]]\nid = 'nt01'\n[[data.worker]]\nid = 'nt02'\n"
     assert netthr1.add_rows("a = 1", "[[x.y]]\n") == "a = 1\n[[x.y]]\n"
     rows = netthr1.m17_rows([("M17-DVH1", "hole1.hole.dvt.test", 17013)])

@@ -194,9 +194,18 @@ def hostname_rows(doc):
     return out
 
 
+ROW_EDGES = {"m17": "dv-edge-m17", "link": "dv-edge-link"}    # these start the two resolver workers for ANY configured peer / uplink row, numeric ones too
+
+
 def hostname_edges(doc):
-    """The process names (dv-edge-<kind>) with at least one host-name row."""
-    return tuple(sorted("dv-edge-" + kind for kind in hostname_rows(doc)))
+    """The process names that run the two resolver workers: an edge with a host-name row (xlx, nxdn, p25 ...), and m17 / link with any peer or
+    uplink row (deployment.md "Extra source": "M17/link with configured peer/uplink rows"; the first rig run saw dv-edge-m17 with 6 threads on literal rows)."""
+    names = {"dv-edge-" + kind for kind in hostname_rows(doc)}
+    for kind, proc in ROW_EDGES.items():
+        section = (doc.get("edges", {}) or {}).get(kind, {})
+        if isinstance(section, dict) and any(isinstance(v, list) and v and isinstance(v[0], dict) for v in section.values()):
+            names.add(proc)
+    return tuple(sorted(names))
 
 
 def http_settings(doc, hotspot=False):
@@ -225,7 +234,8 @@ def sessions_from_samples(samples):
         proc = s.labels.get("proc")
         if proc not in (None, "dv-router"):
             continue
-        out[s.labels.get("kind", "")] = s.value
+        v = s.value
+        out[s.labels.get("kind", "")] = int(v) if isinstance(v, float) and v.is_integer() else v      # the hub text has 64.0
     return out
 
 
@@ -267,9 +277,11 @@ def find_sessions(obj):
 
 # ---------------------------------------------------------------- reload text edits (the rendered config of the run)
 
-def data_worker_rows(n, prefix="nt"):
-    """TOML text of n extra [[data.worker]] rows (ids nt01 ...)."""
-    return "".join("[[data.worker]]\nid = '%s%02d'\n" % (prefix, i + 1) for i in range(n))
+def data_worker_rows(n, prefix="nt", first=None):
+    """TOML text of n extra [[data.worker]] rows (ids nt01 ...). Explicit rows REPLACE the implicit default row `pkt` (the first rig run: 1 -> 2 workers for two
+    rows), so `first="pkt"` puts the default back as an explicit row when the file has none."""
+    head = "[[data.worker]]\nid = '%s'\n" % first if first else ""
+    return head + "".join("[[data.worker]]\nid = '%s%02d'\n" % (prefix, i + 1) for i in range(n))
 
 
 def add_rows(text, rows):

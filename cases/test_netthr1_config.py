@@ -124,6 +124,20 @@ def errors_of(lines, code):
     return config_check.judge_check(lines, code)["parsed"]
 
 
+UNPOSITIONED = re.compile(r"^(?:dv-router:\s*)?([a-z_]+(?:\.[a-z_]+)+):\s+(.*)$")
+
+
+def refusals(lines, code):
+    """Positioned errors, else the unpositioned `KEY: message` lines: the capacity refusal has no file:line:col (first rig run)."""
+    out = list(errors_of(lines, code))
+    if not out and code not in (0, None):
+        for line in lines:
+            m = UNPOSITIONED.match(line.strip())
+            if m:
+                out.append({"key": m.group(1), "message": m.group(2), "line": None})
+    return out
+
+
 def cap_line(lines):
     for line in lines:
         m = CAP_LINE.match(line.replace("dv-router:", "", 1))
@@ -189,7 +203,7 @@ def test_c2_negative_cap_is_refused(image, rig_text):
 def requirement(image, text):
     """(R, P) from the refusal of cap 4, which is below every real node's requirement."""
     lines, code = check(image, with_cap(text, 4))
-    parsed = errors_of(lines, code)
+    parsed = refusals(lines, code)
     for p in parsed:
         m = BELOW.search(p["message"])
         if m:
@@ -207,10 +221,10 @@ def cover(image, text, label, want_children=None):
     if want_children is not None:
         assert planned == want_children, "%s: %d planned children, the documents give %d" % (label, planned, want_children)
     lines, code = check(image, with_cap(text, required))
-    assert code == 0, "%s: cap %d (= required) was refused: %s" % (label, required, errors_of(lines, code)[:1] or lines[:3])
+    assert code == 0, "%s: cap %d (= required) was refused: %s" % (label, required, refusals(lines, code)[:1] or lines[:3])
     assert cap_line(lines) == (required, "configured"), "%s: summary %s" % (label, cap_line(lines))
     lines, code = check(image, with_cap(text, required - 1))
-    parsed = errors_of(lines, code)
+    parsed = refusals(lines, code)
     assert code not in (0, None) and parsed, "%s: cap %d (required - 1) was accepted or gave no error" % (label, required - 1)
     assert parsed[0]["message"] == "cap %d is below %d required for %d planned children plus 1 reserved session" % (required - 1, required, planned), parsed[0]
     return required
