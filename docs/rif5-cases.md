@@ -440,6 +440,13 @@ The non-default RAN / NAC / TGs make a default that leaks into the RF frames vis
 the modes, RAN, NAC, TGs and `ride_along` from the RENDERED config (`rif5.port_from_config`), so a case skips with the reason on the wrong file. `tx_ack` is the sentence of config.md for `N0CALL` (the same as the base snippet; DV-Router asks the exact
 sentence per callsign, and a different one is an error).
 
+### A second port: `rif5-two-ports.toml` (RADIOSEQ1-C)
+
+`rig/config/dv-router/rif5-two-ports.toml` is the one snippet that IS an addition: it holds only a second `[[edges.radio.port]]` row (`rif5-modem-b`, its own `physical`, `udp` `<TESTER_IP>:3342`, `udp_bind` `<OWN_IP>:3343`, `modes = { dmr = "Q" }`, the same TG 4017 and colour code, band 70cm,
+434.5 MHz) and no `[edges.radio]` table. Name it AFTER `rif5-mmdvm-udp.toml` or `rif5n-modes.toml` (arrays of tables are appended in the order of the extras; the tester takes the row `rif5-modem` as port A and `rif5-modem-b` as port B whatever the order). `tx_ack` is a key of the
+EDGE (`[edges.radio]`, config.md), so the sentence of the first snippet covers both rows. The tester starts a second fake modem on :3342 together with the first (`cases/test_rif5_mmdvm_serial.py`, fixture `ctx`: `ctx.modem_b`); a run without the snippet starts one modem as before. With the second port in
+the config every RF over of A in room Q is also transmitted by B (and the reverse): use the file for `-k radioseq1` (shape A) and not for the evidence of the other RIF5 cases or RIF5-M1, whose tallies know only port A.
+
 ### Run it
 
 Shape A, everything but the positive rider case (the negative control of the rider runs here, with the data worker on). `R`, the image and the template as in "Run it":
@@ -492,9 +499,9 @@ Own page: [radioseq1-cases.md](radioseq1-cases.md). Shape A (`rif5n-modes.toml`)
 | Case | Test | Source | Asserts (switch on; off: RECORD only) |
 |------|------|--------|---------------------------------------|
 | RADIOSEQ1-RX-dmr / -nxdn | `test_radioseq1_rx_over_is_numbered_by_frame[dmr\|nxdn]` | radio.md "Built (RADIOSEQ1)"; media-format.md "Unit granularity" | a lossless 3 s RF over: a DMRD client of the room hears the letters A..F in order (sync on A, none repeated or skipped); NXDN -> DMR all 148 words, `dir=tx result=dropped` +0; NXDN client SACCH structure 3, 2, 1, 0 |
-| RADIOSEQ1-RX-ysf / -p25 / -dstar | the same test, `[ysf\|p25\|dstar]` | status.md `dv_room_over_units_total` | YSF FN +1 per voice packet; P25 and D-STAR: counters only (D-STAR is the control) |
+| RADIOSEQ1-RX-ysf / -p25 / -dstar | the same test, `[ysf\|p25\|dstar]` | status.md `dv_room_over_units_total`; dv-router `crates/edge/ysf/src/wire.rs` (`VOICE_FT`, `voice_fn`) | YSF voice FN +1 modulo 7 (FN 0..6, FT 6); FN 7 on a voice packet is a FINDING and the modulus seen is recorded; P25 and D-STAR: counters only (D-STAR is the control) |
 | every RADIOSEQ1-RX | the same test | status.md, medload1-cases.md | `dv_edge_over_units_total{dir=rx,proc=radio,result=gap}` +0, `dv_room_over_units_total{result=gap}` +0, `dv_room_overs_total{result=lossy}` +0 |
-| RADIOSEQ1-C | `test_radioseq1_c_radio_to_radio_dmr` | | SKIP: one radio port in the rig (needs a second `mmdvm-serial` row and a second fake modem) |
+| RADIOSEQ1-C | `test_radioseq1_c_radio_to_radio_dmr` | config.md `[[edges.radio.port]]`; dv-router answer: two ports may serve one room | a lossless DMR over of fake board A is transmitted by port B (headers, voice bursts A..F in order, sync on A, every word, terminators) and B -> A the same; the origin board gets no RF frame of its own over. Needs `rif5-two-ports.toml` after the first snippet (section "A second port" above); skips without it |
 
 ### The three open items of the last runs
 

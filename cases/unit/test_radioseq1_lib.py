@@ -1,9 +1,16 @@
 # SPDX-License-Identifier: MIT
 """dvtest.radioseq1 (DVT_RADIOSEQ1, docs/radioseq1-cases.md): the DMRD flags decoder, the superframe-order checker, the cyclic counters of YSF FN and NXDN SACCH,
 the hub counters of a lossless radio over. Offline and deterministic: the datagrams are built with the encoders of dvtest.proto."""
+import tomllib
+from pathlib import Path
+
 import pytest
 
 from dvtest import metrics, radioseq1 as rs
+from dvtest import mmdvm_rf as rf
+from dvtest import mmdvm_serial as ms
+from dvtest import rif5, sut_config
+from dvtest.audio import signals
 from dvtest.proto import dmr, nxdn, ysf
 
 pytestmark = pytest.mark.unit
@@ -215,3 +222,156 @@ def test_an_over_that_never_closed_and_end_missing():
     assert rs.judge_counts(none, over_expected=False).problems == []
     missing = rs.delta(rs.counts(hub(end_missing=1), "q"), before)
     assert rs.judge_counts(missing).problems == []
+
+
+# ---------------------------------------------------------------- YSF FN: FN 0..6 (FT 6), FN 7 is a FINDING
+
+def test_ysf_fn_check_accepts_the_cycle_0_to_6_and_names_modulus_7():
+    values = [i % 7 for i in range(30)]
+    got = rs.ysf_fn_check(values, [6] * 30)
+    assert got.problems == [] and got.findings == []
+    assert got.facts["modulus"] == 7 and got.facts["fn7"] == 0 and got.facts["ft"] == [6]
+
+
+def test_ysf_fn_7_on_a_voice_packet_is_a_finding_not_a_problem_and_modulus_8_is_recorded():
+    values = [i % 8 for i in range(24)]
+    got = rs.ysf_fn_check(values, [7] * 24)
+    assert got.problems == []
+    assert got.facts["modulus"] == 8 and got.facts["fn7"] == 3
+    assert len(got.findings) == 2
+    assert "FN 7 on 3 of 24 voice packets" in got.findings[0] and "FT of the voice packets [7]" in got.findings[1]
+
+
+def test_ysf_fn_check_problems_are_repeats_skips_and_short_runs():
+    assert rs.ysf_fn_check([0, 1, 1, 2]).problems
+    assert rs.ysf_fn_check([0, 1, 3, 4]).problems
+    assert rs.ysf_fn_check([0, 2, 4, 6, 1]).problems                      # a +2 step per packet
+    assert rs.ysf_fn_check([0, 5, 2, 7, 4, 1]).facts["modulus"] is None   # the 20 ms unit numbering of bc9af2b1
+    assert rs.ysf_fn_check([3]).problems
+    # FN 7 with a wrong step is a problem (and the FN 7 count is still a fact)
+    got = rs.ysf_fn_check([0, 1, 2, 7, 4])
+    assert got.problems and got.facts["fn7"] == 1 and got.facts["modulus"] is None
+
+
+def test_ysf_ft_values_come_from_voice_packets_only():
+    packets = ysf.stream_packets([ysf.SILENCE] * 40, "N0CALL", dgid=0)
+    assert rs.ysf_ft_values(packets) == [6] * 8                           # the header and the terminator (FT 7) are not voice
+    assert rs.ysf_fn_check(rs.ysf_fn_values(packets), rs.ysf_ft_values(packets)).facts["ft"] == [6]
+
+
+# ---------------------------------------------------------------- RADIOSEQ1-C: two radio ports
+
+ROOT = Path(__file__).resolve().parents[2]
+SNIPPETS = ROOT / "rig" / "config" / "dv-router"
+
+
+def two_port_doc(first="rif5-mmdvm-udp.toml", second=rs.SNIPPET_B):
+    extras = [(SNIPPETS / first).read_text(encoding="utf-8")] + ([(SNIPPETS / second).read_text(encoding="utf-8")] if second else [])
+    text = sut_config.render('[node]\nbind_ip = "<OWN_IP>"\n', "172.30.0", own=11, tester=30, extras=extras)
+    return tomllib.loads(text)
+
+
+def test_the_two_ports_snippet_adds_one_row_after_either_first_snippet():
+    for first in ("rif5-mmdvm-udp.toml", "rif5n-modes.toml"):
+        doc = two_port_doc(first)
+        names = [p["name"] for p in doc["edges"]["radio"]["port"]]
+        assert names == ["rif5-modem", "rif5-modem-b"]
+        a, b = rs.port_pair(doc)
+        assert (a.name, b.name) == (rif5.PORT_NAME, rs.PORT_B)
+        assert rs.pair_problems(a, b) == []
+        # the key names of config.md, distinct per port, the same DMR room and talk group, one edge-level acknowledgement
+        assert (a.peer, a.bind) == (("172.30.0.30", 3340), ("172.30.0.11", 3341)) and (b.peer, b.bind) == (("172.30.0.30", 3342), ("172.30.0.11", 3343))
+        assert a.modes["dmr"] == b.modes["dmr"] == "Q" and b.modes == {"dmr": "Q"}
+        assert a.physical != b.physical and b.tx is True and b.dmr_tg == a.dmr_tg == 4017 and b.color_code == a.color_code
+        row = doc["edges"]["radio"]["port"][1]
+        assert row["band"] == "70cm" and 430_000_000 <= row["rx_freq"] <= 440_000_000 and row["tx_freq"] == row["rx_freq"]
+        assert "tx_ack" not in row and doc["edges"]["radio"]["tx_ack"].startswith("I am the control operator of N0CALL ")
+
+
+def test_without_the_snippet_there_is_no_pair_and_a_first_b_row_is_not_port_a():
+    doc = two_port_doc(second=None)
+    a, b = rs.port_pair(doc)
+    assert a.name == rif5.PORT_NAME and b is None
+    assert rs.pair_problems(a, b)
+    swapped = two_port_doc()
+    swapped["edges"]["radio"]["port"].reverse()
+    a, b = rs.port_pair(swapped)
+    assert (a.name, b.name) == (rif5.PORT_NAME, rs.PORT_B)
+    only_b = two_port_doc()
+    del only_b["edges"]["radio"]["port"][0]
+    a, b = rs.port_pair(only_b)
+    assert a is None and b.name == rs.PORT_B
+
+
+def test_pair_problems_single_fields():
+    a, b = rs.port_pair(two_port_doc())
+    copy = lambda **kw: type(b)(**{**vars(b), **kw})
+    assert any("same name" in p for p in rs.pair_problems(a, copy(name=a.name)))
+    assert any("same udp_bind" in p for p in rs.pair_problems(a, copy(bind=a.bind)))
+    assert any("same physical" in p and "one physical is one transmitter" in p for p in rs.pair_problems(a, copy(physical=a.physical)))
+    assert any("room differs" in p for p in rs.pair_problems(a, copy(modes={"dmr": "R"})))
+    assert any("no dmr mode" in p for p in rs.pair_problems(a, copy(modes={"ysf": "R"})))
+    assert any("tx = False" in p for p in rs.pair_problems(a, copy(tx=False)))
+    assert any("without a physical" in p for p in rs.pair_problems(a, copy(physical="")))
+    assert rs.pair_problems(a, copy()) == [] and rs.pair_problems(a, None)
+
+
+def tx_log(n_words, src=1023007, dst=4017, cc=1, headers=8, terminators=3, drop_burst=None, double_burst=None, no_sync=False, t0=10.0):
+    """Host frames of a DMR TX of n_words words, as a board of case C would log them."""
+    words = rf.canonical_frames("dmr", [signals.prng_bytes("c/%d" % i, 9) for i in range(n_words)])
+    up = rf.dmr_keyup(words, src, dst, colour_code=cc)
+    head, voice, term = up[0], up[1:-1], up[-1]
+    if drop_burst is not None:
+        voice = voice[:drop_burst] + voice[drop_burst + 1:]
+    if double_burst is not None:
+        voice = voice[:double_burst + 1] + voice[double_burst:]
+    items = [(ms.SET_MODE, bytes((2,)))]
+    items += [(ms.DMR_DATA2, b"\x00" + head[1][1:])] * headers
+    items += [(ms.DMR_DATA2, b"\x00" + v[1][1:]) for v in voice]
+    items += [(ms.DMR_DATA2, b"\x00" + term[1][1:])] * terminators
+    return [ms.HostFrame(t0 + 0.06 * i, t0 + 0.06 * i, ftype, bytes(payload)) for i, (ftype, payload) in enumerate(items)], rf.padded_frames("dmr", words)
+
+
+def test_a_relayed_over_with_every_burst_in_order_passes():
+    for n in (18, 36, 144):
+        log, sent = tx_log(n)
+        got = rs.relay_verdict(log, sent, 4017, 1)
+        assert got.problems == [] and got.findings == [], (n, got)
+        assert got.facts["letters_n"] == n // 3 and got.facts["letters_head"].startswith("ABCDEFABC"[:min(9, n // 3)])
+        assert got.facts["src"] == 1023007 and got.facts["voice_written"] == n
+
+
+def test_dmr_tx_letters_count_from_the_sync_burst():
+    log, _ = tx_log(54)
+    assert rs.dmr_tx_letters(log) == "ABCDEF" * 3
+    assert rs.dmr_tx_letters([]) == ""
+    log, _ = tx_log(18)
+    # without the burst A first the letters have no origin
+    no_a = [f for i, f in enumerate(log) if i != 9]                                  # header x8 at 1..8, burst A at 9
+    assert rs.dmr_tx_letters(no_a) == "?????"
+
+
+def test_a_missing_repeated_or_out_of_order_burst_is_a_problem():
+    log, sent = tx_log(36, drop_burst=3)
+    got = rs.relay_verdict(log, sent, 4017, 1)
+    assert got.problems and any("voice burst letters differ" in p for p in got.problems)
+    assert any("written" in p or "voice" in p for p in got.problems)
+    log, sent = tx_log(36, double_burst=2)
+    assert rs.relay_verdict(log, sent, 4017, 1).problems
+    # a short run: every word wanted
+    log, sent = tx_log(36)
+    short = [f for i, f in enumerate(log) if not 15 <= i < 21]
+    got = rs.relay_verdict(short, sent, 4017, 1)
+    assert got.problems and any("voice burst letters differ" in p for p in got.problems)
+
+
+def test_the_relayed_over_must_name_the_row_room_and_one_source():
+    log, sent = tx_log(18)
+    assert any("dst" in p for p in rs.relay_verdict(log, sent, 4020, 1).problems)
+    assert any("colour code" in p for p in rs.relay_verdict(log, sent, 4017, 2).problems)
+    log, sent = tx_log(18, headers=1)
+    assert any("8 expected" in p for p in rs.relay_verdict(log, sent, 4017, 1).problems)
+    # no header at all: the source is 0 and the verdict still comes back
+    log, sent = tx_log(18, headers=0)
+    got = rs.relay_verdict(log, sent, 4017, 1)
+    assert got.facts["src"] == 0 and got.problems

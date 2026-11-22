@@ -8,25 +8,33 @@ heard and over parsed hub metrics; the switch DVT_RADIOSEQ1=on decides whether t
   letters(bursts) / histogram(bursts)      what a DMR listener saw: "ABCDEF..." (a letter in lower case = its sync flag disagrees), counts per letter
   superframe_verdict(bursts)               voice bursts A..F in order per superframe, sync on A only, none repeated or skipped, one stream
   cyclic_progression(values, moduli, step) a counter that must advance by `step` modulo one of `moduli` (YSF FN, NXDN SACCH structure)
-  ysf_fn_values(datagrams)                 FN of the FICH of every YSF voice packet
+  ysf_fn_values(datagrams)                 FN of the FICH of every YSF voice packet (ysf_ft_values: FT)
+  ysf_fn_check(values, fts)                FN of a YSF egress: +1 modulo 7 (FN 0..6, FT 6); FN 7 on a voice packet is a FINDING, the modulus seen is recorded
   nxdn_sacch_structures(datagrams)         the two-bit SACCH structure of every NXDN voice packet
   counts(samples, room) / delta(a, b)      the gap and over counters of the radio edge and of one room, from dvtest.metrics samples
   judge_counts(change)                     gap 0 at the edge and in the room, the over not counted lossy
+  port_pair(doc) / pair_problems(a, b)     the two mmdvm-serial rows of RADIOSEQ1-C (rif5-two-ports.toml) and what is wrong with the pair
+  dmr_tx_letters(frames) / relay_verdict   a DMR TX log of the second fake board: voice bursts A..F in order, sync on A, every word (case C)
 """
 import os
 from collections import Counter, namedtuple
 
-from . import medload1, metrics
+from . import medload1, metrics, rif5
+from . import mmdvm_rf as rf
+from . import mmdvm_serial as ms
 from .proto import dmr, nxdn, ysf
 
 ENV = "DVT_RADIOSEQ1"
 LETTERS = "ABCDEF"
 MAX_LISTED = 6                                   # positions named in one problem line
-YSF_FN_MODULI = (7, 8)                           # FN 0..6 (FT 6, dvtest/proto/ysf.py stream_packets) or the 3-bit field cycling 0..7
+YSF_FN_MODULUS = 7                               # dv-router: a voice packet carries FT 6 and FN 0..=FT (crates/edge/ysf/src/wire.rs VOICE_FT, voice_fn); FT 7 is header / terminator
+YSF_VOICE_FT = 6
+YSF_FN_MODULI = (YSF_FN_MODULUS, 8)              # the modulus the egress may be seen with: 7 (the answer), 8 (the 3-bit field, a FINDING)
 NXDN_SACCH_STEP = -1                             # NXDN [1-B] 4.1.6: the structure of the SACCH superframe is 3, 2, 1, 0 (dvtest/proto/nxdn.py voice_payload)
 
 Burst = namedtuple("Burst", "seq stream frame_type vseq slot")
 Verdict = namedtuple("Verdict", "problems facts")
+Checked = namedtuple("Checked", "problems findings facts")       # a verdict that also names what is only a FINDING
 
 
 def on(environ=None):
@@ -128,6 +136,42 @@ def ysf_fn_values(datagrams):
     return out
 
 
+def ysf_ft_values(datagrams):
+    """FT of the FICH of every YSF V/D mode 2 voice packet, in arrival order."""
+    out = []
+    for data in datagrams:
+        info = ysf.parse(bytes(data))
+        if info is not None and info["kind"] == "voice":
+            out.append(info["fich"]["ft"])
+    return out
+
+
+def ysf_fn_check(values, fts=None):
+    """The FN of a YSF egress (dv-router: voice packets carry FT 6 and FN 0..=6, FT 7 is for header and terminator): each voice packet advances FN by +1 modulo 7.
+    FN 7 on a voice packet is a FINDING, not a problem, when the numbering still advances by +1 modulo 8: the modulus seen is facts["modulus"] (7, 8 or None when
+    neither fits, which is a problem). `fts` (optional): the FT of the same packets; any other than 6 is a FINDING. Returns Checked(problems, findings, facts)."""
+    values = list(values)
+    problems, findings = [], []
+    base = cyclic_progression(values, (YSF_FN_MODULUS,))
+    facts = dict(base.facts)
+    facts["fn7"] = sum(1 for v in values if v == 7)
+    if len(values) < 2:
+        return Checked(base.problems, findings, facts)
+    if base.facts["modulus"] is None:
+        wide = cyclic_progression(values, (8,))
+        if wide.facts["modulus"] == 8:
+            facts["modulus"] = 8
+            findings.append("FN 7 on %d of %d voice packets: the egress cycles FN modulo 8, dv-router says voice carries FN 0..6 (FT 6); first values %s" % (
+                facts["fn7"], len(values), values[:16]))
+        else:
+            problems.append("FN does not advance by +1 modulo %d (nor modulo 8): steps modulo 8 %s, head %s" % (YSF_FN_MODULUS, facts.get("steps"), values[:16]))
+    if fts is not None:
+        facts["ft"] = sorted(set(fts))
+        if facts["ft"] != [YSF_VOICE_FT]:
+            findings.append("FT of the voice packets %s, dv-router says %d (FT 7 is header and terminator)" % (facts["ft"], YSF_VOICE_FT))
+    return Checked(problems, findings, facts)
+
+
 def nxdn_sacch_structures(datagrams):
     """The SACCH structure field (bits 7-6 of the first SACCH byte, payload byte 1) of every NXDN voice packet, in arrival order."""
     out = []
@@ -181,3 +225,80 @@ def judge_counts(change, over_expected=True):
     if over_expected and medload1.overs_total(change) < 1:
         problems.append("no over closed in the room (dv_room_overs_total did not move)")
     return Verdict(problems, facts)
+
+
+# ---------------------------------------------------------------- (c) between two radio ports
+
+PORT_B = "rif5-modem-b"                          # the second row of rig/config/dv-router/rif5-two-ports.toml; the first is rif5.PORT_NAME
+SNIPPET_B = "rif5-two-ports.toml"
+
+
+def port_pair(doc):
+    """(A, B) of a rendered dv-router.toml: the row `rif5-modem` (else the first mmdvm-serial udp row that is not B) and the row `rif5-modem-b`, as
+    rif5.port_from_config reads them; B is None without that row, A is None without any other row."""
+    b = rif5.port_from_config(doc, PORT_B)
+    a = rif5.port_from_config(doc, rif5.PORT_NAME)
+    if a is None:
+        first = rif5.port_from_config(doc)
+        a = first if first is not None and first.name != PORT_B else None
+    return a, b
+
+
+def pair_problems(a, b, mode="dmr"):
+    """What makes the two rows unfit for RADIOSEQ1-C (config.md and dv-router's answers): both transmit, the same room for `mode`, distinct names, byte links
+    (udp_bind) and physicals (one physical is one transmitter), one band if a physical were shared. [] when fit."""
+    if a is None or b is None:
+        return ["two mmdvm-serial rows are needed (%s and %s)" % (rif5.PORT_NAME, PORT_B)]
+    problems = []
+    for label, port in (("A", a), ("B", b)):
+        if port.tx not in (True, "true"):
+            problems.append("port %s (%s) has tx = %r, an over is transmitted only by a port with tx on" % (label, port.name, port.tx))
+        if mode not in port.modes:
+            problems.append("port %s (%s) has no %s mode" % (label, port.name, mode))
+    if mode in a.modes and mode in b.modes and a.modes[mode] != b.modes[mode]:
+        problems.append("the %s room differs: %s serves %s, %s serves %s (the case is about ONE room)" % (mode, a.name, a.modes[mode], b.name, b.modes[mode]))
+    for what, x, y in (("name", a.name, b.name), ("udp_bind", a.bind, b.bind), ("udp", a.peer, b.peer), ("physical", a.physical, b.physical)):
+        if x == y:
+            problems.append("both rows have the same %s %r (distinct values wanted%s)" % (what, x, ": one physical is one transmitter" if what == "physical" else ""))
+    if not a.physical or not b.physical:
+        problems.append("a port without a physical cannot transmit")
+    if a.physical == b.physical and (a.rx_freq, a.tx_freq) != (b.rx_freq, b.tx_freq):
+        problems.append("a shared physical must agree on band and frequency")
+    return problems
+
+
+def dmr_tx_letters(frames):
+    """The voice bursts of a DMR TX log of a modem (host frames, type DMR_DATA2), as letters: a burst with the voice sync is A (and restarts the count), the next
+    ones are B, C ... (counted from the last sync); "?" before the first sync or past F. Header and terminator bursts (data sync) are left out."""
+    kinds = [rf.classify_burst(bytes(f.payload[1:])) for f in frames if f.ftype == ms.DMR_DATA2 and len(f.payload) == 1 + rf.DMR_BURST]
+    out, count = [], None
+    for kind in kinds:
+        if kind == "data":
+            continue
+        if kind == "voice_sync":
+            count = 0
+        elif count is not None:
+            count += 1
+        out.append("?" if count is None or count >= len(LETTERS) else LETTERS[count])
+    return "".join(out)
+
+
+def relay_verdict(frames, sent, dst, color_code):
+    """An over that came from ANOTHER radio port, as the second fake board saw it written (host frames since the start): SET_MODE 2, eight headers, voice
+    bursts, three terminators (rif5.judge_tx_dmr: LC group dst and colour code of the row, one source id across headers and terminators, every word of `sent`
+    in order, burst A with the voice sync) and, on top, the letters of the voice bursts in one lossless run A..F, A..F ... with the burst count of the words sent.
+    The source id is whatever the headers carry (facts["src"]; comparing it with the id of the over played on the other board is the caller's business).
+    Returns Checked(problems, findings, facts)."""
+    slot = rf.decode_dmr([(f.ftype, f.payload) for f in frames if f.ftype == ms.DMR_DATA2 and len(f.payload) == 1 + rf.DMR_BURST])[2]
+    src = slot["headers"][0]["src"] if slot["headers"] else 0
+    verdict = rif5.judge_tx_dmr(frames, sent, src, dst, color_code)
+    problems, findings, facts = list(verdict.problems), list(verdict.findings), dict(verdict.facts)
+    letters_ = dmr_tx_letters(frames)
+    nb = len(sent) // 3
+    want = (LETTERS * (nb // 6 + 1))[:nb]
+    facts.update(src=src, letters_head=letters_[:24], letters_n=len(letters_), bursts_wanted=len(want))
+    if letters_ != want:
+        at = next((i for i, (x, y) in enumerate(zip(letters_, want)) if x != y), min(len(letters_), len(want)))
+        problems.append("voice burst letters differ from %d bursts A..F in order: %d bursts, first difference at #%d (got %r, wanted %r)" % (
+            len(want), len(letters_), at, letters_[at:at + 8], want[at:at + 8]))
+    return Checked(problems, findings, facts)

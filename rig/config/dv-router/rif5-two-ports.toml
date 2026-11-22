@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/radioseq1-cases.md "(c) between radio ports"): a SECOND `mmdvm-serial` port for the case RADIOSEQ1-C
+# (DVT_RADIOSEQ1, cases/test_rif5_mmdvm_serial.py). It ADDS a row; it is NOT a replacement: name it AFTER rif5-mmdvm-udp.toml or rif5n-modes.toml (an array of
+# tables [[edges.radio.port]] is appended in the order of the extras, and the tester takes the row `rif5-modem` as port A and `rif5-modem-b` as port B).
+# The table [edges.radio] (callsign, tx_enable, rules, tx_ack) is the one of the first snippet and is not repeated here: tx_ack is one key of the EDGE, not
+# of a row (config.md "[edges.radio]": "Exact control-operator acknowledgement"), so the one sentence of rif5-mmdvm-udp.toml covers both ports.
+#
+# What DV-Router's validator asks of two rows (crates/lib/config/src/radio_validate.rs, radio_mmdvm.rs, answered by dv-router): a distinct `name`, a distinct byte
+# link (`udp_bind` here, `device` for a serial row: "already used by edges.radio.port[n]" otherwise), a shared `physical` must agree on `band`, and ONE PHYSICAL IS
+# ONE TRANSMITTER, so the second row has its OWN `physical`. Two ports may serve the same room for the same mode: every circuit is its own client session and the
+# fan-out skips only the origin circuit, so an RF over received on port A is transmitted by port B (tx on), and the other way round.
+#
+#   port A  rif5-modem     physical rif5-modem     udp <TESTER_IP>:3340  udp_bind <OWN_IP>:3341   (rif5-mmdvm-udp.toml / rif5n-modes.toml, all its modes)
+#   port B  rif5-modem-b   physical rif5-modem-b   udp <TESTER_IP>:3342  udp_bind <OWN_IP>:3343   DMR room Q only (the same room and talk group as A)
+#
+# The tester plays a second fake MMDVM modem on <TESTER_IP>:3342 (dvtest/mmdvm_serial.py, started with the first one when the rendered config has the row).
+# No radio exists. Band 70cm, 434.5 MHz (inside the band, a different RF frequency from A only so that the rows are told apart in the status).
+[[edges.radio.port]]
+name = "rif5-modem-b"
+kind = "mmdvm-serial"
+physical = "rif5-modem-b"
+tx = true
+band = "70cm"
+rx_freq = 434500000
+tx_freq = 434500000
+udp = "<TESTER_IP>:3342"
+udp_bind = "<OWN_IP>:3343"
+modes = { dmr = "Q" }
+hang = { rf_mode_secs = 1, net_mode_secs = 1 }
+timers = { tot_secs = 180 }
+id = { mode = "none", interval_secs = 600 }
+dmr = { color_code = 1, tg = 4017 }
