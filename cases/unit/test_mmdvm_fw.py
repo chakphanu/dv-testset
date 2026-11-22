@@ -164,13 +164,13 @@ def test_a_mode_the_set_config_did_not_enable_reports_no_space():
 
 def test_p25_and_nxdn_numbers_of_the_model():
     m, _ = model("mmdvm")
-    assert m.space("p25", 0.0) == 1200 // 216 == 5 and m.space("nxdn", 0.0) == 1200 // 49 == 24         # the FIFO sizes are our choice (module docstring)
+    assert m.space("p25", 0.0) == 18 and m.space("nxdn", 0.0) == 83                                         # answer 17: 4000 B, free / 216 and free / 48
     hs, _ = model("hs")
-    assert hs.space("p25", 0.0) == 1000 // 216 and hs.space("nxdn", 0.0) == 1000 // 49
+    assert hs.space("p25", 0.0) == 6 and hs.space("nxdn", 0.0) == 31                                        # 1500 B each
     hdu, ldu, tdu = bytes(ms.P25_HDU_LEN), bytes(ms.P25_LDU_LEN), bytes(ms.P25_TDU_LEN)
     assert (fw.stored_bytes(ms.P25_HEADER, hdu), fw.stored_bytes(ms.P25_LDU, ldu), fw.stored_bytes(ms.P25_LDU, tdu)) == (100, 217, 19)   # a length byte + the air bytes
     assert (fw.airtime_s(ms.P25_HEADER, hdu), fw.airtime_s(ms.P25_LDU, ldu), fw.airtime_s(ms.P25_LDU, tdu)) == (0.0825, 0.180, 0.015)
-    assert fw.airtime_s(ms.NXDN_DATA) == 0.080 and fw.stored_bytes(ms.NXDN_DATA) == 49
+    assert fw.airtime_s(ms.NXDN_DATA) == 0.080 and fw.stored_bytes(ms.NXDN_DATA) == 48      # 48 B per frame, not 49
     assert fw.key_of(ms.P25_HEADER) == fw.key_of(ms.P25_LDU) == "p25" and fw.key_of(ms.NXDN_DATA) == "nxdn"
     # radio.md 7.3 P25: MMDVM 500 ms + tx delay (max 1 s), HS 50 ms + tx delay; NXDN 500 ms + tx delay (7.1, E = 500 + d + 80 ms)
     assert m.preamble_s("p25", ms.P25_HEADER) == pytest.approx(0.6) and hs.preamble_s("p25", ms.P25_HEADER) == pytest.approx(0.15)
@@ -181,9 +181,9 @@ def test_a_p25_over_plays_out_and_the_tdu_ends_it_without_an_underrun():
     m, log = model("mmdvm", 0)
     hdu, ldu, tdu = bytes(ms.P25_HDU_LEN), bytes(ms.P25_LDU_LEN), bytes(ms.P25_TDU_LEN)
     assert m.write(ms.P25_HEADER, hdu, 0.0) and m.write(ms.P25_LDU, ldu, 0.001) and m.write(ms.P25_LDU, ldu, 0.002)
-    assert m.fifo_bytes()["p25"] == 100 + 217 * 2 and m.space("p25", 0.3) == (1200 - 534) // 216          # the preamble (500 ms) holds the FIFO
-    assert m.write(ms.P25_LDU, tdu, 0.003) and m.fifo_bytes()["p25"] == 553 and m.space("p25", 0.4) == (1200 - 553) // 216
-    assert m.tx_on(0.4) and m.space("p25", 0.51) == (1200 - 453) // 216            # the preamble ended at 0.5 s: the HDU left the FIFO
+    assert m.fifo_bytes()["p25"] == 100 + 217 * 2 and m.space("p25", 0.3) == (4000 - 534) // 216          # the preamble (500 ms) holds the FIFO
+    assert m.write(ms.P25_LDU, tdu, 0.003) and m.fifo_bytes()["p25"] == 553 and m.space("p25", 0.4) == (4000 - 553) // 216
+    assert m.tx_on(0.4) and m.space("p25", 0.51) == (4000 - 453) // 216            # the preamble ended at 0.5 s: the HDU left the FIFO
     end = 0.5 + 0.0825 + 0.360 + 0.015 + 0.001
     assert not m.tx_on(end + 0.3) and not names(log, "underrun")
     off = names(log, "tx_off")

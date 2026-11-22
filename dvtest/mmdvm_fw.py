@@ -21,11 +21,11 @@ Facts used (design-276 1.2, M/ = refs/MMDVM 1aa1034, HS/ = refs/MMDVM_HS bf66faf
                     after TX went off is aired with no preamble.
   underrun          when nothing is left to play, TX goes off (M/IO.cpp:336-340). A frame of the same over that arrives later is an underrun.
 
-NXDN and P25 (RIF5d / RIF5e, DVT_RIF5N): the FIFO sizes of these two modes are NOT in radio.md and not in design-276's list; they are OUR choice
-(1200 B on the MMDVM profile, 1000 B on the HS profile; unmeasured, a RIF13 H3 item). What radio.md 7.1 and 7.3 (bc9af2b1) does give and the model uses:
-P25 stores one length byte plus the air bytes (HDU 100, LDU 217, TDU 19 B) and reports free bytes / 216; air time HDU 82.5 ms, LDU 180 ms, TDU 15 ms;
-preamble MMDVM 500 ms + tx delay (max 1 s), HS 50 ms + tx delay; NXDN frame 80 ms, preamble 500 ms + tx delay (E = 500 + d + 80 ms), stored 49 B
-(flag byte + 48 air bytes, our reading) and space unit 49 B.
+NXDN and P25 (RIF5d / RIF5e, DVT_RIF5N). FIFO sizes from the DV-Router answer 17 (answers-342-dvt.md, firmware source): MMDVM 4000 B (MMDVM/Globals.h:110-114,
+P25TX.cpp:49, NXDNTX.cpp:51; 2000 B on a MK20DX256, not modelled), MMDVM_HS 1500 B each (MMDVM_HS/P25TX.cpp:29, NXDNTX.cpp:30): idle space P25 18 / 6, NXDN 83 / 31.
+P25 stores one length byte plus the air bytes (HDU 100, LDU 217, TDU 19 B) and reports free bytes / 216 (HDU and TDU are invisible in the space); NXDN stores 48 B per
+frame (no flag, no length byte; the host frame is flag + 48 and the write demands 49) and reports free bytes / 48. Air time P25 HDU 82.5 ms, LDU 180 ms, TDU 15 ms;
+preamble P25 MMDVM 500 ms + tx delay (max 1 s), HS 50 ms + tx delay; NXDN frame 80 ms, preamble 500 ms + tx delay (radio.md 7.1: E = 500 + d + 80 ms).
 
 A model, not a firmware: no RSSI, no sample buffer, no DMR fill bursts, the underrun window below is our own rule.
 """
@@ -37,13 +37,13 @@ from . import mmdvm_serial as ms
 
 PROFILES = {
     # name: FIFO bytes per key, DMR slot 1 byte, D-STAR preamble base (s), DMR / YSF / NXDN preamble base (s), P25 preamble base (s)
-    # (the P25 and NXDN FIFO sizes are our choice, see the module docstring)
-    "mmdvm": {"cap": {"dstar": 370, "dmr2": 370, "ysf": 4000, "p25": 1200, "nxdn": 1200}, "dmr1": 10, "pre_dstar": 0.5, "pre_other": 0.5,
+    # (the P25 and NXDN FIFO sizes are those of the firmware, see the module docstring)
+    "mmdvm": {"cap": {"dstar": 370, "dmr2": 370, "ysf": 4000, "p25": 4000, "nxdn": 4000}, "dmr1": 10, "pre_dstar": 0.5, "pre_other": 0.5,
               "pre_p25": 0.5},
-    "hs": {"cap": {"dstar": 1000, "dmr2": 875, "ysf": 1500, "p25": 1000, "nxdn": 1000}, "dmr1": 25, "pre_dstar": 0.25, "pre_other": 0.5,
+    "hs": {"cap": {"dstar": 1000, "dmr2": 875, "ysf": 1500, "p25": 1500, "nxdn": 1500}, "dmr1": 25, "pre_dstar": 0.25, "pre_other": 0.5,
            "pre_p25": 0.05},
 }
-UNIT = {"dstar": 13, "dmr2": 35, "ysf": 120, "p25": 216, "nxdn": 49}      # bytes per space unit
+UNIT = {"dstar": 13, "dmr2": 35, "ysf": 120, "p25": 216, "nxdn": 48}      # bytes per space unit
 PREAMBLE_MAX_S = 1.0
 UNDERRUN_WINDOW_S = 1.0               # a frame of the same mode this soon after TX went dry, without an end frame before, is an underrun (our rule)
 
@@ -61,7 +61,7 @@ def stored_bytes(ftype, payload=b""):
     """Bytes a frame takes in its FIFO. P25: a length byte plus the air bytes (the payload minus its flag byte), radio.md 7.3."""
     if ftype in (ms.P25_HEADER, ms.P25_LDU):
         return len(payload) if payload else ms.P25_LDU_LEN          # 1 + (len - 1) air bytes = the payload length
-    return {ms.DSTAR_HEADER: 42, ms.DSTAR_DATA: 13, ms.DSTAR_EOT: 1, ms.DMR_DATA2: 33, ms.YSF_DATA: 120, ms.NXDN_DATA: 49}[ftype]
+    return {ms.DSTAR_HEADER: 42, ms.DSTAR_DATA: 13, ms.DSTAR_EOT: 1, ms.DMR_DATA2: 33, ms.YSF_DATA: 120, ms.NXDN_DATA: 48}[ftype]
 
 
 def airtime_s(ftype, payload=b""):
