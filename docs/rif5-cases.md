@@ -485,6 +485,17 @@ All gated by `DVT_RIF5N=on` and, for the mode cases, by the modes of the rendere
 Changes inside the older cases, under `DVT_RIF5N=on` only: `judge_tx` adds the RIF5k end-sequence problems (`rif5n.end_sequence_problems`: D-STAR data frames = words sent, YSF frames = header + ceil(n / 5) + terminator, DMR bursts = ceil(n / 3), no word beyond the padding) to RIF5-TX-dstar / -dmr / -ysf and
 RIF5-J-LONG; RIF5-J-LONG's YSF join phase is a problem (not a FINDING) when it counts `tx_underrun` or drops; RIF5-O3 compares the `modes` of the public row with the modes of the rendered config (it asserted `dmr, dstar, ysf` before).
 
+### RADIOSEQ1 (`DVT_RADIOSEQ1=on`, 917b9e3b, image `wip-37b7960`)
+
+Own page: [radioseq1-cases.md](radioseq1-cases.md). Shape A (`rif5n-modes.toml`), `-k radioseq1`.
+
+| Case | Test | Source | Asserts (switch on; off: RECORD only) |
+|------|------|--------|---------------------------------------|
+| RADIOSEQ1-RX-dmr / -nxdn | `test_radioseq1_rx_over_is_numbered_by_frame[dmr\|nxdn]` | radio.md "Built (RADIOSEQ1)"; media-format.md "Unit granularity" | a lossless 3 s RF over: a DMRD client of the room hears the letters A..F in order (sync on A, none repeated or skipped); NXDN -> DMR all 148 words, `dir=tx result=dropped` +0; NXDN client SACCH structure 3, 2, 1, 0 |
+| RADIOSEQ1-RX-ysf / -p25 / -dstar | the same test, `[ysf\|p25\|dstar]` | status.md `dv_room_over_units_total` | YSF FN +1 per voice packet; P25 and D-STAR: counters only (D-STAR is the control) |
+| every RADIOSEQ1-RX | the same test | status.md, medload1-cases.md | `dv_edge_over_units_total{dir=rx,proc=radio,result=gap}` +0, `dv_room_over_units_total{result=gap}` +0, `dv_room_overs_total{result=lossy}` +0 |
+| RADIOSEQ1-C | `test_radioseq1_c_radio_to_radio_dmr` | | SKIP: one radio port in the rig (needs a second `mmdvm-serial` row and a second fake modem) |
+
 ### The three open items of the last runs
 
 * **RIF5k, `tx_underrun` +1 in the DMR phase of RIF5-J-LONG (clean fake).** `e9fdbe87` rewrote the rule (radio.md 7.1): a fresh post-write status showing TX off after observed TX on during an open over is an underrun CANDIDATE, counted once per key-up only if

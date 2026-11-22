@@ -636,6 +636,9 @@ services:
       # "The image wip-f1f3777"); DVT_PORTCTL1=on adds the same-talker RTS case for the image after it (PORTCTL1, 1ea6bd00). Unset: the earlier assertions.
       DVT_RIF5N: ${DVT_RIF5N:-}
       DVT_PORTCTL1: ${DVT_PORTCTL1:-}
+      # on for the image dv-router:wip-37b7960 (DV-Router 917b9e3b, RADIOSEQ1: the radio hub numbers voice by frame ordinal): the RADIOSEQ1-RX-* cases of
+      # cases/test_rif5_mmdvm_serial.py assert the DMR letters A..F, gap 0, no lossy over, YSF FN and NXDN SACCH steps; unset: they only record (docs/radioseq1-cases.md)
+      DVT_RADIOSEQ1: ${DVT_RADIOSEQ1:-}
       # SECRELOAD1 / SECRELOAD2 (cases/test_secret_reload.py): on = the APRS-IS edge and the image rule are EXPECTED, so a missing series or route
       # fails instead of skipping. Not passing them made the strict mode inert in every rig run (cases/unit/test_tester_env.py guards the class).
       DVT_SECRELOAD1: ${DVT_SECRELOAD1:-}

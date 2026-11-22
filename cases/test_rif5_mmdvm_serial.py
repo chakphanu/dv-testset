@@ -18,6 +18,8 @@ GAPs: docs/rif5-cases.md. Pure judgements: dvtest/rif5.py, the modem and the env
   RIF5-D1   (b) a silent modem: the port goes Down after 2000 ms without a valid status; polls, backoff, six version tries, recovery
   RIF5-M1   the counters of the run: overs, modem results, port results
 
+  RADIOSEQ1-*  the image wip-37b7960 (DV-Router 917b9e3b, DVT_RADIOSEQ1=on; docs/radioseq1-cases.md): the radio hub numbers received DMR / YSF / NXDN / P25
+            voice by frame ordinal: DMR letters A..F, no gap, no lossy over, YSF FN and NXDN SACCH steps; without the switch the cases only record
   RIF5N-*   the image dv-router:wip-f1f3777 (DV-Router bc9af2b1, DVT_RIF5N=on; docs/rif5-cases.md "The image wip-f1f3777"): NXDN (RIF5d) and P25 (RIF5e)
             TX / RX / long overs / foreign RAN and NAC / NXDN <-> DMR, the RIF5k end sequence and the RIF5l voiceless join in the older cases, the
             D-STAR ride-along (RIF5h) with its negative control, the RFHEARD1 guard, and PORTCTL1 (DVT_PORTCTL1=on)
@@ -37,7 +39,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from dvtest import clients, echo, rif5, rif5n, sut_config
+from dvtest import clients, echo, medload1, metrics, radioseq1, rif5, rif5n, sut_config
 from dvtest import mmdvm_rf as rf
 from dvtest import mmdvm_fw
 from dvtest import mmdvm_modem as mm
@@ -1290,6 +1292,168 @@ def test_n_rfheard1_a_radio_heard_position_is_never_ridden_along(ctx, web):
     if lines:
         problems.append("the D-STAR over of a talker WITHOUT a position carries D-PRS lines %s (a radio-heard position rode along)" % lines)
     assert not problems, "%s: %s" % (case, problems)
+
+
+# ---------------------------------------------------------------- RADIOSEQ1 (DVT_RADIOSEQ1=on, DV-Router 917b9e3b, image wip-37b7960)
+
+RS_KINDS = ("dstar", "dmr", "ysf", "nxdn", "p25")
+RS_SETTLE_S = 11.0                                   # the hub metrics are up to 10 s old: a baseline that holds everything before the over
+
+
+def rs_listeners(ctx, kind):
+    """{name: client} that hear the radio over of `kind`: the DMR (DMRD) client of the room, the YSF client, for NXDN BOTH the NXDN client and a DMR client of the
+    same room (NXDN -> DMR needs no transcoder), the P25 client; none for D-STAR (the control: only the counters are read)."""
+    wanted = {"dmr": [("dmr", "dmr")], "ysf": [("ysf", "ysf")], "nxdn": [("nxdn", "nxdn"), ("dmr", "dmr")], "p25": [("p25", "p25")]}.get(kind, [])
+    out = {}
+    try:
+        for name, proto in wanted:
+            if proto in ("nxdn", "p25"):
+                out[name] = RoomMember(ctx.ip, proto, 1, listen=True)
+            else:
+                out[name] = member(ctx, proto, rif5.ROOMS[kind], 1, listen=True)
+    except BaseException:
+        for client in out.values():
+            client.close(settle=0.0)
+        raise
+    return out
+
+
+def rs_play(ctx, kind):
+    """The modem plays one lossless RF over of 3 s (150 words, 148 for NXDN, 144 for P25) and returns the KeyUp."""
+    if kind in N_MODES:
+        return play_n(ctx, kind, n_words(kind, rif5n.RX_WORDS[kind], "radioseq1"), n_rx_kwargs(kind, ctx.port))
+    return ctx.modem.keyup(kind, seconds=RX_SECONDS, seed="radioseq1", **rx_kwargs(kind, ctx.port))
+
+
+def rs_wait_end(client):
+    if isinstance(client, RoomMember):
+        heard_end(client, client.kind)
+    else:
+        wait_for(lambda: [o for o in client.overs() if o.ended], 10.0)
+        time.sleep(0.6)
+
+
+def rs_datagrams(client):
+    """What the client has received so far, in arrival order."""
+    if isinstance(client, RoomMember):
+        return [bytes(d) for _t, d in client.items()]
+    return [bytes(d) for d in list(client.client.client.inbox)]
+
+
+def rs_judge(ctx, case, name, kind, client, data, ku, problems):
+    """The numbering of what one listener heard: records it always, adds to `problems` what DVT_RADIOSEQ1 asserts."""
+    if name == "dmr":
+        bursts = radioseq1.dmrd_bursts(data)
+        verdict = radioseq1.superframe_verdict(bursts)
+        note(ctx.target, case, "RECORD", "DMRD listener: voice letters %s; %s" % (radioseq1.histogram(bursts), ", ".join(
+            "%s=%s" % kv for kv in sorted(verdict.facts.items()) if kv[0] != "histogram")))
+        problems += ["DMR listener: %s" % p for p in verdict.problems]
+        overs = client.overs()
+        want = ku.voice if kind == "dmr" else [nxdn.to_dmr(w) for w in ku.voice]
+        heard = [f for o in overs for f in o.frames]
+        compare = echo.compare_payload(want, heard)
+        note(ctx.target, case, "RECORD", "DMR listener: %d overs, words wanted %d, heard %d, first difference %s, missing %d, extra %d" % (
+            len(overs), len(want), len(heard), compare.first_diff, compare.missing, len(compare.extra)))
+        if len(overs) != 1 or not (compare.prefix_ok and not compare.missing):
+            problems.append("DMR listener: %d overs, %d of %d words (first difference at %s, %d missing)" % (
+                len(overs), len(heard), len(want), compare.first_diff, compare.missing))
+    elif name == "ysf":
+        verdict = radioseq1.cyclic_progression(radioseq1.ysf_fn_values(data), radioseq1.YSF_FN_MODULI)
+        note(ctx.target, case, "RECORD", "YSF listener: FICH FN of the voice packets %s" % verdict.facts)
+        problems += ["YSF FN: %s" % p for p in verdict.problems]
+    elif name == "nxdn":
+        verdict = radioseq1.cyclic_progression(radioseq1.nxdn_sacch_structures(data), (4,), radioseq1.NXDN_SACCH_STEP)
+        note(ctx.target, case, "RECORD", "NXDN listener: SACCH structure of the voice packets %s" % verdict.facts)
+        problems += ["NXDN SACCH: %s" % p for p in verdict.problems]
+    else:
+        heard = client.heard()
+        note(ctx.target, case, "RECORD", "P25 listener: %d words, record types %s, lifecycle %s (the egress numbering of P25 is not decoded: counters only)" % (
+            len(heard["voice"]), dict(Counter(heard["types"])), heard["lifecycle"]))
+
+
+@pytest.mark.parametrize("kind", RS_KINDS)
+def test_radioseq1_rx_over_is_numbered_by_frame(kind, ctx, web):
+    """RADIOSEQ1 (DV-Router 917b9e3b; radio.md "Built (RADIOSEQ1)", media-format.md "Unit granularity", status.md "dv_room_over_units_total"): a lossless RF over of
+    3 s from the fake modem, in each mode. (a) a DMR (DMRD) client of the room (for NXDN: also an NXDN client) hears the voice letters A..F in order per superframe
+    with the sync flag on A, none repeated or skipped, and for NXDN -> DMR every word; (b) over the case the hub counters `dv_edge_over_units_total{dir=rx,
+    proc=radio,result=gap}` and `dv_room_over_units_total{room,result=gap}` stay 0 and the over is not counted `lossy`; (d) the FICH FN of a YSF egress and the SACCH
+    structure of an NXDN egress advance by one frame (YSF: FN +1 modulo 7 or 8; NXDN: 3, 2, 1, 0); P25 egress and D-STAR: counters only. Evidence on bc9af2b1
+    (rig run 20261122T075521Z): the DMRD client saw only A and D, `over_gap` 2 per burst (100 for the 150 words), the over `lossy`, YSF 4 per frame; NXDN -> DMR
+    heard 78 of 148 words (dmrhb EgressDropped 36).
+
+    DVT_RADIOSEQ1 off or unset: the case plays the over and only RECORDS the letter histogram, the FN / SACCH steps, the words and the counters (a difference the
+    switch would assert is a RECORD line "not asserted"); on: every difference is a problem."""
+    if kind in N_MODES:
+        need_n(ctx, kind)
+    case = "RADIOSEQ1-RX-%s" % kind
+    strict = radioseq1.on(os.environ)
+    ready(ctx, web, case)
+    problems = []
+    read, before = None, None
+    if ctx.control is not None:
+        def read():
+            try:
+                return radioseq1.counts(metrics.parse(ctx.control.metrics("xlxd-sut")), rif5.ROOMS[kind].lower())
+            except (RuntimeError, OSError, ValueError) as exc:
+                raise TimeoutError("the hub metrics could not be read: %s" % exc)
+        try:
+            time.sleep(RS_SETTLE_S)
+            before = read()
+        except TimeoutError as exc:
+            problems.append("hub counters: %s" % exc)
+            read = None
+    listeners = rs_listeners(ctx, kind)
+    got = {}
+    try:
+        ku = rs_play(ctx, kind)
+        assert ku.wait(RX_SECONDS + 20) and ku.error is None, "the modem could not play the over: %s" % ku.error
+        for client in listeners.values():
+            rs_wait_end(client)
+        got = {name: rs_datagrams(client) for name, client in listeners.items()}
+        for name, client in listeners.items():
+            rs_judge(ctx, case, name, kind, client, got[name], ku, problems)
+    finally:
+        for client in listeners.values():
+            client.close(settle=0.5)
+    TALLY["rx"] += 1
+    if read is None:
+        note(ctx.target, case, "RECORD", "no hub counters (the control channel, DVT_RIG_CONTROL=1, is off or unreadable): the gap counters were not read")
+    else:
+        try:
+            after = medload1.wait_settled(read, before)
+        except TimeoutError as exc:
+            problems.append("hub counters: %s" % exc)
+        else:
+            change = radioseq1.delta(after, before)
+            verdict = radioseq1.judge_counts(change)
+            note(ctx.target, case, "RECORD", "hub counters over the over (room %s): %s" % (rif5.ROOMS[kind], dict(change._asdict())))
+            problems += ["hub counters: %s" % p for p in verdict.problems]
+            if change.overs_end_missing:
+                note(ctx.target, case, "FINDING", "the over was counted end_missing (%g), not complete: the end of a lossless RF over was not seen by the room" % change.overs_end_missing)
+            if change.egress_dropped or change.egress_lost or change.egress_late:
+                note(ctx.target, case, "RECORD", "egress units: dropped %g, lost %g, late %g (all edges, dir=tx)" % (
+                    change.egress_dropped, change.egress_lost, change.egress_late))
+                if kind == "nxdn" and change.egress_dropped:
+                    problems.append("hub counters: dv_edge_over_units_total{dir=tx,result=dropped} rose by %g (the dmrhb EgressDropped 36 of the NXDN -> DMR over)" % change.egress_dropped)
+    if not strict:
+        for line in problems:
+            note(ctx.target, case, "RECORD", "not asserted (DVT_RADIOSEQ1 is off): %s" % line)
+        return
+    assert not problems, "%s: %s" % (case, problems)
+
+
+def test_radioseq1_c_radio_to_radio_dmr(ctx):
+    """(c) A radio DMR over relayed to a SECOND radio DMR port reaches that fake modem with its bursts in order. SKIP: the rig has one radio port. Every rif5*.toml
+    defines exactly one `[[edges.radio.port]]` (name rif5-modem, udp <tester>:3340 / <sut>:3341), and the tester plays one fake modem (`ctx.modem`, one
+    `PinnedUdp`). What it needs, nothing invented here: a snippet `rif5-two-ports.toml` with a second mmdvm-serial row (own `name`, `physical`, `udp` /
+    `udp_bind` pair, e.g. :3342 / :3343) that serves the SAME DMR room (the comments of rif5n-modes.toml say the modes of ONE port serve different modules; whether two
+    ports may share a module is a question for DV-Router), a second Rif5Modem in the tester and a judge of the burst order on the second modem (`rif5.judge_tx_dmr`
+    already reads the A..F letters of host frames)."""
+    doc = read_config(ctx.target)
+    rows = [p for p in (((doc.get("edges") or {}).get("radio") or {}).get("port") or []) if isinstance(p, dict) and p.get("kind") == "mmdvm-serial"]
+    note(ctx.target, "RADIOSEQ1-C", "RECORD", "mmdvm-serial rows in the rendered config: %d (needs 2 and a second fake modem in the tester)" % len(rows))
+    pytest.skip("RADIOSEQ1 (c) needs a second radio port: the rig has one ([[edges.radio.port]] rif5-modem, one fake modem); a snippet with a second mmdvm-serial row "
+                "serving the same DMR room and a second Rif5Modem would be needed (docs/radioseq1-cases.md); not invented here")
 
 
 # ---------------------------------------------------------------- RIF5-N: PORTCTL1 (DVT_PORTCTL1=on, 1ea6bd00, after wip-f1f3777)

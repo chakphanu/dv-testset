@@ -90,6 +90,12 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
                      off or unset: those cases skip naming this switch (docs/rif5-cases.md "The image wip-f1f3777")
   DVT_PORTCTL1       on: the image has DV-Router PORTCTL1 (1ea6bd00, after wip-f1f3777): after the room's timeout the same talker's repeated headers open no new RTS
                      (`over_total{dir=rx,result=rts_suppressed}`): the case RIF5-PORTCTL1 (a 191 s D-STAR RF over with repeated headers, about 4 minutes); off or unset: it skips; no other case reads it
+  DVT_RADIOSEQ1      on: the image has RADIOSEQ1 (DV-Router 917b9e3b, dv-router:wip-37b7960): the radio hub numbers received DMR / YSF / NXDN / P25 voice by frame
+                     ordinal, so a lossless radio over reaches a DMR (DMRD) client with the voice letters A..F in order (sync on A), the hub gap counters
+                     (dv_edge_over_units_total{dir=rx,proc=radio,result=gap}, dv_room_over_units_total{result=gap}) stay 0 and the over is not counted lossy,
+                     a YSF egress FN and an NXDN egress SACCH structure advance by one frame: the cases RADIOSEQ1-RX-<mode> of cases/test_rif5_mmdvm_serial.py
+                     assert these (shape A of docs/rif5-cases.md, DVT_RIF5N=on for NXDN and P25, DVT_RIG_CONTROL=1 for the counters); off or unset: the same
+                     cases play the overs and only RECORD the letter histogram, the FN / SACCH steps and the counters (docs/radioseq1-cases.md)
   DVT_DIGI1          on: the image has the DIGI1 fill-in digipeater (DV-Router 22994519 + 588ffb4c, wip-eeb44b4): cases/test_digi1.py plays fake KISS TNCs
                      (rig/config/dv-router/digi1.toml = the rate floor 10 / 3 and the class defaults, digi1-roomy.toml = 20 % duty for the functional cases)
                      and asserts DIGI-R1 to R5 (the path vectors G1 to G13, the duplicate window, the flood, two fill-ins, the startup guard) and
