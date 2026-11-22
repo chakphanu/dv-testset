@@ -71,6 +71,6 @@ and 12 s at the end.
 
 * Diagnostics: 40 invalid `access.allow` entries give 40 errors; BUD1-c asserts the cut (no more skip).
 * No refused-body counter survives a process restart (the hub keeps one entry per process, the newest `start_ms` replaces it). So `RigControl.kill_proc` runs `kill_hooks` first, and the BUD1 hook
-  (`Hook.pre_kill`) waits 11 s and samples before the FIRST kill of a process in a burst (kills of the same process within 30 s pass at once). With `DVT_BUD1=on` every first kill costs 11 s.
+  (`Hook.pre_kill`) waits 11 s and samples before the FIRST kill of a process in a burst (kills of the same process within 30 s pass at once). The pre-kill sample is installed only with `DVT_BUD1_KILLWAIT=on` (then every first kill costs 11 s); a chain that runs `DVT_BUD1=on` over all its stages leaves it off so standing restart cases keep their timing, and the BUD1 stage itself sets it.
 * K6b's exact set is the 8 identities of `MAIN` (`body_budgets.rs:13`: launcher, controller room-a, edge usrp, web, admin, recorder, basemap, data-worker); "15" is loose (six more fixtures use
   `assert_none` on one or two identities). A full-node rig expects no fixed number: BUD1-a asserts the zero family per process and RECORDS the set seen.

@@ -100,7 +100,10 @@ def session_start(config):
     hook = Hook(out, lambda service: control.metrics(service), services(), every_s=_number(None, "DVT_BUD1_EVERY_S", bud1.EVERY_S),
                 settle_s=_number(None, "DVT_BUD1_SETTLE_S", bud1.SETTLE_S))
     _state["hook"] = hook
-    RigControl.kill_hooks.append(hook.pre_kill)
+    # the pre-kill sample waits DVT_BUD1_SETTLE_S before the first kill of a process: only with DVT_BUD1_KILLWAIT=on, so that standing
+    # cases that time a restart from the kill keep their timing when DVT_BUD1=on samples a whole chain
+    if os.environ.get("DVT_BUD1_KILLWAIT", "").lower() in ("on", "1", "true", "yes"):
+        RigControl.kill_hooks.append(hook.pre_kill)
     hook.start()
 
 
