@@ -793,9 +793,11 @@ def test_j_long_overs_are_lossless(ctx, web):
             time.sleep(11.0)                                      # the hub metrics are up to 10 s old
             snaps.append((label, counters_now(ctx)))
 
+    sinces = {}
     for kind in KINDS:
         sub = "%s-%s" % (case, kind)
         log, since, sent, ident = tx_over(ctx, web, kind, LONG_FRAMES, "rif5-jlong", sub, after_link=(lambda: snap("ysf join")) if kind == "ysf" else None)
+        sinces[kind] = since
         verdict = judge_tx(kind, log, sent, ident, ctx.port)                   # strict: a dropped word is a problem
         native = [f for f in log if f.ftype in ms.TX_TYPES[kind]]
         natives += len(native)
@@ -849,6 +851,12 @@ def test_j_long_overs_are_lossless(ctx, web):
                 for key in ("dropped", "tx_underrun"):
                     if row[key]:
                         problems.append("%s grew by %s during the %s of 150 words" % (key, row[key], label))
+                if row["tx_underrun"]:
+                    # radio.md 7.1 at bc9af2b1: a count needs more DATA of the same over after a fresh TX-off status; a header write clears the candidate (DV-Router
+                    # answer 13: a +1 here is a product defect). The evidence to send:
+                    kind_ = label.split()[0]
+                    note(ctx.target, case, "FINDING", "PRODUCT: tx_underrun +%s in the %s; evidence %s; timeline rif5/timeline-%s-%s.jsonl" % (
+                        row["tx_underrun"], label, rif5n.underrun_evidence(ctx.modem.events_between(sinces[kind_], sinces[kind_] + 8.0)), case.replace("RIF5-", ""), kind_))
         ok = rif5.delta(before, after, "dv_edge_radio_frames_total", dir="tx", result="ok")
         note(ctx.target, case, "RECORD", "frames_total{dir=tx,result=ok} grew by %s over the whole case, the modem logged %d native frames of the overs" % (ok, natives))
     assert not problems, "%s: %s" % (case, problems)
@@ -1132,6 +1140,9 @@ def test_n_long_over_is_lossless(kind, ctx, web):
                "ok": rif5.delta(before, after, "dv_edge_radio_frames_total", dir="tx", result="ok")}
         note(ctx.target, case, "RECORD", "counters grew by %s, the modem logged %d native frames" % (row, len(native)))
         problems += ["%s grew by %s during the over of %d words" % (k, row[k], len(sent)) for k in ("dropped", "tx_underrun") if row[k]]
+        if row["tx_underrun"]:
+            note(ctx.target, case, "FINDING", "PRODUCT: tx_underrun +%s; evidence %s (timeline rif5/timeline-%s.jsonl)" % (
+                row["tx_underrun"], rif5n.underrun_evidence(ctx.modem.events_between(since)), case.replace("RIF5", "").lstrip("-")))
     assert not problems, "%s: %s" % (case, problems)
 
 
@@ -1268,8 +1279,9 @@ def test_n_rfheard1_a_radio_heard_position_is_never_ridden_along(ctx, web):
     log, _since = dstar_cross_over(ctx, web, case + "-after")
     lines = rif5n.dprs_lines(log)
     after = rif5n.metric_total(hub_text(ctx), *rif5n.RF_DROP[:1], **rif5n.RF_DROP[1])
-    note(ctx.target, case, "RECORD", "dv_pkt_rf_drop_total{reason=rf_origin} %s -> %s (the hub text is up to 10 s old); D-PRS lines in the over after the RF over: %s" % (
-        before, after, lines))
+    # the series is created lazily (DV-Router answer 16): absent is 0, the first appearance is growth from 0, a zero series is never asserted
+    note(ctx.target, case, "RECORD", "dv_pkt_rf_drop_total{reason=rf_origin} %s -> %s (absent = 0; the hub text is up to 10 s old); D-PRS lines in the over after the RF over: %s" % (
+        before or 0, after or 0, lines))
     problems = []
     if echoed:
         problems.append("the radio-heard over was written back to the modem: %s" % echoed[:6])
@@ -1281,48 +1293,47 @@ def test_n_rfheard1_a_radio_heard_position_is_never_ridden_along(ctx, web):
 # ---------------------------------------------------------------- RIF5-N: PORTCTL1 (DVT_PORTCTL1=on, 1ea6bd00, after wip-f1f3777)
 
 def test_portctl1_the_same_talker_opens_no_new_rts_after_the_room_timeout(ctx, web):
-    """PORTCTL1 (radio.md 10.3 "Built (PORTCTL1)"): after the room revokes an RX over (its TOT, 180 s, bounds every received over) while the carrier
-    remains, the SAME talker's repeated headers (here the late entry of the embedded LC of a DMR over that goes on) start no new RTS until an end frame, a
-    loss, a Down, a different talker or 300 ms of silence; each blocked start is counted `over_total{dir=rx,result=rts_suppressed}`. A DMR RF over of
-    N0CALL runs 190 s (the room ends it at 180 s): the client of room Q hears ONE over, `rts_suppressed` grew by at least 1; after its terminator the same
-    talker opens a normal over at once (a 2 s over: heard, one over). About 3.5 minutes. The old image (no PORTCTL1) is expected to open a second over
-    for the late entry: this case is red there by design. Written offline: whether the modem's late entry is what the edge counts as a repeated header
-    is not stated by the document (a RECORD of the overs heard)."""
+    """PORTCTL1 (radio.md 10.3 "Built (PORTCTL1)", DV-Router answer 15): after the room revokes an RX over (the room's TOT, 180 s, bounds every received over)
+    while the carrier remains, the SAME talker's repeated headers (D-STAR MY) start no new RTS until an end frame, a loss, a Down, a different talker or 300 ms of
+    silence; each blocked start is counted `over_total{dir=rx,result=rts_suppressed}`. D-STAR, not DMR: a DMR late entry never reaches the gate (the identity stays
+    open through a revoke, so the late entry does not fire; a repeated header of the open identity bypasses it) and `rts_suppressed` stays 0 there. A D-STAR RF over of
+    N0CALL runs 191.2 s with its header repeated every 100 ms from 181.2 s (the room ends it at 180 s): the client of room P hears ONE over, `rts_suppressed` grew by at
+    least 1 (DV-Router's unit test counts 100), and 0.6 s after the carrier stopped a 2 s over of the same talker is a new over (the silence rule). About 4 minutes. The
+    image before PORTCTL1 allocates a new sid per repeated header, so it is expected to fail the first assertion. Written offline: the RECORD lines hold the overs heard."""
     if not rif5.portctl1_on(os.environ):
         pytest.skip("DVT_PORTCTL1 is not on: this case is for an image with DV-Router PORTCTL1 (1ea6bd00, the image after wip-f1f3777; docs/rif5-cases.md)")
     case = "RIF5-PORTCTL1"
     ready(ctx, web, case)
     time.sleep(11.0)
     before = counters_now(ctx)
-    kw = rx_kwargs("dmr", ctx.port)
-    listener = member(ctx, "dmr", rif5.ROOMS["dmr"], 1, listen=True)
+    air = rif5n.stuck_carrier_air(rx_kwargs("dstar", ctx.port))
+    listener = member(ctx, "dstar", rif5.ROOMS["dstar"], 1, listen=True)
     try:
-        ku = ctx.modem.keyup("dmr", seconds=190.0, **kw)
-        assert ku.wait(190.0 + 30) and ku.error is None, "the modem could not play the over: %s" % ku.error
-        time.sleep(1.0)
+        ku = ctx.modem.play_air("dstar", air, voice=[], count=0)
+        assert ku.wait(200.0 + 30) and ku.error is None, "the modem could not play the over: %s" % ku.error
+        time.sleep(0.6)                                                   # more than the 300 ms silence rule
         long_overs = listener.overs()
         mark = len(long_overs)
-        settle_idle(ctx.modem, 10.0)
-        ku2 = ctx.modem.keyup("dmr", seconds=2.0, seed="rif5-portctl1-after", **kw)
+        ku2 = ctx.modem.keyup("dstar", seconds=2.0, seed="rif5-portctl1-after", **rx_kwargs("dstar", ctx.port))
         assert ku2.wait(30.0) and ku2.error is None
         wait_for(lambda: len([o for o in listener.overs() if o.ended]) > mark, 10.0)
         time.sleep(0.6)
         all_overs = listener.overs()
     finally:
         listener.close(settle=0.5)
-    note(ctx.target, case, "RECORD", "overs heard in the 190 s over: %s; after the terminator: %d more" % (
-        [(round(o.end - o.start, 1), o.idents, o.ended) for o in long_overs], len(all_overs) - mark))
+    note(ctx.target, case, "RECORD", "repeated headers sent: %d; overs heard before the second over: %s; after it: %d more" % (
+        len([1 for t, _p, _d in air if t == rf.DSTAR_HEADER]) - 1, [(round(o.end - o.start, 1), o.idents, o.ended) for o in long_overs], len(all_overs) - mark))
     time.sleep(12.0)
     after = counters_now(ctx)
     suppressed = rif5.delta(before, after, rif5n.RTS_SUPPRESSED[0], **rif5n.RTS_SUPPRESSED[1])
     note(ctx.target, case, "RECORD", "over_total{dir=rx,result=rts_suppressed} grew by %s" % suppressed)
     problems = []
     if len(long_overs) != 1:
-        problems.append("the room heard %d overs in the 190 s over, one expected (the same talker is not given a new RTS after the timeout)" % len(long_overs))
+        problems.append("the room heard %d overs in the stuck-carrier over, one expected (the same talker's repeated headers open no new RTS after the timeout)" % len(long_overs))
     if not suppressed:
         problems.append("over_total{dir=rx,result=rts_suppressed} did not grow")
     if len(all_overs) - mark != 1:
-        problems.append("after the terminator the same talker's 2 s over was heard as %d overs, one expected" % (len(all_overs) - mark))
+        problems.append("0.6 s after the carrier stopped the same talker's 2 s over was heard as %d overs, one expected" % (len(all_overs) - mark))
     assert not problems, "%s: %s" % (case, problems)
 
 

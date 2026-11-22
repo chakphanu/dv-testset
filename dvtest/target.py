@@ -89,7 +89,7 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
                      the config is rig/config/dv-router/rif5n-modes.toml, or rif5n-ride.toml (ride_along = true, with data-ident.toml), INSTEAD of rif5-mmdvm-udp.toml;
                      off or unset: those cases skip naming this switch (docs/rif5-cases.md "The image wip-f1f3777")
   DVT_PORTCTL1       on: the image has DV-Router PORTCTL1 (1ea6bd00, after wip-f1f3777): after the room's timeout the same talker's repeated headers open no new RTS
-                     (`over_total{dir=rx,result=rts_suppressed}`): the case RIF5-PORTCTL1 (a 190 s RF over, about 3.5 minutes); off or unset: it skips; no other case reads it
+                     (`over_total{dir=rx,result=rts_suppressed}`): the case RIF5-PORTCTL1 (a 191 s D-STAR RF over with repeated headers, about 4 minutes); off or unset: it skips; no other case reads it
   DVT_DIGI1          on: the image has the DIGI1 fill-in digipeater (DV-Router 22994519 + 588ffb4c, wip-eeb44b4): cases/test_digi1.py plays fake KISS TNCs
                      (rig/config/dv-router/digi1.toml = the rate floor 10 / 3 and the class defaults, digi1-roomy.toml = 20 % duty for the functional cases)
                      and asserts DIGI-R1 to R5 (the path vectors G1 to G13, the duplicate window, the flood, two fill-ins, the startup guard) and

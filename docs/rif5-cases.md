@@ -454,7 +454,7 @@ DVT_SUT_CONFIG_EXTRA=$R/web.toml:$R/admin.toml:$R/totp-required.toml:$R/data-ide
 
 About 20 minutes (estimate): the 12 minutes of "Run it" plus the J cases (3) plus the new cases (about 6: TX 3 x 10 s, RX 3 x 10 s, foreign 2 x 25 s with the 12 s counter wait, LONG 2 x 40 s, JOIN 2 x 35 s with two 11 s / 12 s counter waits, RIDE 30 s, RFHEARD1 30 s).
 Shape B, the positive rider case, its own rig run (about 6 minutes: 3 for the rig, the two cases 1.5): same command with `rif5n-ride.toml` instead of `rif5n-modes.toml` and `-- cases/test_rif5_mmdvm_serial.py -k "ride or rfheard1" -rA`.
-Add `DVT_RIF5FW_PROFILE=hs` for the HS board. `DVT_PORTCTL1=on` (the image after this one, 1ea6bd00; about 4 minutes more, its own case) is documented below.
+Add `DVT_RIF5FW_PROFILE=hs` for the HS board. `DVT_PORTCTL1=on` (the image after this one, 1ea6bd00; a D-STAR over of 191 s, about 4 minutes more, its own case) is documented below.
 
 **Expected verdict on `wip-f1f3777`, shape A:** every case that passed on `wip-eeb44b4` passes, with these CHANGES that are expected, not defects: RIF5-TX-dstar and RIF5-TX-ysf no longer see the extra end unit / frame (the RIF5k check `extra_words == 0` is a problem now); the YSF
 join does not key (RIF5-J-LONG's join phase and RIF5N-JOIN-ysf); RIF5-J-LONG counts 0 `tx_underrun` in all four phases. New: RIF5N-O1, TX-nxdn, TX-p25, TX-nxdn-from-dmr, RX-nxdn, RX-p25, RX-nxdn-to-dmr, RXR-ran, RXR-nac, LONG-nxdn, LONG-p25, JOIN-dmr, JOIN-ysf, RIDE
@@ -496,10 +496,10 @@ RIF5-J-LONG; RIF5-J-LONG's YSF join phase is a problem (not a FINDING) when it c
 ### PORTCTL1 (`DVT_PORTCTL1=on`, 1ea6bd00, not in `wip-f1f3777`)
 
 DV-Router's note: after the room ends an RX over by its timeout, the SAME talker's repeated headers (D-STAR MY, DMR / NXDN / P25 src, YSF source) start no new RTS until an end frame, a loss, a Down, a different talker or 300 ms of silence (`over_total{dir=rx,result=rts_suppressed}`);
-a different talker opens at once. **No existing RIF5 case relies on a repeated header opening a new RTS after a timeout** (RIF5-RXD and the garbled / bad-frame cases end their overs inside the over, by the 300 ms rule or by LOST, and a damaged copy never opens an over), so the default behaviour of every case is
-unchanged. The new expectation is one case under the separate switch, `RIF5-PORTCTL1` (`test_portctl1_the_same_talker_opens_no_new_rts_after_the_room_timeout`): a 190 s DMR RF over of N0CALL (the room's TOT of 180 s ends it; radio.md: an over received on the port is bounded by it) while the carrier goes on:
-a DMR client of room Q hears ONE over, `rts_suppressed` grew by at least 1, and after the over's terminator a 2 s over of the same talker is heard as one more over. About 4 minutes. The old image is expected to fail it (a second over for the late entry). Whether the late entry of the embedded LC is what the edge counts as a
-"repeated header" is not stated; the case records the overs heard.
+a different talker opens at once. **No existing RIF5 case relies on a repeated header opening a new RTS after a timeout**, so the default behaviour of every case is unchanged. DV-Router's answer 15: the gate is reached by D-STAR repeated headers (their own tests, `floor.rs`), **not by a DMR late entry** (a revoke does not clear the
+open identity, so the late entry never fires and a repeated header of the open identity bypasses the gate: `rts_suppressed` stays 0 and one over is heard on both images). So the case was moved from DMR to D-STAR: `RIF5-PORTCTL1` (`test_portctl1_the_same_talker_opens_no_new_rts_after_the_room_timeout`, `rif5n.stuck_carrier_air`): a D-STAR RF over of N0CALL runs 191.2 s with its header repeated every 100 ms
+from 181.2 s (the room's TOT of 180 s ends it; the scenario of `portctl1_endless_stuck_headers_are_suppressed_until_the_carrier_stops`), no EOT; the client of room P hears ONE over, `rts_suppressed` grew by at least 1 (their unit test counts 100), and 0.6 s after the carrier stopped a 2 s over of the same talker is heard as one more over (the silence rule).
+About 4 minutes. The image before PORTCTL1 allocates a new sid per repeated header, so it is expected to fail the first assertion. A DMR 190 s case (one over, count 0, both images) was not kept.
 
 ### GAPs of this image
 
@@ -508,20 +508,22 @@ a DMR client of room Q hears ONE over, `rts_suppressed` grew by at least 1, and 
   the status-symbol value (01, a lead default of radio.md), the P25 NID bit 64, the unkey tails (1400 / 1540 ms), the TOT, mode ownership across the ten pairs of five modes (RIF5m: `over_total{dir=tx,result=mode_busy}` for a second mode's start; the earlier `mode_busy` GAP stands and now has a documented rule to test).
 * **The firmware-like fake's NXDN and P25 FIFOs** are the firmware's (answer 17); the margins on a real board stay with RIF13 H3.
 * **The rider:** the status text (a DMRA alias becoming `dstar-text20` blocks) is a RECORD, not an assertion (the text the sanitiser makes of an alias is not stated); position ambiguity, privacy and the 1-per-30-s admission are DP7's cases; a YSF or M17 talker's position as the source; late entry with a rider (RIF13 R1) and the timing equality (R4) are hardware.
-* **RFHEARD1** is a guard with no producer on this port today (the radio edge sets no `RF_HEARD`, and a rider is bound to its own talker's stream), so a black-box case can show only the absence of a radio-heard position on RF; the AX.25 and worker RF group paths are `cases/test_dp18_origin.py` and `cases/test_dp15_rf.py`.
-  Whether `dv_pkt_rf_drop_total{reason=rf_origin}` is exported at 0 before its first count is not stated.
+* **RFHEARD1** is a guard with no producer on an `mmdvm-serial` port (answer 18: intended; the radio edge never sets `RF_HEARD`, and `origin_is_rf` also tests the origin edge, so a rider is refused for radio origin anyway), so the case here can show only the absence of a radio-heard position on RF. The flag path is the AX.25 edge's
+  (`crates/edge/ax25/src/shell.rs` sets `rf_heard = true`; `dv_edge_rf_rejected_total{result=rf_origin}`, `dv_pkt_rf_drop_total{reason=rf_origin}`): a positive case needs an AX.25 port with a fake KISS TNC (the DP15 / DIGI1 configs) and a text heard on it that routes back to an AX.25 port as a group message. **GAP, not built** (too large for this unit: a second radio-edge shape plus the AX.25
+  paths of `cases/test_dp15_rf.py`; there is no `rf_origin` assertion in `cases/test_dp18_origin.py` today). `dv_pkt_rf_drop_total{reason=rf_origin}` is created lazily (answer 16): absent is 0, a zero series is never asserted.
 * **RIF6 `icom-terminal`** (an RX-only serial kind with its own protocol, `2a5f7596`, `bc9af2b1`) needs its own fake (the Icom terminal-mode serial dialogue of radio.md 6.2); not started.
 
-### Questions for the DV-Router team
+### Answers of the DV-Router team (answer-342, items 11 to 18) and what changed
 
-1. NXDN TX from a DMR talker: the VCALL src is expected to be the NXDN id of the callsign (N0TEST, 1002, `media-format.md` "src = NXDN id of the callsign"); `x_admit` / `origin_src` in `protocol_nxdn.rs` suggest it. Confirm, also for a talker with a DMR id above 65535 and no NXDN id (dropped under `no_radio_id = drop`).
-2. A P25 TDU on RX is delivered as type `30` with 19 bytes in our fake (radio.md 7.3 lists 19 under type 30); is that what the firmware does (MMDVM `P25RX.cpp` `writeP25Hdr` for the terminator), and what happens with a TDU delivered as type `31`, 19 bytes (the MMDVMHost TX tag)?
-3. NXDN voice frames: radio.md says "SACCH_SS parts 3, 2, 1, 0"; we read that as the SACCH structure field value 3 - (frame index mod 4) with the VCALL part `index mod 4` (as `mmdvm_rf_nxdn.voice_frame` and MMDVMHost). A FINDING only; confirm.
-4. RIF5l: is `over_total{dir=tx,result=no_voice}` counted once per voiceless join for YSF, and does a DMR join start a stream at all on the radio circuit? (The older runs say DMR and D-STAR joins never reached RF.)
-5. RIF5k: is the DMR header train a "header boundary" that clears an unconfirmed underrun candidate (the DMR +1 of the third run)? Which `tx_underrun` count do you expect for the 150-word DMR over of RIF5-J-LONG?
-6. Ride-along: which display text does a DMRA talker alias become in the rider (we would then assert it), and is a D-PRS line expected to appear within the first two superframes after the position is admitted (our bound is the whole 3.6 s over)?
-7. PORTCTL1: is a DMR late entry from the embedded LC a "repeated header" in the sense of the new rule, and does `rts_suppressed` count it? A 190 s RF over is the only way found to make the room time out an RX over from a modem.
-8. Is `dv_pkt_rf_drop_total{reason=rf_origin}` pre-registered at 0?
+1. **NXDN source of a DMR talker (11):** the NXDN id of the callsign (1002 for N0TEST in `rig/config/nxdn.csv`); under `no_radio_id = drop` a talker without one gets no header. As asserted. UNVERIFIED: the content of the rig's `nxdn.csv`.
+2. **P25 TDU on RX (12):** type `30`, 19 bytes, in both firmwares; as the fake delivers it. A type `31` TDU of 19 bytes counts `frames_total{dir=rx,result=short}` and the over ends by the 300 ms rule (an optional negative case, not built).
+3. **DMR header train and `tx_underrun` (13):** the 8 headers clear an unconfirmed candidate and a header write resets the TX-on evidence; the +1 of the third run was the old unconditional rule, removed in `e9fdbe87`. On `wip-f1f3777` a +1 in RIF5-J-LONG / RIF5N-LONG is a product defect; the assertion stays, and on a +1 the case now writes a `FINDING` with `rif5n.underrun_evidence` (the TX-flag edges of the
+   status replies, the fake's `tx_off` / `underrun` / `nak` events, the first pops and the gaps between them, the first frames written) and names the timeline file, so that the report is ready to send. The fake's own underrun rule needs the next frame within 1 s of the dry, the core has no such window: a dry gap over 1 s followed by data counts in the core and not in the fake.
+4. **`no_voice` (14):** a voiceless YSF join counts it once (asserted); a DMR join starts no stream (a RECORD; a DMR client already linked that sends a header without voice would open one, the rig's join is the first header after login).
+5. **PORTCTL1 (15):** moved to D-STAR, above.
+6. **`rf_origin` (16):** lazy, absent = 0 (the RFHEARD1 case reads absent as 0 and records growth).
+7. **FIFOs (17):** MMDVM 4000 B, MMDVM_HS 1500 B for both modes; the fake's NXDN unit is **48 B** (it was 49): fixed in `dvtest/mmdvm_fw.py`, the unit tests and the sections above.
+8. **RFHEARD1 (18):** intended; the AX.25 positive case is a GAP.
 
 ## GAPs, things not driven black-box, and predictions
 

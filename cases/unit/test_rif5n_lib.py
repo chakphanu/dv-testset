@@ -349,3 +349,27 @@ def test_the_p25_rx_air_delivers_the_tdu_as_type_30_with_19_bytes():
     assert rx[1:3] == air[1:3] and rx[0] == air[0]
     nxdn_air = nxrf.build_keyup(SRC_N, DST_N, words("nxdn", 8), ran=RAN)
     assert rif5n.rx_air("nxdn", nxdn_air) == nxdn_air
+
+
+# ------------------------------------------------------------------ PORTCTL1 and the underrun evidence
+
+def test_the_stuck_carrier_air_repeats_the_header_from_181_s_without_air_time():
+    air = rif5n.stuck_carrier_air({"my": "N0CALL", "rpt1": "N0CALL B", "rpt2": "N0CALL G"}, voice_s=2.0, repeat_from_s=1.0, repeat_every=5)
+    headers = [i for i, (t, _p, _d) in enumerate(air) if t == rf.DSTAR_HEADER]
+    data = [x for x in air if x[0] == rf.DSTAR_DATA]
+    assert headers[0] == 0 and len(headers) > 1 and len(data) == 100 and not any(t == rf.DSTAR_EOT for t, _p, _d in air)     # no EOT: the carrier just stops
+    assert all(air[i][2] == 0.0 and air[i][1] == air[0][1] for i in headers[1:])                                          # the same header, no air time
+    assert len(headers) - 1 == 10                                                                                         # every 100 ms from 1.0 s to 2.0 s
+    first = headers[1]
+    assert sum(d for _t, _p, d in air[:first]) / 1000.0 >= 0.99
+
+
+def test_underrun_evidence_reads_the_flag_edges_the_fake_events_and_the_pops():
+    ev = [("frame", 10.0, ms.DMR_DATA2, 34, 0), ("status", 10.1, 2, 1, 5, 10, 10, 33, None, 0, 0), ("status", 10.4, 2, 0, 5, 10, 10, 33, None, 0, 0),
+          ("fw", 10.2, "pop", {}), ("fw", 10.26, "pop", {}), ("fw", 10.3, "tx_off", {"end_frame": False}), ("fw", 10.5, "underrun", {"dry_s": 0.2}),
+          ("status", 10.6, 2, 1, 5, 10, 10, 33, None, 0, 0)]
+    out = rif5n.underrun_evidence(ev)
+    assert out["tx_flag_edges_of_the_status"] == [(0.1, "tx_on"), (0.4, "tx_off"), (0.6, "tx_on")]
+    assert out["fake_tx_off_underrun_nak"] == [(0.3, "tx_off"), (0.5, "underrun")] and out["first_pops"] == [0.2, 0.26]
+    assert out["gap_between_first_pops_s"] == [0.06] and out["first_frames"] == [(0.0, "DMR_DATA2", 34)]
+    assert rif5n.underrun_evidence([]) == {"events": 0}

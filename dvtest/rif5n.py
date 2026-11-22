@@ -25,7 +25,7 @@ cases/unit/test_rif5n_lib.py.
 import math
 from collections import namedtuple
 
-from . import dstar_sd, metrics
+from . import dstar_sd, echo, metrics
 from . import mmdvm_rf as rf
 from . import mmdvm_rf_nxdn as nxrf
 from . import mmdvm_rf_p25 as p25rf
@@ -423,3 +423,45 @@ def metric_total(text, family, **labels):
     if not samples:
         return None
     return metrics.total(samples, family, **labels)
+
+
+# ---------------------------------------------------------------- PORTCTL1: a carrier that outlives the room's TOT
+
+def stuck_carrier_air(rx_kwargs, voice_s=191.2, repeat_from_s=181.2, repeat_every=5):
+    """The modem's D-STAR RF over of PORTCTL1 (docs/rif5-cases.md): header, one data frame per 20 ms until `voice_s`, no EOT, and from `repeat_from_s` on the
+    same header again after every `repeat_every`-th frame (every 100 ms), at no extra air time: the scenario of DV-Router's floor.rs
+    `portctl1_endless_stuck_headers_are_suppressed_until_the_carrier_stops`. Returns [(type, payload, delay_ms)] for Rif5Modem.play_air."""
+    n = int(round(voice_s / 0.02))
+    air = rf.dstar_keyup(echo.make_frames("dstar", n, "rif5-portctl1"), **rx_kwargs)
+    header, data = air[0], air[1:-1]
+    out = [header]
+    for i, item in enumerate(data):
+        out.append(item)
+        if 0.06 + 0.02 * (i + 1) >= repeat_from_s and i % repeat_every == 0:
+            out.append((rf.DSTAR_HEADER, header[1], 0.0))
+    return out
+
+
+# ---------------------------------------------------------------- evidence for a tx_underrun that grew
+
+def underrun_evidence(events, limit=12):
+    """What to send DV-Router when `tx_underrun` grew in an over that should not count one (radio.md 7.1: a count needs more DATA of the same over after a fresh
+    TX-off status; a header write or unkey clears the candidate). `events` = Rif5Modem.events_between(since): the TX flag edges of the status replies, the
+    first pops and the tx_off / underrun / nak events of the firmware-like fake, all in seconds from the first frame of the window."""
+    if not events:
+        return {"events": 0}
+    t0 = min(e[1] for e in events)
+    edges, last = [], None
+    for e in events:
+        if e[0] == "status":
+            tx = bool(e[3] & 1)
+            if tx != last:
+                edges.append((round(e[1] - t0, 3), "tx_on" if tx else "tx_off"))
+                last = tx
+    fw = [e for e in events if e[0] == "fw"]
+    pops = [round(e[1] - t0, 3) for e in fw if e[2] == "pop"]
+    frames = [e for e in events if e[0] == "frame"]
+    return {"events": len(events), "tx_flag_edges_of_the_status": edges[:limit],
+            "fake_tx_off_underrun_nak": [(round(e[1] - t0, 3), e[2]) for e in fw if e[2] in ("tx_off", "underrun", "nak")][:limit],
+            "first_pops": pops[:limit], "gap_between_first_pops_s": [round(b - a, 3) for a, b in zip(pops, pops[1:])][:limit],
+            "native_frames_written": len(frames), "first_frames": [(round(e[1] - t0, 3), ms.name_of(e[2]), e[3]) for e in frames[:limit]]}
