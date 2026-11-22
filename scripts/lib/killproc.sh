@@ -31,7 +31,8 @@
 #   launcher label dv-data-worker[<id>]) with KILL only; dv-room (a room controller: the LEAK2 cases
 #   kill the one of a module and the launcher respawns it) with KILL only and
 #   ONLY together with rooms=<LETTER> (a blanket kill of every controller is
-#   refused); the selector is refused for every other process. The
+#   refused); the selector is refused for every other process. dv-edge-dextra, -dplus, -dcs, -m17, -ysf and -dmrhb with KILL
+#   only (GUARD1: the cold guard cache of a respawned protocol edge; every client session of that protocol drops, run those cases alone). The
 #   launcher dv-router is never signalled: it has no handler and a stray signal
 #   kills the node.
 # dvtest/control.py (KILL_PROC_ALLOWED) mirrors the table for the tester;
@@ -54,7 +55,7 @@ dvt_killproc_allowed() {
     return 1                                      # dv-room needs rooms=<LETTER>
   fi
   case "$2:$3" in
-    dv-edge-xlx:KILL|dv-edge-xlx:USR1|dv-edge-xlx:STOP|dv-edge-xlx:CONT|dv-edge-nxdn:KILL|dv-edge-nxdn:USR1|dv-edge-p25:KILL|dv-edge-p25:USR1|dv-edge-allstar:KILL|dv-edge-allstar:USR1|dv-codec-ambed:KILL|dv-svc-web:KILL|dv-edge-webrtc:KILL|dv-svc-status:KILL|dv-svc-status:STOP|dv-svc-status:CONT|dv-data-worker:KILL|dv-room:KILL) return 0 ;;
+    dv-edge-xlx:KILL|dv-edge-xlx:USR1|dv-edge-xlx:STOP|dv-edge-xlx:CONT|dv-edge-nxdn:KILL|dv-edge-nxdn:USR1|dv-edge-p25:KILL|dv-edge-p25:USR1|dv-edge-allstar:KILL|dv-edge-allstar:USR1|dv-codec-ambed:KILL|dv-svc-web:KILL|dv-edge-webrtc:KILL|dv-svc-status:KILL|dv-svc-status:STOP|dv-svc-status:CONT|dv-data-worker:KILL|dv-room:KILL|dv-edge-dextra:KILL|dv-edge-dplus:KILL|dv-edge-dcs:KILL|dv-edge-m17:KILL|dv-edge-ysf:KILL|dv-edge-dmrhb:KILL) return 0 ;;
   esac
   return 1
 }

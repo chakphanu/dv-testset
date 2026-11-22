@@ -23,7 +23,7 @@ HUP_LIB = Path(__file__).resolve().parents[2] / "scripts" / "lib" / "hup.sh"
 RUN_SH = Path(__file__).resolve().parents[2] / "scripts" / "run.sh"
 
 SERVICES = ["xlxd-sut", "xlxd-ref", "tester", "transcoder-sut", "allstar", "XLXD-SUT", "", "xlxd-sut ", "*"]
-PROCESSES = ["dv-edge-xlx", "dv-edge-nxdn", "dv-edge-p25", "dv-edge-allstar", "dv-router", "dv-codec-ambed", "dv-svc-web", "dv-svc-admin", "dv-edge-webrtc", "dv-svc-status", "dv-data-worker", "dv-data-worker2", "dv-data-worker[pkt]", "dv-data", "dv-room", "dv-room2", "dv-codec", "dv-codec-ambed2", "dv-codec-*", "dv-edge-dextra", "dv-edge-*", "dv-edge",
+PROCESSES = ["dv-edge-xlx", "dv-edge-nxdn", "dv-edge-p25", "dv-edge-allstar", "dv-router", "dv-codec-ambed", "dv-svc-web", "dv-svc-admin", "dv-edge-webrtc", "dv-svc-status", "dv-data-worker", "dv-data-worker2", "dv-data-worker[pkt]", "dv-data", "dv-room", "dv-room2", "dv-codec", "dv-codec-ambed2", "dv-codec-*", "dv-edge-dextra", "dv-edge-dplus", "dv-edge-dcs", "dv-edge-m17", "dv-edge-ysf", "dv-edge-dmrhb", "dv-edge-usrp", "dv-edge-*", "dv-edge",
              "dv-router2", "DV-ROUTER", "xlxd", "sh", "", "dv-edge-xlx;id", "../dv-router", "-1", "1"]
 SIGNALS = ["KILL", "USR1", "TERM", "SIGKILL", "kill", "9", "HUP", "USR2", "INT", "STOP", "CONT", "SIGSTOP", "stop", "", "-9", "KILL;id"]
 
@@ -76,7 +76,7 @@ def test_python_table():
     for sig in ("USR1", "TERM", "HUP", "INT", "STOP"):
         assert not control.kill_proc_allowed("xlxd-sut", "dv-room", sig, "B")
     assert not control.kill_proc_allowed("xlxd-ref", "dv-room", "KILL", "B")
-    assert sum(len(v) for v in control.KILL_PROC_ALLOWED.values()) == 18
+    assert sum(len(v) for v in control.KILL_PROC_ALLOWED.values()) == 24
     assert not any(proc == "dv-router" for _svc, proc in control.KILL_PROC_ALLOWED)
 
 
@@ -133,7 +133,7 @@ def test_bash_and_python_agree_on_every_combination():
     allowed_bash = {combos[int(i)] for v, i in verdicts if v == "1"}
     allowed_py = {c for c in combos if control.kill_proc_allowed(*c)}
     assert allowed_bash == allowed_py
-    assert len(allowed_py) == 17                    # dv-room is not among them: it needs a selector
+    assert len(allowed_py) == 23                    # dv-room is not among them: it needs a selector
     assert not any(p == "dv-router" for _s, p, _g in allowed_bash)
     assert not any(p == "dv-room" for _s, p, _g in allowed_bash)
 
@@ -217,7 +217,7 @@ def test_parse_accepts(line, out):
     "kill-proc xlxd-ref dv-edge-xlx KILL",
     "kill-proc xlxd-sut dv-edge-* KILL",
     "kill-proc xlxd-sut dv-edge KILL",
-    "kill-proc xlxd-sut dv-edge-dextra KILL",
+    "kill-proc xlxd-sut dv-edge-usrp KILL",
     "kill-proc xlxd-sut xlxd KILL",
     "kill-proc xlxd-sut dv-edge-xlx KILL extra",
     "kill-proc xlxd-sut dv-edge-xlx;id KILL",
@@ -782,3 +782,16 @@ def test_rig_control_hup_no_container(tmp_path):
     with pytest.raises(RuntimeError, match="error 4"):
         ctl.hup(timeout=5)
     thread.join(5)
+
+
+def test_protocol_edges_are_killable_with_kill_only():
+    """GUARD1: the six protocol edges whose respawn has a cold guard cache; KILL only, no selector, sut only, never the launcher."""
+    for proc in ("dv-edge-dextra", "dv-edge-dplus", "dv-edge-dcs", "dv-edge-m17", "dv-edge-ysf", "dv-edge-dmrhb"):
+        assert control.kill_proc_line("xlxd-sut", proc, "KILL") == "kill-proc xlxd-sut %s KILL" % proc
+        assert control.KILL_PROC_ALLOWED[("xlxd-sut", proc)] == ("KILL",)
+        for sig in ("USR1", "TERM", "HUP", "INT", "STOP", "CONT"):
+            assert not control.kill_proc_allowed("xlxd-sut", proc, sig)
+        assert not control.kill_proc_allowed("xlxd-sut", proc, "KILL", "A")
+        assert not control.kill_proc_allowed("xlxd-ref", proc, "KILL")
+    for name in ("dv-edge-dextra2", "dv-edge-", "dv-edge-d", "dv-edge-usrp", "dv-edge-radio"):
+        assert not control.kill_proc_allowed("xlxd-sut", name, "KILL")

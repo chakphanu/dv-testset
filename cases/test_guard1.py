@@ -9,6 +9,9 @@ guard cache. Probes of the blocked callsign linked to T (header + 5 frames, a sh
 after T carried a control callsign's over again:
 
   GUARD1-a  after   the strike-3 block is earned BEFORE the kill (the record is held by the other controllers; T asks them at startup: GUARDSYNC1)
+  GUARD1-c  edge  the strike-3 `link_blocked` of a callsign is cached by the PROTOCOL EDGE too (new DExtra links of it get NAK); dv-edge-dextra is SIGKILLed (control allow-list since
+                    dv-router answered 2026-11-22, Q7) and the respawned edge, with a cold cache, must NAK the callsign's new link again within the same bound (an ACK before it is
+                    a FINDING: the edge, like a respawned room, fails open until its first snapshot)
   GUARD1-b  during  T is killed again and again for 45 s WHILE the ladder is climbed in U (T misses every put; the strikes 1 to 3 only reach it by the snapshot after its
                     last restart: GUARDMERGE1 / GUARDSYNC1, the record must come as the highest strike with its 300 s block, never as nothing)
 
@@ -27,6 +30,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent / "proto"))
 
 from dvtest import flk15, guard1  # noqa: E402
+from dvtest.proto import dextra  # noqa: E402
 
 import data_support as ds  # noqa: E402
 import test_short_stream_guard as sg  # noqa: E402
@@ -138,4 +142,39 @@ def test_guard1_b_strikes_earned_while_a_room_is_down_arrive_by_the_snapshot(rig
     note(target, case, "RECORD", "room %s kills landed %s over %.0f s" % (TWO["observe"], result.get("landed"), result.get("t1", 0) - result.get("t0", 0)))
     assert result.get("landed", 0) >= 1, "%s: no kill of the room landed" % case
     probes, t_up = observe(c, rig_control, target, case, TWO)
+    judge(target, case, probes, t_up)
+
+
+def edge_reply(ip, callsign, module):
+    """The reply of the DExtra edge to a new link of `callsign`: NAK, ACK or none (edge down, or no answer)."""
+    return sg.ask((ip, dextra.PORT), [dextra.link_packet(callsign, module)], lambda d: "NAK" if b"NAK" in d else ("ACK" if b"ACK" in d else None), 2.0)
+
+
+def test_guard1_c_link_blocked_survives_an_edge_restart(rig, target, rig_control):
+    case = "GUARD1-c"
+    ip = rig.xlxd_sut
+    shape = dict(earn="M", blocked="N0GDE", listen="N0GDP")
+    blocked = sg.dstar(ip, shape["blocked"], shape["earn"])
+    listener = sg.dstar(ip, shape["listen"], shape["earn"])
+    assert sg.probe(blocked, listener), "%s: the callsign is not heard before any strike" % case
+    earn_three_strikes(blocked, listener)
+    assert not sg.probe(blocked, listener), "%s: strike 3 is not in force in the earning room" % case
+    time.sleep(1.5)
+    first = edge_reply(ip, shape["blocked"], shape["earn"])
+    assert first == "NAK", "%s: precondition: a new DExtra link of a strike-3 callsign got %s, not NAK (link_blocked is enforced by the edge)" % (case, first)
+    killed = rig_control.kill_proc("xlxd-sut", "dv-edge-dextra", "KILL")
+    note(target, case, "RECORD", "dv-edge-dextra killed (pids %s); every DExtra session dropped" % getattr(killed, "pids", "?"))
+    probes, t_up, t0, last = [], None, time.monotonic(), None
+    while True:
+        now = time.monotonic()
+        if t_up is None and now - t0 > UP_BUDGET_S:
+            pytest.fail("%s: the DExtra edge answered no link within %.0f s of the kill" % (case, UP_BUDGET_S))
+        if t_up is not None and now - t_up > guard1.APPLIED_BY_S + guard1.SLACK_S + 10.0:
+            break
+        reply = edge_reply(ip, shape["blocked"], shape["earn"])
+        if reply != "none":
+            if t_up is None:
+                t_up = time.monotonic()
+            probes.append(guard1.Probe(time.monotonic(), reply == "ACK"))
+        time.sleep(guard1.PROBE_PERIOD_S)
     judge(target, case, probes, t_up)

@@ -49,6 +49,14 @@ KILL_PROC_ALLOWED = {
     ("xlxd-sut", "dv-edge-webrtc"): ("KILL",),   # K22: a dropped Disconnect, guests calling /rtc/alive meanwhile
     ("xlxd-sut", "dv-svc-status"): ("KILL", "STOP", "CONT"),    # K22: the status hub's snapshots carry the guest proof; STOP/CONT: hub-down banner on the Map (TWIN1d)
     ("xlxd-sut", "dv-data-worker"): ("KILL",),   # DP15: the data worker (comm is the same for every id); the launcher respawns it
+    # GUARD1 (docs/guard1-cases.md): the cold guard cache of a respawned protocol edge (GUARDSYNC1 startup reconcile of `link_blocked`); the launcher respawns every edge
+    # (deployment.md "Supervision"); every client session of that protocol drops, so these cases run alone. KILL only: dv-router answered 2026-11-22 (answers-342-dvt.md Q7)
+    ("xlxd-sut", "dv-edge-dextra"): ("KILL",),
+    ("xlxd-sut", "dv-edge-dplus"): ("KILL",),
+    ("xlxd-sut", "dv-edge-dcs"): ("KILL",),
+    ("xlxd-sut", "dv-edge-m17"): ("KILL",),
+    ("xlxd-sut", "dv-edge-ysf"): ("KILL",),
+    ("xlxd-sut", "dv-edge-dmrhb"): ("KILL",),
     ("xlxd-sut", "dv-room"): ("KILL",),          # LEAK2: one room controller, ONLY with a rooms=<LETTER> selector
 }
 
@@ -224,6 +232,8 @@ class RigControl:
     # one counter for every instance of the process: a fixture and a helper that
     # each hold a RigControl must never issue the same request name
     _next_id = itertools.count(1)
+    # callables (service, process) run before every kill_proc; the BUD1 session hook uses one (dvtest/bud1_plugin.py): a refusal counter dies with its process
+    kill_hooks = []
 
     def __init__(self, directory):
         self.dir = Path(directory)
@@ -279,6 +289,11 @@ class RigControl:
         RuntimeError("... error 3") when no such process runs, TimeoutError
         when the host does not answer in `timeout` seconds."""
         line = kill_proc_line(service, process, signal, rooms)
+        for hook in list(RigControl.kill_hooks):
+            try:
+                hook(service, process)
+            except Exception:                                # a hook never blocks a kill
+                pass
         name = self._request(line, timeout)
         return parse_kill_out((self.dir / (name + ".out")).read_text())
 
