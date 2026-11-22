@@ -788,3 +788,10 @@ def test_statuskeys_read_both_names_of_the_summary_block():
     assert statuskeys.block(old)["edges"] == statuskeys.block(new)["edges"] == ["a"]
     assert statuskeys.rooms_active(statuskeys.block(old)) == statuskeys.rooms_active(statuskeys.block(new)) == ["A"]
     assert statuskeys.block({}) is None and statuskeys.block(None) is None and statuskeys.block({"summary": 3}) is None
+
+
+def test_xlx_peer_tester_bm_row_keeps_its_dmr_kind_next_to_the_xlx_tester_row():
+    text = _snippet("xlx-peer-tester.toml") + "\n" + _snippet("xlx-peer-tester-bm.toml")
+    peers = tomllib.loads(sut_config.render(text, "172.30.0", gen="compat1"))["edges"]["xlx"]["peer"]
+    assert [(p["callsign"], p["kind"], p["modules"]) for p in peers] == [("XLX996", "xlx", "DE"), ("BM3109", "dmr", "D")]
+    assert peers[0]["host"] == peers[1]["host"]

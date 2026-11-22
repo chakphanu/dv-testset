@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/rig.md): the DMR service row BM3109 (module D) at the TESTER address, NEXT TO
+# xlx-peer-tester.toml (XLX996, DE). The interlink profile gives xlxd-ref and xlxd-sut both rows "XLX996 <tester> DE" and
+# "BM3109 <tester> D" (rig/xlxd-entry.sh); a DV-Router SUT only has what its rows say, so cases/proto/test_xlx.py needs both:
+#   P-XLX-09 (test_xlx_bm_peer_class): the tester links as BM3109 (module D); without this row the SUT logs "connect from BM3109 ... refused
+#   (no matching row/modules)" and the link fails;
+#   P-XLX-07 (test_xlx_initiates_connect): the SUT sends an L per row, so the tester sees the module sets D and DE (spec ["D", "DE"]).
+# kind = "dmr": a DMR service, always revision 2 (config.md, [[edges.xlx.peer]]); DV-Router keeps the explicit kind.
+[[edges.xlx.peer]]
+kind = "dmr"
+callsign = "BM3109"
+host = "<TESTER_IP>"
+modules = "D"

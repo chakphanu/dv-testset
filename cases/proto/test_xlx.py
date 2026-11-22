@@ -5,6 +5,9 @@ xlxd-ref and xlxd-sut (rig profile interlink lists it on both) and speaks
 the interlink from UDP 10002 to both at once; ordinary clients on the
 reflector and the rig peers XLX998 / XLX997 observe.
 
+A DV-Router SUT needs its peer rows (native launch, rig/config/dv-router/, in DVT_SUT_CONFIG_EXTRA): xlx-peer.toml and xlx-peer2.toml (XLX998 /
+XLX997, test_xlx_no_transit), xlx-peer-tester.toml (XLX996, DE) and xlx-peer-tester-bm.toml (BM3109, D: P-XLX-07 module sets, P-XLX-09).
+
 Judged as in xlx.md: diff = sut == ref; dev = sut == ref under the xlxd
 profile, else the profile's "xlx" spec entry {"P-XLX-NN": {key: value}}
 (skip "spec pending" without one); spec (Bn) = the DV-Router behaviour
@@ -327,8 +330,11 @@ def test_xlx_bm_peer_class(xrig, peer):
             time.sleep(0.5)
         return {"sizes": sorted({f["size"] for f in frames}),
                 "dstar_zero": bool(frames) and all(not any(f["ambe"]) for f in frames[:-1])}
-    got = both(xrig, side)
-    peer.callsign, peer.modules = "XLX996", "DE"
+    try:
+        got = both(xrig, side)
+    finally:
+        # a failed side must not leave the BM3109 identity behind: the tester answers the SUT's own L with it and the next links fail
+        peer.callsign, peer.modules = "XLX996", "DE"
     judge_dev(xrig, "P-XLX-09", got, "sizes", "dstar_zero")
 
 
@@ -528,8 +534,14 @@ def test_xlx_ingress_rev1_transcoded(xrig, peer, tone_dstar):
         out = ingress(peer, ip, tone_dstar, fresh(), revision=1, kinds=("dmr",))
         return {"dmr": out["dmr"], "voiced": sum(1 for f in out["dmr"] if any(f))}
     got = both(xrig, side)
-    assert got["sut"]["dmr"] == got["ref"]["dmr"], "DMR from a revision 1 peer: sut %d frames, ref %d" % (
-        len(got["sut"]["dmr"]), len(got["ref"]["dmr"]))
+    if os.environ.get("DVT_TRANSCODER_FAKE") == "1":
+        # the SUT's transcoder is the fake (a deterministic transform, not the real vocoder of xlxd-ref): the words cannot be equal byte for byte
+        assert len(got["sut"]["dmr"]) == len(got["ref"]["dmr"]), "DMR from a revision 1 peer: sut %d frames, ref %d" % (
+            len(got["sut"]["dmr"]), len(got["ref"]["dmr"]))
+        assert got["sut"]["voiced"] >= 0.8 * FRAMES, got["sut"]["voiced"]
+    else:
+        assert got["sut"]["dmr"] == got["ref"]["dmr"], "DMR from a revision 1 peer: sut %d frames, ref %d" % (
+            len(got["sut"]["dmr"]), len(got["ref"]["dmr"]))
     assert got["ref"]["voiced"] >= 0.8 * FRAMES, got["ref"]["voiced"]
 
 
