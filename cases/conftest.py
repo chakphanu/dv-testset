@@ -402,6 +402,17 @@ def _crossmode(key, item):
     return bool(rule and callspec and set(callspec.id.split("-")) & rule)
 
 
+def pytest_sessionstart(session):
+    """BUD1: with DVT_BUD1=on sample the hub metrics for the refused-body counters (dvtest/bud1_plugin.py; verdict: python3 -m dvtest.bud1 out/<run>)."""
+    from dvtest import bud1_plugin
+    bud1_plugin.session_start(session.config)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    from dvtest import bud1_plugin
+    bud1_plugin.session_finish(session.config)
+
+
 def pytest_report_header(config):
     """Say whether this run is inside the capped scope (scripts/contained.sh)."""
     if os.environ.get("DVT_CONTAINED"):

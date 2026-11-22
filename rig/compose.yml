@@ -600,6 +600,11 @@ services:
       # on for DV-Router MEDLOAD1 (fb6a2a51 .. 28fc1838, image dv-router:wip-f1f3777): cases/test_medload1.py (docs/medload1-cases.md); DVT_MEDLOAD1_BURN: busy-loop processes of the S7 analogue
       DVT_MEDLOAD1: ${DVT_MEDLOAD1:-}
       DVT_MEDLOAD1_BURN: ${DVT_MEDLOAD1_BURN:-}
+      # on for DV-Router BUD1 / BUD1b (a15b08fa + 364a5760, image dv-router:wip-f1f3777): the session hook samples the hub for refused bodies in ANY stage (dvtest/bud1_plugin.py; verdict
+      # `python3 -m dvtest.bud1 out/<run>`) and cases/test_bud1.py asserts in-run (docs/bud1-cases.md). DVT_BUD1_EVERY_S / DVT_BUD1_SETTLE_S: seconds (empty: the code defaults 60 and 12)
+      DVT_BUD1: ${DVT_BUD1:-}
+      DVT_BUD1_EVERY_S: ${DVT_BUD1_EVERY_S:-}
+      DVT_BUD1_SETTLE_S: ${DVT_BUD1_SETTLE_S:-}
       DVT_FLK15: ${DVT_FLK15:-}
       DVT_FLK15_BOUND_S: ${DVT_FLK15_BOUND_S:-}
       # on for DV-Router AX25ACK1 + TXOFF2 (345f1ebe, image dv-router:wip-f1f3777 or later): the renderer adds the exact control-operator `tx_ack` to every

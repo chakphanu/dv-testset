@@ -100,6 +100,10 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
   DVT_MEDLOAD1       on: MEDLOAD1 (DV-Router fb6a2a51 .. 28fc1838, image wip-f1f3777): cases/test_medload1.py sends overs with controlled drops, a late frame, a duplicate and a counter wrap and
                      compares the per-over gap / lost / late counts of the hub (dv_edge_over_units_total, dv_room_over_units_total, dv_room_overs_total) with the edge's rule, plus the S7 analogue
                      (five rounds under busy loops, DVT_MEDLOAD1_BURN processes, default 16); off or unset: the cases skip naming this switch (docs/medload1-cases.md)
+  DVT_BUD1           on: BUD1 / BUD1b (DV-Router a15b08fa + 364a5760, image wip-f1f3777): the session hook (dvtest/bud1_plugin.py, cases/conftest.py) samples the hub metrics every DVT_BUD1_EVERY_S s
+                     (default 60) into out/<run>/bud1/ and writes the final snapshot after DVT_BUD1_SETTLE_S s (default 12); the verdict is `python3 -m dvtest.bud1 out/<run> ...` (dv_fabric_body_rejected_total
+                     must be 0 in every process of every stage); cases/test_bud1.py asserts it in-run, the admin replies without `truncated` and the 422 `truncated.errors` cut; off or unset: no hook,
+                     the cases skip naming this switch (docs/bud1-cases.md)
   DVT_FLK10          on: FLK10, dv-edge-webrtc refuses an offer whose media section has a missing, repeated, empty,
                      over-16-byte or duplicate a=mid (403 forbidden); the cases of cases/test_web_rtc_mid.py skip naming
                      this switch without it (needs an image with DV-Router 98c88b2, wip-bd3ceb9; docs/web-mid-cases.md)
