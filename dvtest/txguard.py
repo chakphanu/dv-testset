@@ -26,7 +26,7 @@ at any object whose `name` is the port. Every first call records the keys met on
 import time
 from collections import namedtuple
 
-from dvtest import rfsafe1b
+from dvtest import rfsafe1b, statuskeys
 
 STARTUP_GUARD_S = 13.0              # radio.md 10.4 rule 3: G = D 2.5 s + max(B) 10 s + 0.5 s
 MARGIN_S = 2.0                      # slack on top of the guard (poll interval, publish delay of the status record)
@@ -219,7 +219,7 @@ def uptime_reader(admin):
             resp = admin.get(admin.path("/status"), expect=None)
             if resp.status != 200:
                 return None
-            live = (resp.json() or {}).get("live") or {}
+            live = statuskeys.block(resp.json()) or {}
             for key in ("node_uptime_s", "uptime_s"):
                 if isinstance(live.get(key), (int, float)) and not isinstance(live.get(key), bool):
                     return float(live[key])

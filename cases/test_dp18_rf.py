@@ -31,7 +31,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "proto"))
 
-from dvtest import aprsis_client as ai, ax25, kiss_tnc, logscan, metrics, rfsafe1b, rfsafe1c, txguard  # noqa: E402
+from dvtest import aprsis_client as ai, ax25, kiss_tnc, logscan, metrics, rfsafe1b, rfsafe1c, sut_config, txguard  # noqa: E402
 
 import data_support as ds  # noqa: E402
 import dp18_support as dc  # noqa: E402
@@ -376,6 +376,8 @@ def test_dp18_r3_a_reload_that_breaks_an_rf_copy_rule_is_refused(cid, what, path
     that disables the TX of rf-a or gives the AX.25 edge another station call is refused with the launcher's diagnostic; the configuration etag, the
     APRS-IS child (same pid, restarts unchanged, up) and the AX.25 child (not restarted) stay. Needs DVT_SUT_CONFIG_RW=1 (else the skip names it)."""
     sim, case = reload_ctx, "DP18-r3-" + cid
+    if cid == "tx_off" and sut_config.ax25_ack_on():
+        pytest.skip("DVT_AX25ACK1=on (DV-Router 345f1ebe, TXOFF2): a port tx -> false is accepted, the RF copy stays configured and sends nothing")
     shp = dc.origin_shape(sim.doc)
     if shp is None or not any(r.rf_ports for r in shp.reports):
         pytest.skip("no object or beacon with rf_ports in this run: add dp18-rf.toml with dp18-rf-floor.toml (or dp18-rf-objects.toml) (docs/dp18-cases.md)")

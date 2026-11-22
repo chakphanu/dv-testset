@@ -73,6 +73,10 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
   DVT_RIF5J          on: the image has DV-Router RIF5j (fast status poll while keyed, host queue in airtime, tx_underrun, O3 frequencies, RXD silence fill):
                      the cases for that image run (RIF5-J-*, and the RXD / O3 assertions of the fix); off or unset: the assertions for the current image
                      (docs/rif5-cases.md "Cases for the fix image")
+  DVT_AX25ACK1       on: the image has AX25ACK1 + TXOFF2 (DV-Router 345f1ebe, wip-f1f3777 or later): every transmitting `[edges.ax25]` of the rendered config
+                     carries `tx_ack = "I am the control operator of <CALL-SSID> and accept responsibility for its transmissions"` (dvtest/sut_config.py; older
+                     images refuse the key, so it is off by default), the config-refusal cases expect the TXOFF2 / DIGI1b verdicts (an off port or master loads and is
+                     dormant) and the AX25ACK1 cases run (docs/rig.md "AX.25 tx_ack"); off or unset: the shapes of the older images
   DVT_DIGI1          on: the image has the DIGI1 fill-in digipeater (DV-Router 22994519 + 588ffb4c, wip-eeb44b4): cases/test_digi1.py plays fake KISS TNCs
                      (rig/config/dv-router/digi1.toml = the rate floor 10 / 3 and the class defaults, digi1-roomy.toml = 20 % duty for the functional cases)
                      and asserts DIGI-R1 to R5 (the path vectors G1 to G13, the duplicate window, the flood, two fill-ins, the startup guard) and

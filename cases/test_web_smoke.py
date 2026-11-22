@@ -27,11 +27,11 @@ import time
 
 import pytest
 
-from dvtest import web
+from dvtest import statuskeys, web
 
 pytestmark = [pytest.mark.rig, pytest.mark.web]
 
-PUBLIC_STATE_KEYS = {"clients", "info", "live", "now_ms", "reflector", "rooms", "version"}   # openapi PublicState
+PUBLIC_STATE_KEYS = statuskeys.public_state_keys()   # openapi PublicState; the block `live` (before wip-f1f3777) or `summary` is checked below
 
 
 def test_public_state_is_json(web_client):
@@ -41,6 +41,7 @@ def test_public_state_is_json(web_client):
     state = resp.json()
     missing = PUBLIC_STATE_KEYS - set(state)
     assert not missing, "public state lacks %s (keys: %s)" % (sorted(missing), sorted(state))
+    assert statuskeys.block(state) is not None, "public state has neither a `summary` nor a `live` block (keys: %s)" % sorted(state)
     assert resp.headers.get("access-control-allow-origin") == "*"      # owner decision 2026-10-31
     assert "max-age=2" in resp.headers.get("cache-control", "")
     etag = resp.headers.get("etag")

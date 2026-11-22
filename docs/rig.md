@@ -853,6 +853,28 @@ is its cpu quota. Both are compose variables read by `scripts/run.sh` and passed
 `DVT_SUT_RESOLV=<octet>` (host side only) writes a read-only `/etc/resolv.conf` with the single name server `<NET>.<octet>` into the SUT (`out/<run>/xlxd-config/xlxd-sut/resolv.conf`);
 the docker embedded resolver is then out of the path, and so are the compose service names (never together with the host-name peer snippets). Commands and times: `docs/netthr1-cases.md`.
 
+## AX.25 tx_ack (AX25ACK1, image wip-f1f3777 and later)
+
+DV-Router 345f1ebe (TXOFF2 + AX25ACK1) makes the control-operator sentence a configuration fact of the AX.25 edge: `[edges.ax25] tx_ack`
+(one key on the edge, not on a port) must equal `I am the control operator of <CALLSIGN> and accept responsibility for its transmissions`, the
+station `callsign` in upper case with its SSID. Without it a transmitting row is DORMANT: `dv-router config check` warns `no
+control-operator acknowledgement: RX only` and the start line reads `RF TX off (no control-operator acknowledgement: RX only)`; a nonempty
+different sentence is an error even with TX off. The fake TNCs and the KISS wire are unchanged (it is configuration only). The same sentence
+was already required by `[edges.radio] tx_ack` (rif5-mmdvm-udp.toml, netthr1-hotspot.toml carry it).
+
+Older images refuse the key (`deny_unknown_fields`), so the repo snippets do not carry it. With `DVT_AX25ACK1=on` the renderer
+(`dvtest/sut_config.py`, `apply_ax25_ack`) adds `tx_ack = "<sentence>"` after the `callsign` line of `[edges.ax25]` in the RENDERED file
+when that table has `tx_enable = true` (also through `<DP15_TX_ENABLE>`) and no `tx_ack`. Set the switch for `scripts/run.sh` (the host
+renders; the compose tester list passes it on) and for every `cfgload` run. TXOFF2 also changes what loads: a digipeater, a beacon, a
+KISS client TX, an RF data path or an APRS-IS RF copy no longer needs TX intent on its port (an off port or master keeps it dormant and
+only warns), so under the switch `cases/test_dp18_config.py`, `test_digi1_config.py` and `test_dp11e_config.py` expect those loads
+(`expectation()` in `dvtest/dp18cfg.py`, `digi1cfg.py`, `dp11e.py`), DIGI1b's own digi bucket (`digi.tx_per_min` / `digi.tx_burst`, default 2 / 1,
+the port values must be larger) replaces the 10 / 3 floor, and DP18-r3 `tx_off` skips. `DVT_AX25ACK1=on` with an older image fails at
+config load (unknown key); without the switch on wip-f1f3777 transmit cases fail because TX stays dormant.
+
+Status JSON names of NODE1e (dcbbb205): `live` is now `summary` (public state and admin status) and `rooms_live` is `rooms_active`; the cases
+read both through `dvtest/statuskeys.py`. `dv_room_streams_closed_total` is gone: `dv_room_overs_total{result}` replaces it (MEDLOAD1).
+
 ## Environment of the tester
 
 The tester container gets a FIXED environment: the `environment:` list of the `tester` service in `rig/compose.yml`, `.local/rig.env` (`DVT_IAX_SECRET`) and the two

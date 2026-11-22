@@ -599,6 +599,10 @@ services:
       DVT_RTS1: ${DVT_RTS1:-}
       DVT_FLK15: ${DVT_FLK15:-}
       DVT_FLK15_BOUND_S: ${DVT_FLK15_BOUND_S:-}
+      # on for DV-Router AX25ACK1 + TXOFF2 (345f1ebe, image dv-router:wip-f1f3777 or later): the renderer adds the exact control-operator `tx_ack` to every
+      # transmitting [edges.ax25] (dvtest/sut_config.py, docs/rig.md "AX.25 tx_ack"), the config-refusal expectations follow TXOFF2 and the AX25ACK1 cases run;
+      # it must be on for run.sh (the host renders the file) and in the tester (the cases read it); never on for an older image (it refuses the key)
+      DVT_AX25ACK1: ${DVT_AX25ACK1:-}
       # on for DV-Router RIF5 (c017e491 or later, the mmdvm-serial radio adapter) with rig/config/dv-router/rif5-mmdvm-udp.toml in DVT_SUT_CONFIG_EXTRA:
       # cases/test_rif5_mmdvm_serial.py plays a fake MMDVM modem on the UDP byte port (docs/rif5-cases.md); the cases skip with a reason without it
       DVT_RIF5: ${DVT_RIF5:-}

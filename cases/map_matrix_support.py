@@ -23,8 +23,13 @@ Not a screenshot comparison: the screenshots (out/<run>/web/map-matrix/<engine>/
 evidence for a human to look at. The DOM facts are SOURCE-DERIVED from dv-router:wip-efd9eca and NOT verified on a running page.
 """
 import re
+import sys
+from pathlib import Path
 
 import web_pages as pages
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from dvtest import statuskeys  # noqa: E402
 
 CLIP_TOL_PX = 1.0                      # slack of every clip comparison (sub-pixel layout, rounding of scrollWidth)
 THAI_RE = re.compile(r"[\u0e00-\u0e7f]")
@@ -241,7 +246,7 @@ def close_one_edge(state, chosen=None):
     draws that desk closed (map-layout.js: a desk is `down` when its protocol is not in live.edges). The edge is `chosen` when
     given and still present, else the last enabled protocol that is up and not in NOT_CLOSABLE. (state, None) when the state has
     no such edge (the document is returned unchanged). The state is edited in place."""
-    live = state.get("live") if isinstance(state, dict) else None
+    live = statuskeys.block(state)
     info = state.get("info") if isinstance(state, dict) else None
     if not isinstance(live, dict) or not isinstance(info, dict) or not isinstance(live.get("edges"), list):
         return state, None
@@ -290,7 +295,7 @@ def nearest_actions(t, actions, n=3):
 def edge_lists(state):
     """{'edges_enabled': [...], 'live_edges': [...]} of the parsed public state (None for a missing list)."""
     info = state.get("info") if isinstance(state, dict) else None
-    live = state.get("live") if isinstance(state, dict) else None
+    live = statuskeys.block(state)
     return {"edges_enabled": info.get("edges_enabled") if isinstance(info, dict) else None,
             "live_edges": live.get("edges") if isinstance(live, dict) else None}
 
@@ -332,7 +337,7 @@ SERVICE = "xlxd-sut"
 
 def edge_listed(state, protocol):
     """True when `protocol` is in live.edges of the parsed public state (an instance suffix -<16 hex> is cut off, as the page does)."""
-    live = state.get("live") if isinstance(state, dict) else None
+    live = statuskeys.block(state)
     edges = live.get("edges") if isinstance(live, dict) else None
     return isinstance(edges, list) and any(isinstance(e, str) and EDGE_SUFFIX_RE.sub("", e) == protocol for e in edges)
 

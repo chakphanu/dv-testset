@@ -60,6 +60,7 @@ def test_the_rate_cases_move_exactly_the_floor_keys():
     assert by["digi-shared-physical"]["physical"] == "radio1" and port(next(c for c in CASES if c.id == "digi-shared-physical"))["port"][1]["physical"] == "radio1"
 
 
+@pytest.mark.skipif(sut_config.ax25_ack_on(), reason="DVT_AX25ACK1=on: the DIGI1b / TXOFF2 expectations apply (test_the_ack1_expectations_flip below)")
 def test_hints_are_the_operator_sentences_of_dv_router():
     sentences = {c.hint for c in CASES if c.hint}
     assert digi1cfg.M_RATE == "digipeating requires tx_per_min >= 10 and tx_burst >= 3 on this port"
@@ -76,6 +77,7 @@ def err(key, message):
     return {"file": "f", "line": 1, "col": 1, "key": key, "message": message}
 
 
+@pytest.mark.skipif(sut_config.ax25_ack_on(), reason="DVT_AX25ACK1=on: the DIGI1b / TXOFF2 expectations apply (test_the_ack1_expectations_flip below)")
 def test_the_judge_accepts_the_right_refusal_and_names_every_way_to_be_wrong():
     case = next(c for c in CASES if c.id == "digi-per-min-9")
     good = verdict(False, [err("edges.ax25.port[0].digi.enable", digi1cfg.M_RATE)])
@@ -99,3 +101,17 @@ def test_an_anchor_that_is_not_found_once_is_an_error_not_a_silent_no_op():
         digi1cfg._plain("\nnot_there = 1\n", "x")(read("digi1-roomy.toml"))
     with pytest.raises(ValueError):
         digi1cfg._plain("tx_per_min", "x")(read("digi1-roomy.toml"))          # in the header comment too: more than once
+
+
+def test_the_ack1_expectations_flip_the_old_floor_cases(monkeypatch):
+    monkeypatch.delenv("DVT_AX25ACK1", raising=False)
+    by = {c.id: c for c in digi1cfg.CONFIG_CASES}
+    for cid in ("digi-port-tx-off", "digi-master-tx-off", "digi-per-min-9", "digi-burst-2"):
+        assert digi1cfg.expectation(by[cid], ack_on=False) is by[cid]
+        assert digi1cfg.expectation(by[cid], ack_on=True).verdict == "accept"
+    assert digi1cfg.expectation(by["digi-per-min-2"], ack_on=True).hint == digi1cfg.M_RATE_DIGI1B
+    assert by["digi-per-min-2"].hint == digi1cfg.M_RATE      # the case itself is not changed
+    verdict = {"valid": True, "parsed": [], "errors": []}
+    assert digi1cfg.config_problems(by["digi-burst-2"], verdict, 0) != []        # without the switch a silent load is a failure
+    monkeypatch.setenv("DVT_AX25ACK1", "on")
+    assert digi1cfg.config_problems(by["digi-burst-2"], verdict, 0) == []        # with it the load is the expected result

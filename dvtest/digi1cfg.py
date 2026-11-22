@@ -15,11 +15,16 @@ The rules and their exact operator messages are DV-Router's (code a8692074, `cra
   render_extras       the snippet texts of one case
   config_problems     problems of a `config check` verdict for one entry
 """
+import copy
 import types
+
+from dvtest import sut_config
 
 PORT_KEY = "edges.ax25"
 M_TX = "digipeating requires effective RF TX on this port"      # the full sentence ends: (tx = true or "simulate")
 M_RATE = "digipeating requires tx_per_min >= 10 and tx_burst >= 3 on this port"
+M_RATE_DIGI1B = "digipeating requires tx_per_min > digi.tx_per_min and tx_burst > digi.tx_burst to reserve own-frame tokens"
+M_PACKET_RATE = "digi packet rate must be 1-30"
 M_SHARED = "ports on the same physical transmitter must all enable or all disable digipeating"
 M_WINDOW = "must be 10-600 seconds"
 M_WINDOW_TTL = "must be greater than digi.ttl_secs"
@@ -98,10 +103,42 @@ def render_extras(case, read):
     return [read("data-ident.toml"), case.mutate(read("digi1-roomy.toml"))]
 
 
+# DVT_AX25ACK1=on (DV-Router 345f1ebe TXOFF2 and 7f811f45 DIGI1b; the image of the switch has both):
+#  - TXOFF2: a digipeater no longer needs TX intent to load. With the port or the master off it is dormant and `config check` only warns
+#    ("port TX off: digipeater send nothing (RX only)"), so those two cases expect a load.
+#  - DIGI1b: the digipeater has its own packet bucket (digi.tx_per_min / digi.tx_burst, 1-30, default 2 and 1) inside the port ceiling; the rule
+#    is tx_per_min > digi.tx_per_min and tx_burst > digi.tx_burst (own frames keep the remainder), not the fixed floor 10 / 3. So 9 and a burst
+#    of 2 load, and the old default 2 / 1 is refused with the new sentence.
+TXOFF2_ACCEPT = ("digi-port-tx-off", "digi-master-tx-off", "digi-per-min-9", "digi-burst-2")
+DIGI1B_HINT = {"digi-per-min-2": M_RATE_DIGI1B}
+
+
+def expectation(case, ack_on=None):
+    """`case` as the image under test is expected to judge it: unchanged without DVT_AX25ACK1=on, else the verdicts above."""
+    if not (sut_config.ax25_ack_on() if ack_on is None else ack_on):
+        return case
+    if case.id in TXOFF2_ACCEPT:
+        case = copy.copy(case)
+        case.verdict, case.hint = "accept", None
+    elif case.id in DIGI1B_HINT:
+        case = copy.copy(case)
+        case.hint = DIGI1B_HINT[case.id]
+    return case
+
+
+if sut_config.ax25_ack_on():
+    _case("digi-rate-equals-digi-bucket", "digi.tx_per_min equal to the port tx_per_min (own frames would keep no token)", "digi.enable",
+          _digi("enable = true, tx_per_min = 30"), hint=M_RATE_DIGI1B)
+    _case("digi-packet-rate-31", "digi.tx_per_min = 31 (1-30)", "digi.tx_per_min", _digi("enable = true, tx_per_min = 31"), hint=M_PACKET_RATE)
+    _case("accept-digi-bucket-below-port", "digi.tx_per_min and digi.tx_burst below the port values", None,
+          _digi("enable = true, tx_per_min = 10, tx_burst = 3"), verdict="accept")
+
+
 def config_problems(case, verdict, exit_code):
     """Problems ([] = as expected) of a `dv-router config check` verdict (dvtest.tools.config_check.judge_check) for a CONFIG_CASES entry:
     reject = a non-zero exit status and a positioned error under `edges.ax25` whose key (or message) names the field and whose message holds
     DV-Router's sentence; accept = exit status 0."""
+    case = expectation(case)
     if verdict.get("unsupported"):
         return ["the image has no `config check` (usage text printed)"]
     if case.verdict == "accept":

@@ -24,6 +24,13 @@ Plain text replacement of these tokens (a token is <UPPER_CASE_NAME>):
   <COTURN_IP>       the TURN server of the NAT profile, <net>.<coturn> (rig: .94;
                     rig/config/dv-router/turn.toml)
 
+AX25ACK1 (DV-Router 345f1ebe, images from wip-f1f3777): a transmitting AX.25 edge needs the exact control-operator sentence in
+`[edges.ax25] tx_ack` (the same sentence as `[edges.radio] tx_ack`, with the station callsign in upper case, SSID included), else
+transmit stays dormant ("no control-operator acknowledgement: RX only", a warning). Older images refuse the key (unknown field), so
+the snippets do not carry it: with env DVT_AX25ACK1=on the renderer adds `tx_ack = "<sentence for the callsign>"` to the
+`[edges.ax25]` table of the rendered file when it has a `callsign` and `tx_enable = true` and no `tx_ack` of its own (`apply_ax25_ack`).
+Unset or any other value: nothing is added (the rendering of every older image is unchanged).
+
 Extras (DVT_SUT_CONFIG_EXTRA=<file>[:<file>...], --extra): each file is appended
 after the template, in order, and goes through the same token substitution. A
 repo-owned snippet adds a table to a template that lives outside the repository
@@ -290,6 +297,42 @@ def merge_extra(base, extra):
     return out
 
 
+AX25_ACK_ENV = "DVT_AX25ACK1"
+_CALLSIGN_LINE = re.compile(r'^\s*callsign\s*=\s*"([^"]*)"')
+_TX_ENABLE_TRUE = re.compile(r"^\s*tx_enable\s*=\s*true\b")
+
+
+def ax25_ack_on():
+    """True when the env DVT_AX25ACK1 is `on` (the image under test has AX25ACK1: wip-f1f3777 and later)."""
+    return os.environ.get(AX25_ACK_ENV, "") == "on"
+
+
+def tx_ack_sentence(callsign):
+    """The exact control-operator sentence of DV-Router (`dv_lib_config::tx_ack`) for a station callsign (upper case, SSID included)."""
+    call = callsign.strip().upper()
+    return "I am the control operator of %s and accept responsibility for its transmissions" % call
+
+
+def apply_ax25_ack(text):
+    """The rendered text with `tx_ack` added to `[edges.ax25]` when that table has a callsign, `tx_enable = true` and no `tx_ack` key.
+    Text without such a table is returned unchanged (also a table with tx_enable false: dormant anyway, and the admin TX-on route
+    persists an absent acknowledgement itself)."""
+    parts = _split_tables(text)
+    for part in parts:
+        if part[0] != "edges.ax25":
+            continue
+        body = part[3]
+        keys = [m.group(1) for m in map(_KEY.match, body) if m]
+        if "tx_ack" in keys or not any(_TX_ENABLE_TRUE.match(line) for line in body):
+            continue
+        for i, line in enumerate(body):
+            m = _CALLSIGN_LINE.match(line)
+            if m and m.group(1).strip():
+                body.insert(i + 1, 'tx_ack = "%s"' % tx_ack_sentence(m.group(1)))
+                break
+    return _join_tables(parts)
+
+
 def render(text, net, own=11, transcoder=21, tester=30, require_ident=None, extras=(), web_proxy=90, browser=91, coturn=94,
            gen=None, dp15_tx_enable=None):
     """The template text with the tokens replaced; `extras` are texts appended
@@ -314,7 +357,8 @@ def render(text, net, own=11, transcoder=21, tester=30, require_ident=None, extr
         raise ConfigError("unknown token%s %s (known: %s)" % (
             "s" if len(unknown) > 1 else "", ", ".join("<%s>" % n for n in unknown),
             ", ".join("<%s>" % n for n in KNOWN)))
-    return apply_gen(TOKEN.sub(lambda m: values[m.group(1)], text), gen)
+    text = apply_gen(TOKEN.sub(lambda m: values[m.group(1)], text), gen)
+    return apply_ax25_ack(text) if ax25_ack_on() else text
 
 
 def _read(path, what):

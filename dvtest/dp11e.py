@@ -11,11 +11,12 @@ AX.25 edge of DV-Router (`[[edges.ax25.kiss_server]]`, data.md 10.10, config.md)
   budget_problems             the outcome of a burst of client position frames against the class-default airtime budget (DP11e-p)
   room_path                   the (room, addressee) of a data.path that carries RF text from rf-a to a room (DP11e-g room control)
 """
+import copy
 import ipaddress
 import re
 import types
 
-from dvtest import ax25, kiss_tnc
+from dvtest import ax25, kiss_tnc, sut_config
 
 STATION = "N0TEST-1"                    # [edges.ax25] callsign of the snippets
 SRC = "N0TEST-7"                        # an allowed client source: an SSID of the station base
@@ -260,10 +261,25 @@ _case("accept-loopback", "a loopback listen needs no allow_from", None,
       _sub('listen = "<OWN_IP>:8204"\nallow_from = ["192.0.2.0/24"]', 'listen = "127.0.0.1:8204"'), verdict="accept")
 
 
+# DVT_AX25ACK1=on (DV-Router 345f1ebe, TXOFF2): client TX no longer needs a mapped port with TX intent ("client TX requires a mapped port
+# with TX intent or simulate" is gone); the client frames are dropped at the gate instead, so this case expects a load.
+TXOFF2_ACCEPT = ("tx-without-tx-port",)
+
+
+def expectation(case, ack_on=None):
+    """`case` as the image under test is expected to judge it: unchanged without DVT_AX25ACK1=on, else the TXOFF2 verdicts above."""
+    if not (sut_config.ax25_ack_on() if ack_on is None else ack_on) or case.id not in TXOFF2_ACCEPT:
+        return case
+    case = copy.copy(case)
+    case.verdict, case.hint = "accept", None
+    return case
+
+
 def config_problems(case, verdict, exit_code):
     """Problems ([] = as expected) of a `dv-router config check` verdict (dvtest.tools.config_check.judge_check) for a CONFIG_CASES entry:
     reject = a non-zero exit status, a positioned error whose key names the offending field (and whose message holds the hint when the
     document states it); accept = exit status 0."""
+    case = expectation(case)
     if verdict.get("unsupported"):
         return ["the image has no `config check` (usage text printed)"]
     if case.verdict == "accept":

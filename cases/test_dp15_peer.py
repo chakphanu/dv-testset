@@ -76,7 +76,9 @@ def counts(text, room=ROOM_LABEL):
            "has.data": 1.0 if "dv_room_data_total" in families else 0.0}
     for result in ("grant", "deny", "busy_delayed", "duplicate"):
         out["rts." + result] = metrics.total(samples, "dv_room_rts_total", room=room, result=result)
-    out["closed"] = metrics.total(samples, "dv_room_streams_closed_total", room=room)
+    # MEDLOAD1 S1-S2 (DV-Router fb6a2a51): dv_room_overs_total{result=complete|lossy|end_missing} replaces dv_room_streams_closed_total
+    out["closed"] = (metrics.total(samples, "dv_room_streams_closed_total", room=room)
+                     + metrics.total(samples, "dv_room_overs_total", room=room))
     out["units.published"] = metrics.total(samples, "dv_room_units_total", room=room, kind="published")
     out["rec.records"] = metrics.total(samples, "dv_recorder_records_total")
     out["rec.bytes"] = metrics.total(samples, "dv_recorder_bytes_total")

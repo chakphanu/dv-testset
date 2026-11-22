@@ -15,7 +15,10 @@ The rules come from DV-Router's `crates/lib/config/src/aprsis_origin.rs` (HEAD f
   config_problems     problems of a `config check` verdict for one entry
   object_comment      the object comment as DV-Router sends it (for the boundary cases)
 """
+import copy
 import types
+
+from dvtest import sut_config
 
 OBJECT_MARK = "\n[[edges.aprsis.objects]]\n"
 GATEWAY = "N0TEST-5"                    # [edges.aprsis] callsign of dp15-aprsis.toml
@@ -210,10 +213,29 @@ def render_extras(case, read):
     return out
 
 
+# DVT_AX25ACK1=on (DV-Router 345f1ebe, TXOFF2): the RF copy check only wants an existing, enabled AX.25 port. A port with tx = false and a
+# master tx_enable = false load (the copy stays configured and sends nothing), and the sentence lost "TX-capable".
+TXOFF2_ACCEPT = ("rf-port-tx-off", "rf-tx-enable-off")
+RF_MSG_TXOFF2 = "RF copy requires an enabled AX.25 port"
+
+
+def expectation(case, ack_on=None):
+    """`case` as the image under test is expected to judge it: unchanged without DVT_AX25ACK1=on, else the TXOFF2 verdicts above."""
+    if not (sut_config.ax25_ack_on() if ack_on is None else ack_on):
+        return case
+    case = copy.copy(case)
+    if case.id in TXOFF2_ACCEPT:
+        case.verdict, case.hint = "accept", None
+    elif case.hint == RF_MSG:
+        case.hint = RF_MSG_TXOFF2
+    return case
+
+
 def config_problems(case, verdict, exit_code):
     """Problems ([] = as expected) of a `dv-router config check` verdict (dvtest.tools.config_check.judge_check) for a CONFIG_CASES entry:
     reject = a non-zero exit status and a positioned error under `edges.aprsis` whose key (or message) names the offending field and whose
     message holds the hint when the source states one; accept = exit status 0."""
+    case = expectation(case)
     if verdict.get("unsupported"):
         return ["the image has no `config check` (usage text printed)"]
     if case.verdict == "accept":

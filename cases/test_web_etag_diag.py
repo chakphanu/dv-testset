@@ -22,7 +22,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from dvtest import web  # noqa: E402
+from dvtest import statuskeys, web  # noqa: E402
 
 pytestmark = [pytest.mark.rig, pytest.mark.web]
 
@@ -128,9 +128,9 @@ def test_admin_status_keeps_the_uptime_values(anon, admin_session):
     time.sleep(3.0)
     second = admin.get(path, expect=200)
     a, b = json.loads(first.body), json.loads(second.body)
-    assert isinstance(a.get("live"), dict) and isinstance(b.get("live"), dict), \
-        "admin status has no `live` block (admin.md 'Status fields'): top-level keys %s" % sorted(a)[:20]
-    live_a, live_b = a["live"], b["live"]
+    live_a, live_b = statuskeys.block(a), statuskeys.block(b)
+    assert live_a is not None and live_b is not None, \
+        "admin status has no `summary` (older images: `live`) block (admin.md 'Status fields'): top-level keys %s" % sorted(a)[:20]
     for key in ("uptime_s", "node_uptime_s"):
         assert key in live_a and key in live_b, "admin status lacks %s in block live: %s" % (key, sorted(live_a)[:20])
         assert live_b[key] > live_a[key], "%s did not increase: %s then %s" % (key, live_a[key], live_b[key])

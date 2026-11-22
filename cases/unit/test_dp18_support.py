@@ -918,6 +918,7 @@ def test_dp18_r1_fence_view_bounds_follow_the_switch(monkeypatch):
 # ---------------------------------------------------------------- DP18-r3: a refused reload (DP18b)
 
 def run_r3(monkeypatch, cid, status, body, etag_after="e1", aprsis_after=None, doc_files=("dp15-aprsis.toml", "dp18-rf.toml", "dp18-rf-floor.toml"), writable=True):
+    monkeypatch.delenv("DVT_AX25ACK1", raising=False)
     monkeypatch.setattr(trf, "note", lambda *a: None)
     monkeypatch.setattr(trf.time, "sleep", lambda s: None)
     aprsis = [{"pid": 7, "restarts": 0}, aprsis_after or {"pid": 7, "restarts": 0}]

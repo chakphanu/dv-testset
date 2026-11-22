@@ -714,3 +714,77 @@ def test_a_bare_token_extra_before_a_merging_extra_renders_in_either_order():
         assert cfg["data"] == {"enable": True, "require_ident": False} and cfg["web"]["enable"] is True
         results.append(cfg)
     assert results[0] == results[1]
+
+
+# ---- AX25ACK1: the tx_ack line of [edges.ax25] (env DVT_AX25ACK1=on)
+
+AX25_TX = '[edges.ax25]\nenable = true\ncallsign = "n0test-1"\ntx_enable = true\n\n[[edges.ax25.port]]\nname = "rf-a"\ntx = true\n'
+ACK_N0TEST1 = "I am the control operator of N0TEST-1 and accept responsibility for its transmissions"
+
+
+def test_ax25_ack_is_not_added_without_the_switch(monkeypatch):
+    monkeypatch.delenv("DVT_AX25ACK1", raising=False)
+    assert "tx_ack" not in sut_config.render(TEMPLATE, "172.30.0", extras=[AX25_TX])
+
+
+def test_ax25_ack_only_on_exactly_on(monkeypatch):
+    monkeypatch.setenv("DVT_AX25ACK1", "true")
+    assert "tx_ack" not in sut_config.render(TEMPLATE, "172.30.0", extras=[AX25_TX])
+
+
+def test_ax25_ack_added_with_the_upper_case_callsign(monkeypatch):
+    monkeypatch.setenv("DVT_AX25ACK1", "on")
+    doc = tomllib.loads(sut_config.render(TEMPLATE, "172.30.0", extras=[AX25_TX]))
+    assert doc["edges"]["ax25"]["tx_ack"] == ACK_N0TEST1
+    assert doc["edges"]["ax25"]["port"][0]["tx"] is True     # the rest of the table is untouched
+
+
+def test_ax25_ack_not_added_when_master_off_or_already_set(monkeypatch):
+    monkeypatch.setenv("DVT_AX25ACK1", "on")
+    off = AX25_TX.replace("tx_enable = true", "tx_enable = false")
+    assert "tx_ack" not in sut_config.render(TEMPLATE, "172.30.0", extras=[off])
+    own = AX25_TX.replace('tx_enable = true', 'tx_enable = true\ntx_ack = "custom"')
+    assert tomllib.loads(sut_config.render(TEMPLATE, "172.30.0", extras=[own]))["edges"]["ax25"]["tx_ack"] == "custom"
+
+
+def test_ax25_ack_follows_the_dp15_token(monkeypatch):
+    monkeypatch.setenv("DVT_AX25ACK1", "on")
+    snippet = '[edges.ax25]\nenable = true\ncallsign = "N0TEST-1"\ntx_enable = <DP15_TX_ENABLE>\n'
+    on = sut_config.render(TEMPLATE, "172.30.0", extras=[snippet], dp15_tx_enable="true")
+    off = sut_config.render(TEMPLATE, "172.30.0", extras=[snippet], dp15_tx_enable="false")
+    assert ACK_N0TEST1 in on and "tx_ack" not in off
+
+
+def test_every_repo_ax25_snippet_gets_the_exact_ack_when_it_transmits(monkeypatch):
+    monkeypatch.setenv("DVT_AX25ACK1", "on")
+    for path in sorted((ROOT / "rig" / "config" / "dv-router").glob("*.toml")):
+        text = path.read_text(encoding="utf-8")
+        if "\n[edges.ax25]\n" not in text:
+            continue
+        doc = tomllib.loads(sut_config.render(TEMPLATE, "172.30.0", extras=[text], dp15_tx_enable="true"))
+        ax = doc["edges"]["ax25"]
+        if ax.get("tx_enable") is True:
+            assert ax.get("tx_ack") == sut_config.tx_ack_sentence(ax["callsign"]), path.name
+            assert ax["tx_ack"].startswith("I am the control operator of ") and ax["callsign"] == ax["callsign"].upper(), path.name
+
+
+def test_txoff2_expectations_flip_only_with_the_switch():
+    from dvtest import digi1cfg, dp18cfg
+    for mod, ids in ((digi1cfg, digi1cfg.TXOFF2_ACCEPT), (dp18cfg, dp18cfg.TXOFF2_ACCEPT)):
+        cases = {c.id: c for c in mod.CONFIG_CASES}
+        for cid in ids:
+            assert mod.expectation(cases[cid], ack_on=False) is cases[cid]
+            assert cases[cid].verdict == "reject"
+            flipped = mod.expectation(cases[cid], ack_on=True)
+            assert flipped.verdict == "accept" and flipped.hint is None and cases[cid].verdict == "reject"
+    unknown = next(c for c in dp18cfg.CONFIG_CASES if c.id == "rf-port-unknown")
+    assert dp18cfg.expectation(unknown, ack_on=True).hint == dp18cfg.RF_MSG_TXOFF2
+    assert dp18cfg.RF_MSG_TXOFF2 in "RF copy requires an enabled AX.25 port"
+
+
+def test_statuskeys_read_both_names_of_the_summary_block():
+    from dvtest import statuskeys
+    old, new = {"live": {"edges": ["a"], "rooms_live": ["A"]}}, {"summary": {"edges": ["a"], "rooms_active": ["A"]}}
+    assert statuskeys.block(old)["edges"] == statuskeys.block(new)["edges"] == ["a"]
+    assert statuskeys.rooms_active(statuskeys.block(old)) == statuskeys.rooms_active(statuskeys.block(new)) == ["A"]
+    assert statuskeys.block({}) is None and statuskeys.block(None) is None and statuskeys.block({"summary": 3}) is None
