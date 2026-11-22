@@ -7,8 +7,9 @@ import threading
 import time
 from pathlib import Path
 
-from dvtest import clients, echo, rif5, txguard
+from dvtest import clients, echo, rif5, rif5n, txguard
 from dvtest import mmdvm_serial as ms
+from dvtest.proto import nxdn, p25
 
 
 # ---------------------------------------------------------------- notes
@@ -88,6 +89,62 @@ class Member:
             self.drain = None
         sid = clients.talk(self.client, self.kind, frames, tail=tail)
         return sid
+
+    def close(self, settle=1.0):
+        if self.drain:
+            self.drain.stop()
+            self.drain = None
+        try:
+            clients.close(self.client)
+        except Exception:
+            pass
+        time.sleep(settle)
+
+
+class RoomMember:
+    """One NXDN or P25 client of the room of its mode (DVT_RIF5N; rig/config/dv-router/rif5n-modes.toml: NXDN TG 31680 -> room S, P25 server module T
+    with TG 31681), identity `index` 0 = N0CALL, 1 = N0TEST. As a listener its datagrams are timed by a drain thread (items()); as a talker talk() sends
+    one over. The same shape as Member, for the two protocols dvtest.clients does not make."""
+
+    def __init__(self, ip, kind, index, listen=True):
+        self.kind, self.index = kind, index
+        if kind == "nxdn":
+            self.client = nxdn.NxdnClient("0.0.0.0", rif5n.NXDN_ROOM_TG, nxdn_id=rif5n.NXDN_IDS[index], callsign=rif5n.CALLSIGNS[index])
+        elif kind == "p25":
+            self.client = p25.P25Client("0.0.0.0", callsign=rif5n.CALLSIGNS[index], src_id=rif5n.P25_IDS[index], tg=rif5n.P25_ROOM_TG)
+        else:
+            raise ValueError(kind)
+        if not self.client.link(ip):
+            try:
+                clients.close(self.client)
+            except Exception:
+                pass
+            raise AssertionError("%s client %d did not link to %s (rif5n-modes.toml: edges.%s enabled, room %s)" % (
+                kind, index, ip, kind, rif5.ROOMS[kind]))
+        self.client.client.drain()
+        self.client.client.inbox.clear()
+        self.client.client.inbox_times.clear()
+        self.drain = Drain(self.client.client) if listen else None
+        if self.drain:
+            self.drain.start()
+
+    def ident(self):
+        """The talker as the RF side names it: the NXDN id or the P25 source id of the client."""
+        return rif5n.NXDN_IDS[self.index] if self.kind == "nxdn" else rif5n.P25_IDS[self.index]
+
+    def items(self):
+        """[(monotonic time, datagram)] heard so far."""
+        udp = self.client.client
+        return list(zip(list(udp.inbox_times), list(udp.inbox)))
+
+    def heard(self):
+        return (rif5n.heard_nxdn if self.kind == "nxdn" else rif5n.heard_p25)(self.items())
+
+    def talk(self, frames, tail=0.5):
+        if self.drain:
+            self.drain.stop()
+            self.drain = None
+        self.client.talk(frames, tail=tail)
 
     def close(self, settle=1.0):
         if self.drain:

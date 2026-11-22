@@ -18,6 +18,10 @@ GAPs: docs/rif5-cases.md. Pure judgements: dvtest/rif5.py, the modem and the env
   RIF5-D1   (b) a silent modem: the port goes Down after 2000 ms without a valid status; polls, backoff, six version tries, recovery
   RIF5-M1   the counters of the run: overs, modem results, port results
 
+  RIF5N-*   the image dv-router:wip-f1f3777 (DV-Router bc9af2b1, DVT_RIF5N=on; docs/rif5-cases.md "The image wip-f1f3777"): NXDN (RIF5d) and P25 (RIF5e)
+            TX / RX / long overs / foreign RAN and NAC / NXDN <-> DMR, the RIF5k end sequence and the RIF5l voiceless join in the older cases, the
+            D-STAR ride-along (RIF5h) with its negative control, the RFHEARD1 guard, and PORTCTL1 (DVT_PORTCTL1=on)
+
 Gate: DVT_RIF5=on (rig/compose.yml passes it to the tester); every case skips with the reason otherwise. Needs DVT_SUT_PROFILE=dvrouter, native launch
 and rig/config/dv-router/rif5-mmdvm-udp.toml in DVT_SUT_CONFIG_EXTRA. With --profile web (web.toml:admin.toml) the cases read the port state and G1 can
 restart the edge; the rig control channel gives the metrics. A difference the documents do not settle is a FINDING line in out/<run>/rif5.txt, never an
@@ -33,13 +37,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from dvtest import echo, rif5, sut_config
+from dvtest import clients, echo, rif5, rif5n, sut_config
 from dvtest import mmdvm_rf as rf
 from dvtest import mmdvm_fw
+from dvtest import mmdvm_modem as mm
 from dvtest import mmdvm_serial as ms
 from dvtest.control import RigControl
-from rif5_support import (Member, admin_row, last_dialogue, note, public_row, quiesce, restart_radio_edge, settle_idle, wait_for, wait_unfenced,
-                          write_timeline)
+from dvtest.proto import dmr, nxdn
+from rif5_support import (Member, RoomMember, admin_row, last_dialogue, note, public_row, quiesce, restart_radio_edge, settle_idle, wait_for,
+                          wait_unfenced, write_timeline)
 
 pytestmark = pytest.mark.rig
 
@@ -291,7 +297,7 @@ def test_o3_port_row_in_the_status(ctx, web, admin_factory):
         # RIF5j (design-276 2): the public port row has exactly the 19 observer fields, the two frequencies among them
         problems.append("public row keys differ from the 19 observer fields: missing %s, extra %s" % (
             sorted(set(rif5.OBSERVER_FIELDS) - set(row)), sorted(set(row) - set(rif5.OBSERVER_FIELDS))))
-    if sorted(row.get("modes") or []) != ["dmr", "dstar", "ysf"]:
+    if sorted(row.get("modes") or []) != sorted(ctx.port.modes):
         problems.append("modes %r" % (row.get("modes"),))
     if row.get("tx") not in ("on", True):
         problems.append("tx %r for a port with tx = true" % (row.get("tx"),))
@@ -329,12 +335,18 @@ def rx_kwargs(kind, port):
 
 
 def judge_tx(kind, log, sent, ident, port, lossy=False):
-    """The judge of the mode. `lossy`: a long over, where the host queue may drop words (a FINDING, radio.md 7.1 flow control)."""
+    """The judge of the mode. `lossy`: a long over, where the host queue may drop words (a FINDING, radio.md 7.1 flow control). Under DVT_RIF5N=on
+    (RIF5k, radio.md 7.1 "Built (RIF5k P3)") the end sequence has no extra frame: the trailing end unit of D-STAR and the extra YSF frame, a FINDING
+    on the older images, are problems."""
     if kind == "dstar":
-        return rif5.judge_tx_dstar(log, sent, ident, rif5.STATION, port.rpt_module, lossy=lossy)
-    if kind == "dmr":
-        return rif5.judge_tx_dmr(log, sent, ident, port.dmr_tg, port.color_code, lossy=lossy)
-    return rif5.judge_tx_ysf(log, sent, ident, port.ysf_lo_dev, lossy=lossy)
+        verdict = rif5.judge_tx_dstar(log, sent, ident, rif5.STATION, port.rpt_module, lossy=lossy)
+    elif kind == "dmr":
+        verdict = rif5.judge_tx_dmr(log, sent, ident, port.dmr_tg, port.color_code, lossy=lossy)
+    else:
+        verdict = rif5.judge_tx_ysf(log, sent, ident, port.ysf_lo_dev, lossy=lossy)
+    if rif5.n_on(os.environ) and not lossy:
+        verdict.problems.extend("RIF5k: %s" % p for p in rif5n.end_sequence_problems(kind, verdict, len(sent)))
+    return verdict
 
 
 def quiet_after_link(ctx, kind):
@@ -828,13 +840,489 @@ def test_j_long_overs_are_lossless(ctx, web):
             note(ctx.target, case, "RECORD", "%s: counters grew by %s" % (label, row))
             if label == "ysf join":
                 if row["tx_underrun"] or row["dropped"]:
-                    note(ctx.target, case, "FINDING", "the YSF client's join (header + terminator, no voice) was keyed to RF and the host counted %s" % row)
+                    if rif5.n_on(os.environ):
+                        # RIF5l: a stream without voice never keys a port, so the join has nothing to count (RIF5-N-JOIN asserts the silence on the byte link)
+                        problems.append("the YSF join (a stream without voice) was counted as %s: RIF5l says it never keys" % row)
+                    else:
+                        note(ctx.target, case, "FINDING", "the YSF client's join (header + terminator, no voice) was keyed to RF and the host counted %s" % row)
             else:
                 for key in ("dropped", "tx_underrun"):
                     if row[key]:
                         problems.append("%s grew by %s during the %s of 150 words" % (key, row[key], label))
         ok = rif5.delta(before, after, "dv_edge_radio_frames_total", dir="tx", result="ok")
         note(ctx.target, case, "RECORD", "frames_total{dir=tx,result=ok} grew by %s over the whole case, the modem logged %d native frames of the overs" % (ok, natives))
+    assert not problems, "%s: %s" % (case, problems)
+
+
+# ---------------------------------------------------------------- RIF5-N: the image wip-f1f3777 (DVT_RIF5N=on)
+
+N_MODES = ("nxdn", "p25")
+
+
+def need_n(ctx, *modes):
+    """Skip unless DVT_RIF5N is on and the port row of the rendered config has the modes (rig/config/dv-router/rif5n-modes.toml, used INSTEAD of
+    rif5-mmdvm-udp.toml: two [[edges.radio.port]] files would define two ports)."""
+    if not rif5.n_on(os.environ):
+        pytest.skip(rif5n.gate_text(os.environ))
+    missing = [m for m in modes if m not in ctx.port.modes]
+    if missing:
+        pytest.skip("the port row has no %s mode: put rig/config/dv-router/rif5n-modes.toml (or rif5n-ride.toml) in DVT_SUT_CONFIG_EXTRA instead of "
+                    "rif5-mmdvm-udp.toml (docs/rif5-cases.md, \"The image wip-f1f3777\")" % missing)
+
+
+def n_words(kind, n, seed):
+    """n deterministic words of the mode as the room client sends them (NXDN: 49-bit words, the last byte keeps its top bit; P25: 11 byte IMBE)."""
+    frames = mm.default_frames(kind, n, seed)
+    return rf.canonical_frames("nxdn", frames) if kind == "nxdn" else frames
+
+
+def n_rx_kwargs(kind, port):
+    """What the modem's RF over carries: the identity of the radio (N0CALL), and the RAN / NAC of the row (a foreign one is not heard)."""
+    if kind == "nxdn":
+        return {"src": rif5n.NXDN_IDS[0], "dst": port.nxdn_tg, "ran": port.nxdn_ran}
+    return {"src": rif5n.P25_IDS[0], "dst": port.p25_tg, "nac": port.p25_nac}
+
+
+def play_n(ctx, kind, words, kwargs):
+    """The modem plays an RF over of `words` (NXDN or P25) in the shapes of rif5n.rx_air; returns the KeyUp."""
+    air, voice, count = ctx.modem.build_keyup(kind, frames=words, **kwargs)
+    return ctx.modem.play_air(kind, rif5n.rx_air(kind, air), voice, count)
+
+
+def judge_n(kind, log, sent, src, port, lossy=False):
+    if kind == "nxdn":
+        return rif5n.judge_tx_nxdn(log, sent, src, port.nxdn_tg, port.nxdn_ran, lossy=lossy)
+    return rif5n.judge_tx_p25(log, sent, src, port.p25_tg, port.p25_nac, lossy=lossy)
+
+
+def n_tx_over(ctx, web, kind, n, seed, case, talker="same"):
+    """One over of `n` words from N0TEST into the room of `kind` (nxdn: S, p25: T); returns (log since the start, words sent, the source id the RF side
+    must name). talker "dmr": a DMR client keys the NXDN room instead (NXDN <-> DMR needs no transcoder, media-format.md: both are ambe2-dmr; the 49
+    parameter bits pass unchanged), the words sent are the 49-bit form of its 72-bit words and the RF source is the NXDN id of N0TEST."""
+    ready(ctx, web, case)
+    room = rif5.ROOMS[kind]
+    if talker == "same":
+        words = n_words(kind, n, "%s-%s" % (seed, kind))
+        client = RoomMember(ctx.ip, kind, 1, listen=False)
+        sent, src = words, client.ident()
+    else:
+        words = echo.make_frames("dmr", n, "%s-%s-dmr" % (seed, kind))
+        client = member(ctx, "dmr", room, 1, listen=False)
+        sent, src = [nxdn.from_dmr(w) for w in echo.expected_frames("dmr", words)], rif5n.NXDN_IDS[1]
+    since = ctx.modem.mark()
+    try:
+        t_talk = time.monotonic()
+        client.talk(words, tail=0.5)
+        ctx.last_talk = (t_talk, time.monotonic() - 0.5, len(words))
+    finally:
+        client.close(settle=0.5)
+    log = quiesce(ctx.modem, since, ms.TX_TYPES[kind], quiet=1.5, timeout=30.0)
+    assert log is not None, "%s: no %s frames reached the modem within 30 s of the end of the over (frames seen: %s)" % (
+        case, kind, sorted({ms.name_of(f.ftype) for f in ctx.modem.host_frames(since)}))
+    return log, since, sent, src
+
+
+def n_tally(log, kind, field="tx"):
+    TALLY[field] += 1
+    TALLY["tx_native_frames"] += len([f for f in log if f.ftype in ms.TX_TYPES[kind]])
+
+
+def test_n_o1_set_config_enables_the_two_new_modes(ctx):
+    """radio.md 7.1 / 7.3: SET_CONFIG enables NXDN 0x10 and P25 0x08, the P25 level at v2 byte 15 and the NXDN level at byte 16 (pct of the row's
+    tx_level), the firmware hangs (bytes 23 to 26) zero; every offset is compared by rif5.judge_open from the row of the rendered config."""
+    need_n(ctx, "nxdn", "p25")
+    d = last_dialogue(ctx.modem)
+    assert d is not None, "no complete open dialogue in the modem log"
+    verdict = rif5.judge_open(d, ctx.port)
+    report(ctx, "RIF5N-O1", verdict)
+    cfg = ms.parse_set_config_v2(d.config.payload)
+    assert cfg is not None and sorted(cfg["modes"]) == sorted(ctx.port.modes), "SET_CONFIG enables %s, the row has %s" % (cfg and cfg["modes"], sorted(ctx.port.modes))
+    assert not verdict.problems, "open dialogue: %s" % verdict.problems
+
+
+@pytest.mark.parametrize("kind", N_MODES)
+def test_n_tx_room_to_modem(kind, ctx, web):
+    """RIF5d / RIF5e (radio.md "NXDN (Built, RIF5d S2)", "P25 (Built, RIF5e S2)"): a protocol client of the NXDN room S (TG 31680) or the P25 room T keys
+    it; the modem gets SET_MODE 5 / 4, then NXDN one VCALL frame + the voice frames + one TX_REL frame, or P25 one HDU + the LDUs + one TDU; the row's
+    RAN / NAC and TG, the talker's id, the words byte for byte. Same protocol both ways: no transcoder, so the comparison is exact with DVT_TRANSCODER_FAKE."""
+    need_n(ctx, kind)
+    case = "RIF5N-TX-%s" % kind
+    log, since, sent, src = n_tx_over(ctx, web, kind, rif5n.SHORT[kind], "rif5n-tx", case)
+    verdict = judge_n(kind, log, sent, src, ctx.port)
+    report(ctx, case, verdict)
+    timeline(ctx, case, since, verdict)
+    n_tally(log, kind)
+    check_naks(ctx, case, since)
+    assert not verdict.problems, "%s: %s" % (case, verdict.problems)
+
+
+def test_n_tx_dmr_talker_into_the_nxdn_room(ctx, web):
+    """NXDN <-> DMR: a DMR client keys room S; DV-Router passes the AMBE+2 parameter bits unchanged between the two (media-format.md: NXDN 49-bit frames
+    re-laid out by `dv_lib_radio::ambe2`, "NXDN <-> DMR needs no transcoder"), so the NXDN words on RF are the 49-bit forms of the DMR words sent, exact.
+    The RF source is the NXDN id of the callsign (media-format.md, NXDN header: "src = NXDN id of the callsign"): N0TEST = 1002."""
+    need_n(ctx, "nxdn")
+    case = "RIF5N-TX-nxdn-from-dmr"
+    log, since, sent, src = n_tx_over(ctx, web, "nxdn", rif5n.SHORT["nxdn"], "rif5n-xtx", case, talker="dmr")
+    verdict = judge_n("nxdn", log, sent, src, ctx.port)
+    report(ctx, case, verdict)
+    timeline(ctx, case, since, verdict)
+    n_tally(log, "nxdn")
+    check_naks(ctx, case, since)
+    assert not verdict.problems, "%s: %s" % (case, verdict.problems)
+
+
+def heard_end(member_, kind, timeout=12.0):
+    """Wait for the end of an over a RoomMember hears (NXDN: the trailer packet; P25: the terminator record), then 0.6 s more; returns heard()."""
+    key = (lambda h: h["trailers"]) if kind == "nxdn" else (lambda h: h["terminators"])
+    wait_for(lambda: key(member_.heard()), timeout)
+    time.sleep(0.6)
+    return member_.heard()
+
+
+@pytest.mark.parametrize("kind", N_MODES)
+def test_n_rx_modem_to_room(kind, ctx, web):
+    """RIF5d / RIF5e RX: the modem plays an RF over (NXDN: VCALL FACCH1 frame, 37 voice frames, TX_REL, the row's RAN; P25: HDU, 16 LDUs, TDU, the row's
+    NAC, group LC with src 1023007 and the row's TG); a client of the room hears ONE over from N0CALL with the words unchanged and the end; the RF ingress is
+    not echoed back (radio.md 4.4, 7.2)."""
+    need_n(ctx, kind)
+    case = "RIF5N-RX-%s" % kind
+    ready(ctx, web, case)
+    words = n_words(kind, rif5n.RX_WORDS[kind], "rif5n-rx")
+    listener = RoomMember(ctx.ip, kind, 1, listen=True)
+    try:
+        since = ctx.modem.mark()
+        ku = play_n(ctx, kind, words, n_rx_kwargs(kind, ctx.port))
+        assert ku.wait(RX_SECONDS + 20) and ku.error is None, "the modem could not play the over: %s" % ku.error
+        heard = heard_end(listener, kind)
+    finally:
+        listener.close(settle=0.5)
+    compare = echo.compare_payload(ku.voice, heard["voice"])
+    note(ctx.target, case, "RECORD", "voice words sent %d (padding included), heard %d, first difference %s, extra %d, missing %d; heard %s" % (
+        len(ku.voice), len(heard["voice"]), compare.first_diff, len(compare.extra), compare.missing,
+        {k: v for k, v in heard.items() if k not in ("voice", "types", "items")}))
+    problems = []
+    if kind == "nxdn":
+        want_id = (rif5n.NXDN_IDS[0], rif5n.NXDN_ROOM_TG)
+        if heard["headers"] != [want_id]:
+            problems.append("headers heard %s, wanted exactly one, src %d dst %d (the NXDN id of N0CALL and the TG of the client)" % (heard["headers"], *want_id))
+        if heard["trailers"] != 1:
+            problems.append("%d trailers heard, one expected" % heard["trailers"])
+        if heard["other"] or heard["groups"] != {True}:
+            problems.append("%d non-voice packets, group flags %s" % (heard["other"], sorted(heard["groups"])))
+    else:
+        if heard["srcs"] != {rif5n.P25_IDS[0]} or heard["dst"] != rif5n.P25_ROOM_TG:
+            problems.append("source ids %s dst %s, wanted {%d} and the server TG %d" % (sorted(heard["srcs"]), heard["dst"], rif5n.P25_IDS[0], rif5n.P25_ROOM_TG))
+        if heard["terminators"] != 1:
+            problems.append("%d terminators heard, one expected" % heard["terminators"])
+        problems += heard["lifecycle"]
+        if heard["algid"] - {0x80}:
+            problems.append("ALGID %s heard, the call is clear (0x80)" % sorted(heard["algid"]))
+    if not (compare.prefix_ok and not compare.missing):
+        problems.append("the words heard differ from the words the modem sent (first difference at %s, %d missing)" % (compare.first_diff, compare.missing))
+    if compare.extra:
+        note(ctx.target, case, "FINDING", "%d voice words after the %d the modem sent (padding of the egress)" % (len(compare.extra), len(ku.voice)))
+    timeline(ctx, case, since, SimpleNamespace(facts={"voice_sent": len(ku.voice), "voice_heard": len(heard["voice"])}, problems=problems, findings=[]), talk=False)
+    time.sleep(1.5)
+    echoed = [ms.name_of(f.ftype) for f in ctx.modem.host_frames(since, types=rif5.RF_TYPES)]
+    if echoed:
+        problems.append("the RF ingress circuit was echoed back to the modem: %s" % echoed[:6])
+    TALLY["rx"] += 1
+    assert not problems, "%s: %s" % (case, problems)
+
+
+def test_n_rx_nxdn_over_is_heard_by_a_dmr_client(ctx, web):
+    """NXDN RF -> DMR room client (no transcoder): the DMR words are the 72-bit forms of the 49-bit words the modem sent (`nxdn.to_dmr`), in order, one
+    over, ended; the talker is N0CALL (DMR id 1023007 for the NXDN id 1001, RECORD)."""
+    need_n(ctx, "nxdn")
+    case = "RIF5N-RX-nxdn-to-dmr"
+    ready(ctx, web, case)
+    words = n_words("nxdn", rif5n.RX_WORDS["nxdn"], "rif5n-xrx")
+    listener = member(ctx, "dmr", rif5.ROOMS["nxdn"], 1, listen=True)
+    try:
+        since = ctx.modem.mark()
+        ku = play_n(ctx, "nxdn", words, n_rx_kwargs("nxdn", ctx.port))
+        assert ku.wait(RX_SECONDS + 20) and ku.error is None, "the modem could not play the over: %s" % ku.error
+        wait_for(lambda: [o for o in listener.overs() if o.ended], 10.0)
+        time.sleep(0.6)
+        overs = listener.overs()
+    finally:
+        listener.close(settle=0.5)
+    assert len(overs) == 1, "%s: the DMR client heard %d overs, wanted one" % (case, len(overs))
+    over = overs[0]
+    want = [nxdn.to_dmr(w) for w in ku.voice]
+    compare = echo.compare_payload(want, over.frames)
+    note(ctx.target, case, "RECORD", "talker %s; words wanted %d, heard %d, first difference %s, extra %d, missing %d" % (
+        over.idents, len(want), len(over.frames), compare.first_diff, len(compare.extra), compare.missing))
+    TALLY["rx"] += 1
+    assert over.ended, "%s: the over did not end on the client side" % case
+    assert compare.prefix_ok and not compare.missing, "%s: the DMR words heard are not the 72-bit forms of the NXDN words sent (first difference at %s, %d missing)" % (
+        case, compare.first_diff, compare.missing)
+
+
+FOREIGN = {"nxdn": ("ran", lambda port: (port.nxdn_ran + 1) % 64 or 2, "a foreign RAN: supplies neither silence nor a timer refresh and never opens an over"),
+           "p25": ("nac", lambda port: port.p25_nac ^ 0x0F0, "a foreign NAC: counted as an RX drop, no fill, no refresh, no late entry")}
+
+
+@pytest.mark.parametrize("kind", N_MODES)
+def test_n_rx_foreign_ran_or_nac_is_not_heard(kind, ctx, web):
+    """radio.md NXDN: "Outbound LICH and valid SACCH with a foreign RAN supply neither silence nor a timer refresh" (RAN 0 is accepted, so the foreign RAN is
+    neither the row's nor 0); radio.md P25: "Only the exact configured NAC is ours. A foreign NAC increments the RX drop count without silence fill,
+    refreshing the over or feeding late entry." A whole over with the foreign value: nothing reaches the room. The counters are a RECORD."""
+    need_n(ctx, kind)
+    case = "RIF5N-RXR-%s" % ("ran" if kind == "nxdn" else "nac")
+    key, pick, why = FOREIGN[kind]
+    ready(ctx, web, case)
+    kwargs = dict(n_rx_kwargs(kind, ctx.port), **{key: pick(ctx.port)})
+    assert kwargs[key] != getattr(ctx.port, "nxdn_ran" if kind == "nxdn" else "p25_nac") and (kind == "p25" or kwargs[key] != 0)
+    before = counters_now(ctx)
+    listener = RoomMember(ctx.ip, kind, 1, listen=True)
+    try:
+        ku = play_n(ctx, kind, n_words(kind, 60, "rif5n-foreign"), kwargs)
+        assert ku.wait(10.0) and ku.error is None
+        time.sleep(2.0)
+        packets = listener.items()
+    finally:
+        listener.close(settle=0.5)
+    after = counters_now(ctx) if ctx.control is not None else None
+    note(ctx.target, case, "RECORD", "%s = %s (%s); datagrams heard %d" % (key, kwargs[key], why, len(packets)))
+    if ctx.control is not None:
+        time.sleep(12.0)
+        grown = {r: rif5.delta(before, counters_now(ctx), "dv_edge_radio_frames_total", dir="rx", result=r) for r in ("ok", "dropped", "bad_header", "unsupported", "local_only")}
+        note(ctx.target, case, "RECORD", "frames_total{dir=rx} grew by %s" % grown)
+    assert not packets, "%s: an over with %s reached the room (%s)" % (case, why, rif5n.heard_nxdn(packets) if kind == "nxdn" else rif5n.heard_p25(packets))
+
+
+@pytest.mark.parametrize("kind", N_MODES)
+def test_n_long_over_is_lossless(kind, ctx, web):
+    """The strict twin of RIF5-J-LONG for the new modes (radio.md 7.1 flow control: Q = 4 NXDN, 2 P25, host queue 1700 ms): a 3 s over from the room,
+    every word written, in order, byte exact, one header / HDU, one end frame, GET_STATUS every 50 ms while keyed (median 0.065 s, longest 0.12 s), no NAK,
+    no `underrun` of the firmware-like fake (DVT_RIF5FW=on), and over the case `frames_total{dir=tx,result=dropped}` and `modem_total{result=tx_underrun}`
+    grew by 0 (hub counters read 11 s before and 12 s after). P25 hardware checks of the same are RIF13 (radio.md P25): this is the host side only."""
+    need_n(ctx, kind)
+    case = "RIF5N-LONG-%s" % kind
+    before = None
+    if ctx.control is not None:
+        ready(ctx, web, case)
+        time.sleep(11.0)
+        before = counters_now(ctx)
+    log, since, sent, src = n_tx_over(ctx, web, kind, rif5n.LONG[kind], "rif5n-long", case)
+    verdict = judge_n(kind, log, sent, src, ctx.port)
+    native = [f for f in log if f.ftype in ms.TX_TYPES[kind]]
+    keyed = rif5.status_cadence_keyed(log, native[0].mono, native[-1].mono) if native else rif5.verdict(["no native frame was written"])
+    naks = [(ms.name_of(n[1]), n[2]) for n in ctx.modem.naks if n[0] >= since]
+    fw = ctx.modem.fw_events(since, names=("underrun", "nak")) if hasattr(ctx.modem, "fw_events") else None
+    timeline(ctx, case, since, verdict)
+    n_tally(log, kind, "long")
+    span = native[-1].mono - native[0].mono if native else 0.0
+    note(ctx.target, case, "RECORD", "native frames %d over %.2f s; %s; status while keyed %s; fake underrun events %s" % (
+        len(native), span, ", ".join("%s=%s" % kv for kv in sorted(verdict.facts.items())), keyed.facts,
+        "not modelled (DVT_RIF5FW is off)" if fw is None else len(fw)))
+    for line in verdict.findings:
+        note(ctx.target, case, "FINDING", line)
+    problems = verdict.problems + keyed.problems
+    if naks:
+        problems.append("the modem had to NAK frames of the host: %s" % naks[:4])
+    if fw:
+        problems.append("the firmware-like fake logged %s" % [(round(t - since, 3), e, d.get("dry_s")) for t, e, d in fw[:4]])
+    if before is not None:
+        time.sleep(12.0)
+        after = counters_now(ctx)
+        row = {"dropped": rif5.delta(before, after, "dv_edge_radio_frames_total", dir="tx", result="dropped"),
+               "tx_underrun": rif5.delta(before, after, "dv_edge_radio_modem_total", result="tx_underrun"),
+               "ok": rif5.delta(before, after, "dv_edge_radio_frames_total", dir="tx", result="ok")}
+        note(ctx.target, case, "RECORD", "counters grew by %s, the modem logged %d native frames" % (row, len(native)))
+        problems += ["%s grew by %s during the over of %d words" % (k, row[k], len(sent)) for k in ("dropped", "tx_underrun") if row[k]]
+    assert not problems, "%s: %s" % (case, problems)
+
+
+@pytest.mark.parametrize("kind", ("dmr", "ysf"))
+def test_n_voiceless_join_never_keys_the_port(kind, ctx, web):
+    """RIF5l (radio.md "Built (RIF5l)"): "a stream without voice never keys any radio port": a DMR or YSF client's join (a header, 0.3 s, a terminator, no
+    voice) writes NOTHING to the modem (no SET_MODE but an idle, no native frame), and a held start that ends without voice is counted once as
+    `over_total{dir=tx,result=no_voice}` (asserted for YSF, whose join reached RF on the older images; a RECORD for DMR). The older images keyed the
+    port for a YSF join (rig run 20261113T052325Z: SET_MODE 03, a preamble, a header, a terminator; RIF5l)."""
+    if not rif5.n_on(os.environ):
+        pytest.skip(rif5n.gate_text(os.environ))
+    case = "RIF5N-JOIN-%s" % kind
+    ready(ctx, web, case)
+    before = None
+    if ctx.control is not None:
+        time.sleep(11.0)
+        before = counters_now(ctx)
+    t0 = ctx.modem.mark()
+    joined = Member(ctx.ip, kind, rif5.ROOMS[kind], 1, listen=False)          # the link is the voiceless stream
+    try:
+        time.sleep(4.0)                                                       # the core's egress silence timeout is 1.6 s (radio.md RIF5l)
+        t1 = time.monotonic()
+        verdict = rif5n.judge_no_keying(ctx.modem.host_frames(), t0, t1)
+    finally:
+        joined.close(settle=0.5)
+    report(ctx, case, verdict)
+    problems = list(verdict.problems)
+    if before is not None:
+        time.sleep(12.0)
+        after = counters_now(ctx)
+        grown = {"no_voice": rif5.delta(before, after, rif5n.NO_VOICE[0], **rif5n.NO_VOICE[1]),
+                 "tx_started": rif5.delta(before, after, "dv_edge_radio_over_total", dir="tx", result="started"),
+                 "tx_underrun": rif5.delta(before, after, "dv_edge_radio_modem_total", result="tx_underrun")}
+        note(ctx.target, case, "RECORD", "counters grew by %s" % grown)
+        if kind == "ysf" and not grown["no_voice"]:
+            problems.append("over_total{dir=tx,result=no_voice} did not grow for a voiceless YSF join (radio.md RIF5l: a held start that ends without voice is counted)")
+        if grown["tx_underrun"]:
+            problems.append("tx_underrun grew by %s although nothing was written" % grown["tx_underrun"])
+    assert not problems, "%s: %s" % (case, problems)
+
+
+# ---------------------------------------------------------------- RIF5-N: D-STAR ride-along (RIF5h) and the RFHEARD1 guard
+
+DMR_LAT, DMR_LON = 10.5, 20.25                      # 10 deg 30.00 N, 20 deg 15.00 E, as the DP15 and DP7 cases
+RIDE_WORDS = 180                                    # 60 DMR bursts, 3.6 s: the rider needs at least two superframes (0.84 s) after the position is admitted
+
+
+def dstar_cross_over(ctx, web, case, side=None, n=RIDE_WORDS, seed="rif5n-ride"):
+    """A DMR client N0TEST (id 1023008) keys the D-STAR room P (cross-mode into the radio's D-STAR circuit, through the fake transcoder); `side` maps a
+    voice packet index to datagrams sent right after it (a DMRG position). The same talk path with and without `side`, so that two overs are alike.
+    Returns (host frames since the start, since)."""
+    ready(ctx, web, case)
+    frames = echo.make_frames("dmr", n, seed)
+    talker = member(ctx, "dmr", rif5.ROOMS["dstar"], 1, listen=False)
+    since = ctx.modem.mark()
+    try:
+        dmr.talk_with_side_packets(talker.client, frames, side or {}, stream_id=clients.fresh_stream_id("dmr"), tail=0.5)
+    finally:
+        talker.close(settle=0.5)
+    log = quiesce(ctx.modem, since, ms.TX_TYPES["dstar"], quiet=1.5, timeout=30.0)
+    assert log is not None, "%s: no D-STAR frames reached the modem" % case
+    TALLY["tx"] += 1
+    TALLY["tx_native_frames"] += len([f for f in log if f.ftype in ms.TX_TYPES["dstar"]])
+    return log, since
+
+
+def test_n_ride_along_dprs_of_a_cross_mode_talker(ctx, web):
+    """RIF5h (radio.md 7.7, data.md 7.3, config.md `ride_along`): with `ride_along = true` on the port (rif5n-ride.toml) the D-PRS position of a cross-mode
+    talker rides in the unused slow-data slots of the D-STAR over already on air, and the over is otherwise identical: the same voice words, the sync
+    triple at 0 mod 21, header, EOT, frame count. Two overs of the SAME DMR talker (N0TEST) in room P: the first without a position (the base), the second
+    with a DMRG datagram after the 4th voice packet (10.5 N 20.25 E). The slow data the MODEM receives of the second is decoded (dvtest.dstar_sd.Decoder): a
+    D-PRS line with a valid CRC from N0TEST with that position. The negative control: on a port without `ride_along` (rif5n-modes.toml, the default) the
+    two overs are byte identical in every slow-data field and no D-PRS line is there. Needs the data worker (data-ident.toml in DVT_SUT_CONFIG_EXTRA).
+    The status text (DMRA) is not driven: a RECORD of the text events only."""
+    if not rif5.n_on(os.environ):
+        pytest.skip(rif5n.gate_text(os.environ))
+    case = "RIF5N-RIDE"
+    on = bool(ctx.port.ride_along)
+    if not ctx.config_seen:
+        note(ctx.target, case, "RECORD", "the rendered config is not visible: ride_along is taken from the snippet default (off); run with rif5n-ride.toml and "
+                                         "the config visible for the positive case")
+    base, _ = dstar_cross_over(ctx, web, case + "-base")
+    settle_idle(ctx.modem, 30.0)
+    rid = clients.DMR_IDS[1]
+    ride, since = dstar_cross_over(ctx, web, case, side={3: [dmr.dmrg_packet(rid, DMR_LAT, DMR_LON)]})
+    verdict = rif5n.compare_overs(base, ride, rider=on)
+    lines_base, lines = rif5n.dprs_lines(base), rif5n.dprs_lines(ride)
+    texts = [e["text"] for e in rif5n.rider_events(ride) if e["kind"] == "text"]
+    note(ctx.target, case, "RECORD", "ride_along %s; frames %s, changed slow-data fields %d (first %s); D-PRS lines %s; text events %s" % (
+        on, verdict.facts["frames"], len(verdict.facts["changed"]), verdict.facts["changed"][:4], lines, texts[:2]))
+    problems = list(verdict.problems)
+    if lines_base:
+        problems.append("the base over (no position sent) carries D-PRS lines %s" % lines_base)
+    if on:
+        good = [parsed for crc_ok, parsed in lines if crc_ok and parsed]
+        if not good:
+            problems.append("no D-PRS line with a valid CRC in the slow data of the over (lines %s): the rider did not carry the position (data worker on, "
+                            "DMRG admitted, `ride_along = true` in the rendered config?)" % lines)
+        else:
+            source, _dest, _path, info = good[0]
+            if source != "N0TEST" or info[:1] not in (b"!", b"=") or b"1030.00N" not in info or b"02015.00E" not in info:
+                problems.append("the D-PRS line is %s, wanted a position of N0TEST at 1030.00N 02015.00E" % (good[0],))
+    elif lines:
+        problems.append("ride_along is off and the over still carries D-PRS lines %s" % lines)
+    assert not problems, "%s: %s" % (case, problems)
+
+
+def test_n_rfheard1_a_radio_heard_position_is_never_ridden_along(ctx, web):
+    """RFHEARD1 (data.md "RF origin", radio.md 7.7; `origin_is_rf` at every RF transmit decision site): data whose origin is a radio or AX.25 port is never
+    transmitted on an RF port, "radio and AX.25 origins ... are refused" as a rider. The guard has no producer on this port today (the radio edge sets no
+    RF_HEARD and a rider is bound to its own talker's stream), so what is observable is the absence: the modem plays an RF D-STAR over of N0CALL whose slow data
+    carries a D-PRS position (heard by the room, admitted), then a DMR talker N0TEST keys the same room WITHOUT a position: its D-STAR over at the modem must
+    carry no D-PRS line (neither of N0CALL nor any), nothing of the RF over is written back to the modem, and `dv_pkt_rf_drop_total{reason=rf_origin}` is
+    a RECORD (it counts a worker RF group refusal). On a port without ride_along the same must hold: the case runs in both shapes."""
+    if not rif5.n_on(os.environ):
+        pytest.skip(rif5n.gate_text(os.environ))
+    case = "RIF5N-RFHEARD1"
+    ready(ctx, web, case)
+    before = rif5n.metric_total(hub_text(ctx), *rif5n.RF_DROP[:1], **rif5n.RF_DROP[1])
+    fields = rif5n.rf_dprs_fields("N0CALL")
+    air = rf.dstar_keyup(echo.make_frames("dstar", 150, "rif5n-heard"), **dict(rx_kwargs("dstar", ctx.port), slow=lambda n: fields[n][1] if n < len(fields) else rf.DSTAR_NULL_SLOW))
+    listener = Member(ctx.ip, "dstar", rif5.ROOMS["dstar"], 1, listen=True)
+    try:
+        since_rf = ctx.modem.mark()
+        ku = ctx.modem.play_air("dstar", air, voice=rf.canonical_frames("dstar", echo.make_frames("dstar", 150, "rif5n-heard")), count=150)
+        assert ku.wait(RX_SECONDS + 20) and ku.error is None, "the modem could not play the over: %s" % ku.error
+        wait_for(lambda: [o for o in listener.overs() if o.ended], 10.0)
+    finally:
+        listener.close(settle=0.5)
+    TALLY["rx"] += 1
+    time.sleep(1.5)
+    echoed = [ms.name_of(f.ftype) for f in ctx.modem.host_frames(since_rf, types=rif5.RF_TYPES)]
+    settle_idle(ctx.modem, 30.0)
+    log, _since = dstar_cross_over(ctx, web, case + "-after")
+    lines = rif5n.dprs_lines(log)
+    after = rif5n.metric_total(hub_text(ctx), *rif5n.RF_DROP[:1], **rif5n.RF_DROP[1])
+    note(ctx.target, case, "RECORD", "dv_pkt_rf_drop_total{reason=rf_origin} %s -> %s (the hub text is up to 10 s old); D-PRS lines in the over after the RF over: %s" % (
+        before, after, lines))
+    problems = []
+    if echoed:
+        problems.append("the radio-heard over was written back to the modem: %s" % echoed[:6])
+    if lines:
+        problems.append("the D-STAR over of a talker WITHOUT a position carries D-PRS lines %s (a radio-heard position rode along)" % lines)
+    assert not problems, "%s: %s" % (case, problems)
+
+
+# ---------------------------------------------------------------- RIF5-N: PORTCTL1 (DVT_PORTCTL1=on, 1ea6bd00, after wip-f1f3777)
+
+def test_portctl1_the_same_talker_opens_no_new_rts_after_the_room_timeout(ctx, web):
+    """PORTCTL1 (radio.md 10.3 "Built (PORTCTL1)"): after the room revokes an RX over (its TOT, 180 s, bounds every received over) while the carrier
+    remains, the SAME talker's repeated headers (here the late entry of the embedded LC of a DMR over that goes on) start no new RTS until an end frame, a
+    loss, a Down, a different talker or 300 ms of silence; each blocked start is counted `over_total{dir=rx,result=rts_suppressed}`. A DMR RF over of
+    N0CALL runs 190 s (the room ends it at 180 s): the client of room Q hears ONE over, `rts_suppressed` grew by at least 1; after its terminator the same
+    talker opens a normal over at once (a 2 s over: heard, one over). About 3.5 minutes. The old image (no PORTCTL1) is expected to open a second over
+    for the late entry: this case is red there by design. Written offline: whether the modem's late entry is what the edge counts as a repeated header
+    is not stated by the document (a RECORD of the overs heard)."""
+    if not rif5.portctl1_on(os.environ):
+        pytest.skip("DVT_PORTCTL1 is not on: this case is for an image with DV-Router PORTCTL1 (1ea6bd00, the image after wip-f1f3777; docs/rif5-cases.md)")
+    case = "RIF5-PORTCTL1"
+    ready(ctx, web, case)
+    time.sleep(11.0)
+    before = counters_now(ctx)
+    kw = rx_kwargs("dmr", ctx.port)
+    listener = member(ctx, "dmr", rif5.ROOMS["dmr"], 1, listen=True)
+    try:
+        ku = ctx.modem.keyup("dmr", seconds=190.0, **kw)
+        assert ku.wait(190.0 + 30) and ku.error is None, "the modem could not play the over: %s" % ku.error
+        time.sleep(1.0)
+        long_overs = listener.overs()
+        mark = len(long_overs)
+        settle_idle(ctx.modem, 10.0)
+        ku2 = ctx.modem.keyup("dmr", seconds=2.0, seed="rif5-portctl1-after", **kw)
+        assert ku2.wait(30.0) and ku2.error is None
+        wait_for(lambda: len([o for o in listener.overs() if o.ended]) > mark, 10.0)
+        time.sleep(0.6)
+        all_overs = listener.overs()
+    finally:
+        listener.close(settle=0.5)
+    note(ctx.target, case, "RECORD", "overs heard in the 190 s over: %s; after the terminator: %d more" % (
+        [(round(o.end - o.start, 1), o.idents, o.ended) for o in long_overs], len(all_overs) - mark))
+    time.sleep(12.0)
+    after = counters_now(ctx)
+    suppressed = rif5.delta(before, after, rif5n.RTS_SUPPRESSED[0], **rif5n.RTS_SUPPRESSED[1])
+    note(ctx.target, case, "RECORD", "over_total{dir=rx,result=rts_suppressed} grew by %s" % suppressed)
+    problems = []
+    if len(long_overs) != 1:
+        problems.append("the room heard %d overs in the 190 s over, one expected (the same talker is not given a new RTS after the timeout)" % len(long_overs))
+    if not suppressed:
+        problems.append("over_total{dir=rx,result=rts_suppressed} did not grow")
+    if len(all_overs) - mark != 1:
+        problems.append("after the terminator the same talker's 2 s over was heard as %d overs, one expected" % (len(all_overs) - mark))
     assert not problems, "%s: %s" % (case, problems)
 
 
