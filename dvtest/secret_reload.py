@@ -234,6 +234,10 @@ def read_only_reply(status, body):
 
 PREVIEW_KEYS = {"mode", "etag", "changed", "no_change", "actions", "warnings"}
 APPLIED_KEYS = {"status", "etag", "changed", "no_change", "inc", "gen", "actions", "pending_restart"}
+# BUD1b (docs/design/fabric.md, "Aggregated hub reply bounds"): a reload reply may carry `truncated`, an object naming the lists the
+# launcher cut ({list: {dropped?, cut?}}; empty when nothing was cut). openapi-admin.yaml ReloadPreview / ReloadApplied do not list it
+# (additionalProperties false) on bc9af2b1: an optional key here, the gap is a documentation difference, not a case failure.
+OPTIONAL_KEYS = {"truncated"}
 RELOAD_KEY = "edges.aprsis.passcode_file"        # the dotted key name `changed` lists for the APRS-IS passcode file
 
 
@@ -258,6 +262,22 @@ def weak_etag(current):
     return 'W/"%s"' % etag_value(current)
 
 
+def _truncated_problems(body):
+    """`truncated`, when present, is an object of list name -> {dropped, cut} with positive integers."""
+    if "truncated" not in body:
+        return []
+    value = body["truncated"]
+    if not isinstance(value, dict):
+        return ["truncated is not an object"]
+    out = []
+    for name, part in value.items():
+        ok = isinstance(part, dict) and part and set(part) <= {"dropped", "cut"} and all(
+            isinstance(n, int) and not isinstance(n, bool) and n >= 1 for n in part.values())
+        if not ok:
+            out.append("truncated[%s] is not {dropped, cut} with positive integers" % name)
+    return out
+
+
 def _list_of_str(value):
     return isinstance(value, list) and all(isinstance(v, str) for v in value)
 
@@ -268,8 +288,9 @@ def preview_problems(body, header_etag=None):
     if not isinstance(body, dict):
         return ["the preview is not a JSON object"]
     out = []
-    if set(body) != PREVIEW_KEYS:
-        out.append("keys %s, want %s" % (sorted(body), sorted(PREVIEW_KEYS)))
+    if set(body) - OPTIONAL_KEYS != PREVIEW_KEYS:
+        out.append("keys %s, want %s (and optionally %s)" % (sorted(body), sorted(PREVIEW_KEYS), sorted(OPTIONAL_KEYS)))
+    out += _truncated_problems(body)
     if body.get("mode") != "preview":
         out.append("mode %r, want preview" % (body.get("mode"),))
     out += _common_problems(body, header_etag)
@@ -284,8 +305,9 @@ def applied_problems(body, header_etag=None):
     if not isinstance(body, dict):
         return ["the reply is not a JSON object"]
     out = []
-    if set(body) != APPLIED_KEYS:
-        out.append("keys %s, want %s" % (sorted(body), sorted(APPLIED_KEYS)))
+    if set(body) - OPTIONAL_KEYS != APPLIED_KEYS:
+        out.append("keys %s, want %s (and optionally %s)" % (sorted(body), sorted(APPLIED_KEYS), sorted(OPTIONAL_KEYS)))
+    out += _truncated_problems(body)
     if body.get("status") != "applied":
         out.append("status %r, want applied" % (body.get("status"),))
     for name in ("inc", "gen"):

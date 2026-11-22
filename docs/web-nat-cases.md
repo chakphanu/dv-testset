@@ -184,6 +184,12 @@ connect sent exactly one new `POST /rtc/offer` with a new circuit and audio flow
 
 ### ICE1a re-judgement (image `dv-router:wip-3b0724a`, TURN on, `out/20261102T004117Z`; 2 s, 3 s, 5 s, 12 s, 16 s, 20 s per engine x NAT type)
 
+**Since ICE1 (DV-Router e439f62a, 2026-11-08; first NAT run on wip-f1f3777: 9 of 9 blackhole cells failed on the old wording).** The status line at
+'disconnected' is "Connection interrupted. Reconnecting..." (not "Waiting to resume."), and the page restarts ICE on the same circuit: a
+re-offer is another `POST /rtc/offer` answered with the same `sess_id` (web.md, "Built (ICE1)"). The case therefore counts circuits, not offers:
+`new_offers` = distinct sess_ids not seen before (`dvtest/k22.py new_circuits`), `reoffers` = the other offers of the window (recorded, not
+judged), and the manual reconnect after a loss must add exactly one new circuit. The text constant is `LISTEN_INTERRUPTED_TEXT` in `cases/web_pages.py`.
+
 DV-Router ICE1a (web.md "Listen", `web/site/public.js`): at the first ICE or peer `disconnected` the page shows "Connection interrupted.
 Waiting to resume.", keeps the peer, releases Talk at once, and gives up 12 s later with "Connection lost. Connect again manually." unless
 connectivity returns; peer or ICE `failed` closes at once; the edge drops an established peer 15 s after the last STUN request. The case now

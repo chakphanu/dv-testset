@@ -292,6 +292,16 @@ def test_preview_problems_names_the_field(change, needle):
     assert sr.preview_problems([]) == ["the preview is not a JSON object"]
 
 
+def test_truncated_is_an_optional_object_of_cut_lists():
+    """BUD1b: the reply may carry `truncated` ({} when nothing was cut); a malformed one is named."""
+    assert sr.preview_problems(dict(PREVIEW_OK, truncated={})) == []
+    assert sr.preview_problems(dict(PREVIEW_OK, truncated={"actions": {"dropped": 3}})) == []
+    assert sr.applied_problems(dict(APPLIED_OK, truncated={})) == []
+    assert any("truncated" in p for p in sr.preview_problems(dict(PREVIEW_OK, truncated=[])))
+    assert any("truncated[actions]" in p for p in sr.applied_problems(dict(APPLIED_OK, truncated={"actions": {"dropped": 0}})))
+    assert any("keys" in p for p in sr.preview_problems(dict(PREVIEW_OK, other=1, truncated={})))
+
+
 def test_preview_etag_must_equal_the_header():
     assert any("ETag header" in p for p in sr.preview_problems(PREVIEW_OK, '"f-ffffffffffffffff"'))
 

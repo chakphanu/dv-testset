@@ -145,3 +145,12 @@ def test_lease_end_ignores_answers_before_the_start_and_counts_blips():
     v = k22.judge_lease_end(s, 1000.0, 60.0)
     assert v["ok"], v["why"]
     assert v["gaps"] == 1 and v["n"] == len(LEASE_204) + 2
+
+
+def test_new_circuits_tell_an_ice_restart_from_a_new_connect():
+    offers = ["a", "a", "a"]                              # the first offer and two ICE1 re-offers of the same circuit
+    assert k22.new_circuits(offers, 1) == []
+    assert k22.new_circuits(offers + ["b"], 3) == ["b"]
+    assert k22.new_circuits(offers + ["b", "b"], 3) == ["b"]
+    assert k22.new_circuits(offers + ["a"], 3) == []     # a manual connect answered with an old circuit is not new
+    assert k22.new_circuits(["a", "b", "c", "b"], 1) == ["b", "c"]

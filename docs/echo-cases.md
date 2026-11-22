@@ -226,13 +226,14 @@ no run against a real DV-Router image has been made for the four new kinds yet.
 
 **YSF replay (FE2, closed as ruled by dv-router 2026-11-04, report `debug-ysf-echo-egress.md`).** Packet structure of live relay and replay alike: a header
 packet (`fi=0` HC, `dt=2`, `ft=7`, counter 0), voice packets (`fi=1`, `dt=2`, `ft=6`, `fn` cycling 0,1,2, counters 1..), a terminator (`fi=2`, EOT bit
-set). The replay has one extra trailing voice packet (the terminator's zero unit plus 4 zero pads: 30 voice packets sent, 31 in the replay, 155 frames
-for 150 sent; its first frame `202222200000000000`). The audio frames differ from the sent ones in the gain index b2 only: the YSF ingress steps b2 by
+set). Up to wip-eeb44b4 the replay had one extra trailing voice packet (the terminator's zero unit plus 4 zero pads: 30 voice packets sent, 31 in the
+replay, 155 frames for 150 sent; its first frame `202222200000000000`); since DV-Router e9fdbe87 (RIF5k, wip-f1f3777, media-format.md: a YSF terminator
+is the end unit only) it has none: 30 voice packets, 150 frames, the terminator directly after the last voice packet. The case takes 0 (new) or 5 (older). The audio frames differ from the sent ones in the gain index b2 only: the YSF ingress steps b2 by
 +1.0 dB (xlxd `B2_MAP_PLUS_1_0_DB`) and the YSF cross-mode egress by -0.4 dB (nearest-entry fallback map), the replay (a foreign-origin stream) passes
 both, they do not cancel and the +1.0 dB map is not injective, so no egress can restore the sent frames. Recorded pairs (sent -> replay, b2): `8e38664559c199e31f`
 -> `ce5a01431b895da393` (12 -> 15), `4b45860b222b9af23c` -> `6f63a30902e3debeb4` (2 -> 5), `b0ef64d2065cf7c780` -> `94cb63d022b4f38f0c` (2 -> 5); they
 are pinned in `cases/unit/test_crossaudio.py` with the maps of `dvtest/crossaudio.py` (P10, M04; ambe2.rs of DV-Router). The case asserts: every bit but b2
-equal and b2 = M04[P10[b2]] for the 150 sent frames, 5 frames after them; it does not require replay == live relay (the live YSF -> YSF relay is the raw fast
+equal and b2 = M04[P10[b2]] for the 150 sent frames, 0 frames after them (5 on an image before e9fdbe87); it does not require replay == live relay (the live YSF -> YSF relay is the raw fast
 path and byte exact).
 
 ## Findings

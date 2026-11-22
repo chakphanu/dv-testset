@@ -40,6 +40,18 @@ def judge_loss(first_state_ms, lost_wall_s, break_s, grace_s=GRACE_S, tol_s=1.5)
     return {"lost": True, "during_break": lost_wall_s < break_s, "side": side, "gap_s": gap}
 
 
+def new_circuits(offers, since):
+    """The circuits (sess_id of a POST /rtc/offer answer) first answered after the first `since` offers, in order, once each.
+    ICE1 (DV-Router e439f62a): an ICE restart re-offer is another POST on the same circuit and is answered with the same sess_id,
+    so the number of offers is no longer the number of circuits; a manual connect is one offer with a sess_id no earlier offer had."""
+    known = set(offers[:since])
+    out = []
+    for sid in offers[since:]:
+        if sid not in known and sid not in out:
+            out.append(sid)
+    return out
+
+
 def runs(series):
     """Compress [(t, status)] into [{"status", "first", "last", "n"}] runs of equal consecutive statuses."""
     out = []

@@ -304,7 +304,7 @@ def language_button(page, code, pressed):
 
 # ---- Listen / Talk panel of the dashboard (public.js ListenPanel; shown on route #/ to a signed-in user)
 LISTEN_IDLE_TEXT = "Idle"
-LISTEN_INTERRUPTED_TEXT = "Connection interrupted. Waiting to resume."      # ICE1a: data-state disconnected
+LISTEN_INTERRUPTED_TEXT = "Connection interrupted. Reconnecting..."      # ICE1 (e439f62a, wip-eeb44b4 and later; ICE1a had "Waiting to resume."): data-state disconnected
 LISTEN_LOST_TEXT = "Connection lost. Connect again manually."
 TALK_READY_TEXT = "Ready"
 TALK_ON_AIR_TEXT = "On air"

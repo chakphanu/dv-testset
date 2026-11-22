@@ -274,14 +274,20 @@ def test_e1c_payload_is_byte_identical_and_about_3_s(e1_run, target):
     if kind == "ysf":
         # dv-router ruling 2026-11-04 (xlxd parity): the YSF ingress steps the gain index b2 by +1.0 dB and the YSF egress of a
         # foreign-origin stream by -0.4 dB; the echo replay passes both. Every other bit is unchanged; the live relay (raw path) is exact.
+        # RIF5k (DV-Router e9fdbe87, media-format.md, in wip-f1f3777): a YSF terminator is the end unit only, "because a terminator
+        # carries no voice"; the replay no longer ends with the extra zero packet (wip-eeb44b4: 155 frames for 150 sent, now 150).
         chk = crossaudio.gain_check(e1_run.raw, replay.frames, ("p10", "m04"))
         note(target, "E1c[ysf]", "RECORD", "gain check of %d frames (all bits but b2 equal, b2 = M04[P10[b2]]): %d bad %s" % (
             chk["checked"], len(chk["bad"]), chk["bad"][:3]))
         assert chk["checked"] == len(e1_run.raw) and not chk["bad"], \
             "ysf: %d of %d replay frames differ from the sent ones by more than the two b2 steps (index, b2 sent, b2 heard, b2 wanted, " \
             "other bits equal): %s" % (len(chk["bad"]), chk["checked"], chk["bad"][:3])
-        assert len(replay.frames) - len(e1_run.raw) == 5, "ysf: %d frames after the sent ones, want 5 (the terminator's zero unit and pads)" % (
-            len(replay.frames) - len(e1_run.raw))
+        extra = len(replay.frames) - len(e1_run.raw)
+        assert extra in (0, 5), "ysf: %d frames after the sent ones, want 0 (a terminator is the end unit only, RIF5k; images before " \
+            "wip-f1f3777 added the terminator's zero unit and pads: 5)" % extra
+        if extra:
+            note(target, "E1c[ysf]", "FINDING", "the replay carries the terminator's 5 zero frames, which media-format.md no longer has "
+                 "(RIF5k): an image before e9fdbe87")
     else:
         assert got.prefix_ok, "%s: the replay differs from what was sent at frame %s of %d (heard %d, missing %d; the live relay " \
             "carried the sent frames unchanged: %s)" % (kind, got.first_diff, len(e1_run.raw), len(replay.frames), got.missing, live.prefix_ok)

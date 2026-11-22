@@ -40,7 +40,7 @@ from urllib.parse import quote
 import pytest
 
 from dvtest import admin as admin_mod
-from dvtest import api_admin, api_probe, api_web, web
+from dvtest import api_admin, api_probe, api_web, statuskeys, web
 from dvtest import totp_optional as to
 from web_fixtures import make_operator
 
@@ -196,7 +196,8 @@ def test_public_state_and_lastheard_contract(anon):
         assert resp.headers.get("content-security-policy") is None, "%s: CSP on an API reply" % what
         public_security_headers(resp, "GET " + what)
     state = anon.get("/api/v1/public/state", expect=200).json()
-    assert {"clients", "info", "live", "now_ms", "reflector", "rooms", "version"} <= set(state), sorted(state)
+    # NODE1e (dcbbb205, openapi-web.yaml PublicState): the block is `summary`; images before wip-f1f3777 call it `live`
+    assert statuskeys.public_state_keys() <= set(state) and statuskeys.block(state) is not None, sorted(state)
     heard = anon.get("/api/v1/public/lastheard", expect=200).json()
     assert isinstance(heard, (dict, list)), type(heard)
     if isinstance(heard, dict):
@@ -477,7 +478,8 @@ def test_ids_sync_status_needs_an_operator(anon, rx_user, web_operator):
             assert res.body == b""
     ok = web_operator.get("/api/v1/operator/ids/sync")
     if ok.status == 200:
-        assert "live" in ok.json(), sorted(ok.json())
+        # NODE1e: the reply is {available, status} (openapi-web.yaml IdSync); images before wip-f1f3777 name `available` `live`
+        assert ("available" in ok.json() or "live" in ok.json()) and "status" in ok.json(), sorted(ok.json())
     # a foreign Origin on a read is the opaque 404 of the router, before authentication
     foreign = web_operator.get("/api/v1/operator/ids/sync", headers={"Origin": "https://evil.example"})
     assert foreign.status == 404, "foreign Origin on an IDs read: HTTP %d, documented 404" % foreign.status

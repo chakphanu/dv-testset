@@ -15,7 +15,7 @@ criteria") are asserted.
                                         relay, audio plays, one GET /rtc/ice, credential format, nothing secret in
                                         the page (needs turn.toml)
   d  test_blackhole_resume_and_failure  ICE1a: 2, 3, 5 s UDP blackholes resume without a new offer; from 'disconnected'
-                                        the page says "Connection interrupted. Waiting to resume." (12, 16, 20 s) and waits
+                                        the page says "Connection interrupted. Reconnecting..." (ICE1; 12, 16, 20 s) and waits
                                         12 s; 12 and 16 s are recorded (resumed, or lost: from which side), 20 s must end
                                         with "Connection lost. Connect again manually."; a manual connect = one new offer (slow)
   d2 test_talk_is_released_at_disconnected_and_needs_a_fresh_press  Talk held during a blackhole: released at 'disconnected',
@@ -399,8 +399,9 @@ SETTLE_S = 10.0          # how long after the end of a blackhole the page must s
 
 
 def window(rtc, nat_ctl, seconds):
-    """One UDP blackhole of `seconds` during a listen session. ICE1a: the page shows "Connection interrupted. Waiting to
-    resume." at the first 'disconnected' and gives up 12 s later ("Connection lost. Connect again manually.") unless
+    """One UDP blackhole of `seconds` during a listen session. ICE1a / ICE1: the page shows "Connection interrupted.
+    Reconnecting..." at the first 'disconnected', restarts ICE on the same circuit (a re-offer with the same sess_id: `reoffers`,
+    not `new_offers`) and gives up 12 s later ("Connection lost. Connect again manually.") unless
     connectivity returns. Polled every 0.25 s from the start of the break until the page has been connected and
     "Listening" for SETTLE_S after the break (resumed), or it gave up (`lost`, `lost_wall_s` = seconds from the start of
     the blackhole to the poll that saw the loss). Returns what the page did, with `interrupted` (the interrupted status
@@ -441,7 +442,8 @@ def window(rtc, nat_ctl, seconds):
     for ms, st in events:
         first.setdefault(st, ms)
     w = {"seconds": seconds, "lost": lost, "lost_wall_s": round(lost_wall, 2) if lost_wall else None, "first_state_ms": first,
-         "events": events, "status": rtc.status(), "statuses": texts[:8], "new_offers": len(rtc.offers) - offers,
+         "events": events, "status": rtc.status(), "statuses": texts[:8], "new_offers": len(k22.new_circuits(rtc.offers, offers)),
+         "reoffers": len(rtc.offers) - offers - len(k22.new_circuits(rtc.offers, offers)),
          "interrupted": interrupted_first is not None or "ice:disconnected" in first or "conn:disconnected" in first,
          "interrupted_text_seen": pages.LISTEN_INTERRUPTED_TEXT in texts,
          "interrupted_first_s": round(interrupted_first, 2) if interrupted_first is not None else None,
@@ -458,8 +460,9 @@ def window(rtc, nat_ctl, seconds):
 @pytest.mark.slow
 def test_blackhole_resume_and_failure(engine, nat_type, nat_page, nat_ctl, target):
     """A UDP blackhole during a listen session (ICE1a, web.md "Listen"): 2, 3 and 5 s must resume without a new offer;
-    from the first ICE / peer 'disconnected' the page shows "Connection interrupted. Waiting to resume." (asserted for
-    the 12 s and longer breaks) and waits 12 s; a break clearly longer than that (20 s) must end with "Connection lost.
+    from the first ICE / peer 'disconnected' the page shows "Connection interrupted. Reconnecting..." (asserted for
+    the 12 s and longer breaks; ICE1: it also restarts ICE on the same circuit, those re-offers are recorded as `reoffers`, they are not
+    new offers) and waits 12 s; a break clearly longer than that (20 s) must end with "Connection lost.
     Connect again manually."; the 12 s and 16 s breaks are recorded (resumed, or lost: from which side: the page's grace
     expiry or the engine's ICE failure after the edge removed the peer, which the edge does 15 s after the last STUN
     request). After every loss the page sends no offer by itself and a manual connect sends exactly one new offer with
@@ -497,8 +500,9 @@ def _manual_reconnect(engine, nat_type, bp, rtc, target, peer, seconds):
     used_ice(bp, rtc)
     if len(rtc.offers) != offers_before + 1:
         bad.append("a manual reconnect must send exactly one new offer (%d sent)" % (len(rtc.offers) - offers_before))
-    if len(set(rtc.offers)) != len(rtc.offers):
-        bad.append("the new offer got the circuit of an old one")
+    if len(k22.new_circuits(rtc.offers, offers_before)) != 1:
+        # ICE1: the earlier offers may hold one sess_id several times (ICE restart re-offers), so compare with the old set
+        bad.append("the new offer got the circuit of an old one (new circuits: %d)" % len(k22.new_circuits(rtc.offers, offers_before)))
     ok, got = short_over_heard(rtc, target, ROOM_HOLE, peer=peer)
     if not ok:
         bad.append("no audio after the manual reconnect (%d packets)" % got)
