@@ -118,3 +118,10 @@ def test_judge_rounds():
     assert m.judge_rounds(["pass"] * 4 + ["HOST_STARVED"])[0]
     assert not m.judge_rounds(["pass"] * 3 + ["HOST_STARVED"] * 2)[0]
     assert not m.judge_rounds(["pass"] * 4 + ["FAIL"])[0]
+
+
+def test_ignored_counts_late_and_duplicate_frames():
+    assert m.ignored(m.plan_over(60)) == 0
+    assert m.ignored(m.plan_over(60, drop=set(range(10, 15)) | {30})) == 0
+    assert m.ignored(m.plan_over(60, drop=set(range(10, 15)) | {30}, delay={25: 28})) == 1
+    assert m.ignored(m.plan_over(60, drop={21}, duplicate={40})) == 1

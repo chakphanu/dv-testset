@@ -186,3 +186,5 @@ PRODUCT findings: none; no ceiling was exceeded.
 G1b: HARNESS, the NODE1e rename: the admin status body now has `summary` where it had `live` (`launcher.fabric.sessions` was found, `live.fabric.sessions` was not); the case reads the block through `dvtest/statuskeys.py`.
 G3 FINDING (no cap text in the admin status): not the rename and not new (the same line was printed on wip-eeb44b4), and not a product change: the SUT log of the run says
 `config: file changed: ... rejected, gen 3 keeps running: data.worker: at most four data workers are supported`; the 69 extra rows were refused by the four-worker rule, never reaching the cap rule. Nothing was spawned and cap and peak did not move, which is what G3 now asserts; the cap text is GAP 9.
+
+G1b run alone (`-k "g1b or g3"`, rig run 20261122): the first test of a run read the hub gauge before the router's first record arrived (`hub metrics {}`, `KeyError: 'cap'`); the hub gauge is now polled up to `GAUGE_WAIT_S` like G2.

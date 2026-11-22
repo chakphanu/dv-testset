@@ -64,7 +64,9 @@ def viewer(admin_session):
 
 
 def _truncated(body):
-    return isinstance(body, dict) and "truncated" in body
+    """True when a list was cut. A configuration validate / preview reply always carries `truncated` (an empty object when nothing was cut: admin app.rs `check_truncation`
+    keeps only the lists the launcher cut), the other replies omit the key; so an empty member is NOT a truncation."""
+    return isinstance(body, dict) and bool(body.get("truncated"))
 
 
 def test_bud1_b_a_normal_admin_reply_is_not_truncated(viewer, target):
@@ -92,11 +94,11 @@ def test_bud1_c_and_n_more_on_config_diagnostics(admin_session, target):
     raw = admin.get(admin.path("/config/raw"), expect=200)
     text, etag = raw.text(), raw.headers.get("etag", "")
     assert etag, "%s: GET config/raw sent no ETag" % case
-    # a clean validate first: no truncated key on a normal reply
+    # a clean validate first: no list cut on a normal reply (the key may be there as {})
     admin.step_up()
     ok = admin.request("PUT", admin.path("/config/raw") + "?mode=validate&comment=bud1", raw_body=text.encode("utf-8"), headers={"Content-Type": "text/plain", "If-Match": etag})
     assert ok.status == 200, "%s: validate of the unchanged config answered HTTP %d" % (case, ok.status)
-    assert not _truncated(ok.json()), "%s: a normal validate reply carries `truncated`" % case
+    assert not _truncated(ok.json()), "%s: a normal validate reply cuts a list: %s" % (case, json.dumps(ok.json().get("truncated"))[:200])
     if "[access]" in text:
         pytest.skip("the rendered config already has an [access] table: the probe would be a duplicate table, not a list of errors (docs/bud1-cases.md)")
     admin.step_up()

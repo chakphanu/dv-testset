@@ -13,7 +13,8 @@ Per-over media loss accounting (read from the sources, the arithmetic is the edg
     or a recorder row add the gap to lost); an over with a source gap only is `lossy` with gap > 0 and lost = 0;
   * egress: dv_edge_over_units_total{dir="tx",result=late|dropped|lost}: source holes are not egress loss;
   * the counters are cumulative per process (the hub re-exports them with a `proc` label, about every 10 s): the cases take a baseline, run ONE over, and wait until the room over count rose;
-  * late and dropped come from a CTS stall or host starvation, never from a sequence manipulation: they are asserted to stay 0 on an unloaded run, not provoked.
+  * late and dropped come from a CTS stall or host starvation, or from a frame the edge ignores (a repeated D-STAR counter or a short backward step is counted as one late unit, core.rs 3664-3680,
+    rig run 20261122); dropped stays 0 on an unloaded run, late equals the number of ignored frames (`ignored`).
 
 The D-STAR gap rule of the edge (crates/lib/edge/src/core.rs 3555-3600, read from the source: UNVERIFIED on a rig): for each arriving voice frame with counter `pos` (0..20; 21..31 are
 dropped as invalid before counting) and the previous forwarded counter `prev`: delta = (pos + 21 - prev) mod 21; delta 0 (a duplicate) and a BACKWARD step (pos < prev and prev - pos <= 10) are
@@ -143,6 +144,12 @@ def delivered(order):
         prev = pos
         out.append(idx)
     return out
+
+
+def ignored(order):
+    """How many arriving frames of `order` the edge ignores (a repeated counter or a short backward step). DV-Router counts EACH of them as a `late` unit
+    (crates/lib/edge/src/core.rs 3664-3680: RxIgnored and ingress_late), so dv_edge_over_units_total{dir=rx,result=late} and the room's late rise by exactly this."""
+    return len(order) - len(delivered(order))
 
 
 def usrp_gap(sequences):

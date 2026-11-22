@@ -131,7 +131,16 @@ def test_restart1_a_one_node_restart_is_clean(rig, target, rig_control, admin_se
 
 def test_restart1_b_three_restarts_in_a_row(rig, target, rig_control, admin_session, admin):
     case = "RESTART1-b"
-    client = admin
+    # RESTART1-a restarted the node: the session of the module `admin` fixture died with dv-svc-admin, so log in again first
+    client, end, last = None, time.monotonic() + STATUS_BUDGET_S, None
+    while client is None:
+        try:
+            client = fresh_admin(admin_session, admin)
+            assert status_of(client), "%s: the fresh admin session got no status" % case
+        except Exception as exc:                          # noqa: BLE001  the admin service may still be starting
+            last, client = exc, None
+            assert time.monotonic() < end, "%s: no admin login within %.0f s of the first restart (last error %r)" % (case, STATUS_BUDGET_S, last)
+            time.sleep(1.0)
     for n in (1, 2, 3):
         client, problems = one_restart("%s#%d" % (case, n), target, admin_session, rig_control, client)
         assert not problems, "%s restart %d: %s" % (case, n, "; ".join(problems))

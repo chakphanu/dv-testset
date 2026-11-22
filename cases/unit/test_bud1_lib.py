@@ -152,3 +152,13 @@ def test_kill_hooks_run_before_the_request(tmp_path):
     finally:
         control.RigControl.kill_hooks.clear()
     assert seen == [("xlxd-sut", "dv-svc-web")]
+
+
+def test_process_table_names_map_to_the_telemetry_names():
+    table = ('dv_status_process_up{kind="controller",proc="A"} 1\ndv_status_process_up{kind="status",proc="dv-svc-status"} 1\n'
+             'dv_status_process_up{kind="web",proc="dv-svc-web"} 1\n')
+    fam = "".join('dv_fabric_body_rejected_total{proc="%s",reason="%s"} 0\n' % (p, r) for p in ("a", "status", "dv-svc-web") for r in bud1.ADAPTER_REASONS)
+    assert bud1.procs_of(metrics.parse(table + fam)) == {"a", "status", "dv-svc-web"}
+    assert bud1.family_gaps(metrics.parse(table + fam)) == {}
+    # a table process whose family is missing is still a gap
+    assert bud1.family_gaps(metrics.parse(table + fam.replace('proc="a"', 'proc="zz"'))) == {"a": list(bud1.ADAPTER_REASONS)}

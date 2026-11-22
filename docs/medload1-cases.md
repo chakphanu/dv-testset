@@ -21,8 +21,8 @@ CTS stall or host starvation; an over with a source gap only is `lossy` with gap
 |------|------|-----------|
 | ML1-a clean | DExtra, 60 frames + last, 20 ms apart | edge rx gap 0, room gap 0, room lost 0, late and dropped 0, egress lost 0, `overs{complete}` +1, the listener hears 60 frames |
 | ML1-b drops | frames 10..14 and 30 never sent | gap 6 at the edge and at the room, lost 0, `overs{lossy}` +1, the listener hears the other 54 |
-| ML1-c drops and a late frame | as b, frame 25 sent right after frame 28 | gap 7 (the hole of 25 counts, the late frame is ignored), lossy +1; the heard set is recorded (a FINDING when it differs from the rule) |
-| ML1-d wrap and duplicate | frame 21 (counter 0) dropped, frame 40 sent twice | gap 1, the duplicate adds none, lossy +1 |
+| ML1-c drops and a late frame | as b, frame 25 sent right after frame 28 | gap 7 (the hole of 25 counts, the late frame is ignored), late +1 at the edge and in the room (an ignored frame is one late unit, `core.rs` 3664-3680; rig run 20261122), lossy +1; the heard set is recorded (a FINDING when it differs from the rule) |
+| ML1-d wrap and duplicate | frame 21 (counter 0) dropped, frame 40 sent twice | gap 1, the duplicate adds no gap but one late unit (edge and room), lossy +1 |
 | ML1-e M17 | M17 stream, five packets missing | edge and room gap do NOT move (a FINDING when they do: not a failure) |
 | ML1-f USRP | wire sequences 20..22 absent | gap 3 at the edge and the room (needs `DVT_USRP_DYNAMIC=1`, else it skips) |
 | ML1-h per-over fields over HTTP | the over of ML1-b, an admin `viewer` | `GET /api/v1/admin/lastheard` (the talker's newest row) and `GET /api/v1/admin/rooms` (`last` of module P): `gap` 6, `lost` 6 (= gap + room-hop loss), `late` 0; `frames`, `published`, `media_published` recorded (needs `--profile web` with `admin.toml`; skips without it) |

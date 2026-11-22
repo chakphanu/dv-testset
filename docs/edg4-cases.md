@@ -34,11 +34,11 @@ switch `DVT_EDG4` (passed to the tester by `rig/compose.yml`, guarded by `cases/
 
 ```
 DVT_USRP_DYNAMIC=1 DVT_EDG4=on XLXD_SUT_IMAGE=dv-router:wip-f1f3777 DVT_SUT_PROFILE=dvrouter DVT_SUT_LAUNCH=native DVT_SUT_GEN=compat1 DVT_SUT_CONFIG=<template> DVT_TRANSCODER_FAKE=1 \
-DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml \
+DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/guest.toml:rig/config/dv-router/totp-required.toml \
 scripts/run.sh -m rig --profile web,browser -- cases/test_web_edg4.py
 ```
 
-Plain `--profile web,browser`: no NAT, no TURN, no `webload` (aiortc is not needed: the browser is the only client that completes DTLS, the tester sockets only validate sources). Estimated time (not
+The snippets: `guest.toml` (the K22 fixture `k22_env` skips without `guest_listen`) and `totp-required.toml` (the shared `web_operator` fixture wants the `enrol` state of a mandatory TOTP; with the default optional policy the first login answers `off` and every setup fails; rig run 20261122). Plain `--profile web,browser`: no NAT, no TURN, no `webload` (aiortc is not needed: the browser is the only client that completes DTLS, the tester sockets only validate sources). Estimated time (not
 measured): EDG3-a 1 minute, EDG3-b 2 minutes (each counter wait up to 60 s), EDG4b about 4 minutes (45 s control, up to 80 s silent, the settles), EDG4c 1 minute; about 8 minutes. One rig, nothing else at the
 same time; the `ice_source_expired` deltas assume no other peer expires a source in the window. The hand-written offer of EDG4c is removed by the edge at `connect_timeout_secs` (default 10 s): its steps run in
 under 6 s, the counters are read after.

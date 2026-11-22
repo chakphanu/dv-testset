@@ -67,9 +67,24 @@ def refusals(samples):
     return out
 
 
+TABLE_PREFIX = "dv_status_process_"
+
+
+def _table_proc(sample):
+    """The telemetry `proc` of a process-table series. The hub's own table (dv_status_process_*) names a controller by its UPPER case room letter and the status service
+    `dv-svc-status`, while the publishing process labels its records `a` and `status` (rig run 20261122: proc="A" / "dv-svc-status" in dv_status_process_up, proc="a" / "status"
+    in every other family); every other process has the same name in both."""
+    proc, kind = sample.labels["proc"], sample.labels.get("kind")
+    if kind == "controller":
+        return proc.lower()
+    if kind == "status":
+        return "status"
+    return proc
+
+
 def procs_of(samples):
-    """The set of `proc` labels the hub exports (every family)."""
-    return {s.labels["proc"] for s in samples if "proc" in s.labels}
+    """The set of publishing processes the hub exports: the `proc` labels of every family, the process table (dv_status_process_*) mapped to the telemetry names."""
+    return {(_table_proc(s) if s.name.startswith(TABLE_PREFIX) else s.labels["proc"]) for s in samples if "proc" in s.labels}
 
 
 def family_gaps(samples):

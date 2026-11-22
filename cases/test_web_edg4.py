@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "proto"))
 from dvtest import edg4, metrics, sdp_offer as so, stun_pair as sp  # noqa: E402
 
 import data_support as ds  # noqa: E402
-from test_web_k22 import gauge_below, k22_users, make_page, stable_listeners  # noqa: E402,F401
+from test_web_k22 import gauge_below, k22_env, k22_users, make_page, stable_listeners  # noqa: E402,F401  (k22_users needs k22_env: both fixtures must be in this module)
 
 pytestmark = [pytest.mark.rig, pytest.mark.web, pytest.mark.browser, pytest.mark.webrtc]
 

@@ -230,9 +230,11 @@ def test_g1b_status_body_carries_the_same_gauge(rig_control, admin_session, targ
         live = ((statuskeys.block(body) or {}).get("fabric") or {}).get("sessions")     # `summary` (NODE1e, wip-f1f3777 and later) or `live`
         return {"launcher": launcher, "live": live, "any": netthr1.find_sessions(body)}
     got, ok = poll(read, lambda g: g["launcher"] is not None and g["live"] is not None, 60.0)
-    kinds = read_gauge(rig_control)
+    kinds, _hub = poll(lambda: read_gauge(rig_control), lambda k: bool(k), GAUGE_WAIT_S)       # the router record reaches the hub up to ~10 s after the launcher status (rig run 20261122: first test of a run read {})
+    kinds = kinds or {}
     note(target, "G1b", "RECORD", "launcher.fabric.sessions %s, live.fabric.sessions %s, hub metrics %s" % (got and got["launcher"], got and got["live"], kinds))
     assert ok, "launcher.fabric.sessions / summary.fabric.sessions (live.fabric.sessions on older images) missing in the admin status body (found anywhere: %s)" % (got and got["any"])
+    assert {"open", "cap", "peak"} <= set(kinds), "no dv_fabric_sessions{kind} of proc dv-router in the hub metrics within %.0f s: %s" % (GAUGE_WAIT_S, kinds)
     for name in ("launcher", "live"):
         assert {"open", "cap", "peak"} <= set(got[name]), "%s.fabric.sessions has %s" % (name, sorted(got[name]))
         assert got[name]["cap"] == kinds["cap"], "%s cap %s, hub metrics cap %s" % (name, got[name]["cap"], kinds["cap"])

@@ -6,7 +6,7 @@ dvtest/medload1.py (the edge's D-STAR gap rule read from core.rs 3555-3600). Swi
 One over at a time through a DExtra talker on module P (60 voice frames 20 ms apart and the last frame), the counters of the hub (rig_control.metrics, about every 10 s) read before and after:
 
   ML1-a..d  the over's frames arrive as planned: clean; drops 10..14 and 30; the same plus frame 25 delayed behind 28; the counter wrap (frame 21 dropped) and a duplicate (frame 40 twice):
-            edge rx gap, room gap == the model; room lost 0; late and dropped 0 (nothing stalls); the over counts `lossy` when the gap is > 0, else `complete`; egress lost, late, dropped 0
+            edge rx gap, room gap == the model; room lost 0; late == the frames the edge ignores (a late frame or a duplicate counts as ONE late unit each, core.rs 3664-3680), dropped 0 (nothing stalls); the over counts `lossy` when the gap is > 0, else `complete`; egress lost, late, dropped 0
             (a source hole is not egress loss); the listener hears the planned frames
   ML1-e     the same loss over M17: the gap counters do NOT move (M17 counts none; a rise is a FINDING, not a failure)
   ML1-f     a USRP over with wire sequences 20..22 missing (needs the dynamic USRP hub): gap + 3
@@ -15,7 +15,7 @@ One over at a time through a DExtra talker on module P (60 voice frames 20 ms ap
   ML1-g     S7 analogue: five rounds of five clean overs under busy-loop processes in the tester (DVT_MEDLOAD1_BURN, default 16): per round zero lost, gap, uncounted and unknown;
             at most one round HOST_STARVED (late or dropped units counted, every over delivered in full); the rest pass
 
-Not asserted: late and dropped on an unloaded run other than being 0 (they need a CTS stall), per-over fields of the room event (the openapi-admin Heard / LastOver rows carry none of them), the recorder row
+Not asserted: late beyond the ignored frames and dropped beyond 0 on an unloaded run (they need a CTS stall), per-over fields of the room event (the openapi-admin Heard / LastOver rows carry none of them), the recorder row
 (`lost_units` and `late_units`, recorder.toml; docs/medload1-cases.md). Overs are serial and at least one hub period apart, so no short-stream guard strike can occur (every over has at least 50 frames).
 """
 import multiprocessing
@@ -123,7 +123,9 @@ def test_ml1_dstar_over_counts(reader, pair, target, name):
     assert got.edge_rx_gap == want_gap, "%s: dv_edge_over_units_total{dir=rx,result=gap} rose by %g, the edge's rule gives %d (order %s...)" % (case, got.edge_rx_gap, want_gap, order[:3])
     assert got.room_gap == want_gap, "%s: dv_room_over_units_total{room=%s,result=gap} rose by %g, want %d" % (case, ROOM, got.room_gap, want_gap)
     assert got.room_lost == 0, "%s: room lost rose by %g: the loss was before the room (the metric lost is the room hop only)" % (case, got.room_lost)
-    assert got.edge_rx_late == 0 and got.room_late == 0 and got.edge_rx_dropped == 0, "%s: late or dropped units on an unloaded run: %s" % (case, got)
+    ignored = ml.ignored(order)                                        # a duplicate or a backward step is ignored AND counted as one late unit (core.rs 3664-3680)
+    assert got.edge_rx_late == ignored and got.room_late == ignored and got.edge_rx_dropped == 0, "%s: late %g (edge) / %g (room) want %d (the ignored frames of the plan), dropped %g: %s" % (
+        case, got.edge_rx_late, got.room_late, ignored, got.edge_rx_dropped, got)
     assert got.edge_tx_lost == 0 and got.edge_tx_late == 0 and got.edge_tx_dropped == 0, "%s: a source hole counted as egress loss: %s" % (case, got)
     assert got.overs_end_missing == 0, "%s: the over ended with its loss count unknown (end_missing): %s" % (case, got)
     assert got.overs_lossy == (1 if want_gap else 0) and got.overs_complete == (0 if want_gap else 1), "%s: dv_room_overs_total moved %s, a gap of %d must count as %s" % (
