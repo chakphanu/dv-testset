@@ -104,6 +104,9 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
                      (default 60) into out/<run>/bud1/ and writes the final snapshot after DVT_BUD1_SETTLE_S s (default 12); the verdict is `python3 -m dvtest.bud1 out/<run> ...` (dv_fabric_body_rejected_total
                      must be 0 in every process of every stage); cases/test_bud1.py asserts it in-run, the admin replies without `truncated` and the 422 `truncated.errors` cut; off or unset: no hook,
                      the cases skip naming this switch (docs/bud1-cases.md)
+  DVT_EDG4           on: EDG3 / EDG4b / EDG4c (DV-Router 5abe7510, image wip-f1f3777): cases/test_web_edg4.py (browser + tester UDP sockets with signed STUN checks, dvtest/stun_pair.py) asserts
+                     one ctl DataChannel per peer (a refused open resets its stream, the second refusal closes the peer), the 30 s expiry of a validated source and the handshake pin against an alternate
+                     source's DTLS alert; off or unset: the cases skip naming this switch (docs/edg4-cases.md)
   DVT_FLK10          on: FLK10, dv-edge-webrtc refuses an offer whose media section has a missing, repeated, empty,
                      over-16-byte or duplicate a=mid (403 forbidden); the cases of cases/test_web_rtc_mid.py skip naming
                      this switch without it (needs an image with DV-Router 98c88b2, wip-bd3ceb9; docs/web-mid-cases.md)
