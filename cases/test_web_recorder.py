@@ -45,6 +45,8 @@ ROOM_A, ROOM_B = "S", "T"
 ROOM_WEB = "U"                  # the browser talk of test_browser_talk_is_recorded_as_webrtc
 WEB_TALKER = "N0BRU"            # br_user, the may_tx account of rtc_tx_page
 FIELDS = {"id", "room", "start_ms", "end_ms", "duration_ms", "decoded_bytes", "callsign", "protocol", "profile", "reason", "lost_units"}
+# MEDLOAD1 S3 / S4 (DV-Router 9ca5f41b, recorder index version 2, in wip-f1f3777): every row also carries `late_units` (nullable); an older image has none
+OPTIONAL_FIELDS = {"late_units"}
 SAME = {"Sec-Fetch-Site": "same-origin", "Accept": "*/*"}
 AUD = json.dumps(pages.RECORDING_AUDIO_CSS)       # the shared <audio> of the recordings page, as a JS string literal
 AUDIO = "/api/v1/user/recordings/%s/audio.wav"
@@ -185,7 +187,7 @@ def test_list_visibility(seeded, rec_user, web_operator, web_client):
     # recorder.md "PCM talk metadata": a USRP-origin over records protocol usrp (PCM alone does not select it)
     assert protocols == ["usrp"], "USRP overs listed with protocol %s" % protocols
     for r in mine:
-        assert set(r) == FIELDS, sorted(set(r) ^ FIELDS)
+        assert set(r) - OPTIONAL_FIELDS == FIELDS, sorted((set(r) - OPTIONAL_FIELDS) ^ FIELDS)
         assert re.fullmatch(r"[0-9a-f]{96}", r["id"])
         assert r["profile"] == "pcm-s16le-8k"
         assert r["duration_ms"] == r["decoded_bytes"] // 16 and r["decoded_bytes"] % 320 == 0
@@ -530,6 +532,6 @@ def test_browser_talk_is_recorded_as_webrtc(engine, rtc_tx_page, recorder_on, re
     assert row["protocol"] == "webrtc", "a browser talk is recorded as protocol %r, recorder.md says webrtc" % row["protocol"]
     assert row["reason"] == "terminator", "a released browser over ends with reason %r, recorder.md says terminator" % row["reason"]
     assert row["profile"] == "pcm-s16le-8k", row["profile"]
-    assert set(row) == FIELDS, sorted(set(row) ^ FIELDS)
+    assert set(row) - OPTIONAL_FIELDS == FIELDS, sorted((set(row) - OPTIONAL_FIELDS) ^ FIELDS)
     assert row["duration_ms"] == row["decoded_bytes"] // 16
     assert abs(row["duration_ms"] - on_air_s * 1000) <= 800, (row["duration_ms"], round(on_air_s, 2))

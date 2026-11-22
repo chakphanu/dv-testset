@@ -91,6 +91,9 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
                      that the block is reconciled (applied within 31 s + slack) in the restarted room; off or unset: the cases skip naming this switch (docs/guard1-cases.md)
   DVT_RTS1           on: RTS1 (DV-Router b64733cd, image wip-f1f3777): cases/test_rts1.py asserts the image marker (HELP of dv_room_rts_total), the fixed series, the no_winner / deny
                      conservation and the counted reasons around a room restart; the winner gap itself is a GAP; off or unset: the cases skip naming this switch (docs/rts1-cases.md)
+  DVT_MEDLOAD1       on: MEDLOAD1 (DV-Router fb6a2a51 .. 28fc1838, image wip-f1f3777): cases/test_medload1.py sends overs with controlled drops, a late frame, a duplicate and a counter wrap and
+                     compares the per-over gap / lost / late counts of the hub (dv_edge_over_units_total, dv_room_over_units_total, dv_room_overs_total) with the edge's rule, plus the S7 analogue
+                     (five rounds under busy loops, DVT_MEDLOAD1_BURN processes, default 16); off or unset: the cases skip naming this switch (docs/medload1-cases.md)
   DVT_FLK10          on: FLK10, dv-edge-webrtc refuses an offer whose media section has a missing, repeated, empty,
                      over-16-byte or duplicate a=mid (403 forbidden); the cases of cases/test_web_rtc_mid.py skip naming
                      this switch without it (needs an image with DV-Router 98c88b2, wip-bd3ceb9; docs/web-mid-cases.md)
