@@ -447,12 +447,13 @@ Shape A, everything but the positive rider case (the negative control of the rid
 ```sh
 R=rig/config/dv-router
 XLXD_SUT_IMAGE=dv-router:wip-f1f3777 DVT_SUT_PROFILE=dvrouter DVT_SUT_NAME=dv-router DVT_SUT_LAUNCH=native DVT_SUT_GEN=compat1 \
-DVT_SUT_CONFIG=<template path> DVT_TRANSCODER_FAKE=1 DVT_RIF5=on DVT_RIF5J=on DVT_RIF5N=on DVT_RIF5FW=on \
+DVT_SUT_CONFIG=<template path> DVT_TRANSCODER_FAKE=1 DVT_RIF5=on DVT_RIF5J=on DVT_RIF5N=on DVT_RIF5FW=on DVT_P25_MODULE=T DVT_P25_TG=31681 \
 DVT_SUT_CONFIG_EXTRA=$R/web.toml:$R/admin.toml:$R/totp-required.toml:$R/data-ident.toml:$R/rif5n-modes.toml \
   scripts/run.sh -m rig --capture --profile web -- cases/test_rif5_mmdvm_serial.py -rA
 ```
 
 About 20 minutes (estimate): the 12 minutes of "Run it" plus the J cases (3) plus the new cases (about 6: TX 3 x 10 s, RX 3 x 10 s, foreign 2 x 25 s with the 12 s counter wait, LONG 2 x 40 s, JOIN 2 x 35 s with two 11 s / 12 s counter waits, RIDE 30 s, RFHEARD1 30 s).
+**`DVT_P25_MODULE=T DVT_P25_TG=31681` is required** (found on the first rig run of this image: without it `run.sh` writes `DV_P25_SERVER_MODULE=G` / `DV_P25_SERVER_TG=31672` into the SUT, DV-Router logs "edges.p25.server_module pinned by env", the P25 edge serves module G and the `[edges.p25]` keys of the snippet are ignored: RIF5N-TX-p25, RX-p25 and LONG-p25 fail with no P25 frame at the modem or at the room; `need_n` now fails at the start with that text).
 Shape B, the positive rider case, its own rig run (about 6 minutes: 3 for the rig, the two cases 1.5): same command with `rif5n-ride.toml` instead of `rif5n-modes.toml` and `-- cases/test_rif5_mmdvm_serial.py -k "ride or rfheard1" -rA`.
 Add `DVT_RIF5FW_PROFILE=hs` for the HS board. `DVT_PORTCTL1=on` (the image after this one, 1ea6bd00; a D-STAR over of 191 s, about 4 minutes more, its own case) is documented below.
 

@@ -373,3 +373,10 @@ def test_underrun_evidence_reads_the_flag_edges_the_fake_events_and_the_pops():
     assert out["fake_tx_off_underrun_nak"] == [(0.3, "tx_off"), (0.5, "underrun")] and out["first_pops"] == [0.2, 0.26]
     assert out["gap_between_first_pops_s"] == [0.06] and out["first_frames"] == [(0.0, "DMR_DATA2", 34)]
     assert rif5n.underrun_evidence([]) == {"events": 0}
+
+
+def test_p25_env_problem_names_the_pin_unless_the_run_serves_room_t():
+    assert rif5n.p25_env_problem({"DVT_P25_MODULE": "T", "DVT_P25_TG": "31681"}) is None
+    for env in ({}, {"DVT_P25_MODULE": "T"}, {"DVT_P25_TG": "31681"}, {"DVT_P25_MODULE": "G", "DVT_P25_TG": "31672"}):
+        text = rif5n.p25_env_problem(env)
+        assert text and "DVT_P25_MODULE=T DVT_P25_TG=31681" in text

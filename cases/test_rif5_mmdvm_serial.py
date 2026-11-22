@@ -876,6 +876,8 @@ def need_n(ctx, *modes):
     if missing:
         pytest.skip("the port row has no %s mode: put rig/config/dv-router/rif5n-modes.toml (or rif5n-ride.toml) in DVT_SUT_CONFIG_EXTRA instead of "
                     "rif5-mmdvm-udp.toml (docs/rif5-cases.md, \"The image wip-f1f3777\")" % missing)
+    problem = rif5n.p25_env_problem(os.environ) if "p25" in modes else None
+    assert problem is None, "RIF5N setup: %s" % problem
 
 
 def n_words(kind, n, seed):

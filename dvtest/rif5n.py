@@ -56,6 +56,18 @@ RF_DROP = ("dv_pkt_rf_drop_total", {"reason": "rf_origin"})
 DSTAR_FILLER = rf.DSTAR_NULL_SLOW     # the scrambled filler 16 29 f5 of an unused slow-data slot
 
 
+def p25_env_problem(environ):
+    """run.sh writes DV_P25_SERVER_MODULE / DV_P25_SERVER_TG from DVT_P25_MODULE (default G) / DVT_P25_TG (default 31672) into the SUT's environment, and
+    DV-Router lets an environment value win over the file ("edges.p25.server_module pinned by env"): the `[edges.p25]` keys of rif5n-modes.toml are
+    ignored unless the run exports DVT_P25_MODULE=T and DVT_P25_TG=31681. Returns the problem text, or None when the run is set up for room T."""
+    module, tg = environ.get("DVT_P25_MODULE", "G"), environ.get("DVT_P25_TG", "31672")
+    if module == ROOM_P25 and tg == str(P25_ROOM_TG):
+        return None
+    return ("the SUT serves its P25 clients on module %s / TG %s (run.sh pins DV_P25_SERVER_* from DVT_P25_MODULE / DVT_P25_TG over the snippet), "
+            "but the P25 cases use module %s / TG %d: export DVT_P25_MODULE=%s DVT_P25_TG=%d for this run (docs/rif5-cases.md, \"Run it\")"
+            % (module, tg, ROOM_P25, P25_ROOM_TG, ROOM_P25, P25_ROOM_TG))
+
+
 def gate_text(environ):
     return "DVT_RIF5N is not on: this case is for dv-router:wip-f1f3777 (DV-Router bc9af2b1: RIF5d NXDN, RIF5e P25, RIF5h ride-along, RIF5k, RIF5l; docs/rif5-cases.md)"
 
