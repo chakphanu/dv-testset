@@ -146,6 +146,7 @@ route without an install.
 | 5 | admin large-body cap path | settled by answer 9 (`<static>/admin/x` at `/x`); H1 probes `/netthr1-big.bin` then `/shared/netthr1-big.bin` with a HEAD and SKIPs naming the paths when none serves the file | none |
 | 6 | the K6b activity profile (60 s idle, a paced 10 s over, three large downloads per service, basemap refresh, link DNS, simultaneous child failures, group TERM / INT) | T2 covers logins and held streams only | extend T2 with a USRP or protocol over and `kill-proc` of several children at once |
 | 7 | the lost-update ordering inside ONE poll of the echo loop (FLK11) | the publication instant is internal; see `docs/echo-cases.md` "FLK11" | none (the unit tests of the commit) |
+| 9 | the cap refusal text after a reload (`cap N is below M required for K planned children plus 1 reserved session`) | data workers are limited to four (`data.worker: at most four data workers are supported`), so no data-row plan can pass that rule and exceed the derived cap (rooms + 19 edge kinds + 9 service kinds + 8 reserves room for every kind); G3 therefore holds the weaker property that a rejected reload spawns nothing and moves neither cap nor peak (the SUT log has the rejection); C3 covers the cap text at `config check` | a run with a tight explicit `node.fabric_max_sessions` = planned children + 1 (the number from `config check` of the same rendered file) and one more valid row |
 | 8 | memory acceptance (`memory.peak`, OOM events, 400 MiB hotspot experiment) | the SUT cgroup files are not readable from the tester | the `cgroup` action above; `DVT_MEM_SUT=400m` is already a compose knob |
 
 ## Answers of the DV-Router team (answer-279, applied)
@@ -179,3 +180,9 @@ towards the lockout (H2 admin).
 NETTHR1c number: `dv-codec-ambed` has 3 threads at idle (T1, 4 sweeps, 1 process). No transcoded over ran in 2a (no case makes one), so the busy figure is not measured; the rig has the real transcoder
 case `cases/test_crossmode_real_ysf.py` (about 80 s) which can be sampled with the same `proc-stat` sweeps.
 PRODUCT findings: none; no ceiling was exceeded.
+
+## Second image (wip-f1f3777, DV-Router bc9af2b1)
+
+G1b: HARNESS, the NODE1e rename: the admin status body now has `summary` where it had `live` (`launcher.fabric.sessions` was found, `live.fabric.sessions` was not); the case reads the block through `dvtest/statuskeys.py`.
+G3 FINDING (no cap text in the admin status): not the rename and not new (the same line was printed on wip-eeb44b4), and not a product change: the SUT log of the run says
+`config: file changed: ... rejected, gen 3 keeps running: data.worker: at most four data workers are supported`; the 69 extra rows were refused by the four-worker rule, never reaching the cap rule. Nothing was spawned and cap and peak did not move, which is what G3 now asserts; the cap text is GAP 9.

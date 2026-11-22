@@ -35,7 +35,7 @@ from pathlib import Path
 import pytest
 
 from dvtest import control as ctl
-from dvtest import dnshole, metrics, netthr1, web, webload
+from dvtest import dnshole, metrics, netthr1, statuskeys, web, webload
 from echo_support import EchoCfg, wait_reload
 
 pytestmark = pytest.mark.rig
@@ -219,19 +219,20 @@ def test_g1_gauge_shape_and_derived_cap(rig_control, sut, target):
 
 
 def test_g1b_status_body_carries_the_same_gauge(rig_control, admin_session, target):
-    """DV-Router answer 6: GET /api/v1/admin/status has `launcher.fabric.sessions` (admin/config/status) and `live.fabric.sessions` (the hub summary);
+    """DV-Router answer 6: GET /api/v1/admin/status has `launcher.fabric.sessions` (admin/config/status) and `summary.fabric.sessions` (the hub summary;
+    `live` before NODE1e, dvtest/statuskeys.py reads both);
     the public state does not expose it. Null when the launcher status is not available yet (polled)."""
     client = admin_session("viewer")
 
     def read():
         body = client.get(client.path("/status"), expect=200).json()
         launcher = ((body.get("launcher") or {}).get("fabric") or {}).get("sessions")
-        live = ((body.get("live") or {}).get("fabric") or {}).get("sessions")
+        live = ((statuskeys.block(body) or {}).get("fabric") or {}).get("sessions")     # `summary` (NODE1e, wip-f1f3777 and later) or `live`
         return {"launcher": launcher, "live": live, "any": netthr1.find_sessions(body)}
     got, ok = poll(read, lambda g: g["launcher"] is not None and g["live"] is not None, 60.0)
     kinds = read_gauge(rig_control)
     note(target, "G1b", "RECORD", "launcher.fabric.sessions %s, live.fabric.sessions %s, hub metrics %s" % (got and got["launcher"], got and got["live"], kinds))
-    assert ok, "launcher.fabric.sessions / live.fabric.sessions missing in the admin status body (found anywhere: %s)" % (got and got["any"])
+    assert ok, "launcher.fabric.sessions / summary.fabric.sessions (live.fabric.sessions on older images) missing in the admin status body (found anywhere: %s)" % (got and got["any"])
     for name in ("launcher", "live"):
         assert {"open", "cap", "peak"} <= set(got[name]), "%s.fabric.sessions has %s" % (name, sorted(got[name]))
         assert got[name]["cap"] == kinds["cap"], "%s cap %s, hub metrics cap %s" % (name, got[name]["cap"], kinds["cap"])
@@ -319,19 +320,21 @@ def test_g3_reload_over_the_running_cap_is_refused(rig_control, sut, target, req
         time.sleep(6.0)
         after = count_workers(rig_control)
         after_gauge = settled(lambda: read_gauge(rig_control))
+        errors = None
         try:
             admin = request.getfixturevalue("admin_session")("viewer")
             body = admin.get(admin.path("/status"), expect=200).json()
-            text = json.dumps(body)
-            refusal = "required for" in text and "planned children plus 1 reserved session" in text
+            errors = (body.get("launcher") or {}).get("errors")
+            refusal = "required for" in json.dumps(body)
         except (Exception, pytest.skip.Exception) as exc:               # noqa: BLE001 - the admin API is a second witness, not the case (a skip of its fixture must not end G3)
             note(target, "G3", "RECORD", "admin status not read: %s" % type(exc).__name__)
-        note(target, "G3", "RECORD", "%d extra rows at cap %d: data workers %d -> %d, gauge %s -> %s, refusal text in the admin status: %s" % (
-            rows, before_gauge["cap"], before, after, before_gauge, after_gauge, refusal))
-        assert after == before, "an over-cap plan spawned %d new data workers (the reload must be invalid and spawn no over-cap child)" % (after - before)
+        note(target, "G3", "RECORD", "%d extra rows at cap %d: data workers %d -> %d, gauge %s -> %s, cap text in the admin status: %s, launcher.errors %s" % (
+            rows, before_gauge["cap"], before, after, before_gauge, after_gauge, refusal, errors))
+        assert after == before, "a rejected plan spawned %d new data workers (the reload must be invalid and spawn nothing)" % (after - before)
         assert after_gauge["cap"] == before_gauge["cap"] and after_gauge["peak"] == before_gauge["peak"], "cap or peak moved: %s -> %s" % (before_gauge, after_gauge)
         if refusal is False:
-            note(target, "G3", "FINDING", "the admin status shows no `cap N is below M required for K planned children plus 1 reserved session` error after the refused reload")
+            note(target, "G3", "RECORD", "the 4-worker rule (`data.worker: at most four data workers are supported`, wip-f1f3777 log) rejects this plan before the cap rule can; the cap text "
+                 "`cap N is below M required...` needs a plan that is valid but larger than the cap (GAP 9, docs/netthr1-cases.md)")
     finally:
         cfg.restore()
         wait_reload(extra=3.0)
