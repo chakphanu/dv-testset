@@ -79,6 +79,10 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
                      dv_edge_digi_total{port,result} with kind digi on dv_edge_rf_tx_total; cases/test_digi1_dw.py repeats vectors through the Dire Wolf TNCs
                      of profile dw (digi1-dw.toml); off or unset: every case skips naming this switch. The config refusals (cases/test_digi1_config.py,
                      -m cfgload) need an image with DIGI1 but not this switch (docs/digi1-cases.md)
+  DVT_FLK15          on: FLK15 (DV-Router b8d9db72, image wip-f1f3777): cases/test_flk15_policy.py asserts that an outage of the position policy hides and never
+                     leaks and that the consumers resync without a restart (web killed again and again for 15 s, then a consumer restarted; docs/flk15-cases.md);
+                     off or unset: every case skips naming this switch. DVT_FLK15_BOUND_S: seconds waited after a flag change before the next position (default 12 =
+                     the documented 7 s plus slack)
   DVT_FLK10          on: FLK10, dv-edge-webrtc refuses an offer whose media section has a missing, repeated, empty,
                      over-16-byte or duplicate a=mid (403 forbidden); the cases of cases/test_web_rtc_mid.py skip naming
                      this switch without it (needs an image with DV-Router 98c88b2, wip-bd3ceb9; docs/web-mid-cases.md)

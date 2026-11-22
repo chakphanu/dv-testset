@@ -591,6 +591,10 @@ services:
       # on for DV-Router DIGI1 (22994519 + 588ffb4c, image dv-router:wip-eeb44b4): cases/test_digi1.py (fake TNCs) and cases/test_digi1_dw.py (profile dw) assert the
       # OFF-by-default fill-in digipeater of the AX.25 edge with rig/config/dv-router/digi1.toml, digi1-roomy.toml or digi1-dw.toml (docs/digi1-cases.md); the cases skip with a reason without it
       DVT_DIGI1: ${DVT_DIGI1:-}
+      # on for DV-Router FLK15 (b8d9db72, image dv-router:wip-f1f3777): cases/test_flk15_policy.py asserts that an outage of the position policy hides, never leaks, and resyncs
+      # without a restart (docs/flk15-cases.md); the cases skip with a reason without it. DVT_FLK15_BOUND_S: seconds waited after a flag change (empty: the code default)
+      DVT_FLK15: ${DVT_FLK15:-}
+      DVT_FLK15_BOUND_S: ${DVT_FLK15_BOUND_S:-}
       # on for DV-Router RIF5 (c017e491 or later, the mmdvm-serial radio adapter) with rig/config/dv-router/rif5-mmdvm-udp.toml in DVT_SUT_CONFIG_EXTRA:
       # cases/test_rif5_mmdvm_serial.py plays a fake MMDVM modem on the UDP byte port (docs/rif5-cases.md); the cases skip with a reason without it
       DVT_RIF5: ${DVT_RIF5:-}
