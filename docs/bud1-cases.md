@@ -19,7 +19,7 @@ newest record (every 10 s) with a `proc` label and adds `proc="status"` for its 
 
 * every `DVT_BUD1_EVERY_S` seconds (default 60; each read starts a throwaway container, `scripts/lib/metrics.sh`) a record in `out/<run>/bud1/samples.jsonl` (time, service, the non-zero watched counters, the
   process set; an unreachable hub is an `error` record, never a failure of the run). A counter restarts with its process, so a refusal in a process that a case restarts later is only seen by a sample in between;
-* at the end of the session, after `DVT_BUD1_SETTLE_S` seconds (default 12: one telemetry period, so the last put is in), the full snapshot `out/<run>/bud1/final-xlxd-sut.prom` (and `final-dvr-peer.prom`
+* at the end of the session, after `DVT_BUD1_SETTLE_S` seconds (default 11: one telemetry period, so the last put is in), the full snapshot `out/<run>/bud1/final-xlxd-sut.prom` (and `final-dvr-peer.prom`
   with `--profile twonode`, `DVT_TWONODE=on`).
 
 **The checker, on the host, once per stage or once for the chain:**
@@ -40,7 +40,7 @@ finish). Put `DVT_BUD1=on` into every stage's command of a chain and the checker
 |------|-----------|-----------|
 | BUD1-a | no legitimate body is refused | after 12 s of settle: every watched refusal counter 0, every process that exports anything carries the complete adapter family; the process set is recorded |
 | BUD1-b | a normal admin reply is not truncated | `GET /api/v1/admin/status`, `/rooms`, `/lastheard?limit=1000`, `/clients?limit=1000` (step-up) answer 200 with no `truncated` key and `total` >= the returned items |
-| BUD1-c | "and N more" | the admin config VALIDATE (`PUT /config/raw?mode=validate`, `If-Match`, step-up) of the unchanged config has no `truncated` key; of a config with 40 invalid `[access] allow` entries it answers 422 with `errors` cut to 32 and `truncated.errors` = `{dropped >= 1, cut: 32}` (bounds.rs: 32 errors, 32 warnings, 144 actions, 16 restart paths, 80 pinned values, 128 children); a probe that yields no more than 32 diagnostics is a FINDING and a skip |
+| BUD1-c | "and N more" | the admin config VALIDATE (`PUT /config/raw?mode=validate`, `If-Match`, step-up) of the unchanged config has no `truncated` key; of a config with 40 invalid `[access] allow` entries it answers 422 with `errors` cut to 32 and `truncated.errors` = `{dropped >= 1, cut: 32}` (bounds.rs: 32 errors, 32 warnings, 144 actions, 16 restart paths, 80 pinned values, 128 children); 40 invalid `access.allow` entries give 40 diagnostics (dv-router, 2026-11-22: one error per invalid entry, validation does not stop at the first; UNVERIFIED end to end through the HTTP wire): `errors` must be exactly 32 long, so a shorter list fails |
 
 The wire of "and N more": the admin replies carry `truncated.<collection>.{dropped,cut}` (omitted when 0; fixed totals are never reduced; `openapi-admin.yaml` `Truncation`), the admin UI string is
 `andMore(dropped)` (`web/shared/i18n.js`: "and {count} more"; Thai "และอีก {count} รายการ"), the server appends `, and N more` to detail text (`crates/svc/admin/src/app.rs`).
@@ -62,15 +62,15 @@ and 12 s at the end.
 * **The large-list cut of `/clients`, `/lastheard`, `/rooms`, `/status`** cannot be reached from outside: the HTTP `limit` clamps to 1000 rows, the byte caps (512 KiB clients, 944 KiB heard, 128 KiB procs) need rows of
   hundreds of bytes each beyond that, rooms are capped at 26 and always complete, and the per-edge session cut needs more than 2048 rows on one edge (the admission cap is 1024 clients) or more than 64
   edge incarnations. The unit tests `crates/svc/admin/tests/api.rs` `bud1b_*` drive it with a fake hub. BUD1-b therefore only asserts the absence of `truncated` on a small node.
-* **BUD1-c depends on a TOML shape** that yields more than 32 diagnostics through the validator (invalid `access.allow` entries is the guess, config.md: "invalid entries are configuration errors"; if the
-  validator stops at the first error per table the case skips with a FINDING). **Question 1.**
 * **The UI text "and N more" in a browser** (the admin config page) needs the same truncated reply; the string is covered by the web unit test `web/test/bud1-truncation.test.mjs` only.
 * **601 legitimate RTC peers in the hub store** (the raised 200 to 640 cap) and the WebRTC signalling budget are not practical from the rig; byte budgets "before copy and decode", the 23 + 11 killed mutations,
   the fuzz runs and the `login.race` audit are not black-box.
 * The K6b process set is asserted as "every process that publishes carries the complete family"; its exact list of 8 (work-units says 15) is not reproduced because the rig's process set depends on the config.
 
-## Questions for the DV-Router team
+## Answers of dv-router (2026-11-22, `answers-342-dvt.md` Q8, Q10) and what changed
 
-1. Which TOML (or request) gives more than 32 diagnostics in `admin/config/check` and `PUT /config/raw?mode=validate` so that `truncated.errors` can be asserted? Is it one error per invalid `access.allow` entry?
-2. Does the hub keep `dv_fabric_body_rejected_total` of a process across its restart (`start_ms` restarts the counter), or may the rig lose a refusal when a case restarts that process? The hook samples every 60 s to bound it.
-3. K6b says 15 processes in work-units and the code lists 8 in `MAIN` plus fixtures: which set should a full-node rig suite expect?
+* Diagnostics: 40 invalid `access.allow` entries give 40 errors; BUD1-c asserts the cut (no more skip).
+* No refused-body counter survives a process restart (the hub keeps one entry per process, the newest `start_ms` replaces it). So `RigControl.kill_proc` runs `kill_hooks` first, and the BUD1 hook
+  (`Hook.pre_kill`) waits 11 s and samples before the FIRST kill of a process in a burst (kills of the same process within 30 s pass at once). With `DVT_BUD1=on` every first kill costs 11 s.
+* K6b's exact set is the 8 identities of `MAIN` (`body_budgets.rs:13`: launcher, controller room-a, edge usrp, web, admin, recorder, basemap, data-worker); "15" is loose (six more fixtures use
+  `assert_none` on one or two identities). A full-node rig expects no fixed number: BUD1-a asserts the zero family per process and RECORDS the set seen.

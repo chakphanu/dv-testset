@@ -601,7 +601,7 @@ services:
       DVT_MEDLOAD1: ${DVT_MEDLOAD1:-}
       DVT_MEDLOAD1_BURN: ${DVT_MEDLOAD1_BURN:-}
       # on for DV-Router BUD1 / BUD1b (a15b08fa + 364a5760, image dv-router:wip-f1f3777): the session hook samples the hub for refused bodies in ANY stage (dvtest/bud1_plugin.py; verdict
-      # `python3 -m dvtest.bud1 out/<run>`) and cases/test_bud1.py asserts in-run (docs/bud1-cases.md). DVT_BUD1_EVERY_S / DVT_BUD1_SETTLE_S: seconds (empty: the code defaults 60 and 12)
+      # `python3 -m dvtest.bud1 out/<run>`) and cases/test_bud1.py asserts in-run (docs/bud1-cases.md). DVT_BUD1_EVERY_S / DVT_BUD1_SETTLE_S: seconds (empty: the code defaults 60 and 11)
       DVT_BUD1: ${DVT_BUD1:-}
       DVT_BUD1_EVERY_S: ${DVT_BUD1_EVERY_S:-}
       DVT_BUD1_SETTLE_S: ${DVT_BUD1_SETTLE_S:-}

@@ -9,7 +9,7 @@ NOT RUN on a rig: written against the sources of bc9af2b1.
   BUD1-b  a normal admin reply carries no `truncated` key: /status, /rooms, /clients (step-up), /lastheard are read and each of their `total` fields is at least the returned items (needs the web
           profile with admin.toml)
   BUD1-c  "and N more": the admin config validate of a TOML with more than 32 diagnostics answers 422 with `errors` cut to 32 and `truncated.errors.dropped` >= 1 and `cut` = 32 (the bound of
-          crates/lib/fabric/src/admin/bounds.rs); a probe that yields no more than 32 errors is a FINDING, not a failure (the TOML shape that produces many errors is unknown, docs/bud1-cases.md)
+          crates/lib/fabric/src/admin/bounds.rs); 40 invalid `access.allow` entries give 40 diagnostics (dv-router answered 2026-11-22, Q8: one error per invalid entry, validation does not stop at the first)
 """
 import json
 import os
@@ -108,9 +108,7 @@ def test_bud1_c_and_n_more_on_config_diagnostics(admin_session, target):
         ERRORS_CAP + 8, resp.status, None if errors is None else len(errors), json.dumps(body.get("truncated"))[:120] if isinstance(body, dict) else None))
     assert resp.status == 422, "%s: a configuration with invalid access entries answered HTTP %d, not 422" % (case, resp.status)
     assert isinstance(errors, list) and errors, "%s: the 422 body has no `errors` list" % case
+    assert len(errors) == ERRORS_CAP, "%s: %d errors returned for 40 invalid entries, want the list cut to exactly %d (a shorter list means the validator stopped early)" % (case, len(errors), ERRORS_CAP)
     assert len(errors) <= ERRORS_CAP, "%s: %d errors returned: the list must be cut to %d (bounds.rs)" % (case, len(errors), ERRORS_CAP)
     trunc = (body.get("truncated") or {}).get("errors") if isinstance(body, dict) else None
-    if len(errors) < ERRORS_CAP and not trunc:
-        note(target, case, "FINDING", "the probe produced only %d diagnostics: the TOML shape that yields more than %d errors is not known (GAP, docs/bud1-cases.md)" % (len(errors), ERRORS_CAP))
-        pytest.skip("the probe cannot reach the %d-error cap" % ERRORS_CAP)
     assert trunc and trunc.get("dropped", 0) >= 1 and trunc.get("cut") == ERRORS_CAP, "%s: errors cut to %d but truncated.errors is %s" % (case, len(errors), trunc)

@@ -39,6 +39,7 @@ class Hook:
         self.fetch, self.services, self.every_s, self.settle_s = fetch, list(service_names), every_s, settle_s
         self.clock, self.sleep = clock, sleep
         self.errors = 0
+        self._last_kill = {}
         self._stop = threading.Event()
         self._thread = None
 
@@ -58,6 +59,16 @@ class Hook:
             with open(self.dir / bud1.SAMPLES, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record, sort_keys=True) + "\n")
         return texts
+
+    def pre_kill(self, service, process, keep_s=30.0):
+        """Before the FIRST kill of a process in a burst: wait one telemetry period (+1 s: the process has put its last record, dv-router answered 2026-11-22, Q10: no refused-body
+        counter survives a restart) and sample, so a refusal of the incarnation about to die is on record. Kills of the same process within `keep_s` of the last one (a kill loop) pass at once."""
+        now = self.clock()
+        key = (service, process)
+        if now - self._last_kill.get(key, -1e9) > keep_s:
+            self.sleep(self.settle_s)
+            self.sample()
+        self._last_kill[key] = self.clock()
 
     def _run(self):
         while not self._stop.wait(self.every_s):
@@ -89,12 +100,16 @@ def session_start(config):
     hook = Hook(out, lambda service: control.metrics(service), services(), every_s=_number(None, "DVT_BUD1_EVERY_S", bud1.EVERY_S),
                 settle_s=_number(None, "DVT_BUD1_SETTLE_S", bud1.SETTLE_S))
     _state["hook"] = hook
+    RigControl.kill_hooks.append(hook.pre_kill)
     hook.start()
 
 
 def session_finish(config):
     hook = _state.pop("hook", None)
     if hook is not None:
+        from dvtest.control import RigControl
+        if hook.pre_kill in RigControl.kill_hooks:
+            RigControl.kill_hooks.remove(hook.pre_kill)
         try:
             hook.finish()
         except Exception:                                      # never turn a finished run into an error

@@ -11,7 +11,7 @@ switch `DVT_EDG4` (passed to the tester by `rig/compose.yml`, guarded by `cases/
 ## What is asserted (rules read from `docs/design/web.md` at `bc9af2b1`, UNVERIFIED on a rig)
 
 * **EDG3** (web.md 1367-1394, 1328-1333; status.md 872-873). One ordered, reliable DataChannel `ctl` per peer, shared by Listen, module select and Talk. Another open is refused: label not `ctl` gives
-  `unknown_label`, a second `ctl` gives `channel_limit`, an unordered or unreliable `ctl` gives `invalid_config`, an open during a pending close gives `closing` (checked in this order). The FIRST refusal
+  `unknown_label`, a second `ctl` gives `channel_limit`, an unordered or unreliable `ctl` gives `invalid_config`, an open during a pending close gives `closing` (the code checks `closing` before `invalid_config`; the design docs state no order). The FIRST refusal
   resets only that SCTP stream; the peer, `ctl` and media stay (`channel_refused{reason}` +1, `channel_closed{reason}` +1). The SECOND refusal over the peer's lifetime closes the whole association cleanly
   (RTCP BYE, SCTP SHUTDOWN, DTLS close_notify: the browser's connection ends at once, not after the ICE consent timeout) and adds `channel_refused{reason}` +1, `channel_closed` +0,
   `channel_limit_closes_total` +1; the edge logs `peer failed ... reason=channel_limit`. The budget is spent by refusals, not by open channels, and is never replenished.
@@ -55,8 +55,8 @@ under 6 s, the counters are read after.
 * **Other browsers**: the cases run Chromium only (the edge rules do not depend on the engine); what a WebKit or Firefox page reports as the state of a closed association is not recorded.
 * The EDG3 refusals `invalid_config` (an unordered `ctl`) and `closing`, and the log line `reason=channel_limit`, are not asserted (the first needs the budget of a fresh peer per reason, the log is host-side).
 
-## Questions for the DV-Router team
+## Answers of dv-router (2026-11-22, `answers-342-dvt.md` Q9)
 
-1. EDG3: confirm that the second refusal of ANY reason (here two `unknown_label` opens) closes the association, and that the first one counts `closed{reason}` +1 while the second counts it 0.
-2. EDG4b: is a signed Binding request from a tester address that knows both ufrags and the edge `ice-pwd` meant to validate a NEW source on a connected peer (up to the 100-source cap)? The cases assume yes.
-3. Is `a=candidate ... typ host` always present in the answer SDP of the rig image (the cases read the edge address from it), or must the tester take the edge address from configuration?
+EDG3 is confirmed for any reason (the first refusal counts refused +1 and closed +1, the second refused +1 and closed 0 and moves `limit_closes`; the code checks `closing` before `invalid_config`: the order in this document
+is the rig's own wording, the design docs state none). EDG4b is by design (a holder of the ICE password and both ufrags validates its own source, up to 100 sources, one peer per source address; the check needs a
+transaction outside the 32-entry replay window). The answer carries one host candidate per `public_ips` entry (the SDP rendering is UNVERIFIED until the first run). The cases are right as written.

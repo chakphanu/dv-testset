@@ -45,8 +45,6 @@ is up to 45 s, the restart and the 90 s budget are rarely used). One rig, nothin
 * **`link_down`** needs the room's router session cut while RTS are in flight: not producible (the process kill resets the room's counters, and the `fabric: router link down` lines are not written).
 * "No RTS is re-sent after DENY", "no Abort", and "an over that was already granted is not interrupted" are not observable from outside.
 
-## Questions for the DV-Router team
+## Answers of dv-router (2026-11-22, `answers-342-dvt.md` Q5, Q6)
 
-1. Is there a supported way to hold a room controller in the winner gap for a bounded time (a test token of a second controller id, a `dv-room` option, a fabric fault hook)? With one, the DENY 12 count, the silent drop
-   and the WebRTC `absent` status become black-box cases (the browser Hold Talk button of `cases/test_web_webrtc.py`).
-2. Are the sparse series `no_winner` and `link_down` meant to stay sparse? Present-at-zero would let RTS1-a assert them on every image.
+There is no primitive that holds a room controller in the winner gap and none that cuts a session; both stay GAPs (FABCUT1 is a possible future seam). Nothing in the cases changes.

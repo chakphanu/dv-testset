@@ -12,7 +12,7 @@ restarted later is only seen by a sample taken in between.
 How it is read (docs/bud1-cases.md):
 
   * with DVT_BUD1=on a pytest session hook (dvtest/bud1_plugin.py, wired in cases/conftest.py) samples the hub metrics through the control channel every DVT_BUD1_EVERY_S seconds (default 60) into
-    out/<run>/bud1/samples.jsonl (the non-zero refusal counters and the process set of each read) and, at the end of the session, after DVT_BUD1_SETTLE_S seconds (default 12: one telemetry
+    out/<run>/bud1/samples.jsonl (the non-zero refusal counters and the process set of each read) and, at the end of the session, after DVT_BUD1_SETTLE_S seconds (default 11: one telemetry
     period), writes the full final snapshot out/<run>/bud1/final-<service>.prom;
   * this module judges a run directory (or many, one per stage of a chain):
 
@@ -43,7 +43,7 @@ WATCHED = (
     ("dv_pkt_body_dropped_total", {"reason": "oversized"}),
 )
 EVERY_S = 60.0
-SETTLE_S = 12.0
+SETTLE_S = 11.0
 
 Refusal = namedtuple("Refusal", "name labels value")
 

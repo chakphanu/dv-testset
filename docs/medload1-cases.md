@@ -25,6 +25,7 @@ CTS stall or host starvation; an over with a source gap only is `lossy` with gap
 | ML1-d wrap and duplicate | frame 21 (counter 0) dropped, frame 40 sent twice | gap 1, the duplicate adds none, lossy +1 |
 | ML1-e M17 | M17 stream, five packets missing | edge and room gap do NOT move (a FINDING when they do: not a failure) |
 | ML1-f USRP | wire sequences 20..22 absent | gap 3 at the edge and the room (needs `DVT_USRP_DYNAMIC=1`, else it skips) |
+| ML1-h per-over fields over HTTP | the over of ML1-b, an admin `viewer` | `GET /api/v1/admin/lastheard` (the talker's newest row) and `GET /api/v1/admin/rooms` (`last` of module P): `gap` 6, `lost` 6 (= gap + room-hop loss), `late` 0; `frames`, `published`, `media_published` recorded (needs `--profile web` with `admin.toml`; skips without it) |
 | ML1-g S7 analogue | five rounds of five clean overs with 16 busy-loop processes in the tester | per round zero lost, gap, uncounted (sent minus the room's over count) and unknown (`end_missing`); `pass`, or `HOST_STARVED` when late or dropped units were counted and every over was heard in full; at most one `HOST_STARVED` round, no `FAIL` |
 
 The wait for a counter is the room over count (+1, or +5 per S7 round) and one more read 12 s later (the edge records land on their own cadence); at most 60 s. Overs are serial; with at least 50 frames none is a
@@ -48,22 +49,19 @@ DVT_MEDLOAD1=on DVT_USRP_DYNAMIC=1 \
 scripts/run.sh -m rig -- cases/test_medload1.py
 ```
 
-No web profile, no `--capture`, no config extra (module P must be served: `rooms = "A-Z"` does); without `DVT_USRP_DYNAMIC=1` ML1-f skips. Estimated time (not measured): ML1-a..e about 1.5 minutes each
+No `--capture`; module P must be served (`rooms = "A-Z"` does); without `DVT_USRP_DYNAMIC=1` ML1-f skips. ML1-h needs `--profile web` with `DVT_SUT_CONFIG_EXTRA=rig/config/dv-router/web.toml:rig/config/dv-router/admin.toml:rig/config/dv-router/totp-required.toml` (it skips without the admin service); the other cases need no web. Estimated time (not measured): ML1-a..e about 1.5 minutes each
 (over, up to 60 s settle, 12 s quiet), ML1-f 1.5 minutes, ML1-g about 5 x 40 s = 4 to 5 minutes; about 13 minutes in all. Run it alone (the load rounds must not share the host with another rig; `-k "not s7"` leaves the load out).
 
 ## GAPs
 
 * **Late and dropped on purpose**: needs a CTS stall or host starvation (S7 is the only provocation); a late unit by sequence manipulation is impossible (a reorder is ignored, not late).
 * **Room `lost` > 0**: needs a fabric loss between the edge and the room; the rig cannot drop fabric traffic.
-* **Per-over fields** (`frames`, `published`, `media_published`, `late`, `lost`, `gap` of the room event, LastOver and heard rows): not in `openapi-admin.yaml` (`Heard` and `LastOver` have `additionalProperties: false` without
-  them) nor in the public pages, so no HTTP surface shows one over's counts except the recorder row (`late_units`, `lost_units`: `lost_units` = upstream lost including the gap, plus recorder-hop loss), which needs
+* **Per-over fields over HTTP**: dv-router answered (2026-11-22, Q8) that `GET /api/v1/admin/rooms` (`last`) and `/lastheard` rows already carry `frames`, `published`, `media_published`, `late`, `lost`, `gap` (null when unknown; observer roles omit them; `app_over.rs:7-34`); `openapi-admin.yaml` lags (`Heard` and `LastOver` list none), so ML1-h applies no schema. The public pages show none; the recorder row (`late_units`, `lost_units`: `lost_units` = upstream lost including the gap, plus recorder-hop loss), which needs
   `recorder.toml` plus the decoder worker for D-STAR AMBE (K14c) or a USRP over (PCM): not written here. `media_published` has no metric.
 * **YSF, DMR, P25, NXDN, M17 and WebRTC gaps** are not counted by design (ML1-e only checks M17 stays 0).
 * The RTSCLOCK1 clock-domain check (the other half of `28fc1838`) refuses only when both sides know a different identity; all processes of a rig node share one host, so there is nothing to observe.
 
-## Questions for the DV-Router team
+## Answers of dv-router (2026-11-22, `answers-342-dvt.md` Q8) built in
 
-1. Are the per-over fields meant to reach an HTTP API (the admin heard / last-over rows, the public feed)? The openapi at `bc9af2b1` lists none; with them every case above could assert the PER-OVER numbers
-   instead of cumulative deltas.
-2. The model counts the last frame (counter `n mod 21`) in the gap rule; confirm that the end frame takes part, and that frame counters 21..31 are dropped as `rx_ignored` without a gap count.
-3. Is a rig-level load recipe for S7 agreed (cgroup CPU set of the SUT container)? The tester-side busy loops only share host CPUs.
+* The end frame counts in the gap rule (its counter is the sequence byte masked with 0x1F); counters 21..31 are `rx_ignored` with no gap; a hole before the first frame seen is not counted; the model of `dvtest/medload1.py` is right.
+* The per-over fields are on HTTP (ML1-h). The S7 recipe (cgroup CPU set of the SUT container) is still the owner's: the busy loops of ML1-g only share host CPUs.

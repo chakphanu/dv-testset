@@ -55,10 +55,6 @@ session of the session-scoped fixture is logged in again at the end of the modul
   between: same missing primitive. The recorder proxy and the room guard records (GUARDSYNC1) share the primitive.
 * The basemap worker is a third consumer; map publication failing closed is not read here (the rig shape of MAP2d needs the basemap tree, `docs/map2d-cases.md`).
 
-## Questions for the DV-Router team
+## Answers of dv-router (2026-11-22, `answers-342-dvt.md` Q5)
 
-1. Is there (or can there be) a test primitive that cuts ONE process's fabric session for a bounded time without exiting it (a documented `kill -USR2`-like control, an admin action, or a
-   compose `dv-router hub` variant where the router is a separate container the rig may stop and start)? With one of them FLK15-3 (own link loss: the withheld line, 5 s refresh,
-   a hide made during web's session cut) and the guard-records reconcile line become black-box cases.
-2. After a SIGKILL of `dv-svc-web` the new incarnation draws a new `boot`: confirm that a hide made in the first second after the respawn is published (`durable change`) to
-   consumers that kept the last set of the OLD boot, and that the retained public rows are filtered with the new set before the first request is served.
+There is no primitive that cuts one process's fabric session without exiting it; the own-link-loss branch stays a GAP. FABCUT1 is recorded as a possible future seam. Nothing in the cases changes.

@@ -120,3 +120,35 @@ def test_enabled_needs_the_switch_and_the_channel():
     assert bud1_plugin.enabled({"DVT_BUD1": "on", "DVT_RIG_CONTROL": "1"})
     assert bud1_plugin.services({"DVT_TWONODE": "on"}) == ["xlxd-sut", "dvr-peer"]
     assert bud1_plugin.services({}) == ["xlxd-sut"]
+
+
+def test_pre_kill_waits_once_per_burst_and_samples(tmp_path):
+    naps, texts = [], []
+
+    def fetch(service):
+        texts.append(service)
+        return snapshot(procs=("dv-router",), edge=False)
+
+    now = [1000.0]
+    hook = bud1_plugin.Hook(tmp_path, fetch, ["xlxd-sut"], settle_s=11.0, clock=lambda: now[0], sleep=lambda s: naps.append(s))
+    hook.pre_kill("xlxd-sut", "dv-svc-web")
+    now[0] += 0.3
+    hook.pre_kill("xlxd-sut", "dv-svc-web")                    # a kill loop: no more waiting
+    hook.pre_kill("xlxd-sut", "dv-room")                       # another process: its own wait
+    now[0] += 100.0
+    hook.pre_kill("xlxd-sut", "dv-svc-web")                    # a new burst
+    assert naps == [11.0, 11.0, 11.0] and len(texts) == 3
+
+
+def test_kill_hooks_run_before_the_request(tmp_path):
+    from dvtest import control
+    seen = []
+    rc = control.RigControl(tmp_path)
+    rc._request = lambda line, timeout: (_ for _ in ()).throw(RuntimeError("stop here"))
+    control.RigControl.kill_hooks.append(lambda s, p: seen.append((s, p)))
+    try:
+        with pytest.raises(RuntimeError):
+            rc.kill_proc("xlxd-sut", "dv-svc-web", "KILL")
+    finally:
+        control.RigControl.kill_hooks.clear()
+    assert seen == [("xlxd-sut", "dv-svc-web")]

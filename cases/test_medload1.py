@@ -10,6 +10,8 @@ One over at a time through a DExtra talker on module P (60 voice frames 20 ms ap
             (a source hole is not egress loss); the listener hears the planned frames
   ML1-e     the same loss over M17: the gap counters do NOT move (M17 counts none; a rise is a FINDING, not a failure)
   ML1-f     a USRP over with wire sequences 20..22 missing (needs the dynamic USRP hub): gap + 3
+  ML1-h     the per-over fields over HTTP (dv-router, 2026-11-22: GET /api/v1/admin/lastheard rows and GET /api/v1/admin/rooms `last` carry frames, published, media_published, late, lost, gap;
+            null when unknown; `lost` = gap + room-hop loss, unlike the metric): the over of scenario b (gap 6) shows gap 6, lost 6, late 0 in both; needs the web profile with the admin service
   ML1-g     S7 analogue: five rounds of five clean overs under busy-loop processes in the tester (DVT_MEDLOAD1_BURN, default 16): per round zero lost, gap, uncounted and unknown;
             at most one round HOST_STARVED (late or dropped units counted, every over delivered in full); the rest pass
 
@@ -170,6 +172,46 @@ def test_ml1_f_usrp_gap(reader, target):
     note(target, case, "RECORD", "USRP over with wire sequences 20..22 missing: delta %s" % dict(got._asdict()))
     assert got.edge_rx_gap == 3, "%s: dv_edge_over_units_total{dir=rx,result=gap} rose by %g, want 3 (three absent datagrams)" % (case, got.edge_rx_gap)
     assert got.room_gap == 3 and got.room_lost == 0
+
+
+def find_dicts(node, key):
+    """Every dict below `node` that has `key` (the admin bodies are not frozen by the OpenAPI text: it lags the image, so no schema is applied)."""
+    if isinstance(node, dict):
+        if key in node:
+            yield node
+        for v in node.values():
+            yield from find_dicts(v, key)
+    elif isinstance(node, list):
+        for v in node:
+            yield from find_dicts(v, key)
+
+
+def test_ml1_h_per_over_fields_over_http(reader, pair, admin_session, target):
+    case = "ML1-h"
+    viewer = admin_session("viewer")                                  # an observer role omits all six fields; viewer and up carry them
+    talker, listener = pair
+    order = ml.plan_over(FRAMES, **SCENARIOS["b-drops"])
+    before = reader()
+    send_planned(talker, listener, order, "http")
+    ml.wait_settled(reader, before)
+    time.sleep(2.0)
+    last = viewer.get(viewer.path("/lastheard?limit=20"), expect=200).json()
+    rows = [r for r in find_dicts(last, "gap") if str(r.get("callsign", r.get("callsign_base", ""))).upper().startswith("N0MLA")]
+    assert rows, "%s: no last-heard row of the talker carries a `gap` field (rows: %s)" % (case, [sorted(r) for r in find_dicts(last, "callsign")][:2])
+    row = max(rows, key=lambda r: r.get("ts_ms") or r.get("since_ms") or 0)
+    note(target, case, "RECORD", "lastheard row: %s" % {k: row.get(k) for k in ("frames", "published", "media_published", "late", "lost", "gap")})
+    assert row.get("gap") == 6 and row.get("lost") == 6 and row.get("late") == 0, "%s: lastheard gap/lost/late = %s/%s/%s, want 6/6/0 (lost is gap + room-hop loss)" % (
+        case, row.get("gap"), row.get("lost"), row.get("late"))
+    assert row.get("frames") in (None, 54, 55) or isinstance(row.get("frames"), int), row
+    rooms = viewer.get(viewer.path("/rooms"), expect=200).json()
+    mine = [r for r in find_dicts(rooms, "last") if str(r.get("room", r.get("letter", ""))).upper() == MODULE and isinstance(r.get("last"), dict)]
+    if not mine:
+        note(target, case, "FINDING", "no room entry of %s with a `last` object in /rooms (keys seen: %s)" % (MODULE, sorted({k for r in find_dicts(rooms, "last") for k in r})[:12]))
+    else:
+        last_over = mine[0]["last"]
+        note(target, case, "RECORD", "rooms[%s].last: %s" % (MODULE, {k: last_over.get(k) for k in ("frames", "published", "media_published", "late", "lost", "gap")}))
+        assert last_over.get("gap") == 6 and last_over.get("lost") == 6 and last_over.get("late") == 0, "%s: rooms last gap/lost/late = %s/%s/%s, want 6/6/0" % (
+            case, last_over.get("gap"), last_over.get("lost"), last_over.get("late"))
 
 
 @contextlib.contextmanager
