@@ -15,6 +15,7 @@ heard and over parsed hub metrics; the switch DVT_RADIOSEQ1=on decides whether t
   judge_counts(change)                     gap 0 at the edge and in the room, the over not counted lossy
   port_pair(doc) / pair_problems(a, b)     the two mmdvm-serial rows of RADIOSEQ1-C (rif5-two-ports.toml) and what is wrong with the pair
   dmr_tx_letters(frames) / relay_verdict   a DMR TX log of the second fake board: voice bursts A..F in order, sync on A, every word (case C)
+  fixed_mode(port) / fixed_mode_problems   a row with ONE mode claims it once at Up (radio.md 7.2), not per over: the SET_MODE rule of case C for such a board
 """
 import os
 from collections import Counter, namedtuple
@@ -283,16 +284,54 @@ def dmr_tx_letters(frames):
     return "".join(out)
 
 
-def relay_verdict(frames, sent, dst, color_code):
+def fixed_mode(port):
+    """True for a row with exactly one mode (`modes = { dmr = "Q" }`): radio.md 7.2 "Fixed mode ... selects the mode at Up and has no mode-hang switching", so the
+    board gets its SET_MODE once at Up (and again after a Down / Up, or after an idle park for an owed CW ID) and is NOT claimed per over nor returned to idle."""
+    return len(getattr(port, "modes", None) or {}) == 1
+
+
+def fixed_mode_problems(frames, earlier, mode="dmr"):
+    """The SET_MODE rule for a fixed-mode board over one over. `frames` are the host frames of the over window, `earlier` the SET_MODE frames of the same board
+    before the window (the claim at Up is there). Returns (problems, findings, facts): the most recent SET_MODE before the first native frame (window or
+    earlier) must be the row's mode (an idle park followed by a re-entry of the fixed mode is fine, an idle or another mode left standing is a problem), and
+    no SET_MODE other than the row's mode may fall inside the over (mode switching never interrupts a stream). No SET_MODE at all, not even at Up, is a
+    FINDING (a possible product bug), not a problem. No idle is expected after the over."""
+    problems, findings, facts = [], [], {}
+    want = bytes((ms.MODE_ID[mode],))
+    natives = [f for f in frames if f.ftype in ms.TX_TYPES[mode]]
+    modes = sorted([f for f in earlier if f.ftype == ms.SET_MODE] + [f for f in frames if f.ftype == ms.SET_MODE], key=lambda f: f.mono)
+    start = natives[0].mono if natives else None
+    before = [f for f in modes if start is None or f.mono <= start]
+    facts["fixed_modes_before"] = [f.payload.hex() for f in before][-4:]
+    if not before:
+        findings.append("a fixed-mode board never got a SET_MODE, not even at Up, before its first %s frame (radio.md 7.2: a single-mode row selects its mode at Up)" % mode)
+    elif before[-1].payload != want:
+        problems.append("the last SET_MODE before the first %s frame is %s, a fixed-mode row wants %02x (selected at Up, an idle park is followed by a re-entry; radio.md 7.2)" % (
+            mode, before[-1].payload.hex(), ms.MODE_ID[mode]))
+    if natives:
+        inside = [f for f in modes if f.mono > natives[0].mono and f.mono < natives[-1].mono and f.payload != want]
+        if inside:
+            problems.append("SET_MODE %s written %.2f s before the last native frame of the over (radio.md 7.2: mode switching never interrupts a stream)" % (
+                inside[0].payload.hex(), natives[-1].mono - inside[0].mono))
+    return problems, findings, facts
+
+
+def relay_verdict(frames, sent, dst, color_code, fixed=False, earlier=()):
     """An over that came from ANOTHER radio port, as the second fake board saw it written (host frames since the start): SET_MODE 2, eight headers, voice
     bursts, three terminators (rif5.judge_tx_dmr: LC group dst and colour code of the row, one source id across headers and terminators, every word of `sent`
     in order, burst A with the voice sync) and, on top, the letters of the voice bursts in one lossless run A..F, A..F ... with the burst count of the words sent.
     The source id is whatever the headers carry (facts["src"]; comparing it with the id of the over played on the other board is the caller's business).
-    Returns Checked(problems, findings, facts)."""
+    `fixed` (the receiving row has one mode, fixed_mode) replaces the claim-per-over rule by fixed_mode_problems over `frames` and `earlier` (the SET_MODE frames
+    of that board before the over). Returns Checked(problems, findings, facts)."""
     slot = rf.decode_dmr([(f.ftype, f.payload) for f in frames if f.ftype == ms.DMR_DATA2 and len(f.payload) == 1 + rf.DMR_BURST])[2]
     src = slot["headers"][0]["src"] if slot["headers"] else 0
-    verdict = rif5.judge_tx_dmr(frames, sent, src, dst, color_code)
+    verdict = rif5.judge_tx_dmr(frames, sent, src, dst, color_code, mode_check=not fixed)
     problems, findings, facts = list(verdict.problems), list(verdict.findings), dict(verdict.facts)
+    if fixed:
+        more = fixed_mode_problems(frames, earlier)
+        problems += more[0]
+        findings += more[1]
+        facts.update(more[2])
     letters_ = dmr_tx_letters(frames)
     nb = len(sent) // 3
     want = (LETTERS * (nb // 6 + 1))[:nb]

@@ -421,13 +421,15 @@ def burst_center(burst):
     return rf._burst_center(bytes(burst))
 
 
-def judge_tx_dmr(frames, sent, src, dst, color_code, headers_n=8, terminators_n=3, lossy=False):
+def judge_tx_dmr(frames, sent, src, dst, color_code, headers_n=8, terminators_n=3, lossy=False, mode_check=True):
     """A DMR over from the room (radio.md 7.3 "Built DMR simplex"): SET_MODE 2, every frame `E0 25 1A 00` + a 33 B burst, eight voice LC headers
     (MS data sync, LC group src -> dst, the row's colour code), the voice bursts A to F (A with the MS voice sync, three words per burst),
     three terminators with LC; no slot 1 or duplex control. The letter of a burst is that of the burst of the words SENT it carries (a burst the host
-    queue dropped leaves a gap in the letters, it does not renumber the next one); `lossy` as in judge_tx_dstar."""
+    queue dropped leaves a gap in the letters, it does not renumber the next one); `lossy` as in judge_tx_dstar.
+    `mode_check` False leaves the SET_MODE rule (claim per over, `_first_mode`) to the caller: a fixed-mode row claims its mode once at Up, not per over."""
     problems, findings, facts = [], [], {}
-    _first_mode(frames, "dmr", problems, facts)
+    if mode_check:
+        _first_mode(frames, "dmr", problems, facts)
     _foreign(frames, "dmr", problems)
     bursts = _native(frames, (ms.DMR_DATA2,))
     short = sorted({len(f.payload) for f in bursts if len(f.payload) != 34})

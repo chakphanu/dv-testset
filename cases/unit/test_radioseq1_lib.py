@@ -375,3 +375,76 @@ def test_the_relayed_over_must_name_the_row_room_and_one_source():
     log, sent = tx_log(18, headers=0)
     got = rs.relay_verdict(log, sent, 4017, 1)
     assert got.facts["src"] == 0 and got.problems
+
+
+# ---------------------------------------------------------------- fixed-mode board (a single-mode row: SET_MODE once at Up, radio.md 7.2)
+
+def mode_frame(payload, mono):
+    return ms.HostFrame(mono, mono, ms.SET_MODE, bytes((payload,)))
+
+
+def fixed_log(n_words=18):
+    """The log of a fixed-mode board over one over: NO SET_MODE inside the window (the claim was given at Up, before it)."""
+    log, sent = tx_log(n_words)
+    return [f for f in log if f.ftype != ms.SET_MODE], sent
+
+
+def test_fixed_mode_is_a_row_with_exactly_one_mode():
+    import types
+    assert rs.fixed_mode(types.SimpleNamespace(modes={"dmr": "Q"}))
+    assert not rs.fixed_mode(types.SimpleNamespace(modes={"dmr": "Q", "dstar": "P"}))
+    assert not rs.fixed_mode(types.SimpleNamespace(modes={}))
+    assert not rs.fixed_mode(types.SimpleNamespace())
+    for first in ("rif5-mmdvm-udp.toml", "rif5n-modes.toml"):                          # the rendered rows: A is multi-mode (rif5n-modes) or single (the plain udp snippet), B is fixed
+        a, b = rs.port_pair(two_port_doc(first))
+        assert rs.fixed_mode(b)
+    assert not rs.fixed_mode(rs.port_pair(two_port_doc("rif5n-modes.toml"))[0])
+
+
+def test_a_fixed_mode_board_claimed_at_up_passes_without_a_claim_in_the_over():
+    log, sent = fixed_log()
+    got = rs.relay_verdict(log, sent, 4017, 1, fixed=True, earlier=[mode_frame(2, 1.0)])
+    assert got.problems == [] and got.findings == [], got
+    # the same log judged as a multi-mode board is the old failure
+    old = rs.relay_verdict(log, sent, 4017, 1)
+    assert any("no SET_MODE 02" in p for p in old.problems)
+
+
+def test_a_fixed_mode_board_may_park_in_idle_and_re_enter():
+    log, sent = fixed_log()
+    earlier = [mode_frame(2, 1.0), mode_frame(0, 5.0), mode_frame(2, 6.0)]
+    assert rs.relay_verdict(log, sent, 4017, 1, fixed=True, earlier=earlier).problems == []
+    # the re-entry may also fall inside the window, before the first frame
+    log2, sent2 = tx_log(18)
+    assert rs.relay_verdict(log2, sent2, 4017, 1, fixed=True, earlier=[mode_frame(2, 1.0), mode_frame(0, 5.0)]).problems == []
+
+
+def test_a_fixed_mode_board_left_in_idle_or_another_mode_is_a_problem():
+    log, sent = fixed_log()
+    got = rs.relay_verdict(log, sent, 4017, 1, fixed=True, earlier=[mode_frame(2, 1.0), mode_frame(0, 5.0)])
+    assert any("last SET_MODE" in p and "want" in p for p in got.problems), got
+    got = rs.relay_verdict(log, sent, 4017, 1, fixed=True, earlier=[mode_frame(2, 1.0), mode_frame(1, 5.0)])
+    assert any("last SET_MODE" in p for p in got.problems)
+
+
+def test_a_fixed_mode_board_with_no_set_mode_at_all_is_a_finding_not_a_problem():
+    log, sent = fixed_log()
+    got = rs.relay_verdict(log, sent, 4017, 1, fixed=True, earlier=[])
+    assert got.problems == [] and any("never got a SET_MODE" in f for f in got.findings), got
+
+
+def test_an_idle_inside_the_over_of_a_fixed_mode_board_is_a_problem_but_one_after_it_is_not():
+    log, sent = fixed_log()
+    mid = log[len(log) // 2].mono
+    inside = sorted(log + [mode_frame(0, mid)], key=lambda f: f.mono)
+    got = rs.relay_verdict(inside, sent, 4017, 1, fixed=True, earlier=[mode_frame(2, 1.0)])
+    assert any("never interrupts a stream" in p for p in got.problems), got
+    after = log + [mode_frame(0, log[-1].mono + 1.0)]
+    assert rs.relay_verdict(after, sent, 4017, 1, fixed=True, earlier=[mode_frame(2, 1.0)]).problems == []
+
+
+def test_a_multi_mode_board_keeps_the_claim_per_over_rule():
+    log, sent = tx_log(18)
+    assert rs.relay_verdict(log, sent, 4017, 1).problems == []
+    no_claim = [f for f in log if f.ftype != ms.SET_MODE]
+    assert any("no SET_MODE 02" in p for p in rs.relay_verdict(no_claim, sent, 4017, 1).problems)

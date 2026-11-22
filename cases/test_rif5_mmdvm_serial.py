@@ -1478,6 +1478,8 @@ def rc_ready_b(ctx, web, case):
         left = d.config.mono + rif5.GUARD_S + 6.0 - time.monotonic() if d else 0
         if left > 0:
             time.sleep(left)
+    if radioseq1.fixed_mode(ctx.port_b):              # a single-mode row is claimed once at Up and stays in its mode (radio.md 7.2 "Fixed mode"): no idle to wait for
+        return
     if not settle_idle(modem, 30.0):
         note(ctx.target, case, "FINDING", "the host did not give fake board B back to idle (SET_MODE 0) within 30 s of its last mode claim")
 
@@ -1485,10 +1487,14 @@ def rc_ready_b(ctx, web, case):
 def rc_direction(ctx, case, label, origin, origin_port, other, other_port, words_n, problems):
     """One lossless RF over of DMR from fake board `origin` (port `origin_port`): board `other` must get it as a DMR TX (rif5 judge of the host frames plus
     the letters A..F of the voice bursts, every word), board `origin` must get nothing that keys RF (no echo of its own over). Returns the findings."""
-    for board in (ctx.modem, ctx.modem_b):
+    for board, port in ((origin, origin_port), (other, other_port)):
+        if radioseq1.fixed_mode(port):               # a fixed-mode row never returns to idle after a hang (radio.md 7.2); its mode is checked against the SET_MODE log below
+            continue
         if not settle_idle(board, 30.0):
             note(ctx.target, case, "FINDING", "%s: a board did not return to idle before the over" % label)
     since_origin, since_other = origin.mark(), other.mark()
+    fixed = radioseq1.fixed_mode(other_port)
+    earlier = other.host_frames(until=since_other, types=(ms.SET_MODE,))
     words = mm.default_frames("dmr", words_n, "radioseq1-c-%s" % label)
     ku = origin.keyup("dmr", frames=words, **rx_kwargs("dmr", origin_port))
     assert ku.wait(words_n * 0.02 + 25) and ku.error is None, "%s: the modem could not play the over: %s" % (label, ku.error)
@@ -1497,7 +1503,10 @@ def rc_direction(ctx, case, label, origin, origin_port, other, other_port, words
         problems.append("%s: no DMR frame reached board %s within 30 s of the end of the over (frames seen: %s)" % (
             label, other_port.name, sorted({ms.name_of(f.ftype) for f in other.host_frames(since_other)})))
     else:
-        verdict = radioseq1.relay_verdict(log, ku.voice, other_port.dmr_tg, other_port.color_code)
+        verdict = radioseq1.relay_verdict(log, ku.voice, other_port.dmr_tg, other_port.color_code, fixed=fixed, earlier=earlier)
+        if fixed:
+            note(ctx.target, case, "RECORD", "%s: board %s is a fixed-mode row: SET_MODE frames before the over %s, inside it %s" % (
+                label, other_port.name, [f.payload.hex() for f in earlier][-4:], [f.payload.hex() for f in log if f.ftype == ms.SET_MODE]))
         note(ctx.target, case, "RECORD", "%s: board %s got the over, voice letters %s of %d, words sent %d, %s" % (
             label, other_port.name, verdict.facts.get("letters_head"), verdict.facts.get("letters_n"), len(ku.voice),
             ", ".join("%s=%s" % kv for kv in sorted(verdict.facts.items()) if kv[0] not in ("letters_head", "letters_n"))))
