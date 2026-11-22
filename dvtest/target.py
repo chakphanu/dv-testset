@@ -76,7 +76,13 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
   DVT_AX25ACK1       on: the image has AX25ACK1 + TXOFF2 (DV-Router 345f1ebe, wip-f1f3777 or later): every transmitting `[edges.ax25]` of the rendered config
                      carries `tx_ack = "I am the control operator of <CALL-SSID> and accept responsibility for its transmissions"` (dvtest/sut_config.py; older
                      images refuse the key, so it is off by default), the config-refusal cases expect the TXOFF2 / DIGI1b verdicts (an off port or master loads and is
-                     dormant) and the AX25ACK1 cases run (docs/rig.md "AX.25 tx_ack"); off or unset: the shapes of the older images
+                     dormant) and the AX25ACK1 cases run (docs/rig.md "AX.25 tx_ack", docs/ax25ack1-cases.md); off or unset: the shapes of the older images
+  DVT_RESTART1       on: the image has RESTART1 / RESTART1b (DV-Router f34eb5ba + 348f984f, wip-f1f3777 or later): cases/test_restart1.py restarts the node through
+                     `POST /api/v1/admin/system/restart-node` (web profile, admin login, native launch) and asserts new children only, the launcher pid kept, ready
+                     again within the budget; off or unset: every case skips naming this switch (docs/restart1-cases.md)
+  DVT_M17RL1         on: the image has M17RL1 (DV-Router 307525dc, wip-f1f3777 or later): cases/test_m17rl1.py plays the M17 peer M17-DVT in the mrefd manner and asserts an ACKN for
+                     every CONN, at most one local CONN per peer row per 3 s, the deferred CONN and the relink within about 3 s (--profile interlink, native launch; side ref
+                     = real mrefd is recorded only); off or unset: every case skips naming this switch (docs/m17rl1-cases.md)
   DVT_DIGI1          on: the image has the DIGI1 fill-in digipeater (DV-Router 22994519 + 588ffb4c, wip-eeb44b4): cases/test_digi1.py plays fake KISS TNCs
                      (rig/config/dv-router/digi1.toml = the rate floor 10 / 3 and the class defaults, digi1-roomy.toml = 20 % duty for the functional cases)
                      and asserts DIGI-R1 to R5 (the path vectors G1 to G13, the duplicate window, the flood, two fill-ins, the startup guard) and

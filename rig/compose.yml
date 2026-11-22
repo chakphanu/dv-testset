@@ -606,6 +606,12 @@ services:
       # transmitting [edges.ax25] (dvtest/sut_config.py, docs/rig.md "AX.25 tx_ack"), the config-refusal expectations follow TXOFF2 and the AX25ACK1 cases run;
       # it must be on for run.sh (the host renders the file) and in the tester (the cases read it); never on for an older image (it refuses the key)
       DVT_AX25ACK1: ${DVT_AX25ACK1:-}
+      # on for DV-Router RESTART1 / RESTART1b (f34eb5ba + 348f984f, image dv-router:wip-f1f3777): cases/test_restart1.py restarts the NODE through the admin API (docs/restart1-cases.md);
+      # the cases skip with a reason without it
+      DVT_RESTART1: ${DVT_RESTART1:-}
+      # on for DV-Router M17RL1 (307525dc, image dv-router:wip-f1f3777): cases/test_m17rl1.py plays the M17 peer M17-DVT in the mrefd manner (docs/m17rl1-cases.md);
+      # the cases skip with a reason without it
+      DVT_M17RL1: ${DVT_M17RL1:-}
       # on for DV-Router RIF5 (c017e491 or later, the mmdvm-serial radio adapter) with rig/config/dv-router/rif5-mmdvm-udp.toml in DVT_SUT_CONFIG_EXTRA:
       # cases/test_rif5_mmdvm_serial.py plays a fake MMDVM modem on the UDP byte port (docs/rif5-cases.md); the cases skip with a reason without it
       DVT_RIF5: ${DVT_RIF5:-}
