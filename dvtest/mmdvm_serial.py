@@ -10,13 +10,16 @@ Facts used (DV-Router docs/design/radio.md 7.1 "Protocol facts and pure adapter"
   envelope   short `E0 LEN TYPE payload`, LEN = total 3..255; long `E0 00 L2 TYPE payload`, total = 255 + L2
              (256..510). No checksum. LEN 1 or 2 and a zero L2 are invalid (drop the E0, rescan).
   types      GET_VERSION 00, GET_STATUS 01, SET_CONFIG 02, SET_MODE 03, SET_FREQ 04, SEND_CWID 0A, ACK 70, NAK 7F;
-             D-STAR HEADER 10, DATA 11, LOST 12, EOT 13; DMR slot 2 DATA 1A, LOST 1B; YSF DATA 20, LOST 21.
+             D-STAR HEADER 10, DATA 11, LOST 12, EOT 13; DMR slot 2 DATA 1A, LOST 1B; YSF DATA 20, LOST 21;
+             P25 HEADER 30, LDU 31, LOST 32; NXDN DATA 40, LOST 41 (radio.md 7.1 at bc9af2b1, "Control types").
   open       settle 2 s, GET_VERSION (up to 6 attempts 1.8 s apart), SET_FREQ (ACK, 1 s, one retry), SET_CONFIG
              (v1 26 B, v2 40 B; same), GET_STATUS, then Up. A NAK or a missed deadline is Down.
   polling    GET_STATUS every 250 ms; a valid status refreshes the inactivity timer, 2 s without one after Up gives
              Down (reason `inactive`). A short status never refreshes it.
   native     D-STAR header 41 B, data 12 B (9 AMBE + 3 slow data); DMR 1 control byte + 33 B burst; YSF 1 flag +
-             120 B. The host writes a DMR / YSF frame as `E0 25 1A 00 <burst>` / `E0 7C 20 00 <120 B>`.
+             120 B; NXDN 1 flag + 48 B; P25 1 flag + HDU 99 B, LDU 216 B or TDU 18 B (radio.md 7.1 "Native sizes"). The host
+             writes a DMR / YSF frame as `E0 25 1A 00 <burst>` / `E0 7C 20 00 <120 B>`, an NXDN frame as `E0 34 40 00 <48 B>`,
+             a P25 HDU as `E0 67 30 00 <99 B>`, an LDU as `E0 DC 31 00 <216 B>` and a TDU as `E0 16 31 00 <18 B>` (radio.md 7.3, P25).
 
 What is here:
 
@@ -46,23 +49,35 @@ ACK, NAK = 0x70, 0x7F
 DSTAR_HEADER, DSTAR_DATA, DSTAR_LOST, DSTAR_EOT = 0x10, 0x11, 0x12, 0x13
 DMR_DATA2, DMR_LOST2 = 0x1A, 0x1B
 YSF_DATA, YSF_LOST = 0x20, 0x21
+P25_HEADER, P25_LDU, P25_LOST = 0x30, 0x31, 0x32          # radio.md 7.1: the TDU travels as type 31 as well (payload 19 B)
+NXDN_DATA, NXDN_LOST = 0x40, 0x41
 # DMR slot 1 / duplex controls the adapter never sends (simplex only): ALOHA 17, DATA1 18, LOST1 19, SHORTLC 1C, START 1D, ABORT 1E
 DMR_OTHER = (0x17, 0x18, 0x19, 0x1C, 0x1D, 0x1E)
 
 NAMES = {GET_VERSION: "GET_VERSION", GET_STATUS: "GET_STATUS", SET_CONFIG: "SET_CONFIG", SET_MODE: "SET_MODE",
          SET_FREQ: "SET_FREQ", SEND_CWID: "SEND_CWID", ACK: "ACK", NAK: "NAK", DSTAR_HEADER: "DSTAR_HEADER",
          DSTAR_DATA: "DSTAR_DATA", DSTAR_LOST: "DSTAR_LOST", DSTAR_EOT: "DSTAR_EOT", DMR_DATA2: "DMR_DATA2",
-         DMR_LOST2: "DMR_LOST2", YSF_DATA: "YSF_DATA", YSF_LOST: "YSF_LOST", 0x17: "DMR_ALOHA", 0x18: "DMR_DATA1",
+         DMR_LOST2: "DMR_LOST2", YSF_DATA: "YSF_DATA", YSF_LOST: "YSF_LOST", P25_HEADER: "P25_HEADER", P25_LDU: "P25_LDU",
+         P25_LOST: "P25_LOST", NXDN_DATA: "NXDN_DATA", NXDN_LOST: "NXDN_LOST", 0x17: "DMR_ALOHA", 0x18: "DMR_DATA1",
          0x19: "DMR_LOST1", 0x1C: "DMR_SHORTLC", 0x1D: "DMR_START", 0x1E: "DMR_ABORT"}
 
-# mode byte of SET_MODE and of the status (radio.md 7.1): idle 0, D-STAR 1, DMR 2, YSF 3
-MODE_IDLE, MODE_DSTAR, MODE_DMR, MODE_YSF = 0, 1, 2, 3
-MODE_ID = {"dstar": MODE_DSTAR, "dmr": MODE_DMR, "ysf": MODE_YSF}
-MODE_NAME = {MODE_IDLE: "idle", MODE_DSTAR: "dstar", MODE_DMR: "dmr", MODE_YSF: "ysf"}
+# mode byte of SET_MODE and of the status (radio.md 7.1): idle 0, D-STAR 1, DMR 2, YSF 3, P25 4, NXDN 5
+MODE_IDLE, MODE_DSTAR, MODE_DMR, MODE_YSF, MODE_P25, MODE_NXDN = 0, 1, 2, 3, 4, 5
+MODE_ID = {"dstar": MODE_DSTAR, "dmr": MODE_DMR, "ysf": MODE_YSF, "p25": MODE_P25, "nxdn": MODE_NXDN}
+MODE_NAME = {MODE_IDLE: "idle", MODE_DSTAR: "dstar", MODE_DMR: "dmr", MODE_YSF: "ysf", MODE_P25: "p25", MODE_NXDN: "nxdn"}
 # the native voice types the host writes, by mode name
-TX_TYPES = {"dstar": (DSTAR_HEADER, DSTAR_DATA, DSTAR_EOT), "dmr": (DMR_DATA2,), "ysf": (YSF_DATA,)}
-# capability byte 1 of the version reply (radio.md 7.1): D-STAR 01, DMR 02, YSF 04
-CAP_DSTAR, CAP_DMR, CAP_YSF = 0x01, 0x02, 0x04
+TX_TYPES = {"dstar": (DSTAR_HEADER, DSTAR_DATA, DSTAR_EOT), "dmr": (DMR_DATA2,), "ysf": (YSF_DATA,), "p25": (P25_HEADER, P25_LDU),
+            "nxdn": (NXDN_DATA,)}
+NATIVE_MODE = {ftype: MODE_ID[name] for name, types in TX_TYPES.items() for ftype in types}     # host frame type -> mode byte
+FIFO_KEY = {MODE_DSTAR: "dstar", MODE_DMR: "dmr2", MODE_YSF: "ysf", MODE_P25: "p25", MODE_NXDN: "nxdn"}   # mode byte -> space key
+# capability byte 1 of the version reply (radio.md 7.1): D-STAR 01, DMR 02, YSF 04, P25 08, NXDN 10
+CAP_DSTAR, CAP_DMR, CAP_YSF, CAP_P25, CAP_NXDN = 0x01, 0x02, 0x04, 0x08, 0x10
+CAP_ALL = CAP_DSTAR | CAP_DMR | CAP_YSF | CAP_P25 | CAP_NXDN
+# native payload bytes of a P25 frame by kind (radio.md 7.3 P25: HDU 100, LDU 217, TDU 19 native bytes: flag + 99 / 216 / 18)
+P25_HDU_LEN, P25_LDU_LEN, P25_TDU_LEN = 100, 217, 19
+NXDN_LEN = 49                  # flag + 48 B
+# P25 air time in seconds: HDU 82.5 ms, LDU 180 ms, TDU 15 ms (radio.md 7.1 flow control)
+P25_AIR_S = {P25_HDU_LEN: 0.0825, P25_LDU_LEN: 0.180, P25_TDU_LEN: 0.015}
 # NAK reasons (radio.md 7.1 U9)
 NAK_UNKNOWN, NAK_NOT_ACCEPTED, NAK_BAD_VALUE, NAK_FULL = 1, 2, 4, 5
 
@@ -189,10 +204,12 @@ def parse_set_config_v2(payload):
 def expected_set_config_v2(modes=("dstar", "dmr", "ysf"), tx_delay_ms=100, rx_level=50, tx_level=50, cw_id_level=50,
                            dstar_tx_level=None, dmr_tx_level=None, ysf_tx_level=None, tx_dc=0, rx_dc=0, color_code=1,
                            dmr_delay=0, rx_invert=False, tx_invert=False, ptt_invert=False, ysf_lo_dev=False,
-                           use_cos_as_lockout=False):
+                           use_cos_as_lockout=False, p25_tx_level=None, nxdn_tx_level=None):
     """The documented bytes of the v2 SET_CONFIG a row produces: the dict {offset: value} of the offsets radio.md 7.1 names plus
-    the zero offsets. Offsets 15, 16, 18 and 19 (P25, NXDN, POCSAG, FM levels) are not given a value by the document and are left out."""
-    bits = {"dstar": 1, "dmr": 2, "ysf": 4}
+    the zero offsets. Offsets 18 and 19 (POCSAG, FM levels) are not given a value by the document and are left out; offsets 15 (P25) and 16
+    (NXDN) are named by radio.md 7.3 (P25: "TX level frame byte 15 in both versions", NXDN: "v2 byte 16") and carry the level of the row's P25 / NXDN
+    mode, so they are checked only when that mode is in `modes`."""
+    bits = {"dstar": 1, "dmr": 2, "ysf": 4, "p25": 8, "nxdn": 0x10}
     flags = (0x80 | int(rx_invert) | (int(tx_invert) << 1) | (int(ptt_invert) << 2) | (int(ysf_lo_dev) << 3)
              | (int(use_cos_as_lockout) << 5))
     want = {V2_OFFSETS["flags"]: flags, V2_OFFSETS["enables"]: sum(bits[m] for m in modes),
@@ -202,6 +219,10 @@ def expected_set_config_v2(modes=("dstar", "dmr", "ysf"), tx_delay_ms=100, rx_le
             V2_OFFSETS["dmr_level"]: pct(tx_level if dmr_tx_level is None else dmr_tx_level),
             V2_OFFSETS["ysf_level"]: pct(tx_level if ysf_tx_level is None else ysf_tx_level),
             V2_OFFSETS["color_code"]: color_code, V2_OFFSETS["dmr_delay"]: dmr_delay, V2_OFFSETS["oscillator"]: 0x80}
+    if "p25" in modes:
+        want[V2_OFFSETS["p25_level"]] = pct(tx_level if p25_tx_level is None else p25_tx_level)
+    if "nxdn" in modes:
+        want[V2_OFFSETS["nxdn_level"]] = pct(tx_level if nxdn_tx_level is None else nxdn_tx_level)
     for at in V2_ZERO:
         want[at] = 0
     return want
@@ -240,7 +261,7 @@ class PinnedUdp(mm.UdpTransport):
 class Rif5Modem(mm.VirtualModem):
     """The modem DV-Router's adapter needs. A VirtualModem with:
 
-      * protocol version 2 (capabilities D-STAR, DMR, YSF by default) and a 17 byte status payload (a shorter one is a Short
+      * protocol version 2 (capabilities D-STAR, DMR, YSF, P25 and NXDN by default; a row that asks for fewer is served the same) and a 17 byte status payload (a shorter one is a Short
         status to the adapter: radio.md 7.1 "Status offsets differ by version");
       * `frames`: every frame the host wrote, in order, with wall and monotonic time (control frames included; VirtualModem
         records only the voice ones);
@@ -251,12 +272,12 @@ class Rif5Modem(mm.VirtualModem):
         mode's buffer has no room, no answer to SEND_CWID (NAK 5 outside idle), NAK 1 for a type it does not know.
     """
 
-    def __init__(self, transport, caps1=CAP_DSTAR | CAP_DMR | CAP_YSF, text="dvtest RIF5 modem 1.0 (no radio)", log=None):
+    def __init__(self, transport, caps1=CAP_ALL, text="dvtest RIF5 modem 1.0 (no radio)", log=None):
         super().__init__(transport, caps1=caps1, text=text, log=log)
         self.frames = []
         self.mute = False
         self.status_mode = "valid"
-        self.enabled_mask = caps1 & 0x07
+        self.enabled_mask = caps1 & CAP_ALL
         self.config_raw = None
         self.freq_raw = None
         self.cw_until = 0.0
@@ -275,7 +296,7 @@ class Rif5Modem(mm.VirtualModem):
             self.frames.append(host)
             if ftype != GET_STATUS:
                 self.events.append(("frame", now, ftype, len(host.payload), host.payload[0] if host.payload else None))
-        if ftype in mm.PLAYOUT_MS or ftype in (DSTAR_LOST, DMR_LOST2, YSF_LOST):
+        if ftype in mm.PLAYOUT_MS or ftype in (DSTAR_LOST, DMR_LOST2, YSF_LOST, P25_LOST, NXDN_LOST):
             kind = mm.MODE_OF_TYPE.get(ftype)
             with self.lock:
                 self.rx.append(mm.Rx(host.t, now, ftype, host.payload, kind))
@@ -289,7 +310,7 @@ class Rif5Modem(mm.VirtualModem):
             if self.status_mode == "valid":
                 body = self.status_payload(now)
                 with self.lock:
-                    self.events.append(("status", now, body[0], body[1], body[3], body[4], body[5], body[6], self.fifo_bytes(now)))
+                    self.events.append(("status", now, body[0], body[1], body[3], body[4], body[5], body[6], self.fifo_bytes(now), body[7], body[8]))
                 self.send(GET_STATUS, body)
             elif self.status_mode == "short":
                 self.send(GET_STATUS, self.status_payload(now)[:10])
@@ -301,7 +322,7 @@ class Rif5Modem(mm.VirtualModem):
             self.counts["config"] += 1
             self.config_raw = host.payload
             if len(host.payload) >= 2:
-                self.enabled_mask = host.payload[1] & 0x07
+                self.enabled_mask = host.payload[1] & CAP_ALL
             self.mode = MODE_IDLE
             self.send(ACK, bytes((SET_CONFIG,)))
             self.configured.set()
@@ -318,7 +339,7 @@ class Rif5Modem(mm.VirtualModem):
                 self._nak(SEND_CWID, NAK_FULL)
             else:
                 self.cw_until = now + 0.05 * cw_bits(host.payload)
-        elif ftype in TX_TYPES["dstar"] + TX_TYPES["dmr"] + TX_TYPES["ysf"]:
+        elif ftype in NATIVE_MODE:
             self._native(ftype, now, host.payload)
         elif ftype in DMR_OTHER:
             self.send(ACK, bytes((ftype,)))
@@ -330,25 +351,36 @@ class Rif5Modem(mm.VirtualModem):
         self.send(NAK, bytes((ftype, reason)))
 
     def _native(self, ftype, now, payload=b""):
-        own = MODE_DSTAR if ftype in TX_TYPES["dstar"] else MODE_DMR if ftype == DMR_DATA2 else MODE_YSF
+        own = NATIVE_MODE[ftype]
         if not self.enabled_mask & (1 << (own - 1)) or self.mode not in (MODE_IDLE, own):
             self._nak(ftype, NAK_NOT_ACCEPTED)
             return
-        key = {MODE_DSTAR: "dstar", MODE_DMR: "dmr2", MODE_YSF: "ysf"}[own]
+        key = FIFO_KEY[own]
         need = 4 if ftype == DSTAR_HEADER else 0 if ftype == DSTAR_EOT else 1
         if self.space(key, now) < need:
             self._nak(ftype, NAK_FULL)
             return
         self.mode = own
-        self._enqueue(ftype, now)
+        self._enqueue(ftype, now, payload)
+
+    def _enqueue(self, ftype, now, payload=b""):
+        """The parent's fill model, with the P25 air time of the frame kind (HDU 82.5 ms, LDU 180 ms, TDU 15 ms: radio.md 7.1) instead of one
+        figure for the type."""
+        if ftype in (P25_HEADER, P25_LDU):
+            air = P25_AIR_S.get(len(payload))
+            if air is not None:
+                self._busy_until["p25"] = max(self._busy_until["p25"], now) + air
+                return
+        super()._enqueue(ftype, now)
 
     # --- the modem's frames ---
     def status_payload(self, now=None):
         now = time.monotonic() if now is None else now
         tx = any(until > now for until in self._busy_until.values()) or now < self.cw_until
         flags = (mm.FLAG_TX if tx else 0) | (mm.FLAG_CD if self.cd else 0) | (mm.FLAG_LOCKOUT if self.lockout else 0)
+        # payload bytes 3..8 = frame offsets 6..11: D-STAR, DMR slot 1, DMR slot 2, YSF, P25 (10), NXDN (11) (radio.md 7.1 "Status offsets")
         body = bytes((self.mode, flags, 0, self.space("dstar", now), self.space("dmr1", now), self.space("dmr2", now),
-                      self.space("ysf", now)))
+                      self.space("ysf", now), self.space("p25", now), self.space("nxdn", now)))
         return body.ljust(STATUS_V2_MIN, b"\x00")
 
     def keyup(self, mode, frames=None, seconds=3.0, wait=False, **kw):

@@ -28,7 +28,7 @@ GATE = "DVT_RIF5"                       # on: the RIF5 cases run (rig/compose.ym
 # the rig shape of rig/config/dv-router/rif5-mmdvm-udp.toml
 PORT_NAME = "rif5-modem"
 STATION = "N0CALL"
-ROOMS = {"dstar": "P", "dmr": "Q", "ysf": "R"}
+ROOMS = {"dstar": "P", "dmr": "Q", "ysf": "R", "nxdn": "S", "p25": "T"}      # nxdn and p25 only in rif5n-modes.toml (docs/rif5-cases.md, DVT_RIF5N)
 MODEM_PORT = 3340                       # the tester side of the UDP byte port ([[edges.radio.port]] udp)
 EDGE_PORT = 3341                        # the SUT side (udp_bind)
 CHILD = "dv-edge-radio"                 # the launcher child (admin status launcher.children[].name)
@@ -43,7 +43,8 @@ INACTIVE_S = 2.0                        # radio.md 7.1: 2000 ms without a valid 
 VERSION_TRIES, VERSION_GAP_S = 6, 1.8   # radio.md 7.1: at most six GET_VERSION attempts 1800 ms apart
 
 # what must not reach a modem while the RF gate is closed: voice, EOT, CW ID, the DMR slot 1 / duplex controls
-RF_TYPES = frozenset((ms.SEND_CWID, 0x10, 0x11, 0x12, 0x13, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x20, 0x21))
+RF_TYPES = frozenset((ms.SEND_CWID, 0x10, 0x11, 0x12, 0x13, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x20, 0x21,
+                      ms.P25_HEADER, ms.P25_LDU, ms.P25_LOST, ms.NXDN_DATA, ms.NXDN_LOST))
 SETUP_TYPES = frozenset((ms.GET_VERSION, ms.GET_STATUS, ms.SET_CONFIG, ms.SET_FREQ))
 
 
@@ -59,6 +60,8 @@ ENV_FW = "DVT_RIF5FW"                   # on: the fake modem is firmware-like (d
 ENV_FW_PROFILE = "DVT_RIF5FW_PROFILE"   # mmdvm (default) or hs: the FIFO sizes and the D-STAR preamble of that board
 ENV_FW_DELAY = "DVT_RIF5FW_TXDELAY_MS"  # the TX delay of the preamble; unset: the SET_CONFIG value of the row (0-500)
 ENV_J = "DVT_RIF5J"                     # on: the image has RIF5j (flow control, O3 frequencies, RXD silence fill): the fix-image cases run
+ENV_PORTCTL1 = "DVT_PORTCTL1"           # on: the image has PORTCTL1 (1ea6bd00, after wip-f1f3777): no new RTS for the same talker after a room timeout
+ENV_N = "DVT_RIF5N"                     # on: the image has RIF5d NXDN, RIF5e P25, RIF5h ride-along, RIF5k / RIF5l (dv-router:wip-f1f3777, bc9af2b1)
 
 
 def _switch(environ, name):
@@ -71,6 +74,14 @@ def fw_on(environ):
 
 def j_on(environ):
     return _switch(environ, ENV_J)
+
+
+def n_on(environ):
+    return _switch(environ, ENV_N)
+
+
+def portctl1_on(environ):
+    return _switch(environ, ENV_PORTCTL1)
 
 
 def fw_settings(environ):
@@ -96,7 +107,7 @@ def port_from_config(doc, name=None):
     for row in radio.get("port") or []:
         if row.get("kind") != "mmdvm-serial" or not row.get("udp") or (name and row.get("name") != name):
             continue
-        levels, dstar, dmr, ysf = (row.get(k) or {} for k in ("levels", "dstar", "dmr", "ysf"))
+        levels, dstar, dmr, ysf, nx, p25 = (row.get(k) or {} for k in ("levels", "dstar", "dmr", "ysf", "nxdn", "p25"))
         hang = row.get("hang") or {}
         return types.SimpleNamespace(
             name=row.get("name"), callsign=str(radio.get("callsign", "")).upper(), tx=row.get("tx"), tx_enable=bool(radio.get("tx_enable")),
@@ -105,12 +116,15 @@ def port_from_config(doc, name=None):
             levels={"rx_level": levels.get("rx_level", 50), "tx_level": levels.get("tx_level", 50),
                     "cw_id_level": levels.get("cw_id_level", 50), "rf_level": levels.get("rf_level", 100),
                     "dstar_tx_level": levels.get("dstar_tx_level"), "dmr_tx_level": levels.get("dmr_tx_level"),
-                    "ysf_tx_level": levels.get("ysf_tx_level"), "tx_delay_ms": levels.get("tx_delay_ms", 100),
+                    "ysf_tx_level": levels.get("ysf_tx_level"), "nxdn_tx_level": levels.get("nxdn_tx_level"),
+                    "p25_tx_level": levels.get("p25_tx_level"), "tx_delay_ms": levels.get("tx_delay_ms", 100),
                     "tx_dc": levels.get("tx_dc_offset", 0), "rx_dc": levels.get("rx_dc_offset", 0),
                     "rx_invert": bool(levels.get("rx_invert")), "tx_invert": bool(levels.get("tx_invert")),
                     "ptt_invert": bool(levels.get("ptt_invert"))},
             rpt_module=str(dstar.get("rpt_module", "B")), color_code=dmr.get("color_code", 1), dmr_delay=dmr.get("delay", 0),
-            dmr_tg=dmr.get("tg", 9), ysf_lo_dev=bool(ysf.get("lo_dev")), use_cos_as_lockout=bool(row.get("use_cos_as_lockout")),
+            dmr_tg=dmr.get("tg", 9), ysf_lo_dev=bool(ysf.get("lo_dev")),
+            nxdn_ran=nx.get("ran", 1), nxdn_tg=nx.get("tg", 1), p25_nac=p25.get("nac", 659), p25_tg=p25.get("tg", 1),
+            ride_along=bool(row.get("ride_along")), use_cos_as_lockout=bool(row.get("use_cos_as_lockout")),
             rf_hang=hang.get("rf_mode_secs", 10), net_hang=hang.get("net_mode_secs", 3),
             id_mode=(row.get("id") or {}).get("mode", "cw"))
     return None
@@ -120,12 +134,13 @@ def expected_setup(port):
     """(SET_FREQ bytes, {offset: value} of the documented SET_CONFIG offsets) of a port namespace (port_from_config)."""
     lv = port.levels
     freq = ms.expected_set_freq(port.rx_freq or 0, port.tx_freq or 0, lv["rf_level"])
-    modes = [m for m in ("dstar", "dmr", "ysf") if m in port.modes]
+    modes = [m for m in ("dstar", "dmr", "ysf", "p25", "nxdn") if m in port.modes]
     cfg = ms.expected_set_config_v2(
         modes=modes, tx_delay_ms=lv["tx_delay_ms"], rx_level=lv["rx_level"], tx_level=lv["tx_level"], cw_id_level=lv["cw_id_level"],
         dstar_tx_level=lv["dstar_tx_level"], dmr_tx_level=lv["dmr_tx_level"], ysf_tx_level=lv["ysf_tx_level"], tx_dc=lv["tx_dc"],
         rx_dc=lv["rx_dc"], color_code=port.color_code, dmr_delay=port.dmr_delay, rx_invert=lv["rx_invert"], tx_invert=lv["tx_invert"],
-        ptt_invert=lv["ptt_invert"], ysf_lo_dev=port.ysf_lo_dev, use_cos_as_lockout=port.use_cos_as_lockout)
+        ptt_invert=lv["ptt_invert"], ysf_lo_dev=port.ysf_lo_dev, use_cos_as_lockout=port.use_cos_as_lockout,
+        p25_tx_level=lv.get("p25_tx_level"), nxdn_tx_level=lv.get("nxdn_tx_level"))
     return freq, cfg
 
 
@@ -202,7 +217,8 @@ def judge_open(dialogue, port):
             # radio.md 7.1: 12-16 are mode levels, 18 / 19 the POCSAG / FM levels, and "levels use (percent * 255 + 50) / 100". The percent of the
             # P25, NXDN, POCSAG and FM levels is not stated; the default level of the other mode levels is 50 %, pct(50) = 128. A value that is
             # that default is consistent with the level rule (a RECORD fact); anything else is a FINDING.
-            unnamed = [(at, got[at]) for at in LEVEL_OFFSETS_UNSTATED]
+            unnamed = [(at, got[at]) for at in LEVEL_OFFSETS_UNSTATED
+                       if not (at == ms.V2_OFFSETS["p25_level"] and "p25" in port.modes or at == ms.V2_OFFSETS["nxdn_level"] and "nxdn" in port.modes)]
             odd = [(at, value) for at, value in unnamed if value != ms.pct(DEFAULT_LEVEL_PERCENT)]
             facts_open["unstated_level_bytes"] = dict(unnamed)
             if odd:
@@ -664,7 +680,7 @@ def delta(before, after, family, **labels):
 
 TIMELINE_MAX_LINES = 2500               # a 3 s over is a few hundred lines; a longer one keeps its first lines and says so
 _MODE_OF_TYPE = {ms.DSTAR_HEADER: "dstar", ms.DSTAR_DATA: "dstar", ms.DSTAR_EOT: "dstar", ms.DSTAR_LOST: "dstar", ms.DMR_DATA2: "dmr", ms.DMR_LOST2: "dmr",
-                 ms.YSF_DATA: "ysf", ms.YSF_LOST: "ysf"}
+                 ms.YSF_DATA: "ysf", ms.YSF_LOST: "ysf", ms.P25_HEADER: "p25", ms.P25_LDU: "p25", ms.P25_LOST: "p25", ms.NXDN_DATA: "nxdn", ms.NXDN_LOST: "nxdn"}
 
 
 def timeline_lines(events, t0, sent=None, summary=None, max_lines=TIMELINE_MAX_LINES):
@@ -698,6 +714,8 @@ def timeline_lines(events, t0, sent=None, summary=None, max_lines=TIMELINE_MAX_L
                    "space": {"dstar": d, "dmr1": m1, "dmr2": m2, "ysf": y}, "space_triple": [d, m2, y]}
             if len(event) > 8 and event[8] is not None:
                 row["fifo_bytes"] = event[8]
+            if len(event) > 10:
+                row["space"]["p25"], row["space"]["nxdn"] = event[9], event[10]
             out.append(row)
         elif kind == "fw":
             row = {"ev": "fw", "t": t, "event": event[2]}

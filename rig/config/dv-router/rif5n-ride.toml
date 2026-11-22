@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/rif5-cases.md "The image wip-f1f3777"): rif5n-modes.toml with ride_along = true. The ONE
+# `mmdvm-serial` port of rif5-mmdvm-udp.toml with FIVE modes, for DV-Router bc9af2b1 (image dv-router:wip-f1f3777: RIF5d NXDN, RIF5e P25) and the cases RIF5N-* (DVT_RIF5N=on). Use it INSTEAD of
+# rig/config/dv-router/rif5-mmdvm-udp.toml (an array of tables [[edges.radio.port]] is appended, not merged: both files would define two ports).
+# Every case of cases/test_rif5_mmdvm_serial.py runs on it; the cases read the modes, RAN, NAC and TGs from the rendered config.
+#
+# Five modes on one modem, one room each (the modes must serve different modules):
+#   D-STAR  room P   (DExtra client module P)
+#   DMR     room Q   (DMR client TG 4001 + 16 = 4017), slot 2 simplex, colour code 1, LC talk group 4017
+#   YSF     room R   (YSF client DG-ID 10 + 17 = 27)
+#   NXDN    room S   (NXDN client TG 31680 -> module S by [edges.nxdn] tg_modules), RAN 5, RF talk group 2005   (config.md "NXDN key")
+#   P25     room T   (P25 client on [edges.p25] server_module T, server TG 31681), NAC 677 (0x2A5), RF talk group 2025   (config.md "P25 key")
+# The NXDN and P25 values are not the defaults (RAN 1, TG 1, NAC 659) so that a default leaking into the RF frames is seen. The client ports 41400 and
+# 41000 of the NXDN and P25 edges are enabled below (the native template has them on "auto" without a served module, which spawns nothing).
+# station callsign N0CALL; D-STAR RF module B; hang: RF and network mode hang 1 s; rules = "other", ID off, as rif5-mmdvm-udp.toml (a lab rule set for a modem
+# that does not exist, not a statement about any licence). ride_along is ON here (RIF5h: the cross-mode talker's own status and D-PRS ride in the unused
+# slow-data slots of a voiced D-STAR over; needs `ride_along` with a dstar mode, TX on, the master gate and the acknowledgement, all met); rif5n-modes.toml
+# is the same port with it off. The rider needs the data worker: add rig/config/dv-router/data-ident.toml to DVT_SUT_CONFIG_EXTRA.
+# Appended after the template: the template must not define [edges.radio] itself. The tables [edges.nxdn] and [edges.p25] are MERGED key by key.
+[edges.radio]
+enable = true
+callsign = "N0CALL"
+rules = "other"
+tx_enable = true
+tx_ack = "I am the control operator of N0CALL and accept responsibility for its transmissions"
+
+[[edges.radio.port]]
+name = "rif5-modem"
+kind = "mmdvm-serial"
+physical = "rif5-modem"
+tx = true
+band = "70cm"
+rx_freq = 434000000
+tx_freq = 434000000
+udp = "<TESTER_IP>:3340"
+udp_bind = "<OWN_IP>:3341"
+modes = { dstar = "P", dmr = "Q", ysf = "R", nxdn = "S", p25 = "T" }
+hang = { rf_mode_secs = 1, net_mode_secs = 1 }
+timers = { tot_secs = 180 }
+id = { mode = "none", interval_secs = 600 }
+dmr = { color_code = 1, tg = 4017 }
+nxdn = { ran = 5, tg = 2005 }
+p25 = { nac = 677, tg = 2025 }
+ride_along = true
+
+[edges.nxdn]
+enable = true
+tg_modules = "31680:S"
+
+[edges.p25]
+enable = true
+server_module = "T"
+server_tg = 31681

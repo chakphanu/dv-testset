@@ -21,6 +21,12 @@ Facts used (design-276 1.2, M/ = refs/MMDVM 1aa1034, HS/ = refs/MMDVM_HS bf66faf
                     after TX went off is aired with no preamble.
   underrun          when nothing is left to play, TX goes off (M/IO.cpp:336-340). A frame of the same over that arrives later is an underrun.
 
+NXDN and P25 (RIF5d / RIF5e, DVT_RIF5N): the FIFO sizes of these two modes are NOT in radio.md and not in design-276's list; they are OUR choice
+(1200 B on the MMDVM profile, 1000 B on the HS profile; unmeasured, a RIF13 H3 item). What radio.md 7.1 and 7.3 (bc9af2b1) does give and the model uses:
+P25 stores one length byte plus the air bytes (HDU 100, LDU 217, TDU 19 B) and reports free bytes / 216; air time HDU 82.5 ms, LDU 180 ms, TDU 15 ms;
+preamble MMDVM 500 ms + tx delay (max 1 s), HS 50 ms + tx delay; NXDN frame 80 ms, preamble 500 ms + tx delay (E = 500 + d + 80 ms), stored 49 B
+(flag byte + 48 air bytes, our reading) and space unit 49 B.
+
 A model, not a firmware: no RSSI, no sample buffer, no DMR fill bursts, the underrun window below is our own rule.
 """
 import time
@@ -30,11 +36,14 @@ from . import mmdvm_modem as mm
 from . import mmdvm_serial as ms
 
 PROFILES = {
-    # name: FIFO bytes per key, DMR slot 1 byte, D-STAR preamble base (s), DMR / YSF preamble base (s)
-    "mmdvm": {"cap": {"dstar": 370, "dmr2": 370, "ysf": 4000}, "dmr1": 10, "pre_dstar": 0.5, "pre_other": 0.5},
-    "hs": {"cap": {"dstar": 1000, "dmr2": 875, "ysf": 1500}, "dmr1": 25, "pre_dstar": 0.25, "pre_other": 0.5},
+    # name: FIFO bytes per key, DMR slot 1 byte, D-STAR preamble base (s), DMR / YSF / NXDN preamble base (s), P25 preamble base (s)
+    # (the P25 and NXDN FIFO sizes are our choice, see the module docstring)
+    "mmdvm": {"cap": {"dstar": 370, "dmr2": 370, "ysf": 4000, "p25": 1200, "nxdn": 1200}, "dmr1": 10, "pre_dstar": 0.5, "pre_other": 0.5,
+              "pre_p25": 0.5},
+    "hs": {"cap": {"dstar": 1000, "dmr2": 875, "ysf": 1500, "p25": 1000, "nxdn": 1000}, "dmr1": 25, "pre_dstar": 0.25, "pre_other": 0.5,
+           "pre_p25": 0.05},
 }
-UNIT = {"dstar": 13, "dmr2": 35, "ysf": 120}                  # bytes per space unit
+UNIT = {"dstar": 13, "dmr2": 35, "ysf": 120, "p25": 216, "nxdn": 49}      # bytes per space unit
 PREAMBLE_MAX_S = 1.0
 UNDERRUN_WINDOW_S = 1.0               # a frame of the same mode this soon after TX went dry, without an end frame before, is an underrun (our rule)
 
@@ -45,23 +54,36 @@ def key_of(ftype):
     """The FIFO key of a host frame type, or None."""
     if ftype in (ms.DSTAR_HEADER, ms.DSTAR_DATA, ms.DSTAR_EOT):
         return "dstar"
-    return {ms.DMR_DATA2: "dmr2", ms.YSF_DATA: "ysf"}.get(ftype)
+    return {ms.DMR_DATA2: "dmr2", ms.YSF_DATA: "ysf", ms.P25_HEADER: "p25", ms.P25_LDU: "p25", ms.NXDN_DATA: "nxdn"}.get(ftype)
 
 
-def stored_bytes(ftype):
-    return {ms.DSTAR_HEADER: 42, ms.DSTAR_DATA: 13, ms.DSTAR_EOT: 1, ms.DMR_DATA2: 33, ms.YSF_DATA: 120}[ftype]
+def stored_bytes(ftype, payload=b""):
+    """Bytes a frame takes in its FIFO. P25: a length byte plus the air bytes (the payload minus its flag byte), radio.md 7.3."""
+    if ftype in (ms.P25_HEADER, ms.P25_LDU):
+        return len(payload) if payload else ms.P25_LDU_LEN          # 1 + (len - 1) air bytes = the payload length
+    return {ms.DSTAR_HEADER: 42, ms.DSTAR_DATA: 13, ms.DSTAR_EOT: 1, ms.DMR_DATA2: 33, ms.YSF_DATA: 120, ms.NXDN_DATA: 49}[ftype]
 
 
-def airtime_s(ftype):
-    return {ms.DSTAR_HEADER: 0.1417, ms.DSTAR_DATA: 0.020, ms.DSTAR_EOT: 0.030, ms.DMR_DATA2: 0.060, ms.YSF_DATA: 0.100}[ftype]
+def airtime_s(ftype, payload=b""):
+    if ftype in (ms.P25_HEADER, ms.P25_LDU):
+        return ms.P25_AIR_S.get(len(payload), 0.180)
+    return {ms.DSTAR_HEADER: 0.1417, ms.DSTAR_DATA: 0.020, ms.DSTAR_EOT: 0.030, ms.DMR_DATA2: 0.060, ms.YSF_DATA: 0.100, ms.NXDN_DATA: 0.080}[ftype]
 
 
 def is_end_frame(ftype, payload):
-    """True for the frame that ends an over: a D-STAR EOT, a DMR terminator burst (data burst whose slot type is 2) or a YSF terminator (FICH FI 2).
+    """True for the frame that ends an over: a D-STAR EOT, a DMR terminator burst (data burst whose slot type is 2), a YSF terminator (FICH FI 2),
+    an NXDN TX_REL frame or a P25 TDU.
     A DMR header is also a data burst; a TX that went dry right after a header is not told apart from a terminator (no case does that)."""
     if ftype == ms.DSTAR_EOT:
         return True
+    if ftype == ms.P25_LDU:
+        return len(payload) == ms.P25_TDU_LEN                      # a TDU travels as type 31 with 19 payload bytes (radio.md 7.3)
     try:
+        if ftype == ms.NXDN_DATA:
+            from . import mmdvm_rf_nxdn as nx
+            from .proto import nxdn as nxp
+            info = nx.decode_frame(nx.from_payload(bytes(payload)))
+            return any(b is not None and b["msg"] == nxp.TX_REL for b in info["facch1"])
         if ftype == ms.DMR_DATA2:
             from . import mmdvm_rf as rf
             return rf.classify_burst(bytes(payload[1:])) == "data"
@@ -108,6 +130,8 @@ class FwModel:
             if ftype != ms.DSTAR_HEADER:
                 return 0.0
             return min(PREAMBLE_MAX_S, self.p["pre_dstar"] + self.delay_ms() / 1000.0)
+        if key == "p25":
+            return min(PREAMBLE_MAX_S, self.p["pre_p25"] + self.delay_ms() / 1000.0)
         return min(PREAMBLE_MAX_S, self.p["pre_other"] + self.delay_ms() / 1000.0)
 
     def idle_space(self, key):
@@ -167,7 +191,7 @@ class FwModel:
         """A native frame from the host at `now`. True when stored; False is the firmware's NAK 5 (the frame does not fit)."""
         key = key_of(ftype)
         self.advance(now)
-        stored = stored_bytes(ftype)
+        stored = stored_bytes(ftype, payload)
         if self.used[key] + stored > self.p["cap"][key]:
             self.counts["nak"] += 1
             self.emit(now, "nak", reason=ms.NAK_FULL, type=ms.name_of(ftype), fifo_bytes=self.fifo_bytes())
@@ -176,7 +200,7 @@ class FwModel:
                 and now - self.dry_at <= UNDERRUN_WINDOW_S):
             self.counts["underrun"] += 1
             self.emit(now, "underrun", dry_s=round(now - self.dry_at, 4), type=ms.name_of(ftype))
-        self.fifo[key].append(Frame(key, ftype, stored, airtime_s(ftype), is_end_frame(ftype, payload)))
+        self.fifo[key].append(Frame(key, ftype, stored, airtime_s(ftype, payload), is_end_frame(ftype, payload)))
         self.used[key] += stored
         self.emit(now, "write", type=ms.name_of(ftype), fifo_bytes=self.fifo_bytes())
         if not self.tx:
@@ -219,7 +243,7 @@ class FwRif5Modem(ms.Rif5Modem):
         return [(e[1], e[2], e[3]) for e in self.events_between(since, until) if e[0] == "fw" and (names is None or e[2] in names)]
 
     def _native(self, ftype, now, payload=b""):
-        own = ms.MODE_DSTAR if ftype in ms.TX_TYPES["dstar"] else ms.MODE_DMR if ftype == ms.DMR_DATA2 else ms.MODE_YSF
+        own = ms.NATIVE_MODE[ftype]
         if not self.enabled_mask & (1 << (own - 1)) or self.mode not in (ms.MODE_IDLE, own):
             self._nak(ftype, ms.NAK_NOT_ACCEPTED)
             return
@@ -239,7 +263,8 @@ class FwRif5Modem(ms.Rif5Modem):
         with self.lock:
             tx = self.fw.tx_on(now) or now < self.cw_until
             # a mode the SET_CONFIG did not enable reports no space (review-277: firmware 0); the DMR slot 1 byte stays the fixed value
-            enabled = {"dstar": 1, "dmr1": 0, "dmr2": 2, "ysf": 4}
-            spaces = [self.fw.space(k, now) if not enabled[k] or self.enabled_mask & enabled[k] else 0 for k in ("dstar", "dmr1", "dmr2", "ysf")]
+            enabled = {"dstar": 1, "dmr1": 0, "dmr2": 2, "ysf": 4, "p25": 8, "nxdn": 0x10}
+            spaces = [self.fw.space(k, now) if not enabled[k] or self.enabled_mask & enabled[k] else 0
+                      for k in ("dstar", "dmr1", "dmr2", "ysf", "p25", "nxdn")]
         flags = (mm.FLAG_TX if tx else 0) | (mm.FLAG_CD if self.cd else 0) | (mm.FLAG_LOCKOUT if self.lockout else 0)
         return bytes((self.mode, flags, 0) + tuple(spaces)).ljust(ms.STATUS_V2_MIN, b"\x00")

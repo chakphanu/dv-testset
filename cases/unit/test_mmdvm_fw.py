@@ -158,3 +158,49 @@ def test_a_mode_the_set_config_did_not_enable_reports_no_space():
         assert list(modem.status_payload(1.0)[3:7]) == [28, 10, 0, 0]       # DMR slot 1 stays the fixed byte
     finally:
         transport.sock.close()
+
+
+# ------------------------------------------------------------------ NXDN and P25 (DVT_RIF5N; radio.md 7.1 and 7.3 at bc9af2b1)
+
+def test_p25_and_nxdn_numbers_of_the_model():
+    m, _ = model("mmdvm")
+    assert m.space("p25", 0.0) == 1200 // 216 == 5 and m.space("nxdn", 0.0) == 1200 // 49 == 24         # the FIFO sizes are our choice (module docstring)
+    hs, _ = model("hs")
+    assert hs.space("p25", 0.0) == 1000 // 216 and hs.space("nxdn", 0.0) == 1000 // 49
+    hdu, ldu, tdu = bytes(ms.P25_HDU_LEN), bytes(ms.P25_LDU_LEN), bytes(ms.P25_TDU_LEN)
+    assert (fw.stored_bytes(ms.P25_HEADER, hdu), fw.stored_bytes(ms.P25_LDU, ldu), fw.stored_bytes(ms.P25_LDU, tdu)) == (100, 217, 19)   # a length byte + the air bytes
+    assert (fw.airtime_s(ms.P25_HEADER, hdu), fw.airtime_s(ms.P25_LDU, ldu), fw.airtime_s(ms.P25_LDU, tdu)) == (0.0825, 0.180, 0.015)
+    assert fw.airtime_s(ms.NXDN_DATA) == 0.080 and fw.stored_bytes(ms.NXDN_DATA) == 49
+    assert fw.key_of(ms.P25_HEADER) == fw.key_of(ms.P25_LDU) == "p25" and fw.key_of(ms.NXDN_DATA) == "nxdn"
+    # radio.md 7.3 P25: MMDVM 500 ms + tx delay (max 1 s), HS 50 ms + tx delay; NXDN 500 ms + tx delay (7.1, E = 500 + d + 80 ms)
+    assert m.preamble_s("p25", ms.P25_HEADER) == pytest.approx(0.6) and hs.preamble_s("p25", ms.P25_HEADER) == pytest.approx(0.15)
+    assert m.preamble_s("nxdn", ms.NXDN_DATA) == pytest.approx(0.6) and hs.preamble_s("nxdn", ms.NXDN_DATA) == pytest.approx(0.6)
+
+
+def test_a_p25_over_plays_out_and_the_tdu_ends_it_without_an_underrun():
+    m, log = model("mmdvm", 0)
+    hdu, ldu, tdu = bytes(ms.P25_HDU_LEN), bytes(ms.P25_LDU_LEN), bytes(ms.P25_TDU_LEN)
+    assert m.write(ms.P25_HEADER, hdu, 0.0) and m.write(ms.P25_LDU, ldu, 0.001) and m.write(ms.P25_LDU, ldu, 0.002)
+    assert m.fifo_bytes()["p25"] == 100 + 217 * 2 and m.space("p25", 0.3) == (1200 - 534) // 216          # the preamble (500 ms) holds the FIFO
+    assert m.write(ms.P25_LDU, tdu, 0.003) and m.fifo_bytes()["p25"] == 553 and m.space("p25", 0.4) == (1200 - 553) // 216
+    assert m.tx_on(0.4) and m.space("p25", 0.51) == (1200 - 453) // 216            # the preamble ended at 0.5 s: the HDU left the FIFO
+    end = 0.5 + 0.0825 + 0.360 + 0.015 + 0.001
+    assert not m.tx_on(end + 0.3) and not names(log, "underrun")
+    off = names(log, "tx_off")
+    assert off and off[-1][2]["end_frame"] is True                                                         # the TDU is an end frame (a 19 byte type 31)
+
+
+def test_nxdn_end_frame_is_a_tx_rel_and_an_unfinished_over_that_runs_dry_is_an_underrun():
+    from dvtest import mmdvm_rf_nxdn as nx
+    from dvtest.proto import nxdn as nxp
+    words = [bytes(7)] * 8
+    air = nx.build_keyup(1002, 2005, words, ran=5)
+    header, voice1, trailer = air[0][1], air[1][1], air[-1][1]
+    assert not fw.is_end_frame(ms.NXDN_DATA, header) and not fw.is_end_frame(ms.NXDN_DATA, voice1) and fw.is_end_frame(ms.NXDN_DATA, trailer)
+    m, log = model("mmdvm", 0)
+    for i, (_t, payload, _d) in enumerate(air[:2]):
+        assert m.write(ms.NXDN_DATA, payload, 0.001 * i)
+    assert not m.tx_on(0.5 + 0.2 + 0.01) and not names(log, "underrun")                                    # dry after a voice frame, nothing came yet
+    assert m.write(ms.NXDN_DATA, air[2][1], 0.8)                                                           # voice of the same over within 1 s: an underrun
+    assert names(log, "underrun")
+    del nxp

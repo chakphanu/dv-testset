@@ -629,6 +629,11 @@ services:
       DVT_RIF5FW_PROFILE: ${DVT_RIF5FW_PROFILE:-}
       DVT_RIF5FW_TXDELAY_MS: ${DVT_RIF5FW_TXDELAY_MS:-}
       DVT_RIF5J: ${DVT_RIF5J:-}
+      # on for the image dv-router:wip-f1f3777 (DV-Router bc9af2b1: RIF5d NXDN, RIF5e P25, RIF5h ride-along, RIF5k end sequence, RIF5l voiceless start): the cases
+      # RIF5N-* of cases/test_rif5_mmdvm_serial.py with rig/config/dv-router/rif5n-modes.toml (or rif5n-ride.toml) INSTEAD of rif5-mmdvm-udp.toml (docs/rif5-cases.md
+      # "The image wip-f1f3777"); DVT_PORTCTL1=on adds the same-talker RTS case for the image after it (PORTCTL1, 1ea6bd00). Unset: the earlier assertions.
+      DVT_RIF5N: ${DVT_RIF5N:-}
+      DVT_PORTCTL1: ${DVT_PORTCTL1:-}
       # SECRELOAD1 / SECRELOAD2 (cases/test_secret_reload.py): on = the APRS-IS edge and the image rule are EXPECTED, so a missing series or route
       # fails instead of skipping. Not passing them made the strict mode inert in every rig run (cases/unit/test_tester_env.py guards the class).
       DVT_SECRELOAD1: ${DVT_SECRELOAD1:-}

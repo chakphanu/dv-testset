@@ -187,7 +187,7 @@ def status_fields(payload):
 def test_open_dialogue_answers(link):
     modem, edge = link
     version, status = edge.open()
-    assert version.payload[0] == 2 and version.payload[1] == 7 and len(version.payload) >= 20          # v2, D-STAR | DMR | YSF, >= 20 B
+    assert version.payload[0] == 2 and version.payload[1] == ms.CAP_ALL and len(version.payload) >= 20   # v2, D-STAR | DMR | YSF | P25 | NXDN, >= 20 B
     assert version.payload[20:].decode() == "dvtest RIF5 modem 1.0 (no radio)"
     assert len(status.payload) == ms.STATUS_V2_MIN                                                       # a valid v2 status is 17 bytes
     s = status_fields(status.payload)
@@ -260,7 +260,7 @@ def test_firmware_like_modem_reports_bytes_over_unit_and_keys_after_a_preamble(f
     events = modem.events_between(t0)
     names = [e[2] for e in events if e[0] == "fw"]
     assert names[:2] == ["write", "preamble_start"] and "preamble_end" in names and names.count("pop") == 2 and "tx_off" in names
-    assert [e[8] for e in events if e[0] == "status"][-1] == {"dstar": 0, "dmr2": 0, "ysf": 0}
+    assert [e[8] for e in events if e[0] == "status"][-1] == {"dstar": 0, "dmr2": 0, "ysf": 0, "p25": 0, "nxdn": 0}
     # D-STAR data with TX off keys without a preamble, the first frame leaves at once; 28 more fit, the rest is the firmware's NAK 5
     for _ in range(40):
         edge.write(ms.DSTAR_DATA, bytes(12))
@@ -347,3 +347,69 @@ def test_foreign_datagrams_are_dropped_and_the_peer_is_not_learned():
         other.close()
     finally:
         modem.stop()
+
+
+# ------------------------------------------------------------------ NXDN and P25 (DVT_RIF5N; radio.md 7.1 "Control types", "Status offsets", 7.3)
+
+FIVE = ("dstar", "dmr", "ysf", "p25", "nxdn")
+
+
+def test_set_config_v2_enables_p25_and_nxdn_and_names_their_level_bytes():
+    frame = build_v2(modes=FIVE, p25_tx_level=70, nxdn_tx_level=30)
+    assert frame[4] == 0x1F                                                                                # D-STAR 01 | DMR 02 | YSF 04 | P25 08 | NXDN 10
+    want = ms.expected_set_config_v2(modes=FIVE, p25_tx_level=70, nxdn_tx_level=30)
+    assert want[15] == ms.pct(70) == 179 and want[16] == ms.pct(30) == 77                                  # P25 byte 15, NXDN byte 16 (radio.md 7.3)
+    assert 15 not in ms.expected_set_config_v2() and 16 not in ms.expected_set_config_v2()                  # a row without the modes: still unstated
+    frame = bytearray(frame)
+    frame[15], frame[16] = want[15], want[16]
+    assert ms.set_config_differences(bytes(frame), want) == []
+    assert ms.parse_set_config_v2(bytes(frame)[3:])["modes"] == list(FIVE) and ms.parse_set_config_v2(bytes(frame)[3:])["nxdn_level"] == 77
+
+
+def test_the_modem_selects_p25_and_nxdn_reports_their_space_and_refuses_the_other_mode(link):
+    modem, edge = link
+    edge.sock.sendto(ms.expected_set_freq(434_000_000, 434_000_000), edge.modem)
+    edge.read(ms.ACK)
+    edge.sock.sendto(build_v2(modes=FIVE), edge.modem)
+    edge.read(ms.ACK)
+    assert modem.enabled_mask == 0x1F
+    edge.write(ms.GET_STATUS)
+    status = edge.read(ms.GET_STATUS).payload
+    assert len(status) == ms.STATUS_V2_MIN and status[7] == mm.CAPACITY["p25"] and status[8] == mm.CAPACITY["nxdn"]      # frame 10 and 11
+    edge.write(ms.SET_MODE, bytes((ms.MODE_NXDN,)))
+    assert edge.read(ms.ACK).payload == bytes((ms.SET_MODE,))
+    edge.write(ms.NXDN_DATA, bytes(ms.NXDN_LEN))
+    edge.write(ms.P25_HEADER, bytes(ms.P25_HDU_LEN))                                                       # NXDN holds the modem: NAK 2
+    assert edge.read(ms.NAK).payload == bytes((ms.P25_HEADER, ms.NAK_NOT_ACCEPTED))
+    edge.write(ms.GET_STATUS)
+    status = edge.read(ms.GET_STATUS).payload
+    assert status[0] == ms.MODE_NXDN and status[1] & 1 and status[8] == mm.CAPACITY["nxdn"] - 1
+    edge.write(ms.SET_MODE, b"\x00")
+    edge.read(ms.ACK)
+    time.sleep(0.15)
+    edge.write(ms.P25_HEADER, bytes(ms.P25_HDU_LEN))
+    edge.write(ms.P25_LDU, bytes(ms.P25_LDU_LEN))
+    edge.write(ms.P25_LDU, bytes(ms.P25_TDU_LEN))
+    edge.write(ms.GET_STATUS)
+    status = edge.read(ms.GET_STATUS).payload
+    assert status[0] == ms.MODE_P25 and not [n for n in modem.naks if n[1] in (ms.P25_LDU,)]
+    assert [f.ftype for f in modem.host_frames(types=ms.TX_TYPES["p25"])] == [ms.P25_HEADER, ms.P25_HEADER, ms.P25_LDU, ms.P25_LDU]      # the first HDU was refused (NAK 2)
+    assert ms.name_of(ms.P25_LDU) == "P25_LDU" and ms.name_of(ms.NXDN_LOST) == "NXDN_LOST"
+    # a SET_MODE for a mode the SET_CONFIG did not enable is NAK 4
+    edge.sock.sendto(build_v2(modes=("dstar",)), edge.modem)
+    edge.read(ms.ACK)
+    edge.write(ms.SET_MODE, bytes((ms.MODE_P25,)))
+    assert edge.read(ms.NAK).payload == bytes((ms.SET_MODE, ms.NAK_BAD_VALUE))
+
+
+def test_the_fake_p25_air_time_is_the_frame_kind_not_one_figure_for_the_type():
+    transport = ms.PinnedUdp(("127.0.0.1", 0), ("127.0.0.1", 1))
+    modem = ms.Rif5Modem(transport)
+    try:
+        modem._enqueue(ms.P25_LDU, 10.0, bytes(ms.P25_TDU_LEN))
+        modem._enqueue(ms.P25_HEADER, 10.0, bytes(ms.P25_HDU_LEN))
+        assert modem._busy_until["p25"] == pytest.approx(10.0 + 0.015 + 0.0825)
+        modem._enqueue(ms.P25_LDU, 10.0, bytes(ms.P25_LDU_LEN))
+        assert modem._busy_until["p25"] == pytest.approx(10.0 + 0.015 + 0.0825 + 0.180)
+    finally:
+        transport.close()
