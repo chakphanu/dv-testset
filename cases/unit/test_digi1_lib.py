@@ -31,7 +31,9 @@ def test_the_vector_ids_are_unique_and_the_documented_deviations_are_marked():
     ids = [g.id for g in VECTORS]
     assert len(ids) == len(set(ids)) and {"G%d" % n for n in range(1, 14)} <= set(ids)
     deviations = {g.id for g in digi1.GOLDENS if g.dw.startswith("differs")}
-    assert deviations == {"G9", "G10", "G11"}          # design-271 5.7 and data.md 15.5: own source, non-contiguous H, Internet path
+    # design-271 5.7 and data.md 15.5: own source, non-contiguous H, Internet path; G6 (own call already used) and G12 (reserved bits) are
+    # the two the real Dire Wolf 1.8.1 oracle run showed (first usable vectors, DIGI-A of wip-f1f3777)
+    assert deviations == {"G6", "G9", "G10", "G11", "G12"}
     assert all(g.ours == digi1.OURS for g in VECTORS)
 
 

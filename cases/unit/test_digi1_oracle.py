@@ -117,7 +117,8 @@ def test_an_oracle_that_repeats_what_the_model_refuses_is_a_deviation_only_where
             verdicts[g.id] = digi1_oracle.oracle_problems(g, by[g.id])
     assert verdicts["G10"][0] == [] and verdicts["G11"][0] == [] and verdicts["G9"][0] == []     # documented: Dire Wolf repeats, DV-Router refuses
     assert verdicts["G4"][0] and "oracle disagrees" in verdicts["G4"][0][0]                     # WIDE2-1 first: Dire Wolf must stay silent
-    assert verdicts["G6"][0]                                                                     # own path: silent in both
+    assert verdicts["G6"][0] == []                                                               # own path: documented since the first real oracle run
+    assert verdicts["G5"][0] and "oracle disagrees" in verdicts["G5"][0][0]                     # WIDE1 without SSID: silent in both
 
 
 def test_a_frame_the_digipeater_never_heard_proves_nothing():

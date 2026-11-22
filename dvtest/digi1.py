@@ -51,7 +51,8 @@ GOLDENS = (
        ["N0TEST-1*", "N0TEST-2*", "N0TEST-3*", "N0TEST-4*", "N0TEST-5*", "N0TEST-6*", "N0TEST-7*", "WIDE1-1"], "repeat", 7),
     _g("G4", "WIDE2-1 first, WIDE1-1 second: the first unused hop is not WIDE1-1", ["WIDE2-1", "WIDE1-1"], "no_match"),
     _g("G5", "WIDE1 without SSID, WIDE2-1", ["WIDE1", "WIDE2-1"], "no_match"),
-    _g("G6", "our call already used, WIDE1-1 next", [OURS + "*", "WIDE1-1"], "own_path"),
+    _g("G6", "our call already used, WIDE1-1 next", [OURS + "*", "WIDE1-1"], "own_path",
+       dw="differs:Dire Wolf 1.8.1 repeats it (its WIDE1-1 alias match does not look for its own call among the used hops: path N0TEST-10*,N0TEST-10*), DV-Router refuses an own-path loop (ax25 digi.rs OwnPath)"),
     _g("G7", "explicit routing: our call is the next unused hop", [OURS, "WIDE2-1"], "repeat", 0),
     _g("G8", "source N0TEST-7 (not in the own set), WIDE1-1 then WIDE2-2", ["WIDE1-1", "WIDE2-2"], "repeat", 0, src="N0TEST-7"),
     _g("G9", "the source is our own call", ["WIDE1-1"], "own_source", src=OURS, dw="differs:own source via WIDE1-1 is refused by lead decision D10, stricter than Dire Wolf (its answer to G9 as written is information only)"),
@@ -60,7 +61,8 @@ GOLDENS = (
     _g("G11", "WIDE1-1 then TCPIP (an Internet path)", ["WIDE1-1", "TCPIP"], "internet_path",
        dw="differs:Dire Wolf repeats, DV-Router refuses an Internet marker"),
     _g("G12", "G1 with the reserved bits of the received via addresses clear: only our hop gets them set", ["WIDE1-1", "WIDE2-1"],
-       "repeat", 0, reserved=0b00),
+       "repeat", 0, reserved=0b00,
+       dw="differs:Dire Wolf 1.8.1 keeps the reserved bits it received (clear: SSID byte 0x94), DV-Router sets them in the hop it writes (SSID byte 0xf4, AX.25 v2.2 3.12)"),
     _g("G13", "WIDE1-2: the SSID must be exactly 1", ["WIDE1-2"], "no_match"),
 )
 G2B = _g("G2b", "G2 with a station call without SSID (N0TEST): SSID zero in the repeat", ["WIDE1-1"], "repeat", 0, ours="N0TEST")

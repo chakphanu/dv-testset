@@ -206,8 +206,8 @@ VECTORS = list(digi1.GOLDENS) + list(digi1.extra_vectors())
 def test_digi1_r1_path_vector(rig, target, hub, digi, g):
     """data.md 8.3, the ten decision steps and the goldens G1 to G13 (the X vectors are more cases of the same steps): a frame whose next hop is
     WIDE1-1 (or our call) comes back ONCE on the receiving port, our call in that one hop, the H bit set, the reserved bits set, the address
-    extension bit and every other byte exactly as received (the path never grows); a frame that fails a step is not repeated. G9, G10 and G11
-    are the documented deviations from Dire Wolf; every other vector also has to agree with Dire Wolf's answer when the oracle vectors exist."""
+    extension bit and every other byte exactly as received (the path never grows); a frame that fails a step is not repeated. G6, G9, G10, G11
+    and G12 are the documented deviations from Dire Wolf (G6 and G12 found by the first real oracle run); every other vector also has to agree with Dire Wolf's answer when the oracle vectors exist."""
     need(digi, "roomy")
     case = "DIGI-R1[%s]" % g.id
     frame = digi1.golden_frame(g, (" %s%s" % (NONCE, g.id)).encode("ascii"))
