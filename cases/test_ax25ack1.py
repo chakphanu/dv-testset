@@ -200,12 +200,26 @@ def test_txoff2_a_a_port_off_and_on(rig, target, ctx):
     resp = post_tx(ctx.operator, ax25ack1.radio_tx_body(False, port=ctx.idx))
     note(target, case, "RECORD", "port %d Off (operator, no step-up): HTTP %d %s" % (ctx.idx, resp.status, resp.text()[:200]))
     assert resp.status == 200, "%s: Off answered HTTP %d: %s" % (case, resp.status, resp.text()[:300])
-    wait_restart(ctx, before, case, target)
+    problems = ax25ack1.applied_problems(resp.status, resp.json())
+    assert not problems, "%s: %s: %s" % (case, "; ".join(problems), resp.text()[:300])
+    assert dc.restarted(before, wait_restart(ctx, before, case, target)), "%s: a per-port Off must restart the whole dv-edge-ax25" % case
     assert ax25ack1.port_tx(status_of(ctx.operator), PORT) == "off", "%s: the port label is not off after Off" % case
     silent(ctx, "OFFA", case, target)
+    # a repeated Off is a no-op: 200, noop true, no restart
+    steady = child(ctx)
+    again = post_tx(ctx.operator, ax25ack1.radio_tx_body(False, port=ctx.idx))
+    time.sleep(3.0)
+    note(target, case, "RECORD", "repeated Off: HTTP %d %s" % (again.status, again.text()[:200]))
+    problems = ax25ack1.noop_problems(again.status, again.json() if again.status == 200 else {})
+    assert not problems, "%s: %s" % (case, "; ".join(problems))
+    assert not dc.restarted(steady, child(ctx)), "%s: a repeated Off restarted the AX.25 edge" % case
+    # On needs the admin role (403 for an operator), the step-up and the sentence (422 without it)
+    as_operator = post_tx(ctx.operator, ax25ack1.radio_tx_body(True, port=ctx.idx, ack=sentence))
+    note(target, case, "RECORD", "On as operator: HTTP %d" % as_operator.status)
+    assert as_operator.status == 403, "%s: On as an operator answered HTTP %d, want 403" % (case, as_operator.status)
     refused = post_tx(ctx.admin, ax25ack1.radio_tx_body(True, port=ctx.idx), step_up=True)
     note(target, case, "RECORD", "On without the sentence: HTTP %d %s" % (refused.status, refused.text()[:200]))
-    assert refused.status != 200, "%s: On without the control-operator sentence was accepted" % case
+    assert refused.status == 422, "%s: On without the control-operator sentence answered HTTP %d, want 422" % (case, refused.status)
     before2 = child(ctx)
     on = post_tx(ctx.admin, ax25ack1.radio_tx_body(True, port=ctx.idx, ack=sentence), step_up=True)
     assert on.status == 200, "%s: On with the exact sentence answered HTTP %d: %s" % (case, on.status, on.text()[:300])

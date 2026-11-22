@@ -73,3 +73,14 @@ def test_wait_ready_counts_the_down_window_and_the_budget():
     t[0] = 0.0
     never = r.wait_ready(lambda: False, budget_s=5.0, poll_s=1.0, clock=lambda: t[0], sleep=lambda s: t.__setitem__(0, t[0] + s))
     assert never["ready"] is False and never["seconds"] >= 5.0
+
+
+def test_zombies_after_a_restart_are_a_problem():
+    before = r.launcher_view(status(1000, {"dv-edge-dcs": 11}))
+    after = r.launcher_view(status(2000, {"dv-edge-dcs": 21}))
+    procs_b = [(10, 1, "dv-router"), (11, 10, "dv-edge-dcs")]
+    procs_a = [(10, 1, "dv-router"), (21, 10, "dv-edge-dcs")]
+    assert r.restart_problems(before, after, procs_b, procs_a, []) == []
+    out = r.restart_problems(before, after, procs_b, procs_a, [(30, 10, "dv-room")])
+    assert len(out) == 1 and "zombie 30 (dv-room, parent 10)" in out[0]
+    assert r.zombie_problems([]) == []

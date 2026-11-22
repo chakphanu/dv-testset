@@ -203,6 +203,19 @@ def parse_proc_list(text):
     return out
 
 
+def parse_zombie_list(text):
+    """[(pid, ppid, comm)] of the processes in state Z of a `proc-stat xlxd-sut list` reply (lines `zombie=<pid> <ppid> <comm>`); the live ones are parse_proc_list()."""
+    out = []
+    for line in text.splitlines():
+        key, sep, rest = line.strip().partition("=")
+        if key != "zombie" or not sep:
+            continue
+        words = rest.split(None, 2)
+        if len(words) == 3 and words[0].isdigit() and words[1].isdigit():
+            out.append((int(words[0]), int(words[1]), words[2]))
+    return out
+
+
 class RigControl:
     """stop/start/kill of a rig service and kill-proc inside the sut container
     through the run.sh watcher: a request file in $DVT_OUT/control, answered
@@ -272,6 +285,11 @@ class RigControl:
     def proc_list(self, service="xlxd-sut", timeout=60.0):
         """[(pid, ppid, comm)] of every process of the container (`proc-stat <service> list`)."""
         return parse_proc_list(self.proc_stat(service, PROC_STAT_LIST, timeout))
+
+    def proc_snapshot(self, service="xlxd-sut", timeout=60.0):
+        """([(pid, ppid, comm)] live, [(pid, ppid, comm)] zombies) of one `proc-stat <service> list` reply."""
+        text = self.proc_stat(service, PROC_STAT_LIST, timeout)
+        return parse_proc_list(text), parse_zombie_list(text)
 
     def proc_stat(self, service, process, timeout=60.0):
         """Text of a proc-stat reply (key=value lines; dvtest.webload.parse_procstat_out reads it) for the

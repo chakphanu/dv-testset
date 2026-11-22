@@ -18,8 +18,9 @@
 # it) and the word "list". dvtest/control.py (PROC_STAT_NAMES) mirrors the table for the tester;
 # cases/unit/test_procstat.py checks that the two agree.
 #
-# "proc-stat xlxd-sut list" prints one line "proc=<pid> <ppid> <comm>" for EVERY process of the container (names
-# only, never a command line or an environment), so that a test can see children that are not in the table.
+# "proc-stat xlxd-sut list" prints one line "proc=<pid> <ppid> <comm>" for EVERY live process of the container (names
+# only, never a command line or an environment), so that a test can see children that are not in the table, and one line
+# "zombie=<pid> <ppid> <comm>" for every process in state Z (RESTART1b: an uncollected child; dvtest.control.parse_zombie_list).
 #
 # dvt_procstat_allowed SERVICE PROCESS   exit 0 when allow-listed
 # dvt_procstat_parse LINE                prints "SERVICE PROCESS" or exit 1
@@ -77,7 +78,11 @@ if want == "list":
                 rest = fh.read().rsplit(")", 1)[1].split()
         except (OSError, IndexError):
             continue
-        if int(name) != me and rest[0] != "Z":
+        if int(name) == me:
+            continue
+        if rest[0] == "Z":
+            print("zombie=%s %s %s" % (name, rest[1], comm))      # RESTART1b: a stopped child that was not reaped; parse_proc_list ignores it
+        else:
             print("proc=%s %s %s" % (name, rest[1], comm))
     sys.exit(0)
 found = 0

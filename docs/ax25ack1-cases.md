@@ -27,7 +27,7 @@ guarded by `cases/unit/test_tester_env.py`). Notes: stdout and `out/<run>/ax25ac
 | AX25ACK1-a | the exact sentence transmits | the rendered config has `tx_ack` equal to the sentence of the callsign; the status row says `acknowledged` and `tx_enable` true, the port label of rf-a is `on`; one room text is transmitted at rf-a |
 | AX25ACK1-b | an absent sentence is dormant | `replace /edges/ax25/tx_ack` with `""` through `POST /config/changes`: HTTP 200 (a warning, not an error); the edge restarts; `acknowledged` false and the port label `off`; a room text is accepted (202) and NOTHING reaches either TNC for 20 s; the sentence put back (restore in a `finally`) transmits again |
 | AX25ACK1-c | a wrong sentence is an error | the change of `tx_ack` to the sentence of another callsign answers >= 400 with `RF TX acknowledgement must equal`; the file etag does not move; the edge does not restart |
-| TXOFF2-a | a per-port Off and On | operator, no step-up, `{kind: ax25, port: <rf-a>, on: false}`: 200, the edge restarts, the label of rf-a is `off`, nothing transmitted; On without `ack` is not 200; On with the sentence (admin, step-up) is 200 and the text is transmitted again |
+| TXOFF2-a | a per-port Off and On | operator, no step-up, `{kind: ax25, port: <rf-a>, on: false}`: 200 with `rebased` false and an integer `history_seq`, the WHOLE `dv-edge-ax25` restarts (the AX.25 section is one struct for the reload), the label of rf-a is `off`, nothing transmitted; a repeated Off is 200 `noop: true` with `changed: []` and no restart; On as an operator is 403; On by an admin with step-up but without `ack` is exactly 422; On with the sentence is 200 and the text is transmitted again |
 | TXOFF2-b | the master Off and On | the same without `port`: `ax25.tx_enable` false after the restart, nothing transmitted; the master On with the sentence transmits again |
 | TXOFF2-c | an Off on an INVALID file rebases | `dvt_not_a_key = 1` appended to the rw config file by the tester, then the master Off: 200, `rebased` true, `history_seq` >= 1, the file parses and has `tx_enable` false and no bad key, the history entry holds the invalid text, nothing transmitted; the master On restores the run (in a `finally`) |
 
@@ -63,6 +63,6 @@ cases restore the run in a `finally`). One rig, nothing else at the same time. D
 
 ## Questions for the DV-Router team
 
-1. Is `rebased` / `history_seq` at the top level of the `POST /api/v1/admin/radio/tx` reply (the schema text says "Applied writes include ...")? The cases read the top level.
-2. The refusal of an On without `ack` or of a non-admin On: which status (403, 422, 409)? The case only requires "not 200".
-3. Does a per-port Off restart the whole AX.25 edge (the cases assume yes, as the `tx` change of `config/changes` does)?
+Answered (answer-342, `app.rs` / `app_radio_tx.rs`), now asserted: `rebased` and `history_seq` are top level (`history_seq` is there even when `rebased` is false); On without `ack` is 422, On by an
+operator is 403; a per-port Off restarts the whole `dv-edge-ax25`; a repeated Off is 200 with `noop: true`. Still unverified: the exact text of the 422 body (one rig run settles it; the case
+records it).

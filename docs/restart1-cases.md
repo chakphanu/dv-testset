@@ -20,7 +20,7 @@ Shutdown budget: up to 23 s after the signal. A stop signal during the restart c
 
 | Case | Statement | Assertion |
 |------|-----------|-----------|
-| RESTART1-a | one restart is clean | 202 (or a dropped reply); `/ready` goes down and comes back within 120 s (a restart that never shows a not-ready poll is a failure); a fresh admin login works (the session is gone); `launcher.started_ms` advances and `node_ready` is true; the set of children is the same and EVERY child has a new pid; no process of the old incarnation is in `proc-stat xlxd-sut list`; the launcher `dv-router` keeps its pid; the count of children per name is the same; no `dv-*` process outside the launcher's children |
+| RESTART1-a | one restart is clean | 202 (or a dropped reply); `/ready` goes down and comes back within 120 s (a restart that never shows a not-ready poll is a failure); a fresh admin login works (the session is gone); `launcher.started_ms` advances and `node_ready` is true; the set of children is the same and EVERY child has a new pid; no process of the old incarnation is in `proc-stat xlxd-sut list`; the launcher `dv-router` keeps its pid; the count of children per name is the same; no `dv-*` process outside the launcher's children; NO process in state Z (the `zombie=` lines of the same `list`) |
 | RESTART1-b | three restarts in a row | the same checks after each, each ready within the budget: a listener or lock of the old incarnation that was not released would fail the next start |
 | RESTART1-c | the node serves | a probe over on module Q (D-STAR) is relayed within 90 s and a long over in full |
 
@@ -37,15 +37,18 @@ time (the restarts reset every hub counter and every session). No `--capture`.
 
 ## GAPs
 
-* **Zombies and reaping are not visible.** `proc-stat xlxd-sut list` skips state `Z` (`scripts/lib/procstat.sh`), so a child that was stopped but not reaped cannot be seen; the cases show only that the
-  old pids are gone, which an uncollected zombie would also satisfy if it were skipped. A list that includes zombies (state letter in the line, a new word `list-all`) would let RESTART1b be judged.
-* **Inherited children** (orphans adopted by PID 1 collected after the exec) cannot be produced from outside: there is no way to leave a child behind on purpose.
+* **No per-pid "reaped" counter or log line exists** (answer-342; not a product gap): a completed restart (`started_ms` advanced, same launcher pid) proves that every child was reaped, because the
+  launcher needs a `ChildReaped` event per pid before the re-exec. The cases add a state sweep: `proc-stat xlxd-sut list` now prints `zombie=<pid> <ppid> <comm>` for every process in state Z
+  (`scripts/lib/procstat.sh`, `dvtest.control.parse_zombie_list`, `RigControl.proc_snapshot`; the `proc=` lines and `parse_proc_list` are unchanged), and RESTART1-a / b fail on any. A zombie that is
+  reaped between the exit and the sweep is not seen, which is the intended state.
+* **Inherited children** (orphans collected after the exec) cannot be produced from outside, and in the rig they are not the launcher's to collect: `init: true` makes docker-init (tini) PID 1 and the
+  launcher runs below it, so adopted orphans go to tini. The bare image (launcher = PID 1) is not what the rig runs.
 * **The refusal paths** (router close error, release-check error, collection timeout: log `node restart refused: not re-executing`, exit 1) need a fault hook and are not reachable. The SUT log
   is read only after the run, so the host could scan for `node restart refused` (none expected); `python3 -m dvtest.logscan` style step not written.
 * **A stop signal during the restart** (cancels it) needs a signal to the launcher; the control channel never signals `dv-router`.
+* The cases assert nothing about PID 1: only that the launcher pid is unchanged across the restart, which holds with or without an init.
 * The 10 s SDK close timeout and the 23 s shutdown budget are upper bounds; the cases only require the node ready within 120 s.
 
 ## Questions for the DV-Router team
 
-1. Is there a supported way to see reaped versus pending children from outside (a counter, a log line per reaped pid, a status field)?
-2. Is the launcher pid the container's PID 1 in the image under test (the docs say the exec keeps it, including PID 1)? The case only requires that the pid does not change.
+None open (answer-342 Q3 and Q4: no reaped counter exists and a completed restart implies it; PID 1 is tini in the rig compose).

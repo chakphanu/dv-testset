@@ -5,7 +5,7 @@ new incarnation therefore comes up at the first attempt with new children only. 
 docs/restart1-cases.md. Pure judgements: dvtest/restart1.py. Switch DVT_RESTART1=on. NOT RUN on a rig: written against the sources of bc9af2b1.
 
   RESTART1-a  one restart: 202, /ready goes down and comes back, the admin session is lost (fresh login), launcher.started_ms advances, node_ready, every child
-              has a NEW pid, no process of the old incarnation is alive, the launcher pid is unchanged (exec), the child set is the same, no unparented dv-* process
+              has a NEW pid, no process of the old incarnation is alive, the launcher pid is unchanged (exec), the child set is the same, no unparented dv-* process, NO process in state Z (the state sweep of `proc-stat xlxd-sut list`)
   RESTART1-b  three restarts one after the other, each as clean as the first and each ready within the budget (a bind or lock failure would show here, once the
               listener of the old incarnation was not released)
   RESTART1-c  after the restarts a protocol over is relayed in full (module Q, D-STAR): the node is not only "ready" but serves
@@ -48,8 +48,8 @@ def _gate(target, rig_control):
 
 
 def _list_text(rig_control):
-    """The parsed [(pid, ppid, comm)] list of the container: RigControl.proc_list() already parses (dvtest/control.py)."""
-    return rig_control.proc_list(SERVICE)
+    """The parsed [(pid, ppid, comm)] list of the live processes of the container (dvtest/control.py)."""
+    return rig_control.proc_snapshot(SERVICE)[0]
 
 
 def fresh_admin(admin_session, old):
@@ -108,8 +108,8 @@ def one_restart(case, target, admin_session, rig_control, admin):
             break
         time.sleep(1.0)
     assert view is not None, "%s: no admin status with a launcher block within %.0f s of ready (last error %r)" % (case, STATUS_BUDGET_S, last)
-    procs_after = _list_text(rig_control)
-    problems = restart1.restart_problems(before, view, procs_before, procs_after)
+    procs_after, zombies_after = rig_control.proc_snapshot(SERVICE)
+    problems = restart1.restart_problems(before, view, procs_before, procs_after, zombies_after)
     note(target, case, "RECORD", "restart-node HTTP %s; ready again after %.1f s (down seen %s, %d polls); started_ms %s -> %s, inc %s -> %s; %d children; launcher pid %s" % (
         status, ready["seconds"], ready["down_seen"], ready["polls"], before["started_ms"], view["started_ms"], before["inc"], view["inc"], len(view["children"]),
         restart1.launcher_pid(procs_after)))
@@ -125,7 +125,7 @@ def admin(admin_session):
 def test_restart1_a_one_node_restart_is_clean(rig, target, rig_control, admin_session, admin):
     case = "RESTART1-a"
     _client, problems = one_restart(case, target, admin_session, rig_control, admin)
-    note(target, case, "RECORD", "zombies are not visible (`proc-stat list` skips state Z): see docs/restart1-cases.md GAP")
+    note(target, case, "RECORD", "state Z sweep (`zombie=` lines of `proc-stat xlxd-sut list`) is part of the problems above")
     assert not problems, "%s: %s" % (case, "; ".join(problems))
 
 

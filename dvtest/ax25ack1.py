@@ -121,3 +121,26 @@ def rebase_problems(status_code, body):
     if not isinstance(seq, int) or isinstance(seq, bool) or seq < 1:
         problems.append("`history_seq` is %r, want an integer >= 1" % (seq,))
     return problems
+
+
+def applied_problems(status_code, body):
+    """Problems of the reply to an Off request on a VALID file (answer-342): 200, mode apply, `rebased` false and an integer `history_seq` (the replaced file's history entry,
+    present even when nothing was rebased)."""
+    if status_code != 200:
+        return ["HTTP %s, want 200" % status_code]
+    problems = []
+    if not isinstance(body, dict) or body.get("rebased") is not False:
+        problems.append("`rebased` is %r, want false on a valid file" % (body.get("rebased") if isinstance(body, dict) else None,))
+    seq = body.get("history_seq") if isinstance(body, dict) else None
+    if not isinstance(seq, int) or isinstance(seq, bool) or seq < 1:
+        problems.append("`history_seq` is %r, want an integer >= 1 (also when rebased is false)" % (seq,))
+    return problems
+
+
+def noop_problems(status_code, body):
+    """Problems of a REPEATED Off (answer-342): 200 {mode, etag, changed: [], noop: true}, no rebased, no history_seq, and no restart (the caller checks that)."""
+    if status_code != 200:
+        return ["HTTP %s, want 200" % status_code]
+    if not isinstance(body, dict) or body.get("noop") is not True or body.get("changed") not in ([], None):
+        return ["a repeated Off answered %r, want noop true with changed []" % (body,)]
+    return []

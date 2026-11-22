@@ -65,11 +65,14 @@ Estimated time: about 1.5 minutes plus the build of `dvt-mrefd:local` the first 
 
 ## GAPs
 
-* **DV-Router linked to the REAL mrefd.** The rig has no such shape: the mrefd service peers with the tester (`M17-DVT` / `M17-DVU` at `.30` / `.32`), the control channel cannot stop or start `mrefd` (the
-  allow-list is the transcoders, xlxd, allstar and the asl hosts), and `DVT_REF_KIND=mrefd` is refused with `DVT_SUT_PROFILE=dvrouter`. The three start orders with the real daemon need: (1) a snippet with
-  a third `[[edges.m17.peers]]` row `host = "<NET>.80"` (the token `<NET>` exists), `callsign = "M17-REF"`; (2) `rig/mrefd-entry.sh` writing the SUT (`<net>.11:17000`, designation `M17-DVR`) into its
-  interlink file; (3) `stop|start|restart|kill mrefd` in the control channel of `scripts/run.sh`. Not done: it changes the run script and the mrefd entry and cannot be tried offline.
-  Whether mrefd matches an interlink peer by the callsign in the file or only by IP is unknown to us (m17.md: "mrefd keys peers by IP only").
+* **DV-Router linked to the REAL mrefd: possible, but needs rig changes (not done, cannot be tried offline).** mrefd matches an interlink peer by DESIGNATION at the handshake (answer-342 Q1):
+  the callsign of the CONN / ACKN must equal an entry of its interlink file exactly (upper case), and for a CONN the module string must equal the file's, in the same order; only AFTER the link does it
+  look the peer up by IP (port ignored) for PING, DISC and media; a second peer with the same callsign is refused. So `compat-mrefd.md` "IP only" is true after the link only. What is missing:
+  (1) `rig/mrefd-entry.sh` writes only the lines `M17-DVT` / `M17-DVU` for the tester; it needs a line `M17-DVR <SUT ip> 17000 <modules>` (the SUT's `edges.m17.designation`; the SUT's port is its shared
+  listener, 17000); (2) a snippet adding a `[[edges.m17.peers]]` row `callsign = "M17-REF"` (mrefd's own designation), `host = "<NET>.80"`, `port = 17000`, the same module string (the token `<NET>` exists);
+  (3) `stop|start|restart|kill mrefd` in the control channel of `scripts/run.sh` (the allow-list is the transcoders, xlxd, allstar and the asl hosts) for the three start orders and the restart;
+  (4) `DVT_REF_KIND=mrefd` is refused with `DVT_SUT_PROFILE=dvrouter`, so the run is `--profile mrefd` alone with the service named by the case. With those, the orders A, B and C and the peer restart
+  of this document can be repeated against the real daemon, whose link check is 10 s (`M17_RECONNECT_PERIOD`). Until then the tester plays mrefd's wire behaviour.
 * The M17 edge cannot be restarted from outside except through the admin API (`kill-proc` has no `dv-edge-m17`): order A is made by a `DISC` instead of a start of the edge, so "the edge starts" itself
   (first `CONN` after a start, name resolution) is not covered.
 * The per-row state `last local CONN` is internal; the 3 s rule is judged from the `CONN` times the peer sees, with a 0.15 s allowance. A fault that sent two `CONN` 2.9 s apart would pass.
@@ -77,6 +80,5 @@ Estimated time: about 1.5 minutes plus the build of `dvt-mrefd:local` the first 
 
 ## Questions for the DV-Router team
 
-1. Does mrefd match an interlink peer by the designation of the interlink file entry or by IP only? With IP only, the SUT could be added to mrefd's interlink file under any name.
-2. Is the `PING` interval of a linked row 3 s (`PING_INTERVAL` of our peer model) and what does the row do after 10 s without `PONG` or `PING`? M17RL1-e-crash relies on "linked rows answer an
-   ACKN alone" for the duration of the case only.
+Answered (answer-342 Q1): mrefd matches by designation at the handshake (exact callsign and module string), by IP only after the link. Still open: nothing for these cases. The case that a real mrefd
+shows the SUT's `PING` interval and its `PONG` behaviour (the model peer never answers a `PING`) is read from m17.md only.

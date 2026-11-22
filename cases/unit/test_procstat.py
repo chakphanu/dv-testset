@@ -185,8 +185,33 @@ def test_helper_script_list_mode_names_every_process_but_itself():
     rows = control.parse_proc_list(run.stdout)
     pids = {pid for pid, _ppid, _comm in rows}
     assert os.getpid() in pids                                    # this pytest process is listed; the helper itself is not
-    assert all(line.startswith("proc=") for line in run.stdout.splitlines())
-    assert len(rows) == len(run.stdout.splitlines())
+    assert all(line.startswith(("proc=", "zombie=")) for line in run.stdout.splitlines())
+    assert len(rows) + len(control.parse_zombie_list(run.stdout)) == len(run.stdout.splitlines())
+
+
+def test_helper_script_list_mode_reports_a_zombie_apart():
+    """RESTART1b: a child that exited and was not collected shows as `zombie=` (never as `proc=`), so parse_proc_list stays as it was."""
+    if not Path("/proc/self/stat").exists() or not shutil.which("bash"):
+        pytest.skip("/proc or bash missing")
+    script = bash('printf "%s" "$DVT_PROCSTAT_SCRIPT"').stdout
+    child = subprocess.Popen(["true"])
+    try:
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            run = subprocess.run([sys.executable, "-c", script, "list"], capture_output=True, text=True, timeout=30)
+            zombies = control.parse_zombie_list(run.stdout)
+            if any(pid == child.pid for pid, _pp, _c in zombies):
+                break
+            time.sleep(0.05)
+        assert (child.pid, os.getpid(), "true") in control.parse_zombie_list(run.stdout)
+        assert child.pid not in {pid for pid, _pp, _c in control.parse_proc_list(run.stdout)}
+    finally:
+        child.wait()
+
+
+def test_parse_zombie_list_ignores_noise():
+    text = "proc=1 0 dv-router\nzombie=7 1 dv-edge-xlx\nzombie=x 1 y\nzombie=3 1\nnoise\n"
+    assert control.parse_zombie_list(text) == [(7, 1, "dv-edge-xlx")]
 
 
 def test_parse_proc_list_ignores_noise():

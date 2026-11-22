@@ -66,3 +66,10 @@ def test_rebase_reply():
     assert a.rebase_problems(200, {"rebased": True, "history_seq": 4}) == []
     assert len(a.rebase_problems(200, {"rebased": False})) == 2
     assert "HTTP 422" in a.rebase_problems(422, {})[0]
+
+
+def test_applied_and_noop_replies():
+    assert a.applied_problems(200, {"mode": "apply", "rebased": False, "history_seq": 3}) == []
+    assert len(a.applied_problems(200, {"rebased": True})) == 2
+    assert a.noop_problems(200, {"mode": "apply", "etag": "x", "changed": [], "noop": True}) == []
+    assert a.noop_problems(200, {"changed": ["tx"]}) != [] and a.noop_problems(409, {}) == ["HTTP 409, want 200"]
