@@ -167,6 +167,8 @@ def test_the_committed_vectors_file_when_present_agrees_with_the_model():
     loaded = digi1_oracle.load(root=str(ROOT))
     if not loaded:
         pytest.skip("vectors/direwolf/digi_oracle.json is not committed yet (docs/digi1-cases.md GAP 1)")
+    if not digi1_oracle.usable(loaded):
+        pytest.skip("the committed vectors show Dire Wolf repeating nothing at all (the 4x relay run): regenerate them with the real time relay")
     for g in list(digi1.GOLDENS) + list(digi1.extra_vectors()):
         problems, _notes = digi1_oracle.oracle_problems(g, loaded[g.id])
         assert problems == [], problems
@@ -185,3 +187,20 @@ def test_the_digi_job_runs_from_the_repository_copy_of_the_driver_not_the_baked_
 def test_run_sh_does_not_add_the_dp15_dw_snippet_next_to_digi1_dw():
     text = (ROOT / "scripts" / "run.sh").read_text()
     assert "*:rig/config/dv-router/digi1-dw.toml:*) ;;" in text
+
+
+def test_a_vectors_file_in_which_dire_wolf_repeated_nothing_is_not_usable():
+    _steps, silent = build_doc(lambda s: [])
+    assert not digi1_oracle.usable({r["case"]: r for r in silent["records"]}) and not digi1_oracle.usable({})
+    _steps, good = build_doc(model_answer)
+    assert digi1_oracle.usable({r["case"]: r for r in good["records"]})
+
+
+def test_the_digi_job_and_the_dw_services_relay_in_real_time_for_the_digipeater():
+    text = (ROOT / "rig" / "direwolf-entry.py").read_text()
+    assert 'speed = float(job.get("speed", 1.0))' in text and 'env.get("DW_RELAY_SPEED", RELAY_SPEED)' in text
+    compose = (ROOT / "rig" / "compose.yml").read_text()
+    assert compose.count("DW_RELAY_SPEED: ${DVT_DW_RELAY_SPEED:-4}") == 2          # dw-a and dw-b, default unchanged for the DP15 cases
+    run = (ROOT / "scripts" / "run.sh").read_text()
+    assert 'export DVT_DW_RELAY_SPEED="${DVT_DW_RELAY_SPEED:-1}"' in run
+    assert digi1_oracle.log_text({"log_a": "x\u00e9", "log_b": "y"}).isascii()

@@ -8,8 +8,9 @@
 # expires (dropped_ttl), which is correct and is what DIGI-R3 measures on digi1.toml; here it would only make a vector look wrong.
 #
 #   tx_budget = { duty_pct = 20 }   the port holds 120 s per 600 s (design ceiling 25 %), the digi class 4/12 of it = 40 s, a source 25 % = 30 s
-#   tx_per_min = 30, tx_burst = 10  the packet bucket never waits in these cases
-#   digi = { enable = true }        dedupe_secs 30, ttl_secs 5, share 4 (all defaults)
+#   tx_per_min = 30, tx_burst = 10  the hard total; with digi on the digi bucket (default 2 per minute, burst 1: one copy, then one per 30 s) is the limit for
+#                                   repeats, so the functional cases give digi 24 / 8 (DV-Router bc9af2b1, data.md 8.3 DIGI1b)
+#   digi = { enable = true, tx_per_min = 24, tx_burst = 8 }   DIGI1b: the digi packet allowance inside the total (own frames keep 6 / 2); dedupe_secs 30, ttl_secs 5, share 4
 #
 # The tester plays the TNCs: <TESTER_IP>:8101 is rf-a (digipeating, TX), :8102 is rf-b (receive only, no digi: the "same port only" control).
 [edges.ax25]
@@ -31,7 +32,7 @@ class = "afsk1200-shared"
 tx_budget = { duty_pct = 20 }
 tx_per_min = 30
 tx_burst = 10
-digi = { enable = true }
+digi = { enable = true, tx_per_min = 24, tx_burst = 8 }
 reconnect = { min_secs = 1, max_secs = 5 }
 
 [[edges.ax25.port]]

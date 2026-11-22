@@ -44,10 +44,10 @@ def test_every_mutation_applies_and_renders_valid_toml_with_the_digi_row(case):
         assert ax != base, "the mutation of %s changed nothing" % case.id
 
 
-def test_the_baseline_is_the_roomy_shape_that_the_rig_runs():
+def test_the_baseline_is_the_roomy_snippet_with_the_digi_row_at_its_defaults():
     row = port(CASES[0])["port"][0]
     assert (row["tx_per_min"], row["tx_burst"], row["tx_budget"], row["digi"], row["tx"]) == (30, 10, {"duty_pct": 20}, {"enable": True}, True)
-    assert digi1.read_shape({"edges": {"ax25": port(CASES[0])}}).name == "roomy"
+    assert digi1.read_shape({"edges": {"ax25": port(CASES[0])}}).name == "other"      # digi at its defaults 2 / 1: the cfg table's base, not the rig's shape
 
 
 def test_the_rate_cases_move_exactly_the_floor_keys():
@@ -115,3 +115,9 @@ def test_the_ack1_expectations_flip_the_old_floor_cases(monkeypatch):
     assert digi1cfg.config_problems(by["digi-burst-2"], verdict, 0) != []        # without the switch a silent load is a failure
     monkeypatch.setenv("DVT_AX25ACK1", "on")
     assert digi1cfg.config_problems(by["digi-burst-2"], verdict, 0) == []        # with it the load is the expected result
+
+
+def test_the_refusal_table_is_written_against_the_default_digi_row_not_the_rig_allowance():
+    assert digi1cfg.ROOMY_DIGI in read("digi1-roomy.toml") and digi1cfg.ROOMY_DIGI not in digi1cfg.base_text(read)
+    assert "\ndigi = { enable = true }\n" in digi1cfg.base_text(read)
+    assert digi1cfg.ROOMY_DIGI in read("digi1-dw.toml")

@@ -66,6 +66,9 @@ FENCE_APPEAR_S = 25.0               # after a restart: how long to wait for the 
 OWN_FINDING_S = 90.0                # DV-Router's measured worst wait of an own frame at 10 / 3 (data.md 8.3); above it is a finding, not a failure
 OWN_WAIT_S = 125.0                  # the message class TTL is 120 s
 ORACLE = digi1_oracle.load(root=str(ROOT))      # {} until `python3 -m dvtest.oracle_direwolf digi` has run and the file is committed
+ORACLE_BROKEN = bool(ORACLE) and not digi1_oracle.usable(ORACLE)      # a vectors file in which Dire Wolf repeated nothing at all: not a verdict on the model
+if ORACLE_BROKEN:
+    ORACLE = {}
 SIX_KINDS = ("ident", "ack", "digi", "message", "position", "beacon")
 
 Counts = namedtuple("Counts", "digi tx rejected fenced queue kinds modem_tx")
@@ -137,8 +140,8 @@ def digi(request, target, hub, rf):
     base = settled(hub)
     ctx = types.SimpleNamespace(tnc=rf.a, other=rf.b, shape=shape, table=digi1.DedupeTable(), expected=digi1.Expected(), base=base,
                                 t0=time.monotonic(), rf=rf)
-    note(target, "digi", "RECORD", "shape %s: rf-a tx_per_min %d burst %d, digi %s, tx_budget %s, digi class bucket %.1f s; counters at the start: digi %s, tx %s, queue %s, kinds %s" % (
-        shape.name, shape.tx_per_min, shape.tx_burst, shape.digi, shape.budget, shape.class_capacity_s,
+    note(target, "digi", "RECORD", "shape %s: rf-a tx_per_min %d burst %d (digi packets %d / %d), digi %s, tx_budget %s, digi class bucket %.1f s; counters at the start: digi %s, tx %s, queue %s, kinds %s" % (
+        shape.name, shape.tx_per_min, shape.tx_burst, shape.digi_per_min, shape.digi_burst, shape.digi, shape.budget, shape.class_capacity_s,
         {r: n for r, n in base.digi.items() if n}, base.tx, base.queue, base.kinds))
     yield ctx
 
@@ -146,7 +149,7 @@ def digi(request, target, hub, rf):
 def need(digi, *shapes):
     if digi.shape.name not in shapes:
         pytest.skip("this case needs the %s shape of the digi snippet (rendered: %s): %s" % (
-            " or ".join(shapes), digi.shape.name, {"floor": "digi1.toml (rate floor 10 / 3, class defaults)", "roomy": "digi1-roomy.toml (20 % duty, 30 / 10)"}[shapes[0]]))
+            " or ".join(shapes), digi.shape.name, {"floor": "digi1.toml (rate floor 10 / 3, class defaults)", "roomy": "digi1-roomy.toml (20 % duty, 30 / 10, digi packets 24 / 8)"}[shapes[0]]))
 
 
 def send(tnc, frame):
@@ -221,7 +224,9 @@ def test_digi1_r1_path_vector(rig, target, hub, digi, g):
         assert ax25.parse_frame(got[0])["digis"][g.replaced]["bit7"] and len(ax25.hops(got[0])) == len(ax25.hops(frame))
     rec = ORACLE.get(g.id)
     if rec is None:
-        note(target, case, "RECORD", "no Dire Wolf vector for %s (vectors/direwolf/digi_oracle.json absent): the answer is judged against the data.md 8.3 table only" % g.id)
+        note(target, case, "RECORD", "no usable Dire Wolf vector for %s (%s): the answer is judged against the data.md 8.3 table only" % (
+            g.id, "the committed vectors show Dire Wolf repeating nothing at all: a broken oracle run, regenerate with the real time relay" if ORACLE_BROKEN
+            else "vectors/direwolf/digi_oracle.json absent"))
         return
     problems, notes = digi1_oracle.oracle_problems(g, rec)
     for n in notes:
@@ -400,7 +405,8 @@ def test_digi1_r3_flood_obeys_the_quotas_and_own_frames_survive(request, rig, ta
     note(target, case, "RECORD", "flood: %d frames in %.0f s from %d sources; the edge wrote %d copies; own message frame %s after %s s" % (
         len(injected), t_end - t_start, len(digi1.flood_sources()), len(copies), "arrived" if own else "NEVER arrived",
         None if own is None else "%.1f" % (own[0] - posted[0])))
-    problems = digi1.flood_problems(injected, copies, budget=digi.shape.budget, ttl_s=digi1.TTL_S)
+    problems = digi1.flood_problems(injected, copies, budget=digi.shape.budget, ttl_s=digi1.TTL_S,
+                                    digi_packets=(digi.shape.digi_per_min, digi.shape.digi_burst))
     after, ok = wait_counts(hub, lambda c: c.digi.get("repeat", 0) - before.digi.get("repeat", 0) >= len(plan) and c.queue in (0, None) and
                             terminal(c.tx) - terminal(before.tx) + (c.rejected - before.rejected) >= len(plan))
     sample_after = metrics.parse(hub.text())

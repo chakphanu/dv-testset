@@ -1158,6 +1158,7 @@ services:
     environment:
       DW_NAME: a
       DW_MYCALL: N0TEST-8
+      DW_RELAY_SPEED: ${DVT_DW_RELAY_SPEED:-4}      # 1 (real time) for cases/test_digi1_dw.py: run.sh sets it when digi1-dw.toml is listed
       DW_KISS_PORT: "8001"
       DW_AUDIO_PORT: "7355"
       DW_PEER: ${DVT_NET:-172.30.0}.49:7355
@@ -1174,6 +1175,7 @@ services:
     environment:
       DW_NAME: b
       DW_MYCALL: N0TEST-9
+      DW_RELAY_SPEED: ${DVT_DW_RELAY_SPEED:-4}
       DW_KISS_PORT: "8001"
       DW_AUDIO_PORT: "7355"
       DW_PEER: ${DVT_NET:-172.30.0}.48:7355

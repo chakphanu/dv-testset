@@ -294,3 +294,21 @@ def test_read_shape_reports_what_is_missing():
 def test_rejected_by_result_reads_the_edge_wide_family():
     s = [sample("dv_edge_rf_rejected_total", 1, result="expired"), sample("dv_edge_rf_rejected_total", 2, result="invalid", proc="ax25")]
     assert digi1.rejected_by_result(s) == {"expired": 1, "invalid": 2} and digi1.rejected_by_result([]) == {}
+
+
+def test_flood_flags_more_copies_than_the_digi_packet_bucket_allows():
+    plan = injected(digi1.flood_plan("1"))
+    copies = [(t + 0.5 + i * 0.01, ax25.replace_hop(frame, 0, digi1.OURS)) for i, (t, _s, _i, frame) in enumerate(plan[:6])]
+    assert digi1.flood_problems(plan, copies) == []                                  # airtime alone allows 6 copies
+    assert any("digi packet bucket" in p for p in digi1.flood_problems(plan, copies, digi_packets=(2, 1)))      # burst 1 + 2 per minute in 5 s: 1
+    assert digi1.flood_problems(plan, copies[:1], digi_packets=(2, 1)) == []
+
+
+def test_roomy_shape_needs_the_digi_packet_allowance_and_floor_does_not():
+    doc = rendered("digi1-roomy.toml")
+    shape = digi1.read_shape(doc)
+    assert (shape.digi_per_min, shape.digi_burst, shape.name) == (24, 8, "roomy")
+    doc["edges"]["ax25"]["port"][0]["digi"] = {"enable": True}
+    assert digi1.read_shape(doc).name == "other"                                     # digi 2 / 1: one copy per 30 s, not the functional shape
+    floor = digi1.read_shape(rendered("digi1.toml"))
+    assert (floor.name, floor.digi_per_min, floor.digi_burst) == ("floor", 2, 1)

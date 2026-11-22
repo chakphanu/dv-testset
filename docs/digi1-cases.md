@@ -175,6 +175,24 @@ vectors from a throw-away container (`oracle_direwolf run`, `docs/direwolf-cases
 | oracle | exit 2, empty stderr | **HARNESS**: `dvt-direwolf:local` has `entry.py` baked in from before the job `digi`, which answered `unknown mode` on stdout with exit 2. The oracle now bind-mounts the repository's `rig/direwolf-entry.py` read-only over it (no rebuild); an error now prints stdout too |
 | cfgload | 20 passed | good |
 
+## Second rig run (wip-f1f3777, DV-Router bc9af2b1, testset 30c7652) and what was fixed
+
+The image has DIGI1b (`data.md` 8.3: a digipeating physical has its own packet bucket `digi.tx_per_min` / `digi.tx_burst`, default 2 / 1, inside the total; own frames
+keep the rest; the rule is total strictly above the digi allowance, the old 10 / 3 floor is gone) and TXOFF2 / AX25ACK1 (a digi port with TX off or without the
+acknowledgement is dormant, valid).
+
+| Run | Result | Triage |
+|-----|--------|--------|
+| A roomy | 11 failed, 19 passed: G2, G3, G8, G12, X11 wrote nothing, K0 and R4 the same; G1, G7, X9 and the timeline failed against the oracle | **HARNESS**. (1) `digi1-roomy.toml` left the digi bucket at its default 2 / 1: one copy, then one per 30 s, so every later repeating vector found no token. The roomy and Dire Wolf snippets now carry `digi = { enable = true, tx_per_min = 24, tx_burst = 8 }` (own reserve 6 / 2); the shape check requires it, and R3's flood now also asserts the copies stay within `digi.tx_burst + digi.tx_per_min * t / 60`. The cfgload table is rendered from the snippet with the digi row put back at its defaults (`digi1cfg.base_text`). (2) The first oracle vectors show Dire Wolf repeating NOTHING (see oracle): `digi_oracle.usable` now recognises that and the cases record "no usable Dire Wolf vector" instead of asserting against it |
+| B floor | 3 passed, 28 skipped | R3 passes. From the log: 60 eligible frames, `rf_tx{kind=digi}` sent 3 (burst 1 + 2 per minute: the DIGI1b bucket), the own message frame was written (modem tx 4 = 3 digi copies + the own frame, copies at the TNC 3 of 4 frames written) and nothing of the own classes was dropped: **TXCNT1c fixed in the product**, the earlier loss is gone |
+| C Dire Wolf | every repeating vector: dw-b handed out nothing | **HARNESS**. The edge repeated (`dv_edge_digi_total{repeat}` 4, `rf_tx{kind=digi,sent}` 4) and dw-a transmitted each repeat (`[0H] N0TEST-9>APRS,N0TEST-10*,...` in `dw-a.log`), but dw-b never logged hearing one: the loop relays audio at 4 times real time, the repeat comes back within a second, and a Dire Wolf is **deaf while its own transmission would still be on the air** (docs/direwolf-cases.md, "Modem loop" trap). Not load. The standing DP15 6l case is not affected: it pauses 8 s between a frame and a frame in the other direction and nothing answers within a second. Fix: `DW_RELAY_SPEED` for the loop services (compose passes `DVT_DW_RELAY_SPEED`, default 4), and `scripts/run.sh` exports `DVT_DW_RELAY_SPEED=1` (real time) when `digi1-dw.toml` is listed |
+| oracle | repeated nothing for any vector, `b_received` true | **HARNESS**, same cause: node A (the injector) was deaf when B's repeat arrived at 4 times real time. The job `digi` now relays in real time (`speed` 1.0, job field) and the result keeps the head and tail of both Dire Wolf logs; `python3 -m dvtest.oracle_direwolf digi` writes them next to the vectors as `digi_oracle.log`, and exits 1 with "UNUSABLE" when Dire Wolf repeated nothing at all. The schedule is still 257 s of steps plus the longer real time audio (about 6 minutes) |
+| cfgload | 20 passed (cfg cases adapted by 30c7652 for DVT_AX25ACK1=on) | unchanged |
+
+Expected verdict at the next slot: A roomy all green except the Dire Wolf comparisons, which are recorded only until usable vectors are committed; B 3 passed (R3, counters, R5); C six vectors pass
+(G1, G2, G7, G12 repeat; G4, G10 silent); oracle: G1, G2, G3, G7, G8, G12, X9, X11 repeat in Dire Wolf, the timeline is repeat, silent, silent, repeat, silent, G9 to G11 and X6 to X8 are the documented deviations.
+If the oracle is still silent, `digi_oracle.log` (B's log: does it log `[0H]`, is `DIGIPEAT` accepted) is the evidence.
+
 ## Targeted unit tests run for this change
 
 `python3 -m pytest -m unit cases/unit/test_ax25_digi.py cases/unit/test_digi1_lib.py cases/unit/test_digi1_oracle.py cases/unit/test_digi1_cfg.py cases/unit/test_digi1_cases.py cases/unit/test_tester_env.py

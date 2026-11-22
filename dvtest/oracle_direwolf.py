@@ -410,6 +410,9 @@ def digi_main(out=None):
         return 1
     doc = digi1_oracle.file_doc(result, steps, version)
     digi1_oracle.write(doc, out or digi1_oracle.PATH)
+    log_path = (out or digi1_oracle.PATH)[:-5] + ".log" if (out or digi1_oracle.PATH).endswith(".json") else (out or digi1_oracle.PATH) + ".log"
+    with open(log_path, "w", encoding="ascii") as fh:                 # the logs of both nodes: the evidence when B repeats nothing
+        fh.write(digi1_oracle.log_text(result))
     by_case = {r["case"]: r for r in doc["records"]}
     bad = 0
     for step in steps:
@@ -421,6 +424,9 @@ def digi_main(out=None):
         print("%-4s %-13s %s" % (g.id, verdict, text))
         bad += len(problems)
     print("timeline (0 10 29 31 45 s): %s" % digi1_oracle.timeline_outcomes(by_case))
+    if not digi1_oracle.usable(by_case):
+        print("digi oracle UNUSABLE: Dire Wolf repeated nothing at all; read %s (relay speed %s)" % (log_path, result.get("speed")))
+        return 1
     print("digi oracle %s" % ("OK" if not bad else "DISAGREES with the model on %d vector(s)" % bad))
     return 1 if bad else 0
 

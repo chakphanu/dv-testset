@@ -432,7 +432,7 @@ def port_capacity_s(budget=None):
     return b["duty_pct"] / 100.0 * b["window_secs"]
 
 
-def flood_problems(plan, written, budget=None, ttl_s=TTL_S, slack_s=1.0):
+def flood_problems(plan, written, budget=None, ttl_s=TTL_S, slack_s=1.0, digi_packets=None):
     """Problems ([] = fine) of what a digipeating port wrote during a flood. `plan` is flood_plan() with the injection times replaced by
     absolute monotonic times: [(t, source, info, frame)]; `written` is [(t, frame)] the edge wrote to the TNC (the repeats). Checks, each
     from data.md 8.3 / 10.8:
@@ -443,6 +443,8 @@ def flood_problems(plan, written, budget=None, ttl_s=TTL_S, slack_s=1.0):
       * minimum gap: two writes at least min_gap_ms apart (less 0.15 s of timing noise);
       * airtime: the sum of the charged airtime of all copies is within the digi class bucket (it starts full and refills with the run
         time) plus one frame, and the airtime of one source within its quota (per_source_pct of the port capacity) plus one frame;
+      * DIGI1b: with `digi_packets` = (digi.tx_per_min, digi.tx_burst) the number of copies is at most burst + rate * run time / 60 (token
+        bucket envelope, integer part), whatever the airtime allows;
       * at most `digi share` copies are queued at any moment: not checkable from the outside, see docs."""
     b = dict(AFSK_DEFAULTS)
     b.update({k: v for k, v in (budget or {}).items() if k in b})
@@ -485,6 +487,11 @@ def flood_problems(plan, written, budget=None, ttl_s=TTL_S, slack_s=1.0):
         longest_ns = max(longest_ns, ns)
         airtime_by_source[src] = airtime_by_source.get(src, 0) + ns
     run_s = max(0.0, end_t - first_t)
+    if digi_packets is not None:
+        rate, burst = digi_packets
+        allowed = int(burst + rate * (run_s + 1.0) / 60.0)
+        if len(written) > allowed:
+            problems.append("%d copies in %.0f s, the digi packet bucket (digi.tx_per_min %d, digi.tx_burst %d) allows at most %d" % (len(written), run_s, rate, burst, allowed))
     cap = class_capacity_s(budget)
     refill = cap / b["window_secs"]
     class_bound = (cap + refill * run_s) * 1e9 + longest_ns
@@ -505,12 +512,12 @@ def flood_problems(plan, written, budget=None, ttl_s=TTL_S, slack_s=1.0):
 
 # ---------------------------------------------------------------- the rendered config
 
-Shape = namedtuple("Shape", "name port row digi budget tx_per_min tx_burst class_capacity_s problems")
+Shape = namedtuple("Shape", "name port row digi budget tx_per_min tx_burst class_capacity_s problems digi_per_min digi_burst", defaults=(2, 1))
 
 
 def read_shape(doc, port="rf-a"):
     """The digi shape of the rendered dv-router.toml (a dict) for AX.25 port `port`: name "floor" (tx_budget {} and 10 / 3: the rate floor
-    and class defaults), "roomy" (tx_per_min >= 30 and a class bucket of at least 25 s: the functional cases), "other", or "none" (no
+    and class defaults), "roomy" (tx_per_min >= 30, a class bucket of at least 25 s and a digi packet allowance of at least 20 / 8: the functional cases), "other", or "none" (no
     enabled digi on that port). `problems` lists what a case needs and the config lacks (effective TX)."""
     ax = ((doc or {}).get("edges") or {}).get("ax25")
     problems = []
@@ -526,12 +533,13 @@ def read_shape(doc, port="rf-a"):
         problems.append("port %s has no effective TX (tx_enable %r, tx %r)" % (port, ax.get("tx_enable"), row.get("tx")))
     budget = row.get("tx_budget") or {}
     per_min, burst = int(row.get("tx_per_min", 2)), int(row.get("tx_burst", 1))
+    d_per_min, d_burst = int(digi.get("tx_per_min", 2)), int(digi.get("tx_burst", 1))          # DIGI1b (bc9af2b1): the digi packet bucket inside the total
     cap = 0.0
     if row.get("class", "afsk1200-shared") == "afsk1200-shared":
         cap = class_capacity_s(budget, digi.get("share"))
     name = "other"
     if not budget and per_min == 10 and burst == 3:
         name = "floor"
-    elif per_min >= 30 and cap >= 25.0:
+    elif per_min >= 30 and cap >= 25.0 and d_per_min >= 20 and d_burst >= 8:
         name = "roomy"
-    return Shape(name, port, row, digi, budget, per_min, burst, cap, problems)
+    return Shape(name, port, row, digi, budget, per_min, burst, cap, problems, d_per_min, d_burst)

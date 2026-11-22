@@ -97,10 +97,22 @@ _case("digi-shared-physical", "rf-b on the same physical as the digipeating rf-a
       _plain("\ntx = false\n", '\ntx = false\nphysical = "radio1"\n'), hint=M_SHARED)
 
 
+ROOMY_DIGI = "\ndigi = { enable = true, tx_per_min = 24, tx_burst = 8 }\n"        # the digi packet allowance of the rig snippets (see digi1-roomy.toml)
+
+
+def base_text(read):
+    """digi1-roomy.toml with the digi row at its defaults (digi.tx_per_min 2, digi.tx_burst 1): the rig snippet gives digi 24 / 8 so that the functional
+    cases can repeat more than one frame per 30 s; the refusal table below is written against the defaults."""
+    text = read("digi1-roomy.toml")
+    if text.count(ROOMY_DIGI) != 1:
+        raise ValueError("digi1-roomy.toml has no %r row" % ROOMY_DIGI.strip())
+    return text.replace(ROOMY_DIGI, "\ndigi = { enable = true }\n")
+
+
 def render_extras(case, read):
     """The snippet texts to append after the template for one case, in order (pure; `read(name)` returns the text of a snippet of
-    rig/config/dv-router): data-ident.toml, then digi1-roomy.toml with the mutation of the case."""
-    return [read("data-ident.toml"), case.mutate(read("digi1-roomy.toml"))]
+    rig/config/dv-router): data-ident.toml, then digi1-roomy.toml (digi row at its defaults) with the mutation of the case."""
+    return [read("data-ident.toml"), case.mutate(base_text(read))]
 
 
 # DVT_AX25ACK1=on (DV-Router 345f1ebe TXOFF2 and 7f811f45 DIGI1b; the image of the switch has both):

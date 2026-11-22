@@ -27,7 +27,7 @@ class = "afsk1200-shared"
 tx_budget = { duty_pct = 20 }
 tx_per_min = 30
 tx_burst = 10
-digi = { enable = true }
+digi = { enable = true, tx_per_min = 24, tx_burst = 8 }
 reconnect = { min_secs = 1, max_secs = 5 }
 
 [[edges.ax25.port]]

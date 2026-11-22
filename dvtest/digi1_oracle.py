@@ -92,8 +92,17 @@ def records(result, steps):
 
 
 def file_doc(result, steps, version=""):
-    return {"schema": SCHEMA, "tool": version, "image": "dvt-direwolf:local", "mycall": MYCALL, "config": list(EXTRA),
+    return {"schema": SCHEMA, "tool": version, "image": "dvt-direwolf:local", "mycall": MYCALL, "config": list(EXTRA), "relay_speed": result.get("speed"),
             "records": records(result, steps)}
+
+
+def log_text(result):
+    """The Dire Wolf logs of both nodes (ASCII, non-ASCII escaped) for the sidecar file next to the vectors: what B logged is the evidence when the
+    digipeater is silent."""
+    out = []
+    for key in ("log_a", "log_b"):
+        out.append("==== %s ====\n%s\n" % (key, (result.get(key) or "").encode("ascii", "backslashreplace").decode("ascii")))
+    return "".join(out)
 
 
 def write(doc, path=PATH):
@@ -114,6 +123,15 @@ def load(path=PATH, root=None):
     if doc.get("schema") != SCHEMA:
         return {}
     return {r["case"]: r for r in doc.get("records") or []}
+
+
+def usable(loaded):
+    """False when the vectors show a Dire Wolf digipeater that never repeated anything: not one record of the file has a repeat, although frames that
+    every digipeater repeats (G1, G2) were received by it. That is a broken oracle run (the first run had the repeats arrive while the injecting node
+    was still deaf, relay at 4 times real time), not an oracle that disagrees with the model: the cases then record it and skip the comparison."""
+    if not loaded:
+        return False
+    return any(r.get("dw_heard_hex") for r in loaded.values())
 
 
 def dw_outcome(rec, sent):

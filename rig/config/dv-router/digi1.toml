@@ -7,10 +7,11 @@
 # The tester plays the TNCs (dvtest/kiss_tnc.py): <TESTER_IP>:8101 is rf-a (digipeating, TX), :8102 is rf-b (receive only, no digi). The
 # edge is the kiss-tcp CLIENT of both and reconnects within 1..5 s.
 #
-#   tx_per_min = 10, tx_burst = 3   exactly what the validator demands of a digipeating port (digi.enable is refused below either)
+#   tx_per_min = 10, tx_burst = 3   the hard total; DIGI1b (bc9af2b1) replaced the old floor by 'total strictly above the digi allowance': with the digi
+#                                   defaults (digi.tx_per_min 2, digi.tx_burst 1) own frames keep 8 / 2 and digi gets 2 per minute, burst 1
 #   tx_budget = {}                  the afsk1200-shared class defaults: 5 % duty per 600 s (30 s), 25 % per source, queue 8 + digi share 4 = 12,
 #                                   so the digi class holds 4/12 of 30 s = 10 s of airtime and 4 queued copies; digi TTL 5 s, window 30 s
-#   digi = { enable = true }        dedupe_secs 30, ttl_secs 5, share 4 (all defaults)
+#   digi = { enable = true }        all defaults: digi 2 / 1, dedupe_secs 30, ttl_secs 5, share 4
 #
 # Callsign N0TEST-10 is the station call (the docs say N0CALL-10); alias_calls is empty and no KISS server listener exists, so the own set
 # of the digipeater is only N0TEST-10. The Dire Wolf of the oracle (vectors/direwolf/digi_oracle.json) has MYCALL N0TEST-10 too.

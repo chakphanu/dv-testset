@@ -61,7 +61,8 @@ Modem loop (docs/dp15-cases.md, tier B). Dire Wolf 1.8.1 can READ audio from a s
 ours reads it and sends it, as raw 16 bit mono UDP datagrams, to the peer's `udp:` input. Nothing else
 is needed in the image, no sound card, no privileges. Environment of `entry.py loop`:
   DW_MYCALL (N0TEST-8), DW_KISS_PORT (8001), DW_AUDIO_PORT (7355, udp audio input),
-  DW_PEER ("host:port" of the peer's audio input, required), DW_KISSCOPY ("1" copies a frame
+  DW_PEER ("host:port" of the peer's audio input, required), DW_RELAY_SPEED (4: the multiple of real time at which the transmit audio is relayed;
+  1 for the DIGI1 tier B cases, whose repeat comes back within a second), DW_KISSCOPY ("1" copies a frame
   one KISS client sends to the other KISS clients, as the heard-on-two-ports case needs).
 """
 import json
@@ -738,8 +739,12 @@ def mode_digi(job):
     with the lines of `extra`) on the modem loop; all steps are sent at their `at` second, then `settle_s` seconds more."""
     steps = sorted(job.get("steps") or [], key=lambda s: float(s["at"]))
     settle = float(job.get("settle_s", 10.0))
-    a = LoopNode("a", "N0TEST-8", 8001, 7355, ("127.0.0.1", 7356), workdir=LOOP_DIR)
-    b = LoopNode("b", job.get("mycall", "N0TEST-10"), 8002, 7356, ("127.0.0.1", 7355), workdir=LOOP_DIR, extra=job.get("extra") or [])
+    # REAL TIME relay (speed 1): a node is deaf while its own transmission would still be on the air (docs/direwolf-cases.md), and the
+    # digipeater answers within a second; at 4 times real time the repeat arrived while the injector's nominal transmission was still running
+    # and the first oracle run saw not one repeat. At speed 1 the audio of the repeat starts after the original has ended.
+    speed = float(job.get("speed", 1.0))
+    a = LoopNode("a", "N0TEST-8", 8001, 7355, ("127.0.0.1", 7356), workdir=LOOP_DIR, speed=speed)
+    b = LoopNode("b", job.get("mycall", "N0TEST-10"), 8002, 7356, ("127.0.0.1", 7355), workdir=LOOP_DIR, extra=job.get("extra") or [], speed=speed)
     sent, heard, b_heard = [], [], []
     try:
         a.start()
@@ -780,7 +785,8 @@ def mode_digi(job):
                 pass
             s.close()
         return {"sent": sent, "heard": heard, "b_heard": b_heard, "udp_drops": udp_drops(),
-                "log_a": clean(a.log.since(0))[-3000:], "log_b": clean(b.log.since(0))[-6000:]}
+                "speed": speed, "log_a": clean(a.log.since(0))[:2000] + "\n...\n" + clean(a.log.since(0))[-3000:],
+                "log_b": clean(b.log.since(0))[:2500] + "\n...\n" + clean(b.log.since(0))[-6000:]}
     finally:
         a.stop()
         b.stop()
@@ -801,7 +807,7 @@ def run_loop_service():
     while not stop.is_set():
         node = LoopNode(name, env.get("DW_MYCALL", "N0TEST-8"), int(env.get("DW_KISS_PORT", "8001")),
                         int(env.get("DW_AUDIO_PORT", "7355")), (host, int(port)),
-                        kisscopy=env.get("DW_KISSCOPY", "0") == "1", echo_log=True)
+                        kisscopy=env.get("DW_KISSCOPY", "0") == "1", echo_log=True, speed=float(env.get("DW_RELAY_SPEED", RELAY_SPEED)))
         node.start()
         print("loop node %s: kiss tcp %s, audio in udp %s, audio out to %s" % (name, node.kiss_port, node.audio_in, peer), flush=True)
         while not stop.is_set() and node.proc.poll() is None:

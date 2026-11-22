@@ -458,6 +458,11 @@ if [ "$has_dw" = 1 ]; then
     *) DVT_SUT_CONFIG_EXTRA="${DVT_SUT_CONFIG_EXTRA:+$DVT_SUT_CONFIG_EXTRA:}rig/config/dv-router/dp15-rf-dw.toml" ;;
   esac
   export DVT_SUT_CONFIG_EXTRA
+  # DIGI1 tier B: the digipeater answers within a second, so the Dire Wolf nodes must relay in REAL time (a node is deaf while its own
+  # transmission would still be on the air; at the default 4 times real time the repeat arrived inside that window and was never heard)
+  case ":${DVT_SUT_CONFIG_EXTRA}:" in
+    *:rig/config/dv-router/digi1-dw.toml:*) export DVT_DW_RELAY_SPEED="${DVT_DW_RELAY_SPEED:-1}" ;;
+  esac
 fi
 # --profile mmdvm: the MMDVMHost stack; only its sources have to be fetched (any reflector can be the SUT)
 has_mmdvm=0
