@@ -593,6 +593,10 @@ services:
       DVT_DIGI1: ${DVT_DIGI1:-}
       # on for DV-Router FLK15 (b8d9db72, image dv-router:wip-f1f3777): cases/test_flk15_policy.py asserts that an outage of the position policy hides, never leaks, and resyncs
       # without a restart (docs/flk15-cases.md); the cases skip with a reason without it. DVT_FLK15_BOUND_S: seconds waited after a flag change (empty: the code default)
+      # on for DV-Router GUARDSYNC1 / GUARDMERGE1 (c1b239d1 + da900207, image dv-router:wip-f1f3777): cases/test_guard1.py (docs/guard1-cases.md); the cases skip with a reason without it
+      DVT_GUARD1: ${DVT_GUARD1:-}
+      # on for DV-Router RTS1 (b64733cd, image dv-router:wip-f1f3777): cases/test_rts1.py (docs/rts1-cases.md); the cases skip with a reason without it
+      DVT_RTS1: ${DVT_RTS1:-}
       DVT_FLK15: ${DVT_FLK15:-}
       DVT_FLK15_BOUND_S: ${DVT_FLK15_BOUND_S:-}
       # on for DV-Router RIF5 (c017e491 or later, the mmdvm-serial radio adapter) with rig/config/dv-router/rif5-mmdvm-udp.toml in DVT_SUT_CONFIG_EXTRA:

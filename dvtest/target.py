@@ -83,6 +83,10 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
                      leaks and that the consumers resync without a restart (web killed again and again for 15 s, then a consumer restarted; docs/flk15-cases.md);
                      off or unset: every case skips naming this switch. DVT_FLK15_BOUND_S: seconds waited after a flag change before the next position (default 12 =
                      the documented 7 s plus slack)
+  DVT_GUARD1         on: GUARDSYNC1 / GUARDMERGE1 (DV-Router c1b239d1 + da900207, image wip-f1f3777): cases/test_guard1.py earns a strike-3 block, SIGKILLs a room controller and asserts
+                     that the block is reconciled (applied within 31 s + slack) in the restarted room; off or unset: the cases skip naming this switch (docs/guard1-cases.md)
+  DVT_RTS1           on: RTS1 (DV-Router b64733cd, image wip-f1f3777): cases/test_rts1.py asserts the image marker (HELP of dv_room_rts_total), the fixed series, the no_winner / deny
+                     conservation and the counted reasons around a room restart; the winner gap itself is a GAP; off or unset: the cases skip naming this switch (docs/rts1-cases.md)
   DVT_FLK10          on: FLK10, dv-edge-webrtc refuses an offer whose media section has a missing, repeated, empty,
                      over-16-byte or duplicate a=mid (403 forbidden); the cases of cases/test_web_rtc_mid.py skip naming
                      this switch without it (needs an image with DV-Router 98c88b2, wip-bd3ceb9; docs/web-mid-cases.md)
