@@ -330,6 +330,131 @@ def heard(protocol, listener, settle=0.5):
     return len(listener.collect(settle))
 
 
+def heard_frames(protocol, listener, settle=0.5):
+    """What the listener received, in arrival order: the voice frames (heard() is the length of this), for
+    p25 the parsed voice records (p25.parse dicts, terminators left out) because the source id sits in a record."""
+    if protocol == "p25":
+        listener.pump(settle)
+        return [r for r in listener.records() if not r["terminator"]]
+    if protocol == "dmrplus":
+        listener.pump(settle)
+        return list(dmrplus.frames_of(listener.voice()))
+    return list(listener.collect(settle))
+
+
+# ---------------------------------------------------------------- whose frames did the listener hear
+
+IDENTITY_MIN = 0.9      # the warm-up round (no fuzz yet) must match its sent frames this well for the content to count
+
+
+def match_sent(sent, got):
+    """How many of the received frames are frames the valid talker sent: a multiset match (a frame value
+    is used once per time it was sent), so a repeated or copied frame cannot count twice."""
+    left = collections.Counter(bytes(f) for f in sent)
+    hit = 0
+    for frame in got:
+        key = bytes(frame)
+        if left[key] > 0:
+            left[key] -= 1
+            hit += 1
+    return hit
+
+
+def p25_calls(records):
+    """[{"src": id or None, "frames": [imbe, ...]}] of the received P25 records (p25.parse dicts), in order.
+    A call ends at a terminator and a new one starts at a first LDU1 record (0x62); its source is the first
+    source id (0x66) it carries."""
+    calls, cur = [], None
+    for rec in records:
+        if rec.get("terminator"):
+            cur = None
+            continue
+        if cur is None or (rec["type"] == p25.LDU1[0] and cur["frames"]):
+            cur = {"src": None, "frames": []}
+            calls.append(cur)
+        cur["frames"].append(rec["imbe"])
+        if "src" in rec and cur["src"] is None:
+            cur["src"] = rec["src"]
+    return calls
+
+
+def p25_count(records, sent, valid_src=None):
+    """Counts of one P25 listener round: total voice records heard, how many carry a frame the valid
+    talker sent (content), and how many sit in a call whose source id is in valid_src (src)."""
+    calls = p25_calls(records)
+    frames = [f for call in calls for f in call["frames"]]
+    by_src = sum(len(call["frames"]) for call in calls if valid_src and call["src"] in valid_src)
+    return {"total": len(frames), "content": match_sent(sent, frames), "src": by_src,
+            "srcs": sorted({call["src"] for call in calls if call["src"] is not None})}
+
+
+def p25_identity(warm_count):
+    """How the valid over is told from fuzz voice, calibrated on the warm-up round (nothing else
+    transmits yet, so everything heard is the valid over): "content" when the received IMBE frames equal
+    the sent ones, else "src" (the source ids the warm-up calls carried)."""
+    total = warm_count["total"]
+    if total == 0 or warm_count["content"] >= IDENTITY_MIN * total:
+        return {"how": "content", "valid_src": warm_count["srcs"]}
+    return {"how": "src", "valid_src": warm_count["srcs"]}
+
+
+def split_heard(protocol, got, sent, identity=None):
+    """(heard_valid, extra) for a round; got is heard_frames(). P25 with an identity: heard_valid is the frames of the valid over
+    only (content or source id as calibrated), the fuzz voice goes to heard_other; extra is the row fields.
+    Any other protocol: heard_valid is the plain count (verdict unchanged) and extra carries the content
+    match as a RECORD (heard_content, heard_other_est) only when the warm-up calibrated it."""
+    if protocol == "p25":
+        count = p25_count(got, sent, identity["valid_src"] if identity else None)
+        valid = count["src"] if identity and identity["how"] == "src" else count["content"]
+        return valid, {"heard_valid": valid, "heard_other": count["total"] - valid, "heard_total": count["total"],
+                       "heard_content": count["content"], "heard_src": count["src"], "heard_srcs": count["srcs"],
+                       "identity": identity["how"] if identity else "content"}
+    total = len(got)
+    content = match_sent(sent, got)
+    return total, {"heard_total": total, "heard_content": content, "heard_other_est": total - content}
+
+
+def guard_deltas(before, after, proc=None):
+    """{reason: delta} of dv_edge_drops_total for the guard reasons between two scrape texts, over the
+    series of proc (every proc when None)."""
+    if not before or not after:
+        return None
+    changes = metric_changes(before, after)
+    out = {}
+    for reason in GUARD_REASONS:
+        labels = {"reason": reason}
+        if proc:
+            labels["proc"] = proc
+        out[reason] = family_delta(changes, "dv_edge_drops_total", **labels)
+    return out
+
+
+GUARD_REASONS = ("deny_guard_block", "guard_blocked")
+
+
+def round_record(row):
+    """One line about a valid round row (see split_heard and guard_deltas), "" when it has nothing to say:
+    tag, valid heard of expected, other voice heard, the content match of the other protocols, guard denials
+    that moved (fuzz batch / valid round, edge proc)."""
+    if row.get("heard") is None:
+        return ""
+    parts = ["%s %s/%s" % (row.get("tag"), row.get("heard"), row.get("expected"))]
+    if "heard_other" in row:
+        parts.append("other %s (%s by %s)" % (row["heard_other"], row.get("heard_total"), row.get("identity")))
+    elif "heard_content" in row:
+        parts.append("content match %s of %s heard" % (row["heard_content"], row.get("heard_total")))
+    guard = row.get("guard_deny") or {}
+    moved = []
+    for window in ("fuzz_batch", "valid_round"):
+        for reason, delta in sorted((guard.get(window) or {}).items()):
+            if delta:
+                moved.append("%s %s +%d" % (window, reason, delta))
+    if guard and not moved:
+        parts.append("guard deny 0")
+    parts.extend(moved)
+    return " ".join(parts)
+
+
 # ---------------------------------------------------------------- link probes (a fresh client, link only)
 
 def _wait(client, pred, seconds):

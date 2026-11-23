@@ -126,6 +126,20 @@ The valid round, per protocol:
 | xlx, g3 | a valid connect (xlx) or presence request (g3) must be answered (ack or nack; any reply) |
 | imrs | liveness only (the peer list is static, no reply to check) |
 
+What a valid round counts (FUZZP25A): the fuzz client sits on the valid clients' module and TG, so the
+listener also hears fuzz voice. Counting every voice record let fuzz voice make up the 54 while the valid
+talker was denied (wip-eeb44b4 passed by timing only). For **p25** the round now counts only the frames of
+the valid over: the warm-up round (nothing else transmits yet) calibrates the identity, "content" when the
+received IMBE frames equal the sent ones (a multiset match, `fuzz_run.match_sent`), else "src" (the source id
+the warm-up calls carried in record 0x66). `row.heard` is that count (`heard_valid`), `expected` stays the 54
+frames sent; fuzz voice is a RECORD: `heard_other`, `heard_total`, `heard_content`, `heard_src`, `identity`
+(also `result.json` `identity`). The other protocols keep the plain count for the verdict and record
+`heard_total`, `heard_content` (frames equal to the ones sent) and `heard_other_est` beside it, to see
+whether they have the same flaw. Every round also records `guard_deny`: the deltas of
+`dv_edge_drops_total{reason="deny_guard_block"}` and `{reason="guard_blocked"}` for the edge's proc and for
+all procs, over the fuzz batch (incl. the quiet wait) and over the valid round itself. The case prints one
+`RECORD: valid rounds ...` line (pytest warning and `fuzz-findings.txt`).
+
 If the valid round is not served before any fuzz (warm-up), the cases for nxdn, p25, xlx, imrs and g3
 skip `valid_client_served` ("liveness only") and go on; for the other protocols it is a failure.
 
@@ -150,7 +164,16 @@ DVT_DVR_BIN_DIR=.cache/dvr-<tag> DVT_XLXD_BIN=scripts/dvr-import-wrap.sh DVT_SUT
   scripts/contained.sh --name test -- python3 -m pytest -m netns cases/test_fuzz_netns.py -q
 ```
 
-One protocol: add `-k test_fuzz_ysf_`. Smaller or different run: `DVT_FUZZ_N=400`, `DVT_FUZZ_SEED=7`,
+One protocol: add `-k test_fuzz_ysf_`. P25 with seeds 1 to 3 (one run per seed, each its own `out/<utc>/`;
+`DVT_FUZZ_SEED` is the generator seed, default 1, the valid overs do not depend on it):
+
+```
+for s in 1 2 3; do DVT_FUZZ_SEED=$s DVT_DVR_BIN_DIR=.cache/dvr-<tag> DVT_XLXD_BIN=scripts/dvr-import-wrap.sh \
+  DVT_SUT_PROFILE=dvrouter scripts/contained.sh --name test -- \
+  python3 -m pytest -m netns cases/test_fuzz_netns.py -k test_fuzz_p25_ -q; done
+```
+
+Smaller or different run: `DVT_FUZZ_N=400`, `DVT_FUZZ_SEED=7`,
 `DVT_FUZZ_GAP_MS=2`. `DVT_NETNS_PARALLEL` stays 1 (a DV-Router scenario peaks near 435 of the 1024
 tasks of the scope, `docs/rig.md`). Under `DVT_SUT_PROFILE` xlxd the whole file skips.
 

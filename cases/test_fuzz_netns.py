@@ -135,6 +135,7 @@ def _inside(spec, run_dir):
               "ports": {}, "errors": 0, "sent": 0}
     sources, valid = [], []
     keeper = [None]                                 # fuzz_run.Keeper of the valid talker and listener
+    ident = {}                                      # P25: how the valid over is told from fuzz voice (warm-up round)
     stream_ids = itertools.count(0x2000)            # a DExtra header with the last outbound stream id is dropped
 
     def scrape():
@@ -208,7 +209,15 @@ def _inside(spec, run_dir):
                 listener.client.inbox.clear()
                 fuzz_run.drive(valid_protocol, talker, frames, next(stream_ids))
                 row["expected"] = len(frames)
-                row["heard"] = fuzz_run.heard(valid_protocol, listener)
+                got = fuzz_run.heard_frames(valid_protocol, listener)
+                if valid_protocol == "p25" and tag == "warm":
+                    # nothing but the valid over was heard yet: learn how to tell it from fuzz voice
+                    ident["id"] = fuzz_run.p25_identity(fuzz_run.p25_count(got, frames))
+                    result["identity"] = ident["id"]
+                # P25: only the valid over's frames count, fuzz voice goes to heard_other (FUZZP25A); the other
+                # protocols keep the plain count and record the content match beside it
+                row["heard"], extra = fuzz_run.split_heard(valid_protocol, got, frames, ident.get("id"))
+                row.update(extra)
             row["ok"] = row["heard"] >= HEARD_MIN * row["expected"]
         if probe is not None:
             probe.join(15)
@@ -340,11 +349,21 @@ def _inside(spec, run_dir):
                 result["phases"].append(dict(ph, linked_source=how, sent_before=sent))
                 done = 0
                 while done < ph["count"] and not stop:      # a valid round every EVERY datagrams
+                    text_a = scrape()[0]
                     done += fuzzer.batch(min(EVERY, ph["count"] - done))
                     quiet_from = time.monotonic()
                     if ph["quiet"]:                         # floor rule: the module is idle after the stream timeout
                         time.sleep(fuzz_run.QUIET_S)
+                    text_b = scrape()[0]
                     row = valid_round("%s-%d" % (ph["name"], sent + done), kind)
+                    text_c = scrape()[0]
+                    # RECORD: the room guard's denials (dv_edge_drops_total) from the fuzz batch and from the valid round
+                    edge_proc = fuzz_run.edge_label(result["edge"] or "") or None
+                    row["guard_deny"] = {"proc": edge_proc,
+                                         "fuzz_batch": fuzz_run.guard_deltas(text_a, text_b, edge_proc),
+                                         "valid_round": fuzz_run.guard_deltas(text_b, text_c, edge_proc),
+                                         "all_procs": {"fuzz_batch": fuzz_run.guard_deltas(text_a, text_b),
+                                                       "valid_round": fuzz_run.guard_deltas(text_b, text_c)}}
                     row.update(phase=ph["name"], fuzz_module=ph["module"], quiet_s=fuzz_run.QUIET_S if ph["quiet"] else 0.0,
                                sent=sent + done)
                     if not row["ok"] and result["valid_mode"] == "served":
@@ -581,9 +600,23 @@ def fuzz_run_mod():
     return fuzz_run
 
 
+def record_rounds(run, name):
+    """RECORD of every valid round: what was heard of the valid over, what else was heard (fuzz voice) and the
+    guard denials (fuzz_run.round_record); a pytest warning and fuzz-findings.txt, never a failure by itself."""
+    lines = [fuzz_run_mod().round_record(row) for row in [dict(run["warmup"])] + list(run["rounds"])]
+    lines = [text for text in lines if text]
+    if not lines:
+        return
+    text = "RECORD: valid rounds (heard of the valid over / other voice heard / guard denials): " + "; ".join(lines)
+    warnings.warn("[%s] %s" % (name, text), UserWarning, stacklevel=2)
+    with open(Path(run["run_dir"]) / "fuzz-findings.txt", "a", encoding="utf-8") as handle:
+        handle.write("[%s] %s\n" % (name, text))
+
+
 def check_served(runs, name):
     run = get(runs, name)
     warm = run["warmup"]
+    record_rounds(run, name)
     if run["valid_mode"] != "served":
         message = "the valid client was not served before any fuzz (%s; heard %s of %s, probe %s)" % (
             warm.get("reason") or "round not ok", warm.get("heard"), warm.get("expected"), warm.get("probe"))
@@ -593,8 +626,10 @@ def check_served(runs, name):
     bad = [r for r in run["rounds"] if not r["ok"]]
     if bad:
         row = bad[0]
-        text = "valid client not served after %d datagrams (phase %s, heard %s of %s, link probe %s): %s" % (
-            row["sent"], row.get("phase"), row["heard"], row["expected"], row["probe"], quiet_text(row))
+        text = "valid client not served after %d datagrams (phase %s, heard %s of %s%s, link probe %s): %s" % (
+            row["sent"], row.get("phase"), row["heard"], row["expected"],
+            (" of the valid over's frames, %s other voice records" % row["heard_other"])
+            if "heard_other" in row else "", row["probe"], quiet_text(row))
         finding(run, name, "FINDING: " + text)
         fail(run, name, text)
     assert run["rounds"], "no valid round ran"
