@@ -103,6 +103,29 @@ def wait_settled(read, before, want_folds=1, budget_s=SETTLE_S, quiet_s=QUIET_S,
         sleep(poll_s)
 
 
+def series_diff(before, after, procs, limit=60):
+    """Lines "name{labels} before -> after" of every series (dvtest.metrics samples) that changed between two snapshots and belongs to one of `procs` (the proc label;
+    "" stands for a series without one). The diagnosis of a case that never saw its fold: what DID move at the edge (an ingress counter, a session gauge, a drop reason)."""
+    def keyed(samples):
+        out = {}
+        for s in samples:
+            proc = s.labels.get("proc", "")
+            if proc in procs:
+                out[(s.name, tuple(sorted(s.labels.items())))] = s.value
+        return out
+
+    old, new = keyed(before), keyed(after)
+    lines = []
+    for key in sorted(set(old) | set(new)):
+        a, b = old.get(key, 0.0), new.get(key, 0.0)
+        if a != b:
+            labels = ",".join("%s=%s" % kv for kv in key[1])
+            lines.append("%s{%s} %g -> %g" % (key[0], labels, a, b))
+    if len(lines) > limit:
+        lines = lines[:limit] + ["... %d more" % (len(lines) - limit)]
+    return lines
+
+
 def units_for(seconds, multiple=1, rate=RATE):
     """Native units of a burst of `seconds`, rounded down to a multiple of `multiple` (P25 LDU 9, NXDN packet 4, DMR-derived NXDN frames 12)."""
     n = int(seconds * rate)

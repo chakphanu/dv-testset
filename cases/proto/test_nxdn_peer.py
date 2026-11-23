@@ -12,6 +12,9 @@ Two paths per side (rig profile nxdn):
   every poll, can withhold echoes and can send what NXDNReflector filters
   (private calls, other TGs, garbage).
 
+A DV-Router native launch (DVT_SUT_LAUNCH=native) reads no xlxd.interlink: both rows come from the snippet
+rig/config/dv-router/nxdn-peer.toml in DVT_SUT_CONFIG_EXTRA (docs/rig.md).
+
 Judged as in nxdn.md: hb = spec or what every client needs, asserted on
 both sides; diff = sut == ref; dev = sut == ref under the xlxd profile,
 else the profile's "nxdn" spec entry {"P-NXD-NN": {key: value}} (skip
@@ -329,7 +332,8 @@ def peer(rig):
             deadline = time.monotonic() + 60
             while not (_ready_reflector(side) and _ready_probe(side)):
                 if time.monotonic() > deadline:
-                    pytest.fail("%s: NXDN paths not ready (reflector %s, probe port %d)"
+                    pytest.fail("%s: NXDN paths not ready (reflector %s, probe port %d); a DV-Router native launch has the two "
+                                "peer rows only with rig/config/dv-router/nxdn-peer.toml in DVT_SUT_CONFIG_EXTRA"
                                 % (side.name, side.reflector, side.probe_port))
                 time.sleep(2)
         yield {"rig": rig, "sides": sides}

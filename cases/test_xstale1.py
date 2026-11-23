@@ -67,6 +67,12 @@ def edge(request, kit_table, rig_control):
     def read():
         return xstale1.counts(metrics.parse(rig_control.metrics("xlxd-sut")), kit.proc)
 
+    def snapshot():
+        return metrics.parse(rig_control.metrics("xlxd-sut"))
+
+    read.snapshot = snapshot                 # the full series of the hub, for the diagnosis of a fold that never came
+    read.procs = (kit.proc, "dv-router", "")
+
     samples = metrics.parse(rig_control.metrics("xlxd-sut"))
     if kit.proc not in xstale1.procs_seen(samples):
         pytest.fail("no dv_edge_overs_total{proc=%s} on the hub metrics (procs with the family: %s): the image has no egress over accounting, or the edge %s is not "
@@ -98,13 +104,20 @@ def hold(endpoints, seconds):
             ep.pump(0.05)
 
 
-def counted(read, before, case, want_folds, note_fn):
+def counted(read, before, case, want_folds, note_fn, context=lambda: "", snap=None):
+    """The Counts delta of the case once the edge folded. When it never does, the failure names what the clients saw (`context()`) and every series of the edge
+    that moved since `snap` (read.snapshot() taken with the baseline), so a harness slip (nothing reached the edge) is told from a product result."""
     try:
         after = xstale1.wait_settled(read, before, want_folds=want_folds)
     except TimeoutError as exc:
-        pytest.fail("%s: %s" % (case, exc))
+        moved = xstale1.series_diff(snap, read.snapshot(), read.procs) if snap is not None else []
+        note_fn("RECORD", "no fold: %s; series that moved: %s" % (context(), "; ".join(moved) or "none"))
+        pytest.fail("%s: %s; %s; series that moved at the edge: %s" % (case, exc, context(), "; ".join(moved[:12]) or "none"))
     d = xstale1.delta(after, before)
     note_fn("RECORD", "delta of the edge counters: %s" % dict(d._asdict()))
+    if d.lossy or d.lost or d.end_missing:
+        moved = xstale1.series_diff(snap, read.snapshot(), read.procs) if snap is not None else []
+        note_fn("RECORD", "series that moved at the edge: %s" % ("; ".join(moved) or "none"))
     return d
 
 
@@ -115,6 +128,7 @@ def test_xs1_b_own_over_without_listener(edge, proto, target):
     case = "XS1-b[%s]" % proto
     say = lambda tag, text: note(target, case, tag, text)                         # noqa: E731
     before = xstale1.stable_baseline(read)
+    snap = read.snapshot()
     a = open_endpoint(kit, 0, case)
     try:
         sent = a.burst(kit.units(xstale1.OVER_S), "b", True)
@@ -122,7 +136,7 @@ def test_xs1_b_own_over_without_listener(edge, proto, target):
         own = a.heard()
     finally:
         a.close()
-    d = counted(read, before, case, 1, say)
+    d = counted(read, before, case, 1, say, lambda: "%d units sent, the talker heard %d of itself" % (sent, own), snap)
     say("RECORD", "%d units sent, the talker heard %d of itself" % (sent, own))
     problems = xstale1.judge_b(d, own)
     assert not problems, "%s: %s" % (case, "; ".join(problems))
@@ -135,6 +149,7 @@ def test_xs1_c_same_edge_listener_joins_at_three_seconds(edge, proto, target):
     case = "XS1-c[%s]" % proto
     say = lambda tag, text: note(target, case, tag, text)                         # noqa: E731
     before = xstale1.stable_baseline(read)
+    snap = read.snapshot()
     a = open_endpoint(kit, 0, case)
     b = None
     try:
@@ -157,7 +172,8 @@ def test_xs1_c_same_edge_listener_joins_at_three_seconds(edge, proto, target):
     assert joined_at <= xstale1.JOIN_S + xstale1.JOIN_LATE_S, \
         "%s: B was linked only %.1f s into the over (wanted about %.0f s): the link is too slow for this case, not a product result" % (case, joined_at, xstale1.JOIN_S)
     rest = xstale1.expected_rest(xstale1.OVER_S, joined_at)
-    d = counted(read, before, case, 1, say)
+    d = counted(read, before, case, 1, say,
+                lambda: "%d units sent, B joined %.2f s into the over and heard %d of the %d to come, the talker heard %d of itself" % (sent, joined_at, heard, rest, own), snap)
     say("RECORD", "%d units sent, B joined %.2f s into the over and heard %d of the %d to come; the talker heard %d of itself" % (sent, joined_at, heard, rest, own))
     problems = xstale1.judge_c(d, heard, rest, sent, kit.slack)
     if own:
@@ -172,6 +188,7 @@ def test_xs1_d_real_silence_ends_the_stream(edge, proto, target):
     case = "XS1-d[%s]" % proto
     say = lambda tag, text: note(target, case, tag, text)                         # noqa: E731
     before = xstale1.stable_baseline(read)
+    snap = read.snapshot()
     a = open_endpoint(kit, 0, case)
     b = None
     try:
@@ -189,7 +206,8 @@ def test_xs1_d_real_silence_ends_the_stream(edge, proto, target):
         for ep in (b, a):
             if ep is not None:
                 ep.close()
-    d = counted(read, before, case, 2, say)
+    d = counted(read, before, case, 2, say,
+                lambda: "burst 1 sent %d, B heard %d; burst 2 sent %d, B heard %d" % (sent1, heard1, sent2, heard2), snap)
     say("RECORD", "burst 1 sent %d, B heard %d; burst 2 sent %d, B heard %d" % (sent1, heard1, sent2, heard2))
     if d.end_missing or d.lossy:
         say("RECORD", "the stream that ended by silence folded as end_missing %g, lossy %g" % (d.end_missing, d.lossy))

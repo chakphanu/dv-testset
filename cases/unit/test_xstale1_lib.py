@@ -46,6 +46,22 @@ def test_counts_read_one_proc_and_the_tx_direction_only():
     assert x.procs_seen(metrics.parse(text(extra=other))) == ["p25", "usrp"]
 
 
+def test_series_diff_names_what_moved_for_the_wanted_procs_only():
+    before = metrics.parse(text(proc="usrp", x_stale=1) + 'dv_edge_sessions{proc="usrp",kind="client"} 0\n' + text(proc="p25", lost=3)
+                           + 'dv_launcher_child_up{proc="dv-router",child="x"} 1\n')
+    after = metrics.parse(text(proc="usrp", x_stale=4, complete=1) + 'dv_edge_sessions{proc="usrp",kind="client"} 2\n' + text(proc="p25", lost=99)
+                          + 'dv_launcher_child_up{proc="dv-router",child="x"} 0\n' + 'dv_unlabelled_total 5\n')
+    lines = x.series_diff(before, after, ("usrp", "dv-router", ""))
+    assert 'dv_edge_drops_total{proc=usrp,reason=x_stale} 1 -> 4' in lines
+    assert 'dv_edge_overs_total{dir=tx,proc=usrp,result=complete} 0 -> 1' in lines
+    assert 'dv_edge_sessions{kind=client,proc=usrp} 0 -> 2' in lines
+    assert 'dv_launcher_child_up{child=x,proc=dv-router} 1 -> 0' in lines and 'dv_unlabelled_total{} 0 -> 5' in lines
+    assert not [line for line in lines if "p25" in line or "no_session" in line]
+    assert x.series_diff(before, before, ("usrp",)) == []
+    many = x.series_diff([], metrics.parse("".join('m{proc="usrp",i="%d"} 1\n' % i for i in range(10))), ("usrp",), limit=4)
+    assert len(many) == 5 and many[-1] == "... 6 more"
+
+
 def test_delta_and_folds():
     d = x.delta(counts(complete=3, joined=2, x_stale=5), counts(complete=1, x_stale=1))
     assert d.complete == 2 and d.joined == 2 and d.x_stale == 4 and x.folds(d) == 4

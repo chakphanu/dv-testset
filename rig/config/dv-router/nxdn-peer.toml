@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, profile nxdn): BOTH NXDN peer rows of the rig, what the
+# import launch got from xlxd.interlink ("NX31672 <NET>.51:41400 F" and "NX31673 <TESTER_IP>:41411 I"). The
+# native launch reads no xlxd.interlink, so without this snippet the SUT is peered with nothing and every case of
+# cases/proto/test_nxdn_peer.py errors in setup ("NXDN paths not ready"):
+#   reflector row  the NXDNReflector nxdn-sut (<NET>.51, UDP 41400), TG 31672 (DVT_NXDN_TG), module F (DVT_NXDN_MODULE)
+#   probe row      the tester plays an NXDN reflector (FakeReflector, UDP 41411 = DVT_NXDN_PROBE_PORT_SUT), TG 31673
+#                  (DVT_NXDN_PROBE_TG), module I (DVT_NXDN_PROBE_MODULE)
+# Needs scripts/run.sh --profile nxdn (DVT_NXDN=on). If DVT_NXDN_TG / DVT_NXDN_MODULE / DVT_NXDN_PROBE_* are changed,
+# change the rows too. Do not combine with nxdn-peer-host.toml (it is the probe row alone, by host name).
+[[edges.nxdn.peer]]
+tg = 31672
+host = "<NET>.51"
+port = 41400
+module = "F"
+
+[[edges.nxdn.peer]]
+tg = 31673
+host = "<TESTER_IP>"
+port = 41411
+module = "I"
