@@ -159,33 +159,35 @@ def reading(room=None, **egress):
 
 
 def test_judge_counters_loss_and_control():
+    # radioseq1.Counts: edge_gap edge_late edge_dropped room_gap room_late room_lost overs_complete overs_lossy overs_end_missing egress_*
     # xstale1.Counts: x_stale complete lossy end_missing joined late dropped lost
-    ok = reading(radioseq1.Counts(1, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0), dextra=(0, 0, 1, 0, 0, 0, 0, 1), dmrhb=(0, 0, 1, 0, 0, 0, 0, 1), usrp=(0, 0, 1, 0, 0, 0, 0, 1))
-    problems, findings, facts = rfpos1c.judge_counters(ok, 1, ["dextra", "dmrhb", "usrp"])
-    assert problems == [] and findings == [] and facts["egress"]["dmrhb"]["lost"] == 1
-    # the old output: nothing lost at the egress edges (the hole was closed up)
-    old = reading(radioseq1.Counts(0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0), dextra=(0, 1, 0, 0, 0, 0, 0, 0), dmrhb=(0, 1, 0, 0, 0, 0, 0, 0), usrp=(0, 1, 0, 0, 0, 0, 0, 1))
-    problems, _f, _x = rfpos1c.judge_counters(old, 1, ["dextra", "dmrhb", "usrp"])
-    assert sum("rose by 0, wanted 1" in p for p in problems) == 2 and len(problems) == 2
-    # the USRP edge counted nothing on wip-3f142cd and keeps the position in time: 0 is accepted there, 2 is not
-    quiet_usrp = reading(radioseq1.Counts(0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0), dextra=(0, 0, 1, 0, 0, 0, 0, 1), usrp=(0, 1, 0, 0, 0, 0, 0, 0))
-    assert rfpos1c.judge_counters(quiet_usrp, 1, ["dextra", "usrp"])[0] == []
-    two = reading(radioseq1.Counts(0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0), usrp=(0, 0, 1, 0, 0, 0, 0, 2))
-    assert any("at most 1" in p for p in rfpos1c.judge_counters(two, 1, ["usrp"])[0])
-    # more lost than the dropped frame: the rest of the over counted lost
-    many = reading(radioseq1.Counts(0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0), dextra=(0, 0, 1, 0, 0, 0, 0, 40))
-    problems, _f, _x = rfpos1c.judge_counters(many, 1, ["dextra"])
-    assert any("rose by 40, wanted 1" in p for p in problems)
+    egress = dict(dextra=(0, 0, 1, 0, 0, 0, 0, 0), dmrhb=(0, 0, 1, 0, 0, 0, 0, 0), usrp=(0, 0, 1, 0, 0, 0, 0, 0))
+    procs = ["dextra", "dmrhb", "usrp"]
+    # the loss case, wip-3f142cd and step C alike: ingress gap +1, room gap +1, lost +0, one lossy over, no egress lost
+    loss = reading(radioseq1.Counts(1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0), **egress)
+    problems, findings, facts = rfpos1c.judge_counters(loss, 1, procs)
+    assert problems == [] and findings == [] and facts["egress"]["dmrhb"]["lost"] == 0 and facts["room"]["room_gap"] == 1
+    # an egress edge that counts the hole as its own loss is a FINDING (dv-router: upstream loss, +0), not a problem
+    own = reading(radioseq1.Counts(1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0), dextra=(0, 0, 1, 0, 0, 0, 0, 1), dmrhb=(0, 0, 1, 0, 0, 0, 0, 0))
+    problems, findings, _x = rfpos1c.judge_counters(own, 1, procs)
+    assert problems == [] and len(findings) == 1 and "proc=dextra,result=lost} rose by 1" in findings[0]
+    # room counters that differ: the rest of the over counted lost, the gap missing, not lossy
+    bad = reading(radioseq1.Counts(0, 0, 0, 1, 0, 40, 0, 0, 0, 0, 0, 0), dextra=(0, 1, 0, 0, 0, 0, 0, 0))
+    problems = rfpos1c.judge_counters(bad, 1, ["dextra"])[0]
+    assert any("proc=allstar,result=gap} rose by 0, wanted 1" in p for p in problems)
+    assert any("room=l,result=lost} rose by 40, wanted 0" in p for p in problems)
+    assert any("result=lossy} rose by 0, wanted 1" in p for p in problems)
     # control: nothing moves, an over folded
     clean = reading(radioseq1.Counts(0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0), dextra=(0, 1, 0, 0, 0, 0, 0, 0), dmrhb=(0, 1, 0, 0, 0, 0, 0, 0))
     assert rfpos1c.judge_counters(clean, 0, ["dextra", "dmrhb"])[0] == []
     lossy = reading(radioseq1.Counts(0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 0), dextra=(0, 0, 1, 0, 0, 0, 0, 0))
     problems = rfpos1c.judge_counters(lossy, 0, ["dextra"])[0]
-    assert any("counted gap" in p for p in problems) and any("counted lossy" in p for p in problems)
-    # an edge that folded nothing is a harness slip; late and dropped are findings
-    idle = reading(radioseq1.Counts(0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0), dextra=(0, 0, 0, 0, 0, 2, 3, 0))
+    assert any("room=l,result=gap} rose by 2, wanted 0" in p for p in problems) and any("result=lossy} rose by 1, wanted 0" in p for p in problems)
+    # no over closed in the room, an edge that folded nothing: harness slips; late and dropped are findings
+    idle = reading(radioseq1.Counts(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), dextra=(0, 0, 0, 0, 0, 2, 3, 0))
     problems, findings, _x = rfpos1c.judge_counters(idle, 0, ["dextra"])
-    assert any(p.startswith("harness: egress edge dextra") for p in problems) and findings == ["egress edge dextra counted late 2, dropped 3"]
+    assert any(p.startswith("harness: no over closed") for p in problems) and any(p.startswith("harness: egress edge dextra") for p in problems)
+    assert findings == ["egress edge dextra counted late 2, dropped 3"]
 
 
 def test_egress_procs():

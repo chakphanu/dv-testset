@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # RFPOS1 step C cases: a lost AllStar (IAX2) voice frame keeps its position
 
-Status: written against DV-Router `fb3167bb` ("AllStar streams state frame positions through the transcoder", RFPOS1 step C), run on the image BEFORE it,
+Status (counter expectations corrected by dv-router after the first commit; the baseline numbers below are unchanged and still hold against the corrected asserts): written against DV-Router `fb3167bb` ("AllStar streams state frame positions through the transcoder", RFPOS1 step C), run on the image BEFORE it,
 `dv-router:wip-3f142cd`: **2 passed (the controls), 2 failed (the loss cases): that is the recorded "before"**, run `20261123T152004Z` (repeat of
 `20261123T145942Z`, same numbers; the first run's USRP judge was still a seq judge, see "USRP"). The run on the step C image has not been made. Case file
 `cases/test_rfpos1c.py`, pure helpers and judges `dvtest/rfpos1c.py`, unit tests `cases/unit/test_rfpos1c_lib.py` and `cases/unit/test_iax2.py`, snippet
@@ -51,25 +51,38 @@ extra codec in the path. With a real transcoder the D-STAR and DMR frames are no
 
 The USRP packet `seq` is the edge's running packet counter: it continues across overs (0..89, 91..179, 181..269, ...) and has no hole, so the first version of the
 judge (position = seq - first seq) called the control wrong. A USRP listener sees a lost position only in TIME: the edge's tap capture shows a gap of 80.6 ms (case b)
-and 79.8 ms (case c) between the packets of frames 39 and 41 (normal 20 ms, longest gap of a lossless over 20.9 ms), that is the position is kept in time (and more:
-the gap is 4 ticks for a 1 tick hole; the next two packets follow within 1 ms and the rest of the over runs about 9 ms late; recorded, not asserted). The judge
+and 79.8 ms (case c) between the packets of frames 39 and 41 (normal 20 ms, longest gap of a lossless over 20.9 ms), that is the position is kept in time (80 ms = 20 ms spacing plus the
+edge's 60 ms late window, expected by dv-router; the next two packets then follow within 1 ms and the rest of the over runs about 9 ms late; recorded, not asserted). The judge
 (`rfpos1c.judge_usrp`) asserts the content (every frame but 40, once, in order: a PCM unit is a source unit, so the content cannot be shifted) and the hole in time
-(>= 35 ms; with no loss no gap >= 60 ms). The `dv_edge_over_units_total{tx,proc=usrp,result=lost}` series did not move on wip-3f142cd although the position was kept in
-time; the case accepts 0 or 1 there (`at_most`) and records the value.
+(>= 35 ms; with no loss no gap >= 60 ms).
+
+The 80 ms is expected (dv-router): the 20 ms frame spacing plus the edge's 60 ms late window. It stays recorded (`hole_gap_ms` in the JSON) and is not asserted beyond the
+35 ms floor.
 
 ## Counters (hub metrics, `metrics xlxd-sut`, one reading about 12 s after the over and the folds)
 
 Read the way `cases/test_rfpos1b.py` does (`rfpos1b.stable_baseline`, `wait_settled`, room label `l`): `dv_room_over_units_total{room=l}`, `dv_room_overs_total{room=l}`,
-`dv_edge_over_units_total{dir=rx|tx,proc=...}`, `dv_edge_overs_total{dir=tx,proc=...}` for the edges `dextra`, `dmrhb` and `usrp`. After step C the case asserts:
-`tx lost` rises by exactly 1 at `dextra` and `dmrhb` (at most 1 at `usrp`), the room's `lost` by at most 1, each egress edge folded one over; with no loss
-nothing is gap, lost or lossy anywhere. `late` and `dropped` are recorded as FINDING. The `proc` label of the AllStar ingress edge is `allstar` (seen in the rx series).
+`dv_edge_over_units_total{dir=rx|tx,proc=...}`, `dv_edge_overs_total{dir=tx,proc=...}` for the AllStar edge (`proc=allstar`) and the egress edges `dextra`, `dmrhb` and
+`usrp`. Corrected by dv-router after the first version of this case: step C does not change the room's counters, and since MEDLOAD1b an egress counts only loss on ITS OWN
+leg (a hole the room already published as an upstream gap is upstream loss, not tx loss). Asserted (`rfpos1c.judge_counters`):
+
+| Counter (delta over the over) | a, d (no loss) | b, c (frame 40 lost) |
+|-------|------|------|
+| ingress `dv_edge_over_units_total{dir=rx,proc=allstar,result=gap}` | 0 | +1 |
+| room `dv_room_over_units_total{result=gap}` | 0 | +1 |
+| room `dv_room_over_units_total{result=lost}` | 0 | 0 |
+| room `dv_room_overs_total{result=lossy}` | 0 | +1 |
+| egress `dv_edge_over_units_total{dir=tx,result=lost}` at dextra, dmrhb, usrp | 0 | 0 |
+
+An egress `tx lost` rise is NOT asserted: it is written as a `[FINDING]` line. Each egress edge must have folded one over and the room closed one (else a `harness` problem).
+`late` and `dropped` are recorded as FINDING.
 
 ## Cases
 
 | Case | Over | Assertion |
 |------|------|-----------|
 | RFPOS1C-a | no loss (control) | all three listeners hold frames 0..89 at their own positions; no gap, lost or lossy over anywhere |
-| RFPOS1C-b | mini frame 40 lost | D-STAR: positions 0..89 except 40, own frames; DMR: slot 40 is a fill, the rest own frames; USRP: frames except 40 in order with a hole in time; egress lost +1 (dextra, dmrhb) |
+| RFPOS1C-b | mini frame 40 lost | D-STAR: positions 0..89 except 40, own frames; DMR: slot 40 is a fill, frames 39 and 41 carried, the rest own frames; USRP: frames except 40 in order with a hole in time; room counters gap +1, lost +0, lossy +1; egress tx lost +0 (a rise is a FINDING) |
 | RFPOS1C-c | full frame 40 lost | the same as b |
 | RFPOS1C-d | full frame 40 sent, nothing lost (control for c) | the same as a |
 
@@ -87,9 +100,10 @@ USRP capture and the listener disagree), `usrp`, `dstar`, `dmr`, `counters`.
 | `tx lost` dextra / dmrhb / usrp | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 |
 | room gap / lost / lossy over; ingress `allstar` rx gap | 0 / 0 / 0; 0 | 1 / 0 / 1; 1 | 1 / 0 / 1; 1 | 0 / 0 / 0; 0 |
 
-So on the old image the room counts the gap (the ingress edge and the room both see one missing position and the over is `lossy`), the PCM listener keeps the position in
-time, but both transcoded listeners close the hole up: D-STAR is one frame short with a continuous counter and every later frame is one position early, DMR has every later
-frame one slot early and a padded last burst, and no egress edge counts a lost unit. The failures of b and c are therefore the product: the controls a and d pass (listeners,
+So on the old image the room counts the gap (the ingress edge and the room both see one missing position and the over is `lossy`: exactly what step C keeps), the PCM listener
+keeps the position in time, but both transcoded listeners close the hole up: D-STAR is one frame short with a continuous counter and every later frame is one position early, DMR
+has every later frame one slot early and a padded last burst. The counter asserts (gap +1, lost +0, lossy +1, egress tx lost +0) PASS on the old image; only the position asserts
+of D-STAR and DMR fail there. The failures of b and c are therefore the product: the controls a and d pass (listeners,
 counters, capture all as planned), the hole did arrive at the edge (capture), and the USRP control gives the same answer on both sides of the fix.
 
 ## Run command
@@ -107,7 +121,6 @@ For the step C image use its tag in `XLXD_SUT_IMAGE`. One rig, nothing else at t
 
 * Not covered: the 16-bit mini-timestamp wrap (needs an over longer than 65.5 s from the call's timestamp origin; the product's Rust tests cover it), a hole of several positions,
   reordered minis, a lost first frame (the first received packet is position 0 by definition), and a real lost full frame that the sender retransmits.
-* The `tx lost` expectation of the DMR edge (+1 for one missing unit inside a burst) and of the room's own `lost` are inferred, not documented: the run on the step C image decides
-  whether `dmrhb` counts one lost unit or a different amount.
+* The egress `tx lost` +0 and the room counters come from dv-router's correction (MEDLOAD1b), not from a run on the step C image; a `tx lost` rise there is a FINDING.
 * The USRP edge's 80 ms hole for a 20 ms position is recorded, not asserted (only >= 35 ms).
 * The AllStar edge's egress to a real app_rpt node (IAX2 out) is not a listener here.

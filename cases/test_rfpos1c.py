@@ -13,9 +13,10 @@ peer (static row, PCM, no codec: the control that already kept positions).
 
   RFPOS1C-a  no loss: every position at every listener holds its own frame; no gap, no lost, no lossy over anywhere (control)
   RFPOS1C-b  one MINI frame lost mid-over (position 40, the middle frame of DMR burst 13): D-STAR misses exactly position 40 (a skipped counter), DMR has
-             its burst 13 with frames 39 and 41 intact and the fill at 40, USRP misses position 40; every other position holds its own frame; the egress
-             `lost` counters of dextra, dmrhb and usrp rise by exactly 1 and the room's by at most 1. The output before step C was one frame short, no gap
-             and every later frame shifted (the compaction), egress lost 0
+             its burst 13 with frames 39 and 41 intact and the fill at 40, USRP keeps the hole in time; every other position holds its own frame. Counters
+             (the same before and after step C): ingress gap +1, room gap +1, lost +0, one lossy over; egress `tx lost` +0 (since MEDLOAD1b an egress counts
+             only loss on its own leg, an upstream gap is not tx loss; a rise is a FINDING). The output before step C was one frame short, no gap and
+             every later frame shifted (the compaction)
   RFPOS1C-c  the same with one FULL voice frame lost (position 40 is a full frame of the call, as Asterisk sends them now and then)
   RFPOS1C-d  control for c: the same over with a full frame at position 40, nothing lost
 
@@ -303,7 +304,7 @@ def test_rfpos1c_a_no_loss_keeps_every_position(lab, hub, frames):
 
 def test_rfpos1c_b_one_lost_mini_frame_is_one_missing_position(lab, hub, frames):
     """One IAX2 mini frame (position 40) never reaches the edge: the listeners miss exactly that position, every other frame stays at its own position,
-    the egress lost counters rise by one. Before step C: no gap, one frame short, every later frame shifted, lost 0."""
+    the room counts one gap and one lossy over. Before step C: no gap, one frame short, every later frame shifted, lost 0."""
     out = run_over(lab, hub, frames, "b", drop=DROP)
     check(judge(lab, "b", frames, out, DROP))
 

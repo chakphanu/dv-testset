@@ -160,7 +160,7 @@ CONTROL_GAP_S = 0.060               # no gap this long in an over without loss
 
 def judge_usrp(matched, times, count=COUNT, dropped=None, tick=0.020):
     """The PCM control listener (a static USRP row of the room): every position other than `dropped` once, at its own content, in order (a shifted or
-    compacted stream has other content at a position, which cannot happen here: the PCM units are the source units), and the lost position kept IN TIME:
+    compacted stream has other content at a position, which cannot happen here: the PCM units are the source units), and the lost position kept IN TIME (the edge's 20 ms spacing plus its 60 ms late window, about 80 ms, is expected; only >= 35 ms is asserted):
     the gap between the packets of the frames next to the lost one is at least HOLE_GAP_S (the compacted output has one tick), and with no loss no gap
     is as long as CONTROL_GAP_S. Returns (problems, facts)."""
     out = []
@@ -265,32 +265,34 @@ def egress_procs(seen):
     return have, [p for p in ("dextra", "dmrhb") if p not in seen]
 
 
-def judge_counters(change, dropped_count, procs, at_most=("usrp",)):
-    """Judge a rfpos1b.Reading delta of one over with `dropped_count` frames lost on the IAX2 side (0: the control). Returns (problems, findings, facts).
+def judge_counters(change, dropped_count, procs):
+    """Judge a rfpos1b.Reading delta of one over with `dropped_count` frames lost on the IAX2 side (0: a control, 1: the loss case). Returns (problems,
+    findings, facts).
 
-    Every egress edge in `procs` folded the over (else a harness slip) and its tx `lost` rose by exactly `dropped_count` (the old output closed the hole,
-    so it counted none; the procs in `at_most` are held to at most that: the USRP edge counted 0 on wip-3f142cd and its output keeps the position in time); the room's own `lost` rose by at most `dropped_count`; with no loss nothing is gap, lost or lossy anywhere. late / dropped are
-    recorded, not judged."""
+    Room side (step C does not change it; the same on wip-3f142cd): with one lost frame the ingress edge counts gap +1, the room gap +1, lost +0 and the over
+    `lossy` +1; with none all of them stay 0. Egress side (dv-router, since MEDLOAD1b an egress counts only loss on ITS OWN leg: a hole the room already
+    published as an upstream gap is upstream loss): `tx lost` rises by 0 at every edge in `procs`, with or without loss. A rise is a FINDING, not asserted.
+    Every egress edge folded the over (else a harness slip); late / dropped are findings."""
     problems, findings = [], []
     room = change.room
     facts = {"room": dict(room._asdict()), "egress": {proc: dict(c._asdict()) for proc, c in change.egress}}
     if medload1.overs_total(room) < 1:
         problems.append("harness: no over closed in room %s (dv_room_overs_total did not move)" % ROOM_LABEL)
+    want = {"edge_gap": dropped_count, "room_gap": dropped_count, "room_lost": 0, "overs_lossy": 1 if dropped_count else 0}
+    names = {"edge_gap": "dv_edge_over_units_total{dir=rx,proc=%s,result=gap}" % INGRESS_PROC, "room_gap": "dv_room_over_units_total{room=%s,result=gap}" % ROOM_LABEL,
+             "room_lost": "dv_room_over_units_total{room=%s,result=lost}" % ROOM_LABEL, "overs_lossy": "dv_room_overs_total{room=%s,result=lossy}" % ROOM_LABEL}
+    for field, value in want.items():
+        got = getattr(room, field)
+        if got != value:
+            problems.append("%s rose by %g, wanted %d (%s)" % (names[field], got, value, "one frame lost on the IAX2 side" if dropped_count else "an over without loss"))
     for proc, c in change.egress:
         folds = c.complete + c.lossy + c.end_missing + c.joined
         if folds < 1:
             problems.append("harness: egress edge %s folded no over: its listener did not take the stream" % proc)
-        if c.lost > dropped_count or (c.lost != dropped_count and proc not in at_most):
-            problems.append("dv_edge_over_units_total{dir=tx,proc=%s,result=lost} rose by %g, wanted %s%d" % (proc, c.lost, "at most " if proc in at_most else "", dropped_count))
+        if c.lost:
+            findings.append("dv_edge_over_units_total{dir=tx,proc=%s,result=lost} rose by %g (dv-router: +0, the hole is upstream loss; recorded, not asserted)" % (proc, c.lost))
         if c.late or c.dropped:
             findings.append("egress edge %s counted late %g, dropped %g" % (proc, c.late, c.dropped))
-    if room.room_lost > dropped_count:
-        problems.append("dv_room_over_units_total{room=%s,result=lost} rose by %g, at most %d is the lost frame" % (ROOM_LABEL, room.room_lost, dropped_count))
-    if dropped_count == 0:
-        if room.room_gap or room.edge_gap:
-            problems.append("a lossless over counted gap: room %g, edge rx %g" % (room.room_gap, room.edge_gap))
-        if room.overs_lossy:
-            problems.append("a lossless over was counted lossy (%g)" % room.overs_lossy)
     return problems, findings, facts
 
 

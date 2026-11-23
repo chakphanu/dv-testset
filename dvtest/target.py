@@ -131,7 +131,7 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
                      carried field, no bytes added) and that a strike on one unmapped P25 talker leaves the other granted on node 2 (docs/guardid2-cases.md); off or unset: skip
   DVT_RFPOS1C        on: RFPOS1 step C (DV-Router fb3167bb): with --profile asl-edge run.sh adds rfpos1c-usrp.toml (a static USRP row on module L, the tester as the peer);
                      cases/test_rfpos1c.py loses one IAX2 voice frame (a mini frame, and a full frame) of an AllStar call and asserts that the D-STAR, DMR and USRP listeners of the
-                     room miss exactly that position and the egress lost counters rise by one (docs/rfpos1c-cases.md); off or unset: the cases skip naming this switch
+                     room miss exactly that position and the room counts one gap and one lossy over, egress tx lost +0 (docs/rfpos1c-cases.md); off or unset: the cases skip naming this switch
   DVT_MEDLOAD1       on: MEDLOAD1 (DV-Router fb6a2a51 .. 28fc1838, image wip-f1f3777): cases/test_medload1.py sends overs with controlled drops, a late frame, a duplicate and a counter wrap and
                      compares the per-over gap / lost / late counts of the hub (dv_edge_over_units_total, dv_room_over_units_total, dv_room_overs_total) with the edge's rule, plus the S7 analogue
                      (five rounds under busy loops, DVT_MEDLOAD1_BURN processes, default 16); off or unset: the cases skip naming this switch (docs/medload1-cases.md)
