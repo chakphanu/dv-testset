@@ -102,7 +102,7 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
   DVT_XSTALE1C       on: the image has XSTALE1c (DV-Router 5072bf57, dv-router:wip-3f142cd): a leaving listener settles its egress over at the leave, a rejoining one folds as joined,
                      a stream refused for want of a radio id folds no egress over; cases/test_xstale1c.py asserts (docs/xstale1c-cases.md); off or unset: the cases skip
   DVT_XSTALE1D       on: the image has XSTALE1d (DV-Router, after wip-3f142cd): a transcoded over whose only listener left folds complete, not end_missing;
-                     XS1c-b[leave] asserts it (docs/xstale1c-cases.md); off or unset: recorded as a FINDING
+                     XS1c-b[leave] and XS1c-e (DExtra talker, DCS listener leaves) assert it (docs/xstale1c-cases.md); off or unset: b is recorded as a FINDING, e skips
   DVT_RADIOSEQ1      on: the image has RADIOSEQ1 (DV-Router 917b9e3b, dv-router:wip-37b7960): the radio hub numbers received DMR / YSF / NXDN / P25 voice by frame
                      ordinal, so a lossless radio over reaches a DMR (DMRD) client with the voice letters A..F in order (sync on A), the hub gap counters
                      (dv_edge_over_units_total{dir=rx,proc=radio,result=gap}, dv_room_over_units_total{result=gap}) stay 0 and the over is not counted lossy,

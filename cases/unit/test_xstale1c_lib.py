@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import xstale1_support as xs
 import xstale1c_support as xc
+from dvtest.proto import dcs
 from dvtest import metrics, xstale1 as x, xstale1c as c
 from dvtest.proto import dextra
 
@@ -37,6 +38,33 @@ def test_judge_leave():
     assert any("joined" in p for p in c.judge_leave(zero(joined=1)))
     assert any("folded 0 overs" in p for p in c.judge_leave(zero()))
     assert any("folded 2 overs" in p for p in c.judge_leave(zero(complete=2)))
+
+
+def test_switch_d_and_judge_leave_complete():
+    assert c.on_d({"DVT_XSTALE1D": "on"}) and not c.on_d({}) and not c.on_d({"DVT_XSTALE1C": "on"})
+    assert c.judge_leave_complete(zero(complete=1)) == []
+    assert any("end_missing 1" in p for p in c.judge_leave_complete(zero(end_missing=1)))       # the wip-3f142cd result
+    assert any("end_missing" in p for p in c.judge_leave_complete(zero(complete=1, end_missing=1)))
+    assert any("lost" in p for p in c.judge_leave_complete(zero(complete=1, lost=350)))
+    assert any("joined" in p for p in c.judge_leave_complete(zero(joined=1)))
+
+
+def test_dcs_listener_counts_voice_and_leaves():
+    sink = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sink.bind(("127.0.0.1", 0))
+    sink.settimeout(1.0)
+    b = xc.DcsListener("127.0.0.1", "N0TEST", "H")
+    b.c.dest = sink.getsockname()
+    try:
+        for i in range(5):
+            b.c.client.inbox.append(dcs.voice(7, i, bytes(9), False, i, "N0CALL", "H"))
+        b.c.client.inbox.append(dcs.voice(7, 5, bytes(9), True, 5, "N0CALL", "H"))
+        assert b.heard() == 5
+        b.leave()
+        assert b.c.dest is None and sink.recvfrom(2048)[0][:7] == b"N0TEST "
+    finally:
+        sink.close()
+        b.close()
 
 
 def test_judge_leave_allow_end_missing_only_when_asked():

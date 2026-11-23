@@ -23,6 +23,8 @@ Talker A and listener B are two clients of the SAME server port of the edge unde
 | XS1c-b[p25, leave] | a D-STAR talker (DExtra, N0CALL, transcoded to the P25 listener) talks 8 s on the module of the P25 edge, B leaves 3 s in | one fold, not joined; `lost`, `late`, `dropped`, `lossy` 0, x_stale <= 2. `end_missing` is a FINDING (below, XSTALE1d), asserted 0 with `complete` 1 under `DVT_XSTALE1D=on` |
 | XS1c-b[p25, stay] | the same over, B listens to the End | the control: `complete` 1, all of the above 0 |
 | XS1c-c[usrp, p25, nxdn] | as a), B is back 4 s in (same socket, the same address; the edge answers in 0.3 to 1.5 s) | one fold, `joined` exactly 1, `lost`, `late`, `dropped`, `lossy`, `end_missing` 0 (nothing counted twice); B hears at least 80 percent of the units to come after its link completed and no more than was sent (+ padding) |
+| XS1c-e[dcs, leave] | XSTALE1d, same mode and another edge, no transcoding: a D-STAR talker on DExtra (N0CALL, module H), the only listener a DCS client (N0TEST) of the same module; it unlinks 3 s into the 8 s over. Counters of the `dcs` edge. Needs `DVT_XSTALE1D=on` (skips otherwise: wip-3f142cd folds this over `end_missing`, per DV-Router) | one fold, `complete` exactly 1, not joined; `end_missing`, `lost`, `late`, `dropped`, `lossy` 0; x_stale <= 2. The listener must have heard 60 percent of what was sent before leaving (a harness check) |
+| XS1c-e[dcs, stay] | the control: the same over, the DCS listener hears the End | the same verdict (`complete` 1, all else 0) |
 | XS1c-d[p25] | a D-STAR talker with the callsign N0UNK (in no `dmrid.dat`) talks 4 s to the P25 listener B | `no_radio_id` rose by exactly 1 over all edges (the P25 edge), no egress over folded (all tx folds 0), `dropped`, `late`, `lost` 0, B hears nothing |
 
 Numbers of every case: `out/<run>/xstale1c.json` (one dict per case), the readable lines in `out/<run>/xstale1c.txt`.
@@ -84,3 +86,18 @@ Numbers of the final run (tx deltas of the edge; every unlisted counter 0, x_sta
 
 The XSTALE1 cases kept their results (b complete, c joined, d two overs, x_stale 0) with the same image. The pre-fix signature (sent 150 lost 350) is what `judge_leave` would flag as `tx lost rose by 350`;
 the rig has no pre-fix image loaded, so the cases were not shown failing on it.
+
+### Image dv-router:wip-e9fcc38 (XSTALE1d, code `4f454c71`), `DVT_XSTALE1C=on DVT_XSTALE1D=on`
+
+| Run | Cases | Result |
+|-----|-------|--------|
+| `20261123T153442Z` | XS1c-b (leave, stay) and XS1c-e (leave, stay) | 4 passed, 0 failed, 199 s |
+
+| Case | Scenario numbers | Fold (tx deltas of the edge, every unlisted counter 0) |
+|------|------------------|---------|
+| XS1c-b[p25, leave] | 400 D-STAR frames, B heard 136 before leaving at 3.00 s | complete 1, end_missing 0, lost 0 (was end_missing 1 on wip-3f142cd) |
+| XS1c-b[p25, stay] | 400 frames, B heard 405 in all | complete 1 |
+| XS1c-e[dcs, leave] | 400 D-STAR frames on DExtra, DCS listener heard 136 before leaving at 3.00 s | complete 1, end_missing 0, lost 0, late 0, dropped 0 |
+| XS1c-e[dcs, stay] | 400 frames, DCS listener heard 400 in all | complete 1, all else 0 |
+
+XS1c-e was written for the fix image and was not run on wip-3f142cd: it was not shown failing on the old behaviour (DV-Router says the false `end_missing` was not limited to transcoded streams).

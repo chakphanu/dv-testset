@@ -13,7 +13,7 @@ from pathlib import Path
 
 from dvtest.audio import signals
 from dvtest.net import pace
-from dvtest.proto import dextra
+from dvtest.proto import dcs, dextra
 
 
 class DstarTalker:
@@ -47,6 +47,39 @@ class DstarTalker:
             pace(start, units)
             self.c.client.send(self.c.dest, dextra.voice(sid, units, b"\x00" * 9, True))
         return sent, len([i for i in skip if i < units])
+
+    def pump(self, seconds):
+        self.c.client.pump(seconds)
+
+    def close(self):
+        try:
+            if self.c.dest:
+                self.c.unlink()
+        finally:
+            self.c.close()
+
+
+class DcsListener:
+    """A DCS client on the module of the talker (same mode as a DExtra talker, another edge): link, hear, leave. The room hands it a cross stream of the DExtra edge,
+    so its egress accounting is the `dcs` edge's (dv_edge_overs_total{proc=dcs,dir=tx})."""
+
+    def __init__(self, ip, callsign, module):
+        self.ip = ip
+        self.c = dcs.DcsClient("0.0.0.0", callsign=callsign, module=module)
+
+    def link(self):
+        ok = self.c.link(self.ip)
+        self.c.client.pump(0.3)
+        self.c.client.inbox.clear()
+        return ok
+
+    def heard(self):
+        self.c.client.pump(0.02)
+        return sum(1 for d in self.c.client.inbox if (p := dcs.parse(d)) and not p["last"])
+
+    def leave(self):
+        self.c.unlink()
+        self.left, self.c.dest = self.c.dest, None
 
     def pump(self, seconds):
         self.c.client.pump(seconds)

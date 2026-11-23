@@ -18,6 +18,7 @@ import os
 from dvtest import xstale1
 
 ENV = "DVT_XSTALE1C"
+ENV_D = "DVT_XSTALE1D"
 NO_RADIO_ID = "no_radio_id"
 
 LEAVE_S = 3.0                    # the listener leaves this long into the over (position 150 at 50 units a second)
@@ -29,6 +30,12 @@ HEARD_BEFORE_FRACTION = 0.6      # share of the units sent before the leave the 
 def on(environ=None):
     """DVT_XSTALE1C=on: the image has XSTALE1c (DV-Router 5072bf57 or later): the cases assert."""
     return str((environ if environ is not None else os.environ).get(ENV, "")).strip().lower() in ("on", "1", "true", "yes")
+
+
+def on_d(environ=None):
+    """DVT_XSTALE1D=on: the image has XSTALE1d (DV-Router 4f454c71, dv-router:wip-e9fcc38): any last listener leaving on an edge whose talker is on another edge folds
+    complete, never end_missing (the transcoded leave XS1c-b[leave] and the same-mode cross-edge leave XS1c-e)."""
+    return str((environ if environ is not None else os.environ).get(ENV_D, "")).strip().lower() in ("on", "1", "true", "yes")
 
 
 def no_radio_id(samples):
@@ -60,6 +67,15 @@ def judge_leave(d, allow=()):
         out.append("the edge folded %g overs for one over (want 1)" % xstale1.folds(d))
     if d.joined:
         out.append("the over folded as joined with the listener only leaving (joined %g)" % d.joined)
+    return out
+
+
+def judge_leave_complete(d):
+    """e) XSTALE1d: the leave of the last listener of an over whose talker is on another edge folds `complete` (not end_missing), as the leave of case a): judge_leave
+    plus complete exactly 1."""
+    out = judge_leave(d)
+    if d.complete != 1:
+        out.append("XSTALE1d: the over did not fold complete once after the leave (complete %g, end_missing %g)" % (d.complete, d.end_missing))
     return out
 
 

@@ -17,6 +17,8 @@ cases/test_xstale1.py):
   XS1c-b[p25,leave|stay]  as a), the talker a D-STAR client (DExtra, a cross-protocol over, transcoded to the P25 listener): lost 0 after the leave; end_missing of
                           the fold is a FINDING (XSTALE1d; asserted complete with DVT_XSTALE1D=on); stay is the control, B listening to the End (complete, lost 0)
   XS1c-c[usrp|p25|nxdn]   B leaves 3 s into the over and is back (same socket, same address) 4 s in: one fold, joined, lost / late / dropped 0, B hears the rest
+  XS1c-e[leave|stay]      XSTALE1d: a D-STAR talker on DExtra, the only listener a DCS client of the same module (same mode, another edge, no transcoding); the listener
+                          leaves 3 s in: complete 1, end_missing 0, lost / late / dropped 0 (DVT_XSTALE1D=on; stay is the control)
   XS1c-d[p25]             a D-STAR client whose callsign has no radio id talks 4 s to B: exactly one no_radio_id event, dropped 0, no egress over folded, B hears nothing
 
 Needs DVT_XSTALE1C=on, DVT_RIG_CONTROL=1 (set by scripts/run.sh), DVT_SUT_PROFILE=dvrouter, DVT_SUT_LAUNCH=native, DVT_USRP_DYNAMIC=1 and rig/config/dv-router/soak-edges.toml
@@ -160,7 +162,7 @@ def test_xs1c_b_cross_protocol_listener_leaves(edge, proto, stays, target):
                           "heard_total": heard_total, "delta": dict(d._asdict())})
     # XSTALE1d (DV-Router, open on wip-3f142cd): the transcoded over whose only listener left folds end_missing; DV-Router says it must fold complete, the same
     # as the same-edge leave of case a). Until the fix image it is recorded as a finding; with DVT_XSTALE1D=on (the fix image) it is asserted.
-    xs1d = os.environ.get("DVT_XSTALE1D", "").lower() in ("on", "1", "true", "yes")
+    xs1d = xstale1c.on_d()
     if d.end_missing and not stays and not xs1d:
         say("FINDING", "XSTALE1d: the over folded as end_missing %g after the leave (complete %g); with the listener staying the same over folds complete" % (d.end_missing, d.complete))
     problems = xstale1c.judge_leave(d, allow=() if (stays or xs1d) else ("end_missing",))
@@ -272,4 +274,71 @@ def test_xs1c_d_refused_start_adds_no_dropped_frames(edge, proto, target, rig_co
         pytest.fail("%s: no no_radio_id event at all (series that moved: %s): the talk did not reach an egress edge that wants a radio id, not a product result"
                     % (case, "; ".join(moved[:12]) or "none"))
     problems = xstale1c.judge_refusal(d, rises, heard)
+    assert not problems, "%s: %s" % (case, "; ".join(problems))
+
+
+# ---------------------------------------------------------------- e) same mode, cross edge: a DExtra talker, a DCS listener that leaves (XSTALE1d)
+
+E_MODULE = "H"                                   # a module of no other case: a room with only the DExtra talker and the DCS listener (rooms A-Z are served)
+E_PROC = "dcs"
+
+
+@pytest.fixture
+def dcs_edge(rig_control):
+    """read(): the Counts of the `dcs` edge process (the egress edge of the listener); read.snapshot() / read.procs as the `edge` fixture of cases/test_xstale1.py."""
+    def read():
+        return xstale1.counts(metrics.parse(rig_control.metrics("xlxd-sut")), E_PROC)
+
+    def snapshot():
+        return metrics.parse(rig_control.metrics("xlxd-sut"))
+
+    read.snapshot = snapshot
+    read.procs = (E_PROC, "dv-router", "")
+    return read
+
+
+@pytest.mark.parametrize("stays", [False, True], ids=["leave", "stay"])
+def test_xs1c_e_same_mode_cross_edge_listener_leaves(dcs_edge, stays, target):
+    """e) a DExtra talker, the only listener a DCS client of the same module: it leaves 3 s into the 8 s over and the over folds complete at the DCS edge (the leave
+    of the last listener of a stream whose talker is on another edge, no transcoding). `stay` is the control: the listener hears the End."""
+    read = dcs_edge
+    case = "XS1c-e[dcs,%s]" % ("stay" if stays else "leave")
+    if not xstale1c.on_d():
+        pytest.skip("DVT_XSTALE1D=on is not set (the image under test has XSTALE1d, DV-Router 4f454c71: dv-router:wip-e9fcc38 or later)")
+    say = lambda tag, text: note(target, case, tag, text)                         # noqa: E731
+    before = xstale1.stable_baseline(read)
+    snap = read.snapshot()
+    talker = xc.DstarTalker(target.xlxd_sut, TALK_CALL, E_MODULE)
+    b = xc.DcsListener(target.xlxd_sut, "N0TEST", E_MODULE)
+    try:
+        if not b.link():
+            pytest.fail("%s: the DCS listener gets no link ACK on module %s: the DCS edge is not serving" % (case, E_MODULE))
+        if not talker.link():
+            pytest.fail("%s: the DExtra talker gets no link ACK on module %s: the DExtra edge is not serving" % (case, E_MODULE))
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            t0 = time.monotonic()
+            job = pool.submit(talker.over, DSTAR_UNITS, "e", (), True)
+            left_at = wait_until(t0, xstale1c.LEAVE_S)
+            heard_before = b.heard()
+            if stays:
+                sent, _ = pump_while(job, [b])
+            else:
+                b.leave()
+                sent, _ = job.result()
+        talker.pump(x1.HOLD_S)
+        heard_total = b.heard() if stays else heard_before
+    finally:
+        for ep in (b, talker):
+            ep.close()
+    sent_before = int(left_at * xstale1.RATE)
+    assert left_at <= xstale1c.LEAVE_S + xstale1c.LEAVE_LATE_S, "%s: the leave came %.1f s into the over: a slow pacer, not a product result" % (case, left_at)
+    assert xstale1c.hear_before(sent_before, heard_before), \
+        "%s: B heard %d of the about %d units sent before it left: the DCS listener was not served, not a product result" % (case, heard_before, sent_before)
+    d = counted(read, before, case, 1, say,
+                lambda: "%d D-STAR frames sent, B %s %.2f s into the over after hearing %d" % (sent, "was checked" if stays else "left", left_at, heard_before), snap)
+    say("RECORD", "%d D-STAR frames sent, B (DCS) %s %.2f s into the over after hearing %d (%d in all)"
+        % (sent, "was checked" if stays else "left", left_at, heard_before, heard_total))
+    record(target, case, {"proto": E_PROC, "module": E_MODULE, "stays": stays, "frames_sent": sent, "left_at_s": round(left_at, 2), "heard_before_leave": heard_before,
+                          "heard_total": heard_total, "delta": dict(d._asdict())})
+    problems = xstale1c.judge_leave_complete(d)
     assert not problems, "%s: %s" % (case, "; ".join(problems))
