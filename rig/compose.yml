@@ -653,6 +653,7 @@ services:
       DVT_XSTALE1: ${DVT_XSTALE1:-}
       # XSTALE1c (docs/xstale1c-cases.md): the image has the leave / rejoin settlement and the no_radio_id refusal without an egress fold; unset: the cases skip
       DVT_XSTALE1C: ${DVT_XSTALE1C:-}
+      DVT_XSTALE1D: ${DVT_XSTALE1D:-}
       DVT_XSTALE1_USRP_MODULE: ${DVT_XSTALE1_USRP_MODULE:-}
       DVT_XSTALE1_WITNESS: ${DVT_XSTALE1_WITNESS:-}
       # SECRELOAD1 / SECRELOAD2 (cases/test_secret_reload.py): on = the APRS-IS edge and the image rule are EXPECTED, so a missing series or route

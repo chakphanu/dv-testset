@@ -15,7 +15,7 @@ cases/test_xstale1.py):
 
   XS1c-a[usrp|p25|nxdn]   B listens from the start, A talks 8 s, B leaves 3 s in: one fold, lost / late / dropped / lossy / end_missing 0, not joined
   XS1c-b[p25,leave|stay]  as a), the talker a D-STAR client (DExtra, a cross-protocol over, transcoded to the P25 listener): lost 0 after the leave; end_missing of
-                          the fold is a FINDING (not asserted); stay is the control, B listening to the End (complete, lost 0)
+                          the fold is a FINDING (XSTALE1d; asserted complete with DVT_XSTALE1D=on); stay is the control, B listening to the End (complete, lost 0)
   XS1c-c[usrp|p25|nxdn]   B leaves 3 s into the over and is back (same socket, same address) 4 s in: one fold, joined, lost / late / dropped 0, B hears the rest
   XS1c-d[p25]             a D-STAR client whose callsign has no radio id talks 4 s to B: exactly one no_radio_id event, dropped 0, no egress over folded, B hears nothing
 
@@ -158,11 +158,14 @@ def test_xs1c_b_cross_protocol_listener_leaves(edge, proto, stays, target):
     say("RECORD", "%d D-STAR frames sent, B %s %.2f s into the over after hearing %d (%d in all)" % (sent, "was checked" if stays else "left", left_at, heard_before, heard_total))
     record(target, case, {"proto": proto, "stays": stays, "frames_sent": sent, "left_at_s": round(left_at, 2), "heard_before_leave": heard_before,
                           "heard_total": heard_total, "delta": dict(d._asdict())})
-    if d.end_missing and not stays:
-        # The promise is about lost: the over is settled at the leave. The fold RESULT of a transcoded over whose only listener left is end_missing (the same over
-        # with the listener staying folds complete, the same-edge leave of case a) folds complete): recorded as a finding, not asserted.
-        say("FINDING", "the over folded as end_missing %g after the leave (complete %g); with the listener staying the same over folds complete" % (d.end_missing, d.complete))
-    problems = xstale1c.judge_leave(d, allow=() if stays else ("end_missing",))
+    # XSTALE1d (DV-Router, open on wip-3f142cd): the transcoded over whose only listener left folds end_missing; DV-Router says it must fold complete, the same
+    # as the same-edge leave of case a). Until the fix image it is recorded as a finding; with DVT_XSTALE1D=on (the fix image) it is asserted.
+    xs1d = os.environ.get("DVT_XSTALE1D", "").lower() in ("on", "1", "true", "yes")
+    if d.end_missing and not stays and not xs1d:
+        say("FINDING", "XSTALE1d: the over folded as end_missing %g after the leave (complete %g); with the listener staying the same over folds complete" % (d.end_missing, d.complete))
+    problems = xstale1c.judge_leave(d, allow=() if (stays or xs1d) else ("end_missing",))
+    if xs1d and not stays and not d.complete:
+        problems.append("XSTALE1d: the over did not fold complete after the leave (complete %g, end_missing %g)" % (d.complete, d.end_missing))
     assert not problems, "%s: %s" % (case, "; ".join(problems))
 
 

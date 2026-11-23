@@ -20,7 +20,7 @@ Talker A and listener B are two clients of the SAME server port of the edge unde
 | Case | Scenario | Asserted |
 |------|----------|----------|
 | XS1c-a[usrp, p25, nxdn] | B listens from the start, A talks 8 s, B leaves (USRP unregister, P25 / NXDN unlink) 3 s in, about 150 units | one fold at the edge, not joined; tx `lost`, `late`, `dropped`, `lossy`, `end_missing` all 0; x_stale <= 2; A hears nothing of itself. B must have heard 60 percent of what was sent before the leave (a harness check) |
-| XS1c-b[p25, leave] | a D-STAR talker (DExtra, N0CALL, transcoded to the P25 listener) talks 8 s on the module of the P25 edge, B leaves 3 s in | one fold, not joined; `lost`, `late`, `dropped`, `lossy` 0, x_stale <= 2. `end_missing` is a FINDING (below), not asserted |
+| XS1c-b[p25, leave] | a D-STAR talker (DExtra, N0CALL, transcoded to the P25 listener) talks 8 s on the module of the P25 edge, B leaves 3 s in | one fold, not joined; `lost`, `late`, `dropped`, `lossy` 0, x_stale <= 2. `end_missing` is a FINDING (below, XSTALE1d), asserted 0 with `complete` 1 under `DVT_XSTALE1D=on` |
 | XS1c-b[p25, stay] | the same over, B listens to the End | the control: `complete` 1, all of the above 0 |
 | XS1c-c[usrp, p25, nxdn] | as a), B is back 4 s in (same socket, the same address; the edge answers in 0.3 to 1.5 s) | one fold, `joined` exactly 1, `lost`, `late`, `dropped`, `lossy`, `end_missing` 0 (nothing counted twice); B hears at least 80 percent of the units to come after its link completed and no more than was sent (+ padding) |
 | XS1c-d[p25] | a D-STAR talker with the callsign N0UNK (in no `dmrid.dat`) talks 4 s to the P25 listener B | `no_radio_id` rose by exactly 1 over all edges (the P25 edge), no egress over folded (all tx folds 0), `dropped`, `late`, `lost` 0, B hears nothing |
@@ -44,6 +44,8 @@ The Rust unit tests of the product (`xstale1c_leave_keeps_real_losses_before_the
   same-protocol leave (XS1c-a, the same edge's own talker) folds `complete`. The promise (no lost after the leave) holds; the fold RESULT differs. A likely cause (not verified from outside): with no listener left
   for the IMBE profile the room stops the transcoded stream, so its End never reaches the P25 edge, and the settled interval has no End count to close on. Whether `end_missing` is the intended result for that
   over is for DV-Router to say: the case records it as `[FINDING]` and does not assert it.
+  DV-Router answer (2026-11-23): NOT intended; the leave settlement must apply to the transcoded leg too (fold `complete`, lost 0, `end_missing` 0). Open as
+  **XSTALE1d**. With `DVT_XSTALE1D=on` (the fix image) XS1c-b[leave] asserts `complete` 1 and `end_missing` 0; without it the case keeps recording the finding.
 * **XS1c-d** also moved `dv_edge_drops_total{proc=dextra,reason=no_session}` by 1 and `proc=p25,reason=id_held` by 1 (the Start held for the radio id lookup before the refusal): recorded, not asserted.
 
 ## Run
