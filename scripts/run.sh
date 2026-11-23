@@ -105,7 +105,13 @@
 #                      rig/config/dv-router/dp15-twonode-b.toml only, into out/<utc>/xlxd-config/dvr-peer/dv-router.toml;
 #                      the recorder archives are out/<utc>/recorder (SUT) and out/<utc>/recorder-peer (node 2). The
 #                      hub of node 2 is read by the control action `metrics dvr-peer`. The tester gets DVT_TWONODE=on,
-#                      DVT_DVR_PEER and DVT_DVR_PEER_TRANSCODER. Do not combine with --profile interlink
+#                      DVT_DVR_PEER and DVT_DVR_PEER_TRANSCODER. Do not combine with --profile interlink.
+#                      With DVT_RFPOS1B=on (RFPOS1 step B, cases/test_rfpos1_link.py, docs/rfpos1-cases.md) the pair is also a NODE
+#                      LINK (edges.link): the SUT dials an uplink for room G at the tester (<tester>:31801, where the case runs its
+#                      relay), node 2 accepts it; run.sh adds rfpos1-link-a.toml to the SUT's extras, rfpos1-link-b.toml to node 2's
+#                      render and writes a per-run key out/<utc>/link-secrets/link.key (64 hex, mode 600, mounted read-only at
+#                      /etc/dv-router/link-secrets in both nodes, never in the tester, never printed). The directory is made for
+#                      every twonode run (the dvr-peer mount is static)
 #   --profile webload  the WebRTC load generator (webload, .97: aiortc, control server on :3100 for the tester
 #                      only) of the W8 load case, used together with web (--profile web,webload; exit 2
 #                      without it); the tester gets DVT_WEBLOAD=on and DVT_WEBLOAD_URL (docs/web-load-cases.md,
@@ -495,6 +501,15 @@ if [ "$has_twonode" = 1 ]; then
   case ":${DVT_SUT_CONFIG_EXTRA:-}:" in
     *:rig/config/dv-router/dp15-twonode-a.toml:*) ;;
     *) DVT_SUT_CONFIG_EXTRA="${DVT_SUT_CONFIG_EXTRA:+$DVT_SUT_CONFIG_EXTRA:}rig/config/dv-router/dp15-twonode-a.toml" ;;
+  esac
+  # RFPOS1 step B: the node link of the pair (the uplink of the SUT; node 2's account row is added by render_dvr_peer)
+  case "${DVT_RFPOS1B:-}" in
+    on|1|true|yes)
+      case ":${DVT_SUT_CONFIG_EXTRA:-}:" in
+        *:rig/config/dv-router/rfpos1-link-a.toml:*) ;;
+        *) DVT_SUT_CONFIG_EXTRA="$DVT_SUT_CONFIG_EXTRA:rig/config/dv-router/rfpos1-link-a.toml" ;;
+      esac
+      ;;
   esac
   export DVT_SUT_CONFIG_EXTRA
   # dp15-twonode-a.toml switches the recorder of the SUT on: its archive is the host directory out/<run>/recorder
@@ -937,6 +952,16 @@ if [ "$has_twonode" = 1 ]; then
   (umask 077; mkdir -p "$out/recorder" "$out/recorder-peer")
   chmod 700 "$out/recorder" "$out/recorder-peer"
   echo "run.sh: twonode profile: dvr-peer at ${DVT_NET:-172.30.0}.16 (transcoder-peer .17), recorders in $out/recorder and $out/recorder-peer"
+  # the key directory of the node link (compose mounts it into dvr-peer for every twonode run); the key itself only for RFPOS1 step B
+  (umask 077; mkdir -p "$out/link-secrets")
+  chmod 700 "$out/link-secrets"
+  case "${DVT_RFPOS1B:-}" in
+    on|1|true|yes)
+      (umask 077; python3 -c 'import secrets; print(secrets.token_hex(32))' > "$out/link-secrets/link.key")
+      chmod 600 "$out/link-secrets/link.key"
+      echo "run.sh: RFPOS1B: node link key in $out/link-secrets/link.key (mode 600, never printed), uplink of the SUT at the tester ${DVT_NET:-172.30.0}.30:31801"
+      ;;
+  esac
 fi
 
 # --profile asl-edge: fixture secret files of the edge's accounts and node password (the lab's
@@ -1074,6 +1099,10 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
     if [ "$svc" = xlxd-sut ] && [ "$has_recorder" = 1 ]; then
       printf '      - "%s/%s/recorder:/var/lib/dv-recorder"\n' "$DVT_ROOT" "$out"
     fi
+    # --profile twonode: the node link key directory (RFPOS1 step B; empty unless DVT_RFPOS1B=on), read-only
+    if [ "$svc" = xlxd-sut ] && [ "$has_twonode" = 1 ]; then
+      printf '      - "%s/%s/link-secrets:/etc/dv-router/link-secrets:ro"\n' "$DVT_ROOT" "$out"
+    fi
     # --profile nat with turn.toml: the per-run TURN secret (mode 600, the SUT's uid) at the absolute path of turn_secret_file
     if [ "$svc" = xlxd-sut ] && [ "$has_turn" = 1 ]; then
       printf '      - "%s/%s/web/turn.secret:/run/secrets/turn-secret:ro"\n' "$DVT_ROOT" "$out"
@@ -1085,10 +1114,13 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
 # snippet dp15-twonode-b.toml only (the image and the command are in rig/compose.yml; the bind address and the callsign
 # are in the file, the argv repeats them)
 render_dvr_peer() {
-  local net="${DVT_NET:-172.30.0}" cfg="$DVT_ROOT/$out/xlxd-config/dvr-peer"
+  local net="${DVT_NET:-172.30.0}" cfg="$DVT_ROOT/$out/xlxd-config/dvr-peer" link_extra=()
+  # RFPOS1 step B: the account row of the node link (the SUT's uplink is rfpos1-link-a.toml)
+  case "${DVT_RFPOS1B:-}" in on|1|true|yes) link_extra=(--extra rig/config/dv-router/rfpos1-link-b.toml) ;; esac
   mkdir -p "$cfg"
   python3 -m dvtest.sut_config "$DVT_SUT_CONFIG" "$cfg/dv-router.toml" --net "$net" --own 16 --transcoder 17 --tester 30 \
-    --require-ident "${DVT_REQUIRE_IDENT:-true}" --dp15-tx-enable false --extra rig/config/dv-router/dp15-twonode-b.toml || exit 2
+    --require-ident "${DVT_REQUIRE_IDENT:-true}" --dp15-tx-enable false --extra rig/config/dv-router/dp15-twonode-b.toml \
+    "${link_extra[@]}" || exit 2
 }
 [ "$has_twonode" = 0 ] || render_dvr_peer
 if { [ "$lab_only" = 0 ] || [ "$has_asl_edge" = 1 ]; } && [ -n "${XLXD_REF_IMAGE:-}${XLXD_SUT_IMAGE:-}" ]; then

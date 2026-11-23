@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: MIT
+# RFPOS1 step B (DV-Router 47dac7b4, image dv-router:wip-c3b24d2; docs/rfpos1-cases.md): node 1 (the SUT, XLX999) dials a node-link
+# uplink for room G. The uplink host is the TESTER (<TESTER_IP>:31801), where cases/test_rfpos1_link.py runs an opaque UDP relay
+# (dvtest/rfpos1.py LinkRelay) that forwards every datagram to node 2 (<NET>.16:31800) and drops one Units record on request: the only black-box
+# way to lose ONE link frame (a netem sidecar can only lose a random share of a container's egress). The key is a per-run file made by
+# scripts/run.sh under DVT_RFPOS1B=on (out/<run>/link-secrets/link.key, 64 hex digits, mode 0600, mounted read-only at
+# /etc/dv-router/link-secrets; the tester never gets it). scripts/run.sh adds this file to DVT_SUT_CONFIG_EXTRA for --profile twonode with
+# DVT_RFPOS1B=on; node 2 gets rfpos1-link-b.toml. Room G is served by the template (A-Z) and is not in the XLX peer rows of dp15-twonode-a.toml
+# (modules DE), so no interlink loop. Never add this file to a run without the matching node 2 file.
+[[edges.link.uplink]]
+name = "rfpos1"
+host = "<TESTER_IP>:31801"
+account = "rfpos1"
+secret_file = "/etc/dv-router/link-secrets/link.key"
+rooms = { G = "G" }

@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+# RFPOS1 step B (DV-Router 47dac7b4, image dv-router:wip-c3b24d2; docs/rfpos1-cases.md): node 2 (dvr-peer, XLX998) accepts the node link of
+# node 1 for room G, with the right to talk (node 1 is the talker side of the cases). scripts/run.sh appends this file to the render of node 2
+# (render_dvr_peer) under DVT_RFPOS1B=on, after dp15-twonode-b.toml. The server port is edges.link.port (default 31800); the dialling side is
+# reached through the tester's relay (rfpos1-link-a.toml), so the server sees the tester's address as the client. The key is the SAME per-run
+# file as node 1's (out/<run>/link-secrets/link.key, mounted read-only at /etc/dv-router/link-secrets).
+[[edges.link.account]]
+name = "rfpos1"
+callsign = "N0TEST"
+secret_file = "/etc/dv-router/link-secrets/link.key"
+rooms = ["G"]
+talk = true
