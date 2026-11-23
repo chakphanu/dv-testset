@@ -678,3 +678,10 @@ def test_small5_problems_names_the_image_before_small5():
     other = rif5.small5_problems(1100, by_mode)
     assert len(other) == 1 and "before SMALL5" not in other[0]
     assert rif5.small5_problems(None, by_mode) == ["frames_total{dir=tx,result=ok} could not be read (no counters)"]
+
+
+def test_rx_ok_problems_demands_movement_only_when_rf_overs_were_accepted():
+    assert rif5.rx_ok_problems(0, 0) == [] and rif5.rx_ok_problems(None, 0) == []       # a TX-only -k subset: no RX over ran
+    assert rif5.rx_ok_problems(12, 3) == []
+    assert len(rif5.rx_ok_problems(0, 3)) == 1 and "3 RF overs" in rif5.rx_ok_problems(0, 3)[0]
+    assert len(rif5.rx_ok_problems(None, 1)) == 1

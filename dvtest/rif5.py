@@ -81,6 +81,13 @@ def n_on(environ):
     return _switch(environ, ENV_N)
 
 
+def rx_ok_problems(grown, rx_overs):
+    """frames_total{dir=rx,result=ok} must have moved when RF overs were accepted; with none (a -k subset of TX cases only) there is nothing to demand."""
+    if rx_overs and not grown:
+        return ["frames_total{dir=rx,result=ok} did not move although %d RF overs were accepted" % rx_overs]
+    return []
+
+
 def small5_on(environ):
     return _switch(environ, ENV_SMALL5)
 

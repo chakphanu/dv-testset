@@ -1803,8 +1803,7 @@ def test_m1_counters_account_for_the_overs(ctx, web):
         problems.append("tx started grew by %s, %d room overs were sent" % (grown["tx_started"], tx_overs))
     if grown["ptt_key"] < tx_overs or grown["ptt_unkey"] < tx_overs:
         problems.append("ptt key / unkey grew by %s / %s, %d room overs were sent" % (grown["ptt_key"], grown["ptt_unkey"], tx_overs))
-    if not grown["frames_rx_ok"]:
-        problems.append("frames_total{dir=rx,result=ok} did not move although %d RF overs were accepted" % rx_overs)
+    problems += rif5.rx_ok_problems(grown["frames_rx_ok"], rx_overs)
     # Every frame the fake logged since the counters' baseline (the restart of G1), not only those of the overs the cases tallied: the document says
     # ok is byte-link acceptance, so the comparison is with all frames the host wrote to the byte link in that time. Native frames first; then all
     # types, so that a difference can be read against the SET_MODE and other control frames of the run.
