@@ -1,15 +1,18 @@
 # SPDX-License-Identifier: MIT
 """ASLDROP1 (DV-Router image wip-42d5473; docs/asldrop1-cases.md): the AllStar edge counts a REFUSED voice packet once, in
 dv_edge_over_units_total{dir=rx,result=late}. A packet is refused when it is before the over's first timestamp, behind playout (more than 60 ms late) or a
-repeat of a pending position. Nothing else moves for it: not rx lost / gap / dropped, not the room's gap and lost, not the egress edges' tx lost and dropped.
+repeat of a pending position. `late` counts packets that ARRIVED and were not used, `gap` counts missing positions: they do not double count (dv-router). So a frame
+refused as more than 60 ms late is late +1 AND gap +1 (its position stays empty: rx gap, room gap, a lossy over), a packet stamped before the first one is late +1
+and gap 0 (room late +1, the over still folds lossy, the rule of a refused backward or duplicate D-STAR datagram). Never moved: rx lost and dropped, the room's lost,
+the egress edges' tx lost and dropped.
 
 The tester is the IAX2 caller (as in RFPOS1C, dvtest.proto.iax2.Client): a mini frame can be held back and sent later (`voice(drop=True)` for its own slot
 then `voice_at(timestamp, ...)`), or stamped before the first packet of the over. The edge's tap capture shows the order in which the packets arrived
 (`order_problems`: the harness check that the late frame really went out late).
 
-  a  frame 40 sent 110 ms late (after frame 45, before 46): not heard, rx late +1
-  b  frame 40 sent 30 ms late (after frame 41, before 42), inside the window: heard at its own position, rx late +0 (control)
-  c  one mini stamped 20 ms before the over's first timestamp, sent right after the first frames: not heard, rx late +1
+  a  frame 40 sent 110 ms late (after frame 45, before 46): not heard, rx late +1, rx gap +1, room gap +1, lossy +1
+  b  frame 40 sent 30 ms late (after frame 41, before 42), inside the window: heard at its own position, nothing moves (control)
+  c  one mini stamped 20 ms before the over's first timestamp, sent right after the first frames: rx late +1, gap 0, room late +1, lossy +1, 90 frames heard
 
 Pure and stdlib only (cases/unit/test_asldrop1_lib.py); the sockets and the rig are in cases/test_asldrop1.py.
 """
@@ -91,30 +94,35 @@ def judge_early(d_slots, usrp_matched, count=COUNT):
     return judge_heard(d_slots, usrp_matched, None, count)
 
 
-def judge_counters(change, rx, late):
-    """Judge one over: `change` is a rfpos1b.Reading delta (room Counts, egress Counts per proc), `rx` the rx_delta of the ingress edge, `late` the refused
-    packets expected (1 or 0). Returns (problems, findings, facts).
+def judge_counters(change, rx, late, gap=0, lossy=0, room_late=None):
+    """Judge one over: `change` is a rfpos1b.Reading delta (room Counts, egress Counts per proc), `rx` the rx_delta of the ingress edge. Expected (dv-router):
+    `late` refused packets (they arrived and were not used: counted once, as late), `gap` missing positions (counted as gap, never twice: a frame refused as
+    more than 60 ms late leaves its position empty, one stamped before the over's first timestamp leaves none), `lossy` the over folded lossy (1 when it had a
+    gap or a late unit, as for a refused backward or duplicate D-STAR datagram), `room_late` the room's late count (None: recorded, not asserted).
+    Returns (problems, findings, facts).
 
-    Asserted: the ingress edge's rx late rose by exactly `late`; rx gap, lost and dropped by 0; the room's gap and lost by 0; every egress edge's tx lost and
-    dropped by 0 and each folded the over (else a harness slip). Recorded: the room's late, a lossy over, the egress late."""
+    Asserted: rx late rose by `late`, rx gap and the room's gap by `gap`, rx lost and dropped and the room's lost by 0, the lossy over count by `lossy`,
+    every egress edge's tx lost and dropped by 0 and each folded the over (else a harness slip). Recorded: the room's late (asserted when `room_late` is
+    given), the egress late."""
     problems, findings = [], []
     room = change.room
     facts = {"rx": dict(rx), "room": dict(room._asdict()), "egress": {proc: dict(c._asdict()) for proc, c in change.egress}}
     if medload1.overs_total(room) < 1:
-        problems.append("harness: no over closed in room %s (dv_room_overs_total did not move)" % rfpos1c.ROOM_LABEL)
-    if rx["late"] != late:
-        problems.append("dv_edge_over_units_total{dir=rx,proc=%s,result=late} rose by %g, wanted %d" % (rfpos1c.INGRESS_PROC, rx["late"], late))
-    for result in ("gap", "lost", "dropped"):
-        if rx[result]:
-            problems.append("dv_edge_over_units_total{dir=rx,proc=%s,result=%s} rose by %g, wanted 0 (a refused packet is counted once, as late)" % (rfpos1c.INGRESS_PROC, result, rx[result]))
-    if room.room_gap:
-        problems.append("dv_room_over_units_total{room=%s,result=gap} rose by %g, wanted 0" % (rfpos1c.ROOM_LABEL, room.room_gap))
-    if room.room_lost:
-        problems.append("dv_room_over_units_total{room=%s,result=lost} rose by %g, wanted 0" % (rfpos1c.ROOM_LABEL, room.room_lost))
-    if room.room_late:
-        findings.append("dv_room_over_units_total{room=%s,result=late} rose by %g (not named by the contract, recorded)" % (rfpos1c.ROOM_LABEL, room.room_late))
-    if room.overs_lossy:
-        findings.append("the over was counted lossy (%g): recorded, the contract does not name it" % room.overs_lossy)
+        problems.append("harness: no over closed in room %s (dv_room_over_units_total did not move)" % rfpos1c.ROOM_LABEL)
+    wanted = (("dv_edge_over_units_total{dir=rx,proc=%s,result=late}" % rfpos1c.INGRESS_PROC, rx["late"], late),
+              ("dv_edge_over_units_total{dir=rx,proc=%s,result=gap}" % rfpos1c.INGRESS_PROC, rx["gap"], gap),
+              ("dv_edge_over_units_total{dir=rx,proc=%s,result=lost}" % rfpos1c.INGRESS_PROC, rx["lost"], 0),
+              ("dv_edge_over_units_total{dir=rx,proc=%s,result=dropped}" % rfpos1c.INGRESS_PROC, rx["dropped"], 0),
+              ("dv_room_over_units_total{room=%s,result=gap}" % rfpos1c.ROOM_LABEL, room.room_gap, gap),
+              ("dv_room_over_units_total{room=%s,result=lost}" % rfpos1c.ROOM_LABEL, room.room_lost, 0),
+              ("dv_room_overs_total{room=%s,result=lossy}" % rfpos1c.ROOM_LABEL, room.overs_lossy, lossy))
+    if room_late is not None:
+        wanted += (("dv_room_over_units_total{room=%s,result=late}" % rfpos1c.ROOM_LABEL, room.room_late, room_late),)
+    elif room.room_late:
+        findings.append("dv_room_over_units_total{room=%s,result=late} rose by %g (not asserted here, recorded)" % (rfpos1c.ROOM_LABEL, room.room_late))
+    for name, got, want in wanted:
+        if got != want:
+            problems.append("%s rose by %g, wanted %d" % (name, got, want))
     for proc, c in change.egress:
         if c.complete + c.lossy + c.end_missing + c.joined < 1:
             problems.append("harness: egress edge %s folded no over: its listener did not take the stream" % proc)

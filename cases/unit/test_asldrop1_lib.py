@@ -102,20 +102,35 @@ def test_judge_counters():
     # radioseq1.Counts: edge_gap edge_late edge_dropped room_gap room_late room_lost overs_complete overs_lossy overs_end_missing egress_lost egress_late egress_dropped
     egress = dict(dextra=(0, 1, 0, 0, 0, 0, 0, 0), dmrhb=(0, 1, 0, 0, 0, 0, 0, 0), usrp=(0, 1, 0, 0, 0, 0, 0, 0))
     quiet = {"gap": 0.0, "late": 0.0, "dropped": 0.0, "lost": 0.0}
-    refused = dict(quiet, late=1.0)
-    ok = reading((0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0), **egress)
-    assert asldrop1.judge_counters(ok, refused, 1) == ([], [], asldrop1.judge_counters(ok, refused, 1)[2])
-    assert asldrop1.judge_counters(ok, quiet, 0)[0] == []
-    # the contract's counter did not move / moved twice, and something else moved with it
-    assert any("result=late} rose by 0, wanted 1" in p for p in asldrop1.judge_counters(ok, quiet, 1)[0])
-    assert any("result=late} rose by 1, wanted 0" in p for p in asldrop1.judge_counters(ok, refused, 0)[0])
-    moved = dict(refused, gap=1.0, lost=2.0, dropped=3.0)
-    problems = asldrop1.judge_counters(ok, moved, 1)[0]
-    assert len(problems) == 3 and all("counted once, as late" in p for p in problems)
-    room = reading((0, 0, 0, 1, 0, 2, 1, 1, 0, 0, 0, 0), dextra=(0, 1, 0, 0, 0, 0, 0, 4), usrp=(0, 1, 0, 0, 0, 0, 3, 0))
-    problems, findings, _ = asldrop1.judge_counters(room, refused, 1)
-    assert sorted(p.split(" rose")[0].split("{")[1] for p in problems) == ["dir=tx,proc=dextra,result=lost}", "dir=tx,proc=usrp,result=dropped}", "room=l,result=gap}", "room=l,result=lost}"]
-    assert any("lossy" in f for f in findings)
+    # a: refused as more than 60 ms late: rx late +1, rx gap +1, room gap +1, over lossy +1 (no double count of one packet as two losses)
+    a_rx = dict(quiet, late=1.0, gap=1.0)
+    a = reading((1, 1, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0), **egress)
+    assert asldrop1.judge_counters(a, a_rx, 1, gap=1, lossy=1)[0] == []
+    # c: stamped before the first timestamp: rx late +1, gap 0, room late +1, over lossy +1
+    c_rx = dict(quiet, late=1.0)
+    c = reading((0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0), **egress)
+    assert asldrop1.judge_counters(c, c_rx, 1, gap=0, lossy=1, room_late=1)[0] == []
+    # b: nothing moves, an over folded
+    b = reading((0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0), **egress)
+    assert asldrop1.judge_counters(b, quiet, 0)[0] == []
+    # the old contract line (a without the gap) now fails, and so does c with a gap or without the lossy over
+    assert any("result=gap} rose by 0, wanted 1" in p for p in asldrop1.judge_counters(reading((0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0), **egress), dict(quiet, late=1.0), 1, gap=1, lossy=1)[0])
+    assert any("result=gap} rose by 1, wanted 0" in p for p in asldrop1.judge_counters(a, a_rx, 1, gap=0, lossy=1, room_late=1)[0])
+    assert any("result=lossy} rose by 0, wanted 1" in p for p in asldrop1.judge_counters(reading((0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0), **egress), c_rx, 1, gap=0, lossy=1, room_late=1)[0])
+    assert any("room=l,result=late} rose by 0, wanted 1" in p for p in asldrop1.judge_counters(reading((0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0), **egress), c_rx, 1, gap=0, lossy=1, room_late=1)[0])
+    # without room_late the room's late count is recorded, not judged
+    problems, findings, _ = asldrop1.judge_counters(a, a_rx, 1, gap=1, lossy=1)
+    assert problems == [] and any("room=l,result=late} rose by 1" in f for f in findings)
+    # the contract's counter did not move / moved twice
+    assert any("result=late} rose by 0, wanted 1" in p for p in asldrop1.judge_counters(a, quiet, 1, gap=1, lossy=1)[0])
+    assert any("result=late} rose by 1, wanted 0" in p for p in asldrop1.judge_counters(b, dict(quiet, late=1.0), 0)[0])
+    # rx lost and dropped, the room's lost and the egress tx lost and dropped never move
+    moved = dict(a_rx, lost=2.0, dropped=3.0)
+    problems = asldrop1.judge_counters(a, moved, 1, gap=1, lossy=1)[0]
+    assert len(problems) == 2 and any("result=lost} rose by 2" in p for p in problems) and any("result=dropped} rose by 3" in p for p in problems)
+    room = reading((1, 1, 0, 1, 1, 2, 0, 1, 0, 0, 0, 0), dextra=(0, 1, 0, 0, 0, 0, 0, 4), usrp=(0, 1, 0, 0, 0, 0, 3, 0))
+    problems = asldrop1.judge_counters(room, a_rx, 1, gap=1, lossy=1)[0]
+    assert sorted(p.split(" rose")[0].split("{")[1] for p in problems) == ["dir=tx,proc=dextra,result=lost}", "dir=tx,proc=usrp,result=dropped}", "room=l,result=lost}"]
     # no over closed, an egress edge that folded nothing: harness slips
     idle = reading((0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), dextra=(0, 0, 0, 0, 0, 0, 0, 0))
     problems = asldrop1.judge_counters(idle, quiet, 0)[0]

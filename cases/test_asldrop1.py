@@ -8,10 +8,12 @@ those of cases/test_rfpos1c.py (imported, not copied).
 The tester is the IAX2 caller of the edge's account "acct" and plays an over of 90 distinct mu-law frames at 20 ms (dvtest.rfpos1c.make_frames):
 
   ASLDROP1-a  frame 40 is sent 110 ms late (after frame 45, before 46): more than 60 ms behind playout. Asserted: not heard by the D-STAR and USRP listeners (every
-              other frame once, in order), rx late +1, and nothing else moves: rx gap, lost, dropped +0, room gap and lost +0, egress tx lost and dropped +0
+              other frame once, in order); rx late +1, rx gap +1, room gap +1, over lossy +1 (late counts a packet that arrived and was not used, gap the missing
+              position: they do not double count); lost +0, dropped +0, egress tx lost and dropped +0
   ASLDROP1-b  control: frame 40 is sent 30 ms late (after 41, before 42), inside the window: heard at its own position (D-STAR 0..89, USRP all in order), rx late +0,
-              nothing moves
-  ASLDROP1-c  a mini frame whose timestamp is 20 ms BEFORE the over's first one is sent right after frame 2: not heard (the over is complete, no extra frame), rx late +1
+              nothing moves (gap, lost, dropped, lossy all +0)
+  ASLDROP1-c  a mini frame whose timestamp is 20 ms BEFORE the over's first one is sent right after frame 2: rx late +1, gap 0, room late +1, over lossy +1 (an over
+              with a late unit folds lossy, as for a refused backward or duplicate D-STAR datagram); all 90 frames heard, no extra frame
 
 The harness checks that the late frame really went out late: the edge's tap capture holds the call's voice frames in the order the tester sent them
 (dvtest.asldrop1.order_problems). The shape of the output around the refused frame (a hole at its position, or the later frames closed up) is RECORDED, not
@@ -180,8 +182,9 @@ def run_over(lab, hub, frames, case, holds=None, early=None):
             "rx": asldrop1.rx_delta(asldrop1.rx_counts(samples), rx_before), "procs_seen": xstale1.procs_seen(samples)}
 
 
-def judge(lab, case, frames, out, late, absent):
-    """Verdicts of one over: {owner: [sentences]}. late: refused packets expected (rx late); absent: the position whose frame must not be heard (None: all heard)."""
+def judge(lab, case, frames, out, late, absent, gap=0, lossy=0, room_late=None):
+    """Verdicts of one over: {owner: [sentences]}. late: refused packets expected (rx late); gap: missing positions expected (rx and room gap); lossy: the over folded lossy;
+    room_late: the room's late count when asserted; absent: the position whose frame must not be heard (None: all heard)."""
     _ulaw, want, _marker = frames
     problems = {"harness": [], "listeners": [], "counters": []}
     problems["harness"] += asldrop1.order_problems(out["stamps"], out["voice_log"])
@@ -193,7 +196,7 @@ def judge(lab, case, frames, out, late, absent):
     if out["dstar_repeats"]:
         problems["harness"].append("repeated D-STAR positions: %d" % out["dstar_repeats"])
     problems["listeners"] = asldrop1.judge_heard(d_slots, u_matched, absent)
-    c_problems, c_findings, facts = asldrop1.judge_counters(out["change"], out["rx"], late)
+    c_problems, c_findings, facts = asldrop1.judge_counters(out["change"], out["rx"], late, gap, lossy, room_late)
     problems["counters"] = c_problems
     missing = [p for p in range(COUNT) if p not in d_slots]
     order = asldrop1.order_problems(out["stamps"], out["voice_log"])
@@ -222,9 +225,10 @@ def check(problems):
 
 
 def test_asldrop1_a_frame_110_ms_late_is_refused_once_as_late(lab, hub, frames):
-    """Frame 40 goes out 110 ms late (after frame 45): refused, not heard, rx late +1, nothing else moves."""
+    """Frame 40 goes out 110 ms late (after frame 45): refused, not heard; rx late +1, rx gap +1, room gap +1, over lossy +1 (late counts a packet that arrived and was
+    not used, gap the missing position: no double count); lost and dropped +0 everywhere."""
     out = run_over(lab, hub, frames, "a", holds={asldrop1.HELD: asldrop1.LATE_MS})
-    check(judge(lab, "a", frames, out, late=1, absent=asldrop1.HELD))
+    check(judge(lab, "a", frames, out, late=1, absent=asldrop1.HELD, gap=1, lossy=1))
 
 
 def test_asldrop1_b_frame_30_ms_late_is_heard_at_its_position(lab, hub, frames):
@@ -234,6 +238,7 @@ def test_asldrop1_b_frame_30_ms_late_is_heard_at_its_position(lab, hub, frames):
 
 
 def test_asldrop1_c_a_mini_before_the_first_timestamp_is_refused_once_as_late(lab, hub, frames):
-    """A mini stamped 20 ms before the over's first timestamp is sent after frame 2: not heard, rx late +1, the over is complete."""
+    """A mini stamped 20 ms before the over's first timestamp is sent after frame 2: rx late +1, gap 0, room late +1, over lossy +1 (an over with a late unit folds
+    lossy), all 90 frames heard and nothing extra."""
     out = run_over(lab, hub, frames, "c", early=asldrop1.BEFORE_AFTER)
-    check(judge(lab, "c", frames, out, late=1, absent=None))
+    check(judge(lab, "c", frames, out, late=1, absent=None, gap=0, lossy=1, room_late=1))
