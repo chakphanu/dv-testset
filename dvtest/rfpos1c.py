@@ -22,7 +22,7 @@ import random
 import struct
 
 from dvtest import asl_lab, crossmode, medload1, rfpos1, rfpos1b
-from dvtest.proto import usrp
+from dvtest.proto import dmr, usrp
 
 ENV = "DVT_RFPOS1C"
 ROOM = "L"                          # room / module of the AllStar edge in the asl-lab (rig/config/dv-router/allstar-lab.toml)
@@ -195,8 +195,54 @@ def dstar_slots(rows, want):
 
 
 def dmr_slots(frames, want):
-    """{position: matched index or None} of the DMR frames in arrival order (a flat list: the position is the index, a lost frame is a filled slot)."""
+    """{position: matched index or None} of the DMR frames in a flat list (the position is the index; a burst the edge did not send shifts everything
+    after it, so a case uses dmr_burst_slots instead)."""
     return _slots(list(enumerate(frames)), want)
+
+
+def dmr_bursts(datagrams):
+    """({burst index: [3 frames]}, [DMRD seq of each voice burst in arrival order]) of a DMR listener's datagrams. The burst index is the position of a burst
+    in the over from its voice sequence letter (flags byte, low nibble: A..F = 0..5): a letter that does not rise starts the next superframe, so a burst
+    the edge did not send is a hole in the indexes (and in the letters), not a shift of the later bursts. Placing by arrival order would call that a
+    shift: the wip-e9fcc38 run 20261123T153031Z was judged that way first and misread a position kept at burst granularity as a compaction."""
+    out, seqs = {}, []
+    superframe, prev = 0, None
+    for data in datagrams:
+        if not dmr.is_voice(data):
+            continue
+        letter = data[15] & 0x0F
+        if prev is not None and letter <= prev:
+            superframe += 1
+        prev = letter
+        out[superframe * 6 + letter] = dmr.extract(data[20:53])
+        seqs.append(data[4])
+    return out, seqs
+
+
+def dmr_burst_slots(bursts, want):
+    """{position: matched index or None} with position = burst index * 3 + frame in the burst (a burst not sent leaves its three positions absent)."""
+    return _slots([(b * 3 + i, f) for b, trio in sorted(bursts.items()) for i, f in enumerate(trio)], want)
+
+
+def seq_gaps(seqs):
+    """The DMRD sequence bytes that skip a number (mod 256): [(after, next)]. Empty for a contiguous run."""
+    return [(a, b) for a, b in zip(seqs, seqs[1:]) if (b - a) & 0xFF != 1]
+
+
+def judge_dmr(slots, count=COUNT, dropped=None):
+    """The DMR listener: positions = burst * 3 + frame, judged like judge_slots(filled=True) (the lost frame's slot exists and carries a fill, every
+    other slot its own frame) with one named partial result: when the output lacks exactly the three positions of the lost frame's burst and every other
+    position holds its own frame, the edge dropped the WHOLE burst (the survivors of the burst are not carried) but kept the later bursts at their
+    positions. dv-router's expectation is that the burst still carries the other two frames."""
+    if dropped is not None and slots:
+        burst = [p for p in range(dropped - dropped % 3, dropped - dropped % 3 + 3)]
+        absent = [p for p in range(count) if p not in slots]
+        rest = [p for p in range(count) if p in slots and slots[p] != p]
+        if absent == burst and not rest:
+            others = [p for p in burst if p != dropped]
+            return ["DMR: the whole burst of the lost frame (positions %s) was not sent: frames %s are not carried; every other burst holds its own frames "
+                    "(positions kept at burst granularity, not compacted)" % (burst, others)]
+    return judge_slots("DMR", slots, count, dropped, filled=True)
 
 
 def _slots(rows, want):

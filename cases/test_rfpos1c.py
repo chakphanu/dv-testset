@@ -37,7 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "proto"))
 
 from dvtest import asl_lab, clients, medload1, metrics, rfpos1b, rfpos1c, xstale1  # noqa: E402
 from dvtest.control import RigControl  # noqa: E402
-from dvtest.proto import dmr, iax2  # noqa: E402
+from dvtest.proto import iax2  # noqa: E402
 
 import data_support as ds  # noqa: E402
 
@@ -213,10 +213,7 @@ def run_over(lab, hub, frames, case, drop=None, full=None):
             sc.note("dropped", sorted(drops))
         listeners.drain()
         dstar_rows, dstar_repeats = rfpos1c.dstar_rows(listeners.dstar.client.inbox)
-        dmr_frames = []
-        for data in listeners.dmr.client.inbox:
-            if dmr.is_voice(data):
-                dmr_frames.extend(dmr.extract(data[20:53]))
+        dmr_bursts, dmr_seqs = rfpos1c.dmr_bursts(listeners.dmr.client.inbox)
         usrp_rows = rfpos1c.usrp_voice(listeners.usrp_in)
         usrp_other = len(listeners.usrp_in) - len(usrp_rows)
     fold = [p for p in procs]
@@ -229,7 +226,7 @@ def run_over(lab, hub, frames, case, drop=None, full=None):
     stamps = rfpos1c.edge_voice_stamps(sc.dir / "edge.pcap", ip, lab.port, call)
     usrp_times = rfpos1c.usrp_times(sc.dir / "edge.pcap", ip)
     time.sleep(GAP_S)
-    return {"dstar_rows": dstar_rows, "dstar_repeats": dstar_repeats, "dmr_frames": dmr_frames, "usrp_rows": usrp_rows, "usrp_other": usrp_other,
+    return {"dstar_rows": dstar_rows, "dstar_repeats": dstar_repeats, "dmr_bursts": dmr_bursts, "dmr_seqs": dmr_seqs, "usrp_rows": usrp_rows, "usrp_other": usrp_other,
             "usrp_times": usrp_times, "stamps": stamps, "change": rfpos1b.delta(after, before), "procs_seen": xstale1.procs_seen(samples),
             "rx_gap": {k: v - rx_before.get(k, 0) for k, v in rfpos1c.rx_gaps(samples).items()}, "voice_log": list(caller.voice_log)}
 
@@ -249,7 +246,7 @@ def judge(lab, case, frames, out, dropped, full=None):
     if len(sent_drops) != dropped_count or len(out["voice_log"]) != COUNT:
         problems["harness"].append("the tester logged %d frames of which %d dropped, planned %d of which %d" % (len(out["voice_log"]), len(sent_drops), COUNT, dropped_count))
     d_slots, _ = rfpos1c.dstar_slots(out["dstar_rows"], want["dstar"])
-    m_slots, _ = rfpos1c.dmr_slots(out["dmr_frames"], want["dmr"])
+    m_slots, _ = rfpos1c.dmr_burst_slots(out["dmr_bursts"], want["dmr"])
     u_matched = rfpos1c.usrp_matched(out["usrp_rows"], want["usrp"])
     for name, slots in (("D-STAR", d_slots), ("DMR", m_slots), ("USRP", u_matched)):
         if not slots:
@@ -260,7 +257,7 @@ def judge(lab, case, frames, out, dropped, full=None):
     problems["harness"] += [p for p in usrp_problems if p.startswith("harness:")]
     problems["usrp"] = [p for p in usrp_problems if not p.startswith("harness:")]
     problems["dstar"] = rfpos1c.judge_slots("D-STAR", d_slots, COUNT, dropped)
-    problems["dmr"] = rfpos1c.judge_slots("DMR", m_slots, COUNT, dropped, filled=True)
+    problems["dmr"] = rfpos1c.judge_dmr(m_slots, COUNT, dropped)
     procs = [p for p in rfpos1c.EGRESS.values()]
     c_problems, c_findings, facts = rfpos1c.judge_counters(out["change"], dropped_count, procs)
     problems["counters"] = c_problems
@@ -269,7 +266,8 @@ def judge(lab, case, frames, out, dropped, full=None):
     note(lab, case, "RECORD", "dropped index %s (full frame at %s); the edge's capture: %d voice frames, timestamp holes %s, off grid %d" % (
         dropped, full, len(out["stamps"]), holes, len(off)))
     note(lab, case, "RECORD", "D-STAR: %d frames, missing positions %s, %s" % (len(d_slots), absent["dstar"][:8], rfpos1c.runs(d_slots)))
-    note(lab, case, "RECORD", "DMR: %d frames, slots missing %s, %s" % (len(m_slots), absent["dmr"][:8], rfpos1c.runs(m_slots)))
+    note(lab, case, "RECORD", "DMR: %d frames in %d bursts (placed by burst letter), slots missing %s, %s; DMRD seq skips %s" % (
+        len(m_slots), len(out["dmr_bursts"]), absent["dmr"][:8], rfpos1c.runs(m_slots), rfpos1c.seq_gaps(out["dmr_seqs"])))
     note(lab, case, "RECORD", "USRP: %d keyed packets (+%d other), frames not heard %s, arrival order %s; seq %s..%s (the edge's running counter); %s" % (
         len(out["usrp_rows"]), out["usrp_other"], absent["usrp"][:8], rfpos1c.runs(dict(enumerate(u_matched))),
         out["usrp_rows"][0][0] if out["usrp_rows"] else None, out["usrp_rows"][-1][0] if out["usrp_rows"] else None, usrp_facts))
@@ -283,7 +281,7 @@ def judge(lab, case, frames, out, dropped, full=None):
         "dropped_index": dropped, "full_frame_index": full, "count": COUNT,
         "capture_voice_frames": len(out["stamps"]), "capture_timestamp_holes": holes,
         "dstar": {"frames": len(d_slots), "missing_positions": absent["dstar"], "runs": rfpos1c.runs(d_slots)},
-        "dmr": {"frames": len(m_slots), "missing_slots": absent["dmr"], "runs": rfpos1c.runs(m_slots), "fill_at_dropped": (
+        "dmr": {"frames": len(m_slots), "bursts": len(out["dmr_bursts"]), "seq_skips": rfpos1c.seq_gaps(out["dmr_seqs"]), "missing_slots": absent["dmr"], "runs": rfpos1c.runs(m_slots), "fill_at_dropped": (
             None if dropped is None or dropped not in m_slots else m_slots[dropped])},
         "usrp": {"packets": len(out["usrp_rows"]), "frames_not_heard": absent["usrp"], "arrival_order": rfpos1c.runs(dict(enumerate(u_matched))), **usrp_facts,
                  "seq_first": out["usrp_rows"][0][0] if out["usrp_rows"] else None, "seq_last": out["usrp_rows"][-1][0] if out["usrp_rows"] else None},

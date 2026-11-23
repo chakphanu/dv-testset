@@ -106,6 +106,26 @@ has every later frame one slot early and a padded last burst. The counter assert
 of D-STAR and DMR fail there. The failures of b and c are therefore the product: the controls a and d pass (listeners,
 counters, capture all as planned), the hole did arrive at the edge (capture), and the USRP control gives the same answer on both sides of the fix.
 
+## The step C image, dv-router:wip-e9fcc38 (fb3167bb), run 20261123T153031Z (testset 293191d), DMR triaged
+
+Result as run: 2 passed (a, d), 2 failed (b, c), only on DMR. D-STAR misses exactly position 40 and 41-89 hold 41-89 (fixed), USRP unchanged (hole gap 79.3 ms), room counters
+as expected. The first DMR verdict (87 frames, "shifted by one burst") came from placing frames by ARRIVAL ORDER, which is wrong for a burst the edge did not send; the DMR judge now
+places each burst by its voice sequence letter (`rfpos1c.dmr_bursts`: flags byte low nibble A..F, a letter that does not rise starts the next superframe). The edge's tap capture of
+that run (`asl-lab/rfpos1c-b/edge.pcap`, DMRD to the tester, same in c):
+
+| | a (control) | b (frame 40 lost) |
+|---|---|---|
+| voice bursts sent / DMRD seq skips | 30 / none | 29 / none (seq renumbered, 14 follows 13) |
+| around the hole | S0(A) +757 ms, seq 13; V1(B) +818, seq 14; V2(C) +877 | S0(A) +757, seq 13; **V2(C) +877, seq 14: the burst B (frames 39, 40, 41) was never sent** |
+| over end | last burst +1777 ms | last burst +1777 ms (same timeline) |
+| `dmrhb` tx | complete 1, dropped 0 | lossy 1, dropped +2, lost 0, late 0 |
+
+Verdict: HARNESS for the "shifted" reading (the later 29 bursts hold their own frames 42-89 at their own letters and times: positions are kept, nothing is compacted), PRODUCT for what
+remains: a PARTIAL result. The edge keeps the position at BURST granularity (a 120 ms hole in time, the letters B skipped, frames 42-89 intact) but drops the WHOLE burst of the lost frame:
+frames 39 and 41 are not carried, whereas dv-router's expectation is that the burst still carries the other two frames. `dropped +2` at `dmrhb` matches the two surviving units of that burst
+(inference from the counts: 3 units, 1 missing, 2 dropped; the egress fold is `lossy`). The judge reports exactly this as one sentence ("the whole burst of the lost frame ... was not sent:
+frames [39, 41] are not carried; ... positions kept at burst granularity") and the case still fails on it until the burst carries them.
+
 ## Run command
 
 ```

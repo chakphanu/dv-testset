@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from dvtest import asl_lab, crossmode, radioseq1, rfpos1b, rfpos1c, xstale1
-from dvtest.proto import iax2, usrp
+from dvtest.proto import dmr, iax2, usrp
 
 pytestmark = pytest.mark.unit
 
@@ -151,6 +151,49 @@ def test_slots_from_dstar_and_dmr_rows():
     assert slots == {0: 0, 1: 1, 3: 3, 4: None} and repeats == 1
     slots, _ = rfpos1c.dmr_slots([want["dmr"][0], bytes(9), want["dmr"][2]], want["dmr"])
     assert slots == {0: 0, 1: None, 2: 2}
+
+
+def dmr_datagrams(want_dmr, skip=()):
+    """DMRD datagrams of a listener for the frames `want_dmr` (30 bursts), without the bursts in `skip`; the edge renumbers the DMRD seq contiguously."""
+    packets, _ = dmr.voice_packets(want_dmr, 1023007, 4012, 0x1234)
+    kept = [p for n, p in enumerate(packets) if n not in skip]
+    return [bytes(p[:4]) + bytes([n & 0xFF]) + bytes(p[5:]) for n, p in enumerate(kept)]
+
+
+def test_dmr_bursts_are_placed_by_letter_not_by_arrival():
+    _ulaw, pcm = rfpos1c.make_frames()
+    want = rfpos1c.expected(pcm)["dmr"]
+    count = rfpos1c.COUNT
+    whole = dmr_datagrams(want)
+    bursts, seqs = rfpos1c.dmr_bursts(whole)
+    assert len(bursts) == 30 and rfpos1c.seq_gaps(seqs) == []
+    slots, _ = rfpos1c.dmr_burst_slots(bursts, want)
+    assert rfpos1c.judge_dmr(slots, count, None) == [] and rfpos1c.runs(slots) == "0-89 hold 0-89"
+    # the product as the lost frame should be handled: burst 13 carries frames 39 and 41 and a fill at 40
+    trio = list(want[39:42])
+    trio[1] = bytes(9)
+    filled = list(want)
+    filled[39:42] = trio
+    slots, _ = rfpos1c.dmr_burst_slots(rfpos1c.dmr_bursts(dmr_datagrams(filled))[0], want)
+    assert slots[40] is None and slots[39] == 39 and slots[41] == 41
+    assert rfpos1c.judge_dmr(slots, count, 40) == []
+    # wip-e9fcc38 (run 20261123T153031Z): the whole burst 13 (frames 39..41) not sent, the later bursts at their own letters, seq renumbered: placed by letter
+    datagrams = dmr_datagrams(want, skip=(13,))
+    bursts, seqs = rfpos1c.dmr_bursts(datagrams)
+    assert len(bursts) == 29 and 13 not in bursts and rfpos1c.seq_gaps(seqs) == []
+    slots, _ = rfpos1c.dmr_burst_slots(bursts, want)
+    assert sorted(set(range(count)) - set(slots)) == [39, 40, 41] and all(slots[p] == p for p in slots)
+    problems = rfpos1c.judge_dmr(slots, count, 40)
+    assert len(problems) == 1 and "whole burst" in problems[0] and "[39, 41]" in problems[0] and "burst granularity" in problems[0]
+    # the old image: nothing missing in letters but the frames closed up (every later frame one position early, the last burst padded)
+    shifted = list(want[:40]) + list(want[41:]) + [bytes(9)]
+    slots, _ = rfpos1c.dmr_burst_slots(rfpos1c.dmr_bursts(dmr_datagrams(shifted))[0], want)
+    problems = rfpos1c.judge_dmr(slots, count, 40)
+    assert len(problems) == 1 and "first position 40 holds frame 41" in problems[0]
+    # the superframe letter wrap: a burst dropped at the start of a superframe (letter A) leaves its three positions absent
+    slots, _ = rfpos1c.dmr_burst_slots(rfpos1c.dmr_bursts(dmr_datagrams(want, skip=(12,)))[0], want)
+    assert sorted(set(range(count)) - set(slots)) == [36, 37, 38]
+    assert rfpos1c.seq_gaps([5, 6, 8, 9, 10, 255, 0]) == [(6, 8), (10, 255)]
 
 
 def reading(room=None, **egress):
