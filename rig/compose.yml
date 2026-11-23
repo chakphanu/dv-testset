@@ -599,6 +599,8 @@ services:
       DVT_RTS1: ${DVT_RTS1:-}
       # on for DV-Router RFPOS1 step B (47dac7b4, image dv-router:wip-c3b24d2): cases/test_rfpos1_link.py (docs/rfpos1-cases.md; needs --profile twonode, run.sh adds the node link); the cases skip with a reason without it
       DVT_RFPOS1B_LINK: ${DVT_RFPOS1B_LINK:-}
+      # on for DV-Router GUARDID2 (9a8d1cb4, image dv-router:wip-3f142cd): cases/test_guardid2.py (docs/guardid2-cases.md; needs --profile twonode, run.sh adds the node link and a P25 port on both nodes); the cases skip with a reason without it
+      DVT_GUARDID2: ${DVT_GUARDID2:-}
       # on for DV-Router MEDLOAD1 (fb6a2a51 .. 28fc1838, image dv-router:wip-f1f3777): cases/test_medload1.py (docs/medload1-cases.md); DVT_MEDLOAD1_BURN: busy-loop processes of the S7 analogue
       DVT_MEDLOAD1: ${DVT_MEDLOAD1:-}
       DVT_MEDLOAD1_BURN: ${DVT_MEDLOAD1_BURN:-}

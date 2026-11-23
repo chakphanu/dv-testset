@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT
+# GUARDID2 (DV-Router 9a8d1cb4, image dv-router:wip-3f142cd; docs/guardid2-cases.md): the P25 server port of BOTH nodes of the twonode pair, UDP 41000,
+# TG 31672 -> room G (the room of the node link, rfpos1-link-a.toml / -b.toml), with no_radio_id = "fallback": a talker whose source id is in no id
+# directory is admitted under the shared placeholder callsign P31672 (the `P%05u` of the talkgroup) with RTS_SOURCE_ID, the case the guard identity
+# is about. The default `drop` would refuse such a talker (P-P25-33). scripts/run.sh adds this file to the SUT's extras and to node 2's render
+# under DVT_GUARDID2=on (which also brings the node link of RFPOS1 step B). The template's [edges.p25] (enable = "auto") is merged key by key.
+[edges.p25]
+enable = true
+server_module = "G"
+server_tg = 31672
+no_radio_id = "fallback"

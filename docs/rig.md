@@ -833,6 +833,8 @@ a second DV-Router node next to the SUT. Nothing is built: it is the prebuilt im
   `<NET>.30:31801`) to the SUT's extras and `rfpos1-link-b.toml` (the account, `talk = true`) to node 2's render, and writes a per-run key `out/<run>/link-secrets/link.key` (0600, mounted read-only at
   `/etc/dv-router/link-secrets` in both nodes; the directory is made, empty, for every twonode run). The tester runs the relay (`dvtest.rfpos1.LinkRelay`), so one datagram can be dropped black-box.
   Cases and run command: [rfpos1-cases.md](rfpos1-cases.md).
+* GUARDID2 (`DVT_GUARDID2=on`): the same node link (key, relay) plus `guardid2-p25.toml` (a P25 server port, UDP 41000, TG 31672 -> room G, `no_radio_id = "fallback"`) in the config of BOTH nodes, so P25 talkers
+  and listeners need no transcoder. Cases and run command: [guardid2-cases.md](guardid2-cases.md).
 
 ## Real client stack (profile mmdvm)
 

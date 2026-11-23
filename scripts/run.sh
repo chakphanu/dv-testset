@@ -111,7 +111,9 @@
 #                      relay), node 2 accepts it; run.sh adds rfpos1-link-a.toml to the SUT's extras, rfpos1-link-b.toml to node 2's
 #                      render and writes a per-run key out/<utc>/link-secrets/link.key (64 hex, mode 600, mounted read-only at
 #                      /etc/dv-router/link-secrets in both nodes, never in the tester, never printed). The directory is made for
-#                      every twonode run (the dvr-peer mount is static)
+#                      every twonode run (the dvr-peer mount is static). DVT_GUARDID2=on (cases/test_guardid2.py, docs/guardid2-cases.md)
+#                      brings the same link and adds guardid2-p25.toml (a P25 server port, TG 31672 -> room G, no_radio_id fallback) to
+#                      both nodes
 #   --profile webload  the WebRTC load generator (webload, .97: aiortc, control server on :3100 for the tester
 #                      only) of the W8 load case, used together with web (--profile web,webload; exit 2
 #                      without it); the tester gets DVT_WEBLOAD=on and DVT_WEBLOAD_URL (docs/web-load-cases.md,
@@ -502,12 +504,21 @@ if [ "$has_twonode" = 1 ]; then
     *:rig/config/dv-router/dp15-twonode-a.toml:*) ;;
     *) DVT_SUT_CONFIG_EXTRA="${DVT_SUT_CONFIG_EXTRA:+$DVT_SUT_CONFIG_EXTRA:}rig/config/dv-router/dp15-twonode-a.toml" ;;
   esac
-  # RFPOS1 step B: the node link of the pair (the uplink of the SUT; node 2's account row is added by render_dvr_peer)
-  case "${DVT_RFPOS1B_LINK:-}" in
-    on|1|true|yes)
+  # RFPOS1 step B or GUARDID2: the node link of the pair (the uplink of the SUT; node 2's account row is added by render_dvr_peer)
+  case "${DVT_RFPOS1B_LINK:-}:${DVT_GUARDID2:-}" in
+    on:*|1:*|true:*|yes:*|*:on|*:1|*:true|*:yes)
       case ":${DVT_SUT_CONFIG_EXTRA:-}:" in
         *:rig/config/dv-router/rfpos1-link-a.toml:*) ;;
         *) DVT_SUT_CONFIG_EXTRA="$DVT_SUT_CONFIG_EXTRA:rig/config/dv-router/rfpos1-link-a.toml" ;;
+      esac
+      ;;
+  esac
+  # GUARDID2: the P25 server port (fallback policy) of the SUT, node 2 gets the same file in render_dvr_peer
+  case "${DVT_GUARDID2:-}" in
+    on|1|true|yes)
+      case ":${DVT_SUT_CONFIG_EXTRA:-}:" in
+        *:rig/config/dv-router/guardid2-p25.toml:*) ;;
+        *) DVT_SUT_CONFIG_EXTRA="$DVT_SUT_CONFIG_EXTRA:rig/config/dv-router/guardid2-p25.toml" ;;
       esac
       ;;
   esac
@@ -952,11 +963,11 @@ if [ "$has_twonode" = 1 ]; then
   (umask 077; mkdir -p "$out/recorder" "$out/recorder-peer")
   chmod 700 "$out/recorder" "$out/recorder-peer"
   echo "run.sh: twonode profile: dvr-peer at ${DVT_NET:-172.30.0}.16 (transcoder-peer .17), recorders in $out/recorder and $out/recorder-peer"
-  # the key directory of the node link (compose mounts it into dvr-peer for every twonode run); the key itself only for RFPOS1 step B
+  # the key directory of the node link (compose mounts it into dvr-peer for every twonode run); the key itself only for RFPOS1 step B / GUARDID2
   (umask 077; mkdir -p "$out/link-secrets")
   chmod 700 "$out/link-secrets"
-  case "${DVT_RFPOS1B_LINK:-}" in
-    on|1|true|yes)
+  case "${DVT_RFPOS1B_LINK:-}:${DVT_GUARDID2:-}" in
+    on:*|1:*|true:*|yes:*|*:on|*:1|*:true|*:yes)
       (umask 077; python3 -c 'import secrets; print(secrets.token_hex(32))' > "$out/link-secrets/link.key")
       chmod 600 "$out/link-secrets/link.key"
       echo "run.sh: RFPOS1B: node link key in $out/link-secrets/link.key (mode 600, never printed), uplink of the SUT at the tester ${DVT_NET:-172.30.0}.30:31801"
@@ -1115,8 +1126,12 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
 # are in the file, the argv repeats them)
 render_dvr_peer() {
   local net="${DVT_NET:-172.30.0}" cfg="$DVT_ROOT/$out/xlxd-config/dvr-peer" link_extra=()
-  # RFPOS1 step B: the account row of the node link (the SUT's uplink is rfpos1-link-a.toml)
-  case "${DVT_RFPOS1B_LINK:-}" in on|1|true|yes) link_extra=(--extra rig/config/dv-router/rfpos1-link-b.toml) ;; esac
+  # RFPOS1 step B or GUARDID2: the account row of the node link (the SUT's uplink is rfpos1-link-a.toml)
+  case "${DVT_RFPOS1B_LINK:-}:${DVT_GUARDID2:-}" in
+    on:*|1:*|true:*|yes:*|*:on|*:1|*:true|*:yes) link_extra=(--extra rig/config/dv-router/rfpos1-link-b.toml) ;;
+  esac
+  # GUARDID2: node 2 serves P25 as well (the listener of the cases hears the relayed over without any transcoding)
+  case "${DVT_GUARDID2:-}" in on|1|true|yes) link_extra+=(--extra rig/config/dv-router/guardid2-p25.toml) ;; esac
   mkdir -p "$cfg"
   python3 -m dvtest.sut_config "$DVT_SUT_CONFIG" "$cfg/dv-router.toml" --net "$net" --own 16 --transcoder 17 --tester 30 \
     --require-ident "${DVT_REQUIRE_IDENT:-true}" --dp15-tx-enable false --extra rig/config/dv-router/dp15-twonode-b.toml \

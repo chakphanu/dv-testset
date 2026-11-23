@@ -18,8 +18,10 @@ stream id, profile, sequence) and forwards every datagram unchanged, except the 
     kind 17 RoomMapAck    count u8, results[count] u8   (0 listen_only, 1 talk, 2 not_permitted, 3 not_served)
     kind 18 Demand        pair u8, profiles u16
     kind 19 StreamStart   pair u8, stream_id u32, origin u64, hop u8, profile u16, carried u16, callsign[10], radio_id u32, raw_len u8, raw
+                          (GUARDID2: bit 0 of `carried` is the source-id flag, dvtest/guardid2.py)
     kind 20 Units         stream_id u32, profile u16, sequence u64, payload_len u16, payload
     kind 21 StreamEnd     stream_id u32, reason u16
+    kind 22 Refused       stream_id u32, reason u8   (busy 1, listen_only 2, loop 3, hop_limit 4, not_mapped 5, overload 6)
 
 Cases: cases/test_rfpos1_link.py; unit tests: cases/unit/test_rfpos1_lib.py; document: docs/rfpos1-cases.md.
 """
@@ -59,7 +61,8 @@ def parse_record(data):
 
     Handshake records (kind 1..5) give {"kind"} only. An authenticated record gives kind, session, counter and, for the kinds the cases
     read, their fields: units {stream_id, profile, sequence, payload_len, payload}, streamstart {pair, stream_id, profile, carried},
-    roommap {pairs}, roommapack {results}, demand {pair, profiles}, streamend {stream_id, reason}. A kind-20 record whose declared payload
+    roommap {pairs}, roommapack {results}, demand {pair, profiles}, streamend {stream_id, reason}, refused {stream_id, reason}; a streamstart
+    with a whole fixed part also gives callsign (text), radio_id, raw_len and size (the datagram length). A kind-20 record whose declared payload
     length is not what the datagram holds gives None (the cases never act on a malformed record)."""
     if not data:
         return None
@@ -81,6 +84,10 @@ def parse_record(data):
         elif kind == 19:
             pair, stream_id, _origin, _hop, profile, carried = struct.unpack_from("<BIQBHH", body, 0)
             rec.update(pair=pair, stream_id=stream_id, profile=profile, carried=carried)
+            if len(body) >= 33:                 # GUARDID2: callsign, radio id and the raw header length (the whole datagram size is `size`)
+                callsign = bytes(body[18:28])
+                radio_id, raw_len = struct.unpack_from("<IB", body, 28)
+                rec.update(callsign=callsign.rstrip(b" \0").decode("ascii", "replace"), radio_id=radio_id, raw_len=raw_len, size=len(data))
         elif kind == 16:
             count = body[0]
             rec["pairs"] = [(body[1 + 2 * i], body[2 + 2 * i]) for i in range(count)]
@@ -92,6 +99,9 @@ def parse_record(data):
             rec.update(pair=pair, profiles=profiles)
         elif kind == 21:
             stream_id, reason = struct.unpack_from("<IH", body, 0)
+            rec.update(stream_id=stream_id, reason=reason)
+        elif kind == 22:
+            stream_id, reason = struct.unpack_from("<IB", body, 0)
             rec.update(stream_id=stream_id, reason=reason)
     except (struct.error, IndexError):
         return None
