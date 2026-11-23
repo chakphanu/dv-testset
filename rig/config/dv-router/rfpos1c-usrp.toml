@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/rfpos1c-cases.md): a STATIC USRP row on module L, the room of the AllStar
+# edge of the asl-lab (allstar-lab.toml, node 2999), with the tester (<TESTER_IP>:32004) as the far end. It is the PCM listener of
+# RFPOS1 step C (cases/test_rfpos1c.py): the same room, no codec on the way, so what it hears is the AllStar audio frame for frame.
+# scripts/run.sh adds this file under --profile asl-edge with DVT_RFPOS1C=on. Ports 34004 / 32004 are free of usrp-rig.toml
+# (34001-34003), echo-usrp-peer.toml (34003) and the dynamic hub (34101).
+[edges.usrp]
+enable = "auto"
+
+[[edges.usrp.endpoint]]
+module = "L"
+bind = "<OWN_IP>:34004"
+peer = "<TESTER_IP>:32004"
+callsign = "N0TEST"

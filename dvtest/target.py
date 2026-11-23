@@ -129,6 +129,9 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
   DVT_GUARDID2       on: GUARDID2 (DV-Router 9a8d1cb4, image wip-3f142cd): like DVT_RFPOS1B_LINK run.sh links the pair by a node link and adds a P25 server port (guardid2-p25.toml,
                      TG 31672 -> room G, no_radio_id fallback) to both nodes; cases/test_guardid2.py asserts that the source-id guard flag crosses the link (bit 0 of the StreamStart
                      carried field, no bytes added) and that a strike on one unmapped P25 talker leaves the other granted on node 2 (docs/guardid2-cases.md); off or unset: skip
+  DVT_RFPOS1C        on: RFPOS1 step C (DV-Router fb3167bb): with --profile asl-edge run.sh adds rfpos1c-usrp.toml (a static USRP row on module L, the tester as the peer);
+                     cases/test_rfpos1c.py loses one IAX2 voice frame (a mini frame, and a full frame) of an AllStar call and asserts that the D-STAR, DMR and USRP listeners of the
+                     room miss exactly that position and the egress lost counters rise by one (docs/rfpos1c-cases.md); off or unset: the cases skip naming this switch
   DVT_MEDLOAD1       on: MEDLOAD1 (DV-Router fb6a2a51 .. 28fc1838, image wip-f1f3777): cases/test_medload1.py sends overs with controlled drops, a late frame, a duplicate and a counter wrap and
                      compares the per-over gap / lost / late counts of the hub (dv_edge_over_units_total, dv_room_over_units_total, dv_room_overs_total) with the edge's rule, plus the S7 analogue
                      (five rounds under busy loops, DVT_MEDLOAD1_BURN processes, default 16); off or unset: the cases skip naming this switch (docs/medload1-cases.md)

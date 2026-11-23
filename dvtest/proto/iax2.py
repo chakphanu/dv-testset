@@ -106,6 +106,7 @@ class Client:
         self.controls = []
         self.voice_started = False
         self.voice_timestamp = 0
+        self.voice_log = []
         self.link_ready = False
         self.radio_keyed = False
         self.radio_due = float("inf")
@@ -270,15 +271,30 @@ class Client:
         self.send(CONTROL, 13)
         self.radio_due = time.monotonic() + 2
 
-    def voice(self, pcm):
+    def voice(self, pcm, drop=False, full=False):
+        """Send one voice frame: the first of an over is a full frame, the rest are mini frames (16-bit timestamp) at +20 ms.
+        drop=True advances the call clock by 20 ms and sends NOTHING (a frame lost on the way: the receiver sees a hole of one
+        position in the timestamps, no retransmission follows because no full frame left the socket and no sequence number was
+        used). full=True sends this frame as a (reliable) full frame with its 32-bit timestamp instead of a mini frame, as
+        Asterisk does now and then in an over. Every call is logged in `voice_log` as (timestamp, "full" | "mini" | "drop")."""
         network = swap_pcm(pcm) if self.codec == SLIN else pcm
         if not self.voice_started:
+            if drop:
+                raise ValueError("the first frame of an over is a full frame and cannot be dropped here")
             self.voice_timestamp = self.stamp()
             self.send(VOICE, self.codec, network, stamp=self.voice_timestamp)
             self.voice_started = True
+            self.voice_log.append((self.voice_timestamp, "full"))
+            return
+        self.voice_timestamp = (self.voice_timestamp + 20) & 0xffffffff
+        if drop:
+            self.voice_log.append((self.voice_timestamp, "drop"))
+        elif full:
+            self.send(VOICE, self.codec, network, stamp=self.voice_timestamp)
+            self.voice_log.append((self.voice_timestamp, "full"))
         else:
-            self.voice_timestamp = (self.voice_timestamp + 20) & 0xffffffff
             self.socket.sendto(struct.pack("!HH", self.local, self.voice_timestamp & 0xffff) + network, self.peer)
+            self.voice_log.append((self.voice_timestamp, "mini"))
 
     def ping(self):
         """IAX PING (the peer answers PONG)."""

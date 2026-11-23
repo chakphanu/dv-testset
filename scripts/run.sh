@@ -40,6 +40,8 @@
 #                      /etc/dv-router/asl-secrets. Alone it starts tester, xlxd-sut, transcoder-sut, the four lab
 #                      hosts and netem sidecars for the edge and the lab nodes (control: netem edge|asl <args>).
 #                      The tester gets DVT_ASL_EDGE=on. Select with -m asl_lab; docs/asl-edge-results.md
+#                      DVT_RFPOS1C=on (RFPOS1 step C, cases/test_rfpos1c.py, docs/rfpos1c-cases.md) also adds
+#                      rig/config/dv-router/rfpos1c-usrp.toml: a static USRP row on module L, the tester as its peer
 #                      DVT_ASL_EDGE_NAT=1 adds the profile asl-nat: service asl-nat-a (the image of the NAT profile) shares
 #                      asl-a's namespace and holds one SNAT rule for its IAX2 socket towards the edge (case T5n,
 #                      docs/asl-lab.md "T5n"; alias address .46, control tcp <net>.42:9101, tester only)
@@ -363,6 +365,10 @@ if [ "$has_asl_edge" = 1 ]; then
   fi
   if [ "${DVT_ASL_EDGE_REG:-}" = 1 ]; then
     DVT_SUT_CONFIG_EXTRA="$DVT_SUT_CONFIG_EXTRA:rig/config/dv-router/allstar-lab-reg.toml"
+  fi
+  # DVT_RFPOS1C=on (cases/test_rfpos1c.py, docs/rfpos1c-cases.md): a static USRP row on the edge's module L, the tester as its peer
+  if [ "${DVT_RFPOS1C:-}" = on ]; then
+    DVT_SUT_CONFIG_EXTRA="$DVT_SUT_CONFIG_EXTRA:rig/config/dv-router/rfpos1c-usrp.toml"
   fi
   export DVT_SUT_CONFIG_EXTRA DVT_ASL_EDGE_OUT DVT_ASL_EDGE_LOOKUP DVT_ASL_EDGE_REG
 fi
