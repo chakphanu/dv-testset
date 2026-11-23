@@ -272,7 +272,7 @@ class RigControl:
     def netem(self, target, args, timeout=30.0):
         """"netem <target> <args>": a preset name, "off", or netem arguments ("delay 80ms loss 5%") on the
         sidecar(s) the host maps `target` to (run.sh header: tester, xlxd, and, with --profile asl-edge,
-        edge / asl). ValueError before sending for an empty or oddly-charactered target/args; the host
+        edge / asl, and, with DVT_NODE1G=on, wan: both interfaces of the WAN router). ValueError before sending for an empty or oddly-charactered target/args; the host
         refuses a target it does not run sidecars for."""
         if not target or not all(c.isalnum() or c in "._-" for c in target) or not target.isascii():
             raise ValueError("bad netem target %r" % (target,))

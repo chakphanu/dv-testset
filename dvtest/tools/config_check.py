@@ -158,6 +158,8 @@ def main(argv=None):
     ap.add_argument("--extra", action="append", default=[])
     ap.add_argument("--gen", default=None, help="DVT_SUT_GEN of the render (default: env, else c165c93)")
     ap.add_argument("--net", default="172.30.0")
+    ap.add_argument("--own", type=int, default=11, help="host octet of <OWN_IP> (NODE1g hotspot: 16)")
+    ap.add_argument("--central-ip", default=None, help="value of <CENTRAL_IP> (NODE1g hotspot template)")
     ap.add_argument("--mode", choices=("auto",) + MODES, default="auto",
                     help="check = `dv-router config check FILE` (compat1 images); start = `--config FILE ...` (older images); "
                          "auto = check when the gen is in GENS_WITH_CHECK, else start")
@@ -165,13 +167,15 @@ def main(argv=None):
     try:
         with tempfile.TemporaryDirectory(prefix="dvt-cfgcheck-") as tmp:
             out = os.path.join(tmp, "dv-router.toml")
-            sut_config.render_file(args.template, out, args.net, extras=args.extra, gen=args.gen)
+            sut_config.render_file(args.template, out, args.net, own=args.own, extras=args.extra, gen=args.gen,
+                                   central_ip=args.central_ip)
             stand_ins = []
             with open(out, encoding="utf-8") as fh:
                 for n, inside in enumerate(secret_file_paths(fh.read())):
                     host = os.path.join(tmp, "secret-%d" % n)
                     with open(host, "w", encoding="utf-8") as sf:
-                        sf.write("standin\n")
+                        # a node-link key file must hold exactly 64 hex digits (link.md "Keys and accounts")
+                        sf.write(("0" * 64 if inside.endswith(".key") else "standin") + "\n")
                     os.chmod(host, 0o600)
                     stand_ins.append((host, inside))
             gen = sut_config.gen_value(args.gen)

@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: MIT
+# NODE1g (docs/node1g-cases.md): the CENTRAL node of the hotspot link, i.e. the SUT (xlxd-sut, XLX999). It accepts one node-link account for a
+# hotspot, serves room C to P25 clients (UDP 41000, TG 31672, fallback policy), and keeps a persistent state dir with the admin service on its rig
+# address so the cases can read the link rows (`GET /api/v1/admin/status`, `link_edges`: state, rtt_ms, loss_ppm, last_error). scripts/run.sh adds this
+# file to DVT_SUT_CONFIG_EXTRA under DVT_NODE1G=on (with --profile twonode); never by hand. The key file is made per run by run.sh
+# (out/<run>/link-secrets/hs1.key, 64 hex digits, mode 0600, mounted read-only at /etc/dv-router/link-secrets) and replaced by the case for the
+# rotated-key cases (same path, atomic rename, then the control action `hup xlxd-sut`).
+#
+# The admin listener is plain HTTP on <OWN_IP>:8080 for the tester only (allow_from); `host` is the effective host the tester presents.
+[node]
+state_dir = "/var/lib/dv"
+
+[admin]
+enable = true
+bind = "<OWN_IP>:8080"
+host = "<OWN_IP>:8080"
+allow_from = ["<TESTER_IP>"]
+totp = true
+
+[edges.p25]
+enable = true
+server_module = "C"
+server_tg = 31672
+no_radio_id = "fallback"
+
+[[edges.link.account]]
+name = "n0call-hs1"
+callsign = "N0CALL"
+secret_file = "/etc/dv-router/link-secrets/hs1.key"
+rooms = ["C"]
+talk = true

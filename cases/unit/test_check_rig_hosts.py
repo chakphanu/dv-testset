@@ -25,6 +25,7 @@ NOT_A_PROTOCOL_PEER = {
     31: "load-node (profile load, HTTP/TCP only)",
     91: "browser", 92: "nat-router", 93: "nat-router alias", 94: "coturn", 95: "nat-ref-a",
     96: "nat-ref-b", 97: "webload",
+    98: "wan-router (NODE1g: the NAT router in front of the hotspot, control TCP only)", 99: "wan-router alias (the hotspot's second outside address)",
 }
 
 

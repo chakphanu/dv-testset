@@ -118,6 +118,17 @@
 #                      every twonode run (the dvr-peer mount is static). DVT_GUARDID2=on (cases/test_guardid2.py, docs/guardid2-cases.md)
 #                      brings the same link and adds guardid2-p25.toml (a P25 server port, TG 31672 -> room G, no_radio_id fallback) to
 #                      both nodes
+#                      DVT_NODE1G=on (NODE1g, cases/test_node1g.py, docs/node1g-cases.md) makes the pair a HOTSPOT and its CENTRAL node
+#                      joined by a node link over an emulated WAN: dvr-peer is rendered from rig/config/dv-router/node1g-hotspot.toml (hotspot
+#                      preset, P25 port, admin, ONE uplink row; the inside network DVT_NAT_NET is its <NET>, .16) and moved behind the new
+#                      service wan-router (.98 outside, alias .99, the NAT router of the nat profile with the hotspot as the NAT'd host; control
+#                      tcp <net>.98:9100, tester only) by rig/compose.node1g.yml, which also gives the tester an inside address (.30); wan-edge
+#                      sets the hotspot's default route and netem-wan shapes both router interfaces (control: netem wan <preset|off|arguments>).
+#                      The SUT is the central node: node1g-central.toml (account row, P25 on room C, admin on <net>.11:8080, state dir
+#                      out/<utc>/sut-state) instead of dp15-twonode-a.toml (no XLX interlink, no recorder). run.sh writes a per-run link key
+#                      out/<utc>/link-secrets/hs1.key (64 hex, mode 600, mounted read-only into both nodes, never printed) and the admin logins
+#                      out/<utc>/node1g/{central,hotspot}-admin.env (mode 600); the output directory is scanned for the key afterwards (exit 5).
+#                      Not with DVT_RFPOS1B_LINK, DVT_GUARDID2 or the web, nat, interlink, asl-edge, aprs profiles. The tester gets DVT_NODE1G=on
 #   --profile webload  the WebRTC load generator (webload, .97: aiortc, control server on :3100 for the tester
 #                      only) of the W8 load case, used together with web (--profile web,webload; exit 2
 #                      without it); the tester gets DVT_WEBLOAD=on and DVT_WEBLOAD_URL (docs/web-load-cases.md,
@@ -217,7 +228,8 @@
 # then rename) with one line "<action> <service>":
 #   action  stop | start | restart | kill (SIGKILL)
 #   service transcoder-ref | transcoder-sut | allstar | xlxd-ref | xlxd-sut | asl-reg | asl-a | asl-b | asl-e
-# or, with netem on: "netem tester|xlxd <preset|off|netem arguments>".
+# or, with netem on: "netem tester|xlxd <preset|off|netem arguments>" (profile asl-edge: edge|asl; DVT_NODE1G=on: wan, both
+# interfaces of the WAN router, so the arguments apply to each direction).
 # or, with the allstar profile: "asl usrp-show" (chan_usrp counters into
 # <id>.out) or "asl play-1901|play-1902" (app_rpt plays a short telemetry
 # file on that node, i.e. keys its USRP channel toward xlxd-sut).
@@ -506,7 +518,9 @@ if [ "$has_mmdvm" = 1 ]; then
 fi
 # --profile twonode: the second DV-Router node; the SUT's peer row and recorder come from dp15-twonode-a.toml
 has_twonode=0
+has_node1g=0
 case ",$profile," in *,twonode,*) has_twonode=1 ;; esac
+case "${DVT_NODE1G:-}" in on|1|true|yes) [ "$has_twonode" = 1 ] || { echo "run.sh: DVT_NODE1G=on needs --profile twonode (the hotspot is dvr-peer)" >&2; exit 2; } ;; esac
 if [ "$has_twonode" = 1 ]; then
   [ "${DVT_SUT_LAUNCH:-direct}" = native ] \
     || { echo "run.sh: --profile twonode needs DVT_SUT_LAUNCH=native (both nodes are DV-Router)" >&2; exit 2; }
@@ -515,10 +529,29 @@ if [ "$has_twonode" = 1 ]; then
   case ",$profile," in
     *,interlink,*) echo "run.sh: --profile twonode and --profile interlink are separate rigs (the xlxd peer XLX998 and dvr-peer share a callsign)" >&2; exit 2 ;;
   esac
+  # NODE1g (DVT_NODE1G=on): the pair is a HOTSPOT behind a WAN router and its CENTRAL node, joined by a node link and nothing else (no XLX
+  # interlink, no recorder); the hotspot is rendered from its own template (render_dvr_peer), the central node gets node1g-central.toml
+  case "${DVT_NODE1G:-}" in on|1|true|yes) has_node1g=1 ;; esac
+  if [ "$has_node1g" = 1 ]; then
+    case "${DVT_RFPOS1B_LINK:-}:${DVT_GUARDID2:-}" in
+      :|off:*|0:*) ;;
+      *) echo "run.sh: DVT_NODE1G=on is its own node link: not with DVT_RFPOS1B_LINK or DVT_GUARDID2" >&2; exit 2 ;;
+    esac
+    case ",$profile," in
+      *,web,*|*,nat,*|*,interlink,*|*,asl-edge,*|*,aprs,*) echo "run.sh: DVT_NODE1G=on needs the plain twonode rig: not with the web, nat, interlink, asl-edge or aprs profiles (the central node's admin service and state dir are its own, the NAT router is the WAN)" >&2; exit 2 ;;
+    esac
+    case ":${DVT_SUT_CONFIG_EXTRA:-}:" in
+      *:rig/config/dv-router/node1g-central.toml:*) ;;
+      *) DVT_SUT_CONFIG_EXTRA="${DVT_SUT_CONFIG_EXTRA:+$DVT_SUT_CONFIG_EXTRA:}rig/config/dv-router/node1g-central.toml" ;;
+    esac
+    # the central node serves room C to P25 (node1g-central.toml); the env pins of the rig win over the file, so they say the same
+    export DVT_P25_MODULE=C DVT_P25_TG=31672
+  else
   case ":${DVT_SUT_CONFIG_EXTRA:-}:" in
     *:rig/config/dv-router/dp15-twonode-a.toml:*) ;;
     *) DVT_SUT_CONFIG_EXTRA="${DVT_SUT_CONFIG_EXTRA:+$DVT_SUT_CONFIG_EXTRA:}rig/config/dv-router/dp15-twonode-a.toml" ;;
   esac
+  fi
   # RFPOS1 step B or GUARDID2: the node link of the pair (the uplink of the SUT; node 2's account row is added by render_dvr_peer)
   case "${DVT_RFPOS1B_LINK:-}:${DVT_GUARDID2:-}" in
     on:*|1:*|true:*|yes:*|*:on|*:1|*:true|*:yes)
@@ -539,7 +572,7 @@ if [ "$has_twonode" = 1 ]; then
   esac
   export DVT_SUT_CONFIG_EXTRA
   # dp15-twonode-a.toml switches the recorder of the SUT on: its archive is the host directory out/<run>/recorder
-  has_recorder=1
+  [ "$has_node1g" = 1 ] || has_recorder=1
 fi
 # --profile nat: needs web and browser; rig/config/dv-router/turn.toml in DVT_SUT_CONFIG_EXTRA switches the SUT's TURN on
 has_nat=0
@@ -768,6 +801,12 @@ for p in "${wanted[@]}"; do
       # checked above (native launch, XLXD_SUT_IMAGE, the SUT's snippet)
       profiles+=(--profile twonode)
       export DVT_TWONODE=on
+      # NODE1g: dvr-peer becomes a hotspot behind the WAN router (rig/compose.node1g.yml, services wan-router, wan-edge, netem-wan)
+      if [ "$has_node1g" = 1 ]; then
+        profiles+=(--profile node1g)
+        compose_files+=(-f rig/compose.node1g.yml)
+        export DVT_NODE1G=on
+      fi
       ;;
     nat)
       # checked above (needs web and browser); the browser moves behind the router (rig/compose.nat.yml)
@@ -845,6 +884,12 @@ fi
 if [ "$has_asl_edge" = 1 ]; then
   netem_svcs=(netem-xlxd-sut netem-asl-a netem-asl-b netem-asl-e)
   export DVT_NETEM_ARGS_XLXD="${DVT_NETEM_ARGS_XLXD:-}" DVT_NETEM_ARGS_ASL="${DVT_NETEM_ARGS_ASL:-}"
+fi
+
+# NODE1g: one netem sidecar on both interfaces of the WAN router (control: "netem wan <args>"); the tester sets the impairment per case
+if [ "$has_node1g" = 1 ]; then
+  netem_svcs+=(netem-wan)
+  export DVT_NETEM_ARGS_WAN="${DVT_NETEM_ARGS_WAN:-}"
 fi
 
 capture_svcs=()
@@ -989,6 +1034,24 @@ if [ "$has_twonode" = 1 ]; then
       ;;
   esac
 fi
+# NODE1g: the per-run key of the hotspot link (out/<run>/link-secrets/hs1.key, 64 hex digits, mode 600, never printed; the cases replace it
+# by atomic rename for the rotated-key cases and keep the rotated key in rotated.key beside it, so the scan below covers both), the state
+# directories of the two nodes (mode 700, the host uid) and the admin logins of both (out/<run>/node1g/*.env, mode 600, never printed)
+if [ "$has_node1g" = 1 ]; then
+  (umask 077; python3 -c 'import secrets; print(secrets.token_hex(32))' > "$out/link-secrets/hs1.key")
+  chmod 600 "$out/link-secrets/hs1.key"
+  (umask 077; mkdir -p "$out/node1g" "$out/sut-state/admin" "$out/hotspot-state/admin")
+  chmod 700 "$out/node1g" "$out/sut-state" "$out/sut-state/admin" "$out/hotspot-state" "$out/hotspot-state/admin"
+  for n1g_node in sut hotspot; do
+    if [ "$n1g_node" = sut ]; then n1g_state="$out/sut-state"; n1g_env="$out/node1g/central-admin.env"
+    else n1g_state="$out/hotspot-state"; n1g_env="$out/node1g/hotspot-admin.env"; fi
+    (cd "$DVT_ROOT" && PYTHONPATH="$DVT_ROOT" python3 -m dvtest.tools.admin_users \
+      --users-file "$DVT_ROOT/$n1g_state/admin/users" --env-file "$DVT_ROOT/$n1g_env" \
+      --image "$XLXD_SUT_IMAGE" --route-file "$DVT_ROOT/$out/node1g/admin-users-$n1g_node.route") \
+      || { echo "run.sh: could not write the admin users file of the $n1g_node node" >&2; exit 2; }
+  done
+  echo "run.sh: NODE1g: hotspot link key in $out/link-secrets/hs1.key (mode 600, never printed); hotspot dvr-peer behind the WAN router at ${DVT_NAT_NET}.16 (router ${DVT_NET:-172.30.0}.98), central node ${DVT_NET:-172.30.0}.11:31800"
+fi
 
 # --profile asl-edge: fixture secret files of the edge's accounts and node password (the lab's
 # test-secret-not-real: they protect nothing), regular files, mode 0600, no symlink, as the edge demands;
@@ -1113,7 +1176,7 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
       printf 'nameserver %s.%s\n' "$net" "$DVT_SUT_RESOLV" > "$cfg/resolv.conf"
       printf '      - "%s/resolv.conf:/etc/resolv.conf:ro"\n' "$cfg"
     fi
-    if [ "$svc" = xlxd-sut ] && [ "$has_web" = 1 ]; then
+    if [ "$svc" = xlxd-sut ] && { [ "$has_web" = 1 ] || [ "$has_node1g" = 1 ]; }; then
       printf '      - "%s/%s/sut-state:/var/lib/dv"\n' "$DVT_ROOT" "$out"
     fi
     if [ "$svc" = xlxd-sut ] && [ "$has_asl_edge" = 1 ]; then
@@ -1148,6 +1211,12 @@ render_dvr_peer() {
   # GUARDID2: node 2 serves P25 as well (the listener of the cases hears the relayed over without any transcoding)
   case "${DVT_GUARDID2:-}" in on|1|true|yes) link_extra+=(--extra rig/config/dv-router/guardid2-p25.toml) ;; esac
   mkdir -p "$cfg"
+  if [ "$has_node1g" = 1 ]; then
+    # NODE1g: the hotspot, its own complete template, on the INSIDE network, dialling the central node (the SUT) at <net>.11
+    python3 -m dvtest.sut_config rig/config/dv-router/node1g-hotspot.toml "$cfg/dv-router.toml" --net "$DVT_NAT_NET" --own 16 --tester 30 \
+      --central-ip "$net.11" || exit 2
+    return 0
+  fi
   python3 -m dvtest.sut_config "$DVT_SUT_CONFIG" "$cfg/dv-router.toml" --net "$net" --own 16 --transcoder 17 --tester 30 \
     --require-ident "${DVT_REQUIRE_IDENT:-true}" --dp15-tx-enable false --extra rig/config/dv-router/dp15-twonode-b.toml \
     "${link_extra[@]}" || exit 2
@@ -1217,6 +1286,7 @@ watch_control() {
           xlxd) target=(netem-xlxd-ref netem-xlxd-sut) ;;
           edge) target=(netem-xlxd-sut) ;;                              # --profile asl-edge: the edge's egress
           asl) target=(netem-asl-a netem-asl-b netem-asl-e) ;;          # --profile asl-edge: the lab nodes' egress
+          wan) target=(netem-wan) ;;                                    # DVT_NODE1G=on: both interfaces of the WAN router
           *) target=() ;;
         esac
         if [ "${#target[@]}" -gt 0 ] && [ -n "$extra" ] && args="$(netem_args "$extra" 2>/dev/null)"; then
@@ -1380,6 +1450,7 @@ printf 'markers=%s profile=%s xlxd_ref=%s xlxd_sut=%s transcoder=%s sut_divergen
 [ "$has_web" = 0 ] || echo "web=on sut_config_extra=${DVT_SUT_CONFIG_EXTRA}" >> "$out/run.txt"
 [ "$has_mmdvm" = 0 ] || echo "mmdvm=on mmdvmhost_commit=${MMDVMSTACK_MMDVMHOST_COMMIT:-}" >> "$out/run.txt"
 [ "$has_twonode" = 0 ] || echo "twonode=on image=${XLXD_SUT_IMAGE} sut_config_extra=${DVT_SUT_CONFIG_EXTRA}" >> "$out/run.txt"
+[ "$has_node1g" = 0 ] || echo "node1g=on image=${XLXD_SUT_IMAGE} nat_net=${DVT_NAT_NET} sut_config_extra=${DVT_SUT_CONFIG_EXTRA}" >> "$out/run.txt"
 [ "$has_nat" = 0 ] || echo "nat=on turn=$([ "$has_turn" = 1 ] && echo on || echo off) coturn_image=${COTURN_IMAGE} nat_net=${DVT_NAT_NET}" >> "$out/run.txt"
 cat ".cache/xlxd/${XLXD_REF_DIR:-ref}.fetched" ".cache/xlxd/${XLXD_SUT_DIR:-sut}.fetched" >> "$out/run.txt" 2>/dev/null || true
 
@@ -1451,6 +1522,20 @@ if [ "$has_nat" = 1 ]; then
     echo "run.sh: the TURN secret was found in the output above (exit $scan_rc)" >&2
     [ "$rc" != 0 ] || rc=5
   fi
+fi
+# NODE1g: the link keys (the per-run key and the rotated one the cases write beside it) must be in no other file of the output directory
+# (logs, case notes, captures); the hub, admin API and logs never carry them. Paths only, never a value; the state dirs hold hashes only.
+if [ "$has_node1g" = 1 ]; then
+  for n1g_key in hs1.key rotated.key; do
+    [ -f "$out/link-secrets/$n1g_key" ] || continue
+    scan_rc=0
+    PYTHONPATH="$DVT_ROOT" python3 -m dvtest.secretscan --secret-file "$out/link-secrets/$n1g_key" --root "$out" \
+      --skip link-secrets/hs1.key --skip link-secrets/rotated.key || scan_rc=$?
+    if [ "$scan_rc" != 0 ]; then
+      echo "run.sh: the NODE1g link key $n1g_key was found in the output above (exit $scan_rc)" >&2
+      [ "$rc" != 0 ] || rc=5
+    fi
+  done
 fi
 # SECRELOAD1 (cases/test_secret_reload.py): the case lists the passcode values it used in out/<utc>/secreload/scan.json (mode 600);
 # neither may be in any collected log or file of the output directory (the wire captures carry a passcode by protocol and are skipped).

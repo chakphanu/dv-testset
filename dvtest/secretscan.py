@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: MIT
 """Find a secret (the bytes of a file) in directories and in the pending git changes, without ever printing it.
 
-  python3 -m dvtest.secretscan --secret-file F [--root DIR ...] [--git]
+  python3 -m dvtest.secretscan --secret-file F [--root DIR ...] [--skip REL ...] [--git]
 
 Exit 0: not found; 1: found (the relative paths go to stderr, never the value); 2: usage or read error.
 --root DIR   every regular file under DIR (symlinks skipped), read in chunks
+--skip REL   a path relative to DIR (a file, or a directory with all below it) that is not read: where the secret is meant to be
 --git        `git diff HEAD`, `git diff --cached`, and every untracked file that is not ignored (cwd must be the repo)
 The secret is the file content with surrounding whitespace removed; it must be at least 8 bytes (a shorter value
 would match by accident). Stdlib only. Used by scripts/run.sh (profile asl-ext) and before committing its results.
@@ -38,13 +39,16 @@ def file_has(path, secret):
             tail = chunk[-len(secret):]
 
 
-def scan_root(root, secret):
-    """Relative paths under root whose bytes contain the secret."""
+def scan_root(root, secret, skip=()):
+    """Relative paths under root whose bytes contain the secret. `skip`: relative paths (a file, or a directory with everything below
+    it) that are not read: the files that legitimately hold the secret."""
     hits = []
+    skip = tuple(os.path.normpath(x) for x in skip)
     for base, _dirs, files in os.walk(root):
         for name in files:
             path = os.path.join(base, name)
-            if os.path.islink(path):
+            rel = os.path.normpath(os.path.relpath(path, root))
+            if os.path.islink(path) or any(rel == x or rel.startswith(x + os.sep) for x in skip):
                 continue
             try:
                 if file_has(path, secret):
@@ -82,12 +86,13 @@ def main(argv=None):
     ap.add_argument("--secret-file", required=True)
     ap.add_argument("--root", action="append", default=[])
     ap.add_argument("--git", action="store_true")
+    ap.add_argument("--skip", action="append", default=[], help="path relative to every --root that is not scanned (repeatable)")
     args = ap.parse_args(argv)
     try:
         secret = load_secret(args.secret_file)
         hits = []
         for root in args.root:
-            hits += ["%s: %s" % (root, h) for h in scan_root(root, secret)]
+            hits += ["%s: %s" % (root, h) for h in scan_root(root, secret, args.skip)]
         if args.git:
             hits += ["git: %s" % h for h in scan_git(secret)]
     except (ValueError, OSError, subprocess.CalledProcessError) as exc:

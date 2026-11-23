@@ -1,0 +1,360 @@
+# SPDX-License-Identifier: MIT
+"""NODE1g (DV-Router, image dv-router:wip-42d5473): a HOTSPOT node linked to a CENTRAL node over an emulated WAN.
+
+What the product says (docs/design/link.md, answers-364-node1g.md): node link v1 over UDP (edges.link.port, default 31800), the hotspot dials out
+from an ephemeral socket (an `[[edges.link.uplink]]` row), the central node answers the source it saw (an `[[edges.link.account]]` row); both send
+a keepalive every 5 s and a session is dead after 30 s without a valid datagram; the credential is one pre-shared 32-byte key (64 hex digits, mode
+0600) with HMAC-SHA256 proofs both ways and no expiry; after a lost session or a failed handshake the client retries after 0.5 s, doubling to 5 s
+(+-20 percent); a NAT rebinding moves an ESTABLISHED session to the new source without a handshake; an over in flight when the link goes dark ends
+by stream silence after 1.6 s (the floor is released then, the room folds the over end_missing).
+
+This module is pure (stdlib only) except for the small clients it builds on (dvtest.nat control protocol, dvtest.admin): the switches, the hub
+counters of the link, the refusal rate, the key files, the arrival-time evidence of a P25 listener, the plain-HTTP admin client of the two nodes and
+the WAN router client. Cases: cases/test_node1g.py; unit tests: cases/unit/test_node1g.py; document: docs/node1g-cases.md.
+"""
+import http.client
+import os
+import re
+import secrets
+import tempfile
+
+from dvtest import admin, metrics, nat
+from dvtest.proto import p25
+
+SWITCH = "DVT_NODE1G"
+LINKOBS_SWITCH = "DVT_LINKOBS1"
+SKIP_REASON = ("DVT_NODE1G=on is not set (run scripts/run.sh --profile twonode with DVT_NODE1G=on on an image with the node link: "
+               "dv-router:wip-42d5473 or later; docs/node1g-cases.md)")
+LINKOBS_REASON = ("DVT_LINKOBS1=on is not set (LINKOBS1 is a future image: a refusal log and counter on the hotspot, a session-end counter with "
+                  "reasons, Bye{revoked}, a bad-source counter; the names are not known yet)")
+
+# the pair
+ACCOUNT = "n0call-hs1"            # the account row of the central node (name), and the account the hotspot's uplink row names
+UPLINK = "central"                # the name of the hotspot's uplink row
+HOTSPOT_ROOM, CENTRAL_ROOM = "B", "C"
+TG = 31672                        # P25 talk group of both nodes' server ports (UDP 41000)
+LINK_PORT = 31800
+KEY_NAME, ROTATED_NAME = "hs1.key", "rotated.key"      # in out/<run>/link-secrets/
+UNMAPPED_BASE = 1030000           # radio ids of the relink probes: in no directory of the rig (rig/config/dmrid.dat ends at 1023230)
+
+# the contract (answers-364-node1g.md, link.md): seconds
+KEEPALIVE_S = 5.0
+SESSION_DEAD_S = 30.0
+RELINK_S = 10.0                   # "link up within 10 s of the blackout end"
+STREAM_SILENCE_S = 1.6            # an over without a Unit ends after this; the floor is released then
+NAT_GAP_S = 5.0                   # media gap after a NAT rebinding: at most one keepalive period
+NAT_GAP_SLACK_S = 0.2             # measurement slack of the arrival clock (the tester polls its sockets every 10 ms; netem off)
+REFUSAL_RATE_MAX = 1.1            # Reject{auth} per second per hotspot: backoff 0.5 .. 5 s with Auth every 0.5 s for a 5 s attempt = about 1.0
+
+# the impairments (docs/node1g-cases.md "Why these values"): per direction, the router shapes both of its interfaces
+DELAY_ARGS = "delay 60ms 10ms"
+LOSS_ARGS = "loss 3%"
+DELAY_ONE_WAY_MS = 60.0
+RTT_RANGE_MS = (100.0, 220.0)     # 2 x 60 ms +- jitter, plus the two nodes' own processing
+
+HANDSHAKE_RESULTS = ("accepted", "welcomed", "auth", "version", "bad_proof", "auth_replay", "auth_capacity", "amplification")
+MUST_NOT_MOVE_HANDSHAKE = ("auth_replay", "auth_capacity", "amplification", "bad_proof")
+MUST_NOT_MOVE_DATAGRAM_RX = ("bad_tag", "unknown_session", "malformed")
+
+
+def on(environ=None):
+    """DVT_NODE1G=on: run.sh made the pair a hotspot behind a WAN router and its central node (--profile twonode)."""
+    return (environ if environ is not None else os.environ).get(SWITCH, "").strip().lower() in ("on", "1", "true", "yes")
+
+
+def linkobs_on(environ=None):
+    """DVT_LINKOBS1=on: the image has LINKOBS1 (a future image)."""
+    return (environ if environ is not None else os.environ).get(LINKOBS_SWITCH, "").strip().lower() in ("on", "1", "true", "yes")
+
+
+# ---------------------------------------------------------------- hub counters
+
+def counters(text):
+    """{name: value} of what the cases judge, from one scrape of a node's hub (`metrics xlxd-sut` / `metrics dvr-peer`):
+
+      hs.<result>            dv_edge_link_handshakes_total{result}
+      sessions               dv_edge_link_sessions (gauge)
+      rtt_ms                 dv_edge_link_rtt_ms (gauge, mean of the known samples, 0 when none)
+      dgram.rx.<result>      dv_edge_link_datagrams_total{dir=rx,result}
+      dgram.tx.<result>      the same for dir=tx
+      refused.<reason>       dv_edge_link_refused_total{reason}
+      restarts.<child>       dv_launcher_child_restarts_total{child}
+      overs.<room>.<result>  dv_room_overs_total{room,result}, room as the label gives it
+      onair.<room>           dv_status_room_onair{room} (gauge; the hub labels rooms in lower case)
+      procs_down             number of dv_status_process_up series that are 0
+    Every series that is not in the text is absent (a delta treats absent as 0)."""
+    out = {}
+    for s in metrics.parse(text):
+        lab = s.labels
+        if s.name == "dv_edge_link_handshakes_total" and "result" in lab:
+            key = "hs.%s" % lab["result"]
+        elif s.name == "dv_edge_link_sessions":
+            key = "sessions"
+        elif s.name == "dv_edge_link_rtt_ms":
+            key = "rtt_ms"
+        elif s.name == "dv_edge_link_datagrams_total" and "dir" in lab and "result" in lab:
+            key = "dgram.%s.%s" % (lab["dir"], lab["result"])
+        elif s.name == "dv_edge_link_refused_total" and "reason" in lab:
+            key = "refused.%s" % lab["reason"]
+        elif s.name == "dv_launcher_child_restarts_total" and "child" in lab:
+            key = "restarts.%s" % lab["child"]
+        elif s.name == "dv_room_overs_total" and "room" in lab and "result" in lab:
+            key = "overs.%s.%s" % (lab["room"].upper(), lab["result"])
+        elif s.name == "dv_status_room_onair" and "room" in lab:
+            key = "onair.%s" % lab["room"].upper()
+        elif s.name == "dv_status_process_up":
+            if s.value == 0:
+                out["procs_down"] = out.get("procs_down", 0.0) + 1.0
+            continue
+        else:
+            continue
+        out[key] = out.get(key, 0.0) + s.value if not key.startswith(("sessions", "rtt_ms", "onair.")) else s.value
+    return out
+
+
+def delta(before, after):
+    """{name: after - before} for the names whose value changed (a name missing on one side counts as 0)."""
+    out = {}
+    for key in set(before) | set(after):
+        d = after.get(key, 0.0) - before.get(key, 0.0)
+        if d:
+            out[key] = d
+    return out
+
+
+def collateral(moved, allow_restarts=(), allow_rx=()):
+    """The things that must NOT move after a recovery (answers-364 section 5), as sentences: the handshake results auth_replay, auth_capacity,
+    amplification and bad_proof, the datagram results bad_tag, unknown_session and malformed (except those named in `allow_rx`: a case that
+    restarts the edge on purpose sees datagrams of the old session), any link refusal, any child restart except the children in
+    `allow_restarts`, and a process of the hub's table that is down."""
+    out = []
+    for name in MUST_NOT_MOVE_HANDSHAKE:
+        if moved.get("hs.%s" % name):
+            out.append("handshake result %s moved by %g" % (name, moved["hs.%s" % name]))
+    for name in MUST_NOT_MOVE_DATAGRAM_RX:
+        if name not in allow_rx and moved.get("dgram.rx.%s" % name):
+            out.append("datagram rx result %s moved by %g" % (name, moved["dgram.rx.%s" % name]))
+    for key, value in sorted(moved.items()):
+        if key.startswith("refused.") and value:
+            out.append("link refusal %s moved by %g" % (key.split(".", 1)[1], value))
+        if key.startswith("restarts.") and value and key.split(".", 1)[1] not in allow_restarts:
+            out.append("child %s restarted %g time(s)" % (key.split(".", 1)[1], value))
+    return out
+
+
+def link_active(counts):
+    """True when a scrape shows one connected link session."""
+    return counts.get("sessions", 0.0) >= 1.0
+
+
+# ---------------------------------------------------------------- the refusal rate
+
+def refusal_rate(samples):
+    """(rate per second, window seconds, events) of a counter that grows in bursts, from [(t, value)] reads taken while it grows. The hub
+    refreshes its counters every 10 s, so a read shows the value of the last refresh: the instants at which the value CHANGES from one read to the
+    next are the refreshes (known to within one read interval). The rate is the growth between the first and the last change instant over the time
+    between them; the events before the first refresh and after the last one are not counted. None when fewer than two changes were seen."""
+    changes = []
+    for (t0, v0), (t1, v1) in zip(samples, samples[1:]):
+        if v1 != v0:
+            changes.append((t1, v1))
+    if len(changes) < 2:
+        return None
+    (ta, va), (tb, vb) = changes[0], changes[-1]
+    if tb <= ta:
+        return None
+    return (vb - va) / (tb - ta), tb - ta, vb - va
+
+
+# ---------------------------------------------------------------- key files
+
+KEY_RE = re.compile(r"^[0-9a-fA-F]{64}\n?$")
+
+
+def new_key_hex(rng=None):
+    """A fresh 32-byte key as 64 lower-case hex digits."""
+    return (rng or secrets).token_hex(32)
+
+
+def valid_key_text(text):
+    """True for exactly 64 hex digits and an optional trailing newline (link.md "Keys and accounts")."""
+    return bool(KEY_RE.match(text))
+
+
+def write_key(path, key_hex):
+    """Replace `path` with a regular file of mode 0600 that holds `key_hex` and a newline, by writing a sibling file and renaming it over the old
+    one (the documented rotation, link.md: the launcher then sees one inode change, never a half-written key). Nothing is returned or printed."""
+    if not valid_key_text(key_hex):
+        raise ValueError("not a 64 hex digit key")
+    directory = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(prefix=".key-", dir=directory)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="ascii") as fh:
+            fh.write(key_hex.strip() + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def read_key(path):
+    """The key text of `path` (kept in memory by a case to put it back; never printed)."""
+    with open(path, encoding="ascii") as fh:
+        text = fh.read()
+    if not valid_key_text(text):
+        raise ValueError("%s does not hold a 64 hex digit key" % os.path.basename(path))
+    return text.strip()
+
+
+# ---------------------------------------------------------------- the admin API of a node (plain HTTP)
+
+class PlainAdmin(admin.AdminClient):
+    """The admin API of one node over plain HTTP on its own address (rig/config/dv-router/node1g-hotspot.toml and node1g-central.toml: `[admin]
+    bind = <OWN_IP>:8080`, `host` the same, `allow_from` the tester, totp on). dv-svc-admin has no TLS; its Host mount demands the effective host
+    to equal `host` and an Origin, when sent, to be https://<host>, which the base client does. The cookies are handled by the base client by name
+    (the Secure attribute is not enforced here)."""
+
+    def __init__(self, ip, port=8080, **kw):
+        super().__init__("https://%s:%d" % (ip, port), None, mount="host", **kw)
+        self._plain = (ip, port)
+
+    def _connect(self):
+        return http.client.HTTPConnection(self._plain[0], self._plain[1], timeout=self.timeout)
+
+    def sign_in(self, user, password):
+        """Log in, enrolling the authenticator at the first login (the rig's users have no TOTP secret yet). Returns the identity."""
+        self.hide(password)
+        ident = self.login(user, password)
+        if ident.get("totp") == "enrol":
+            self.enrol_totp()
+            ident = self.session()
+        return ident
+
+
+def link_rows(status):
+    """[{row}] of every link session of an admin `GET /api/v1/admin/status` body (`link_edges: [{edge, age_ms, sessions: [...]}]`)."""
+    out = []
+    for edge in (status or {}).get("link_edges") or []:
+        for row in edge.get("sessions") or []:
+            out.append(row)
+    return out
+
+
+def link_row(status, name):
+    """The row called `name` (`account:<account>` on the central node, `uplink:<name>` on the hotspot), or None."""
+    for row in link_rows(status):
+        if row.get("name") == name:
+            return row
+    return None
+
+
+def row_summary(row):
+    """One line about a row for the notes: state, last_error, rtt, loss, peer."""
+    if row is None:
+        return "no row"
+    return "state=%s last_error=%s rtt_ms=%s loss_ppm=%s peer=%s:%s" % (
+        row.get("state"), row.get("last_error"), row.get("rtt_ms"), row.get("loss_ppm"), row.get("ip"), row.get("port"))
+
+
+# ---------------------------------------------------------------- the WAN router
+
+class Wan:
+    """The tester's client of the WAN router's control server (dvtest/nat.py protocol, `<net>.98:9100`). The hotspot is the NAT'd host: its UDP to
+    the central node's link port crosses the router, so `blackhole` is a blackout of the WAN in both directions, `nat_mode symmetric` plus the flush
+    it does is a NAT rebinding to a NEW SOURCE PORT, and `readdress` moves the hotspot's UDP to another outside ADDRESS."""
+
+    def __init__(self, ip, port=9100):
+        self.addr = (ip, port)
+
+    def ctl(self, op, **kw):
+        ans = nat.call(self.addr, dict(op=op, **kw))
+        if not ans.get("ok"):
+            raise nat.NatError("wan router: %s" % ans.get("error"))
+        return ans
+
+    def blackhole(self, on):
+        return self.ctl("blackhole", state="on" if on else "off")
+
+    def mode(self, mode):
+        return self.ctl("nat_mode", mode=mode)
+
+    def readdress(self, on):
+        return self.ctl("readdress", state="on" if on else "off")
+
+    def mappings(self):
+        """[{'browser_port', 'seen_ip', 'seen_port'}]: the hotspot's UDP flows to the central node's link port as the central node sees them."""
+        return self.ctl("mappings")["mappings"]
+
+    def firsts(self):
+        return self.ctl("firsts")["firsts"]
+
+    def status(self):
+        return self.ctl("status")
+
+    def reset(self):
+        return self.ctl("reset")
+
+
+# ---------------------------------------------------------------- what a P25 listener heard
+
+def voice_arrivals(client):
+    """[(monotonic arrival time, imbe bytes)] of the voice records (no terminators) in a P25Client's inbox, in arrival order."""
+    out = []
+    for data, t in zip(client.client.inbox, client.client.inbox_times):
+        rec = p25.parse(data)
+        if rec is not None and not rec["terminator"]:
+            out.append((t, bytes(rec["imbe"])))
+    return out
+
+
+def heard_share(arrivals, sent, since=0.0):
+    """Share (0..1) of the distinct frames in `sent` that arrived at or after `since` (monotonic seconds)."""
+    want = set(bytes(f) for f in sent)
+    if not want:
+        return 0.0
+    got = set(imbe for t, imbe in arrivals if t >= since)
+    return len(want & got) / float(len(want))
+
+
+def first_heard(arrivals, sent, since=0.0):
+    """The arrival time of the first frame of `sent` that arrived at or after `since`, or None."""
+    want = set(bytes(f) for f in sent)
+    for t, imbe in arrivals:
+        if t >= since and imbe in want:
+            return t
+    return None
+
+
+def max_gap(times):
+    """(largest gap between neighbouring arrival times, the time it starts) of a list of times; (0.0, None) for fewer than two."""
+    ts = sorted(times)
+    best, at = 0.0, None
+    for a, b in zip(ts, ts[1:]):
+        if b - a > best:
+            best, at = b - a, a
+    return best, at
+
+
+def stream_gap(arrivals, sent, start, end):
+    """The largest silence between the frames of ONE over that arrived (frames of `sent` only) within [start, end] (monotonic seconds): what a
+    listener perceives as a media gap. The over's own first and last arrival bound the window, so the silence before the first frame (setup) and
+    after the last one (end of the over) are not gaps. (0.0, None) when fewer than two of its frames arrived."""
+    want = set(bytes(f) for f in sent)
+    return max_gap([t for t, imbe in arrivals if start <= t <= end and imbe in want])
+
+
+def floor_probe_ok(share, floor=0.8):
+    """A floor probe over was granted when the listener on the same node heard at least `floor` of it (the over of a busy floor is refused whole)."""
+    return share >= floor
+
+
+def unmapped_id(base, n):
+    """A radio id for probe number n that is in no directory (the nodes' P25 ports serve it under the placeholder callsign P31672 and key the guard
+    on the source id), so a train of short probe overs never earns a strike."""
+    return base + (n % 900)

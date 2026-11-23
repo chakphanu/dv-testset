@@ -23,6 +23,8 @@ Plain text replacement of these tokens (a token is <UPPER_CASE_NAME>):
                     rig/config/dv-router/admin.toml lets it reach the admin host)
   <COTURN_IP>       the TURN server of the NAT profile, <net>.<coturn> (rig: .94;
                     rig/config/dv-router/turn.toml)
+  <CENTRAL_IP>      only with --central-ip ADDR (an IPv4 address, whatever network): the central node a NODE1g hotspot dials
+                    (rig/config/dv-router/node1g-hotspot.toml; the hotspot itself is rendered with the inside network as --net)
 
 AX25ACK1 (DV-Router 345f1ebe, images from wip-f1f3777): a transmitting AX.25 edge needs the exact control-operator sentence in
 `[edges.ax25] tx_ack` (the same sentence as `[edges.radio] tx_ack`, with the station callsign in upper case, SSID included), else
@@ -57,7 +59,7 @@ import tomllib
 from pathlib import Path
 
 TOKEN = re.compile(r"<([A-Z][A-Z0-9_]*)>")
-KNOWN = ("OWN_IP", "TRANSCODER_IP", "TESTER_IP", "NET", "REQUIRE_IDENT", "DP15_TX_ENABLE", "WEB_PROXY_IP", "BROWSER_IP", "COTURN_IP")
+KNOWN = ("OWN_IP", "TRANSCODER_IP", "TESTER_IP", "NET", "REQUIRE_IDENT", "DP15_TX_ENABLE", "WEB_PROXY_IP", "BROWSER_IP", "COTURN_IP", "CENTRAL_IP")
 BOOLS = ("true", "false")
 _OCTET = r"(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])"
 _NET = re.compile(r"^%s\.%s\.%s$" % (_OCTET, _OCTET, _OCTET))
@@ -334,7 +336,7 @@ def apply_ax25_ack(text):
 
 
 def render(text, net, own=11, transcoder=21, tester=30, require_ident=None, extras=(), web_proxy=90, browser=91, coturn=94,
-           gen=None, dp15_tx_enable=None):
+           gen=None, dp15_tx_enable=None, central_ip=None):
     """The template text with the tokens replaced; `extras` are texts appended
     after it (each after a newline, in order) before the substitution.
     ConfigError for a bad /24 prefix, a host octet outside 1..254, a bad
@@ -352,6 +354,10 @@ def render(text, net, own=11, transcoder=21, tester=30, require_ident=None, extr
         if not isinstance(octet, int) or isinstance(octet, bool) or not 1 <= octet <= 254:
             raise ConfigError("%s octet must be 1..254 (got %r)" % (name, octet))
         values[name] = "%s.%d" % (net, octet)
+    if central_ip is not None:
+        if not re.fullmatch(r"%s\.%s\.%s\.%s" % ((_OCTET,) * 4), central_ip):
+            raise ConfigError("central ip must be an IPv4 address (got %r)" % (central_ip,))
+        values["CENTRAL_IP"] = central_ip
     unknown = [name for name in tokens(text) if name not in values]
     if unknown:
         raise ConfigError("unknown token%s %s (known: %s)" % (
@@ -369,13 +375,14 @@ def _read(path, what):
 
 
 def render_file(template, output, net, own=11, transcoder=21, tester=30, require_ident=None, extras=(),
-                web_proxy=90, gen=None, dp15_tx_enable=None):
+                web_proxy=90, gen=None, dp15_tx_enable=None, central_ip=None):
     """Read TEMPLATE (and the files of `extras`), write OUTPUT (mode 0644; the
     container reads it as any user). Returns the output path; ConfigError when
     a file is missing, unreadable, not UTF-8 or the text has an unknown token."""
     text = _read(template, "template")
     texts = [_read(path, "extra") for path in extras]
-    rendered = render(text, net, own, transcoder, tester, require_ident, texts, web_proxy, gen=gen, dp15_tx_enable=dp15_tx_enable)
+    rendered = render(text, net, own, transcoder, tester, require_ident, texts, web_proxy, gen=gen, dp15_tx_enable=dp15_tx_enable,
+                      central_ip=central_ip)
     out = Path(output)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(rendered, encoding="utf-8")
@@ -424,6 +431,7 @@ def main(argv=None):
     ap.add_argument("--web-proxy", type=int, default=90)
     ap.add_argument("--require-ident", default=None, help="true or false (default: env DVT_REQUIRE_IDENT, else true)")
     ap.add_argument("--dp15-tx-enable", default=None, help="true or false (default: env DVT_DP15_TX_ENABLE, else false)")
+    ap.add_argument("--central-ip", default=None, help="value of <CENTRAL_IP> (NODE1g hotspot template)")
     ap.add_argument("--extra", action="append", default=[], metavar="FILE",
                     help="appended after the template, token substituted (repeatable)")
     args = ap.parse_args(argv)
@@ -431,10 +439,12 @@ def main(argv=None):
         if args.output == "-":
             text = _read(args.template, "template")
             render(text, args.net, args.own, args.transcoder, args.tester, args.require_ident,
-                   [_read(path, "extra") for path in args.extra], args.web_proxy, dp15_tx_enable=args.dp15_tx_enable)
+                   [_read(path, "extra") for path in args.extra], args.web_proxy, dp15_tx_enable=args.dp15_tx_enable,
+                   central_ip=args.central_ip)
         else:
             render_file(args.template, args.output, args.net, args.own, args.transcoder, args.tester,
-                        args.require_ident, args.extra, args.web_proxy, dp15_tx_enable=args.dp15_tx_enable)
+                        args.require_ident, args.extra, args.web_proxy, dp15_tx_enable=args.dp15_tx_enable,
+                        central_ip=args.central_ip)
     except (ConfigError, OSError, UnicodeDecodeError) as exc:
         print("sut_config: %s" % exc, file=sys.stderr)
         return 2

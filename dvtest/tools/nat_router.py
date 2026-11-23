@@ -126,13 +126,14 @@ def main(argv=None):
     ap.add_argument("--sut-ip", required=True)
     ap.add_argument("--media-port", type=int, default=50000)
     ap.add_argument("--forward", type=int, action="append", default=[], help="TCP port forwarded outside -> browser (repeatable)")
+    ap.add_argument("--no-forward", action="store_true", help="no control forward at all (the NODE1g WAN router: nothing listens behind it for the tester)")
     ap.add_argument("--out-prefix", type=int, default=24)
     args = ap.parse_args(argv)
     rc, out = run(["ip", "-o", "-4", "addr", "show"])
     names = nat.parse_ip_addr(out)
     try:
         topo = nat.make_topology(args.inside_net, args.out_ip, args.in_ip, args.alias_ip, args.browser_ip, args.sut_ip,
-                                 args.media_port, args.forward or (3000, 3001), names[args.out_ip], names[args.in_ip], args.out_prefix)
+                                 args.media_port, () if args.no_forward else (args.forward or (3000, 3001)), names[args.out_ip], names[args.in_ip], args.out_prefix)
     except (KeyError, nat.NatError) as exc:
         print("nat-router: cannot set up: %s (addresses seen: %s)" % (exc, sorted(names)), file=sys.stderr)
         return 2

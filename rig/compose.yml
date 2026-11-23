@@ -54,6 +54,11 @@
 #            config) with its own transcoder transcoder-peer (.17), a plain XLX interlink peer of xlxd-sut on modules
 #            DE (DP15 cases 7b-7d, cases/test_dp15_peer.py, docs/dp15-cases.md); needs XLXD_SUT_IMAGE, DVT_SUT_LAUNCH=native;
 #            the tester gets DVT_TWONODE=on and DVT_DVR_PEER
+#   node1g   NODE1g (docs/node1g-cases.md; used with twonode and DVT_NODE1G=on): the WAN between a hotspot and a central node:
+#            wan-router (.98 outside, alias .99, inside .2 on nat-inside; the image of the nat profile, no control forward; its control
+#            server is the JSON-line protocol of dvtest/nat.py on <net>.98:9100, tester only), wan-edge (default route of the hotspot via
+#            the router, in the namespace of dvr-peer) and netem-wan (netem on BOTH interfaces of the router, control: "netem wan <args>");
+#            rig/compose.node1g.yml (added by run.sh) moves dvr-peer behind the router and gives the tester an address on the inside network
 #   mmdvm    the REAL client stack of a hotspot: mmdvm-stack (.100, image dvt-mmdvmstack:local) runs upstream MMDVMHost with
 #            DMRGateway, YSFGateway, P25Gateway, NXDNGateway and DStarGateway against xlxd-sut; its modem is the virtual MMDVM
 #            modem (dvtest/mmdvm_modem.py) that the tester runs on UDP DVT_MMDVM_MODEM_PORT (docs/mmdvm-stack-cases.md);
@@ -601,6 +606,14 @@ services:
       DVT_RFPOS1B_LINK: ${DVT_RFPOS1B_LINK:-}
       # on for DV-Router GUARDID2 (9a8d1cb4, image dv-router:wip-3f142cd): cases/test_guardid2.py (docs/guardid2-cases.md; needs --profile twonode, run.sh adds the node link and a P25 port on both nodes); the cases skip with a reason without it
       DVT_GUARDID2: ${DVT_GUARDID2:-}
+      # on for DV-Router NODE1g (image dv-router:wip-42d5473): cases/test_node1g.py (docs/node1g-cases.md; needs --profile twonode, run.sh adds the WAN router, the hotspot template and the link key); the cases skip with a reason without it
+      DVT_NODE1G: ${DVT_NODE1G:-}
+      # on for DV-Router LINKOBS1 (a future image: hotspot refusal counter, session-end counter with reasons, Bye{revoked}, bad-source counter): the RECORD-only part of cases/test_node1g.py
+      DVT_LINKOBS1: ${DVT_LINKOBS1:-}
+      # NODE1g addresses: the hotspot on the inside network, the WAN router (control port 9100), its alias outside address
+      DVT_N1G_HOTSPOT: ${DVT_NAT_NET:-172.31.0}.16
+      DVT_N1G_ROUTER: ${DVT_NET:-172.30.0}.98
+      DVT_N1G_ALIAS: ${DVT_NET:-172.30.0}.99
       # on for DV-Router RFPOS1 step C (fb3167bb: AllStar streams state frame positions): cases/test_rfpos1c.py (docs/rfpos1c-cases.md; needs --profile asl-edge, run.sh adds rfpos1c-usrp.toml); the cases skip with a reason without it
       DVT_RFPOS1C: ${DVT_RFPOS1C:-}
       # on for DV-Router BUNDLEFILL1 (a bundled egress fills a missing unit and still sends the native frame): the YSF, P25 and NXDN listeners of cases/test_rfpos1c.py (docs/rfpos1c-cases.md; run.sh adds bundlefill1-edges.toml under --profile asl-edge); without it those listeners do not run
@@ -1568,6 +1581,75 @@ services:
       DVT_TRANSCODER_PEERS: ${DVT_NET:-172.30.0}.16 ${DVT_NET:-172.30.0}.30
     networks:
       rig: {ipv4_address: "${DVT_NET:-172.30.0}.17"}
+
+  # ---- NODE1g (profile node1g, with twonode; docs/node1g-cases.md) ----
+  # The WAN between a hotspot (dvr-peer, moved to the inside network by rig/compose.node1g.yml) and the central node (xlxd-sut): the
+  # same router image and control server as the NAT profile, with the hotspot as the NAT'd host and the central node's link port as the
+  # watched port (--sut-ip / --media-port: `mappings` and `firsts` read the link flow), and no TCP forward (nothing listens behind it for the
+  # tester: the tester is on the inside network too). Control: JSON lines on <net>.98:9100, the tester only (dvtest/nat.py): nat_mode
+  # (port_restricted / symmetric / full_cone), flush, readdress (the hotspot's source address moves to the alias .99), blackhole on|off|for N.
+  wan-router:
+    <<: *nat
+    profiles: [node1g]
+    cap_add: [NET_ADMIN, NET_RAW]
+    sysctls:
+      net.ipv4.ip_forward: "1"
+    command:
+      - python
+      - -m
+      - dvtest.tools.nat_router
+      - --listen
+      - ${DVT_NET:-172.30.0}.98:9100
+      - --allow
+      - ${DVT_NET:-172.30.0}.30
+      - --inside-net
+      - ${DVT_NAT_NET:-172.31.0}.0/24
+      - --out-ip
+      - ${DVT_NET:-172.30.0}.98
+      - --in-ip
+      - ${DVT_NAT_NET:-172.31.0}.2
+      - --alias-ip
+      - ${DVT_NET:-172.30.0}.99
+      - --browser-ip
+      - ${DVT_NAT_NET:-172.31.0}.16
+      - --sut-ip
+      - ${DVT_NET:-172.30.0}.11
+      - --media-port
+      - "31800"
+      - --no-forward
+    networks:
+      rig: {ipv4_address: "${DVT_NET:-172.30.0}.98"}
+      nat-inside: {ipv4_address: "${DVT_NAT_NET:-172.31.0}.2"}
+
+  # The default route of the hotspot (the inside network is internal: Docker gives it none) in the namespace of dvr-peer; the probe server
+  # of the NAT profile's image runs along as nobody on TCP 3001 and is not used.
+  wan-edge:
+    <<: *nat
+    profiles: [node1g]
+    cap_add: [NET_ADMIN, SETUID, SETGID]
+    network_mode: "service:dvr-peer"
+    depends_on:
+      dvr-peer: {condition: service_started, restart: false}
+    command:
+      - python
+      - -m
+      - dvtest.tools.nat_probe
+      - --listen
+      - 0.0.0.0:3001
+      - --gateway
+      - ${DVT_NAT_NET:-172.31.0}.2
+
+  # netem on every interface of the WAN router (DVT_NETEM_ALL): a datagram is shaped once in each direction, so the one-way delay is the
+  # netem delay and the round trip is twice that. Control: "netem wan <preset|off|arguments>".
+  netem-wan:
+    <<: *netem
+    profiles: [node1g]
+    network_mode: "service:wan-router"
+    depends_on:
+      wan-router: {condition: service_started, restart: false}
+    environment:
+      DVT_NETEM_ARGS: ${DVT_NETEM_ARGS_WAN:-}
+      DVT_NETEM_ALL: "1"
 
   # ---- netem sidecars (profile netem) ----
   netem-tester:

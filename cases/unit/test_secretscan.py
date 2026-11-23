@@ -57,3 +57,14 @@ def test_git_diff_and_untracked(tmp_path, monkeypatch):
     assert secretscan.scan_git(SECRET) == ["new.txt"]
     (tmp_path / ".gitignore").write_text("new.txt\n")
     assert secretscan.scan_git(SECRET) == []
+
+
+def test_scan_root_skip_leaves_out_the_files_that_hold_the_secret(tmp_path):
+    (tmp_path / "link-secrets").mkdir()
+    (tmp_path / "link-secrets" / "hs1.key").write_bytes(SECRET + b"\n")
+    (tmp_path / "keep.log").write_bytes(b"clean")
+    assert secretscan.scan_root(str(tmp_path), SECRET) == ["link-secrets/hs1.key"]
+    assert secretscan.scan_root(str(tmp_path), SECRET, skip=["link-secrets/hs1.key"]) == []
+    assert secretscan.scan_root(str(tmp_path), SECRET, skip=["link-secrets"]) == []
+    (tmp_path / "keep.log").write_bytes(b"leak " + SECRET)
+    assert secretscan.scan_root(str(tmp_path), SECRET, skip=["link-secrets"]) == ["keep.log"]

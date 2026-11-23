@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: MIT
+# NODE1g (docs/node1g-cases.md): a COMPLETE template (not a snippet) for the HOTSPOT node of the hotspot link: node 2 of --profile twonode (dvr-peer),
+# rendered by scripts/run.sh under DVT_NODE1G=on with the INSIDE network as <NET> (the hotspot lives behind the WAN router, never on the rig network)
+# and the central node's address as <CENTRAL_IP>. It is the exact hotspot preset of netthr1-hotspot.toml (profile = "hotspot", room B, one null radio
+# port) plus: a P25 server port (UDP 41000, TG 31672 -> room B, fallback policy) so a tester on the hotspot's LAN can talk and listen without any
+# transcoder, the id seed files the rig mounts at /xlxd, the admin service on the inside address for the tester only (plain HTTP; the tester is on the
+# inside network too) and ONE uplink row: account n0call-hs1 at the central node's link port, room B here = room C there. The key file is
+# out/<run>/link-secrets/hs1.key (made per run by run.sh, 64 hex digits, mode 0600, never printed). State dir: out/<run>/hotspot-state at /var/lib/dv.
+schema = 1
+
+[node]
+profile = "hotspot"
+callsign = "N0CALL"
+bind_ip = "<OWN_IP>"
+rooms = "B"
+state_dir = "/var/lib/dv"
+
+[ids]
+dmrid = "/xlxd/dmrid.dat"
+nxdn = "/xlxd/nxdn.csv"
+
+[edges.radio]
+callsign = "N0CALL"
+tx_enable = true
+rules = "other"
+tx_ack = "I am the control operator of N0CALL and accept responsibility for its transmissions"
+
+[[edges.radio.port]]
+name = "port1"
+kind = "null"
+module = "B"
+physical = "null-radio"
+tx = true
+band = "70cm"
+timers = { tot_secs = 180, tx_delay_ms = 0, tx_tail_ms = 0 }
+id = { mode = "none", interval_secs = 600 }
+
+[edges.p25]
+enable = true
+server_module = "B"
+server_tg = 31672
+no_radio_id = "fallback"
+
+[admin]
+enable = true
+bind = "<OWN_IP>:8080"
+host = "<OWN_IP>:8080"
+allow_from = ["<TESTER_IP>"]
+totp = true
+
+[[edges.link.uplink]]
+name = "central"
+host = "<CENTRAL_IP>:31800"
+account = "n0call-hs1"
+secret_file = "/etc/dv-router/link-secrets/hs1.key"
+rooms = { B = "C" }

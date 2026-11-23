@@ -836,6 +836,34 @@ a second DV-Router node next to the SUT. Nothing is built: it is the prebuilt im
 * GUARDID2 (`DVT_GUARDID2=on`): the same node link (key, relay) plus `guardid2-p25.toml` (a P25 server port, UDP 41000, TG 31672 -> room G, `no_radio_id = "fallback"`) in the config of BOTH nodes, so P25 talkers
   and listeners need no transcoder. Cases and run command: [guardid2-cases.md](guardid2-cases.md).
 
+## Hotspot link behind a WAN (DVT_NODE1G=on, with profile twonode)
+
+NODE1g ([node1g-cases.md](node1g-cases.md)) turns the twonode pair into a hotspot and its central node joined by a node link over an emulated WAN. `scripts/run.sh --profile twonode` with
+`DVT_NODE1G=on` adds the compose profile `node1g` and `rig/compose.node1g.yml`:
+
+```
+   rig network 172.30.0.0/24                                          nat-inside 172.31.0.0/24 (internal)
+   --------------------------------                                   ---------------------------------
+   xlxd-sut .11  CENTRAL node: link port UDP 31800, P25 UDP 41000      dvr-peer .16  HOTSPOT: uplink row -> .11:31800, P25 UDP 41000
+   tester    .30  ------ control :9100 ----+                           tester   .30 (second address: the hotspot's LAN)
+                                           v
+                                  wan-router  outside .98 (alias .99)  inside .2   (+ netem-wan on both interfaces, wan-edge: the hotspot's route)
+```
+
+| Service | Address | Role |
+|---------|---------|------|
+| `wan-router` | outside `<net>.98` (alias `.99`), inside `<nat-net>.2` | the NAT router of the nat profile (same image `dvt-nat:local`, same control server, `dvtest/nat.py`) with the HOTSPOT as the NAT'd host, `--sut-ip` the central node and `--media-port 31800` (its `mappings` and `firsts` read the link flow), no TCP forward; `NET_ADMIN`, `NET_RAW` |
+| `wan-edge` | in the namespace of `dvr-peer` | the default route of the hotspot through the router (the inside network gives none), then the probe server of the NAT image idles on TCP 3001 as nobody |
+| `netem-wan` | in the namespace of `wan-router` | netem on EVERY interface of the router (`DVT_NETEM_ALL=1` in `rig/netem-entry.sh`), so a setting applies once per direction; control `netem wan <preset|off|arguments>` |
+| `dvr-peer` | `<nat-net>.16` | the hotspot: `rig/config/dv-router/node1g-hotspot.toml` (complete template: the hotspot preset of netthr1-hotspot.toml, a P25 port for room B, admin on its inside address for the tester, one uplink row; rendered with the inside network as `<NET>` and `--central-ip`), state dir `out/<run>/hotspot-state` |
+| `xlxd-sut` | `.11` | the central node: the template plus `node1g-central.toml` (one account row for room C with the talk right, P25 on room C, admin on `<net>.11:8080`, state dir `out/<run>/sut-state`); NOT `dp15-twonode-a.toml` (no XLX interlink, no recorder) |
+| `tester` | `.30` and `<nat-net>.30` | a second address on the inside network: the hotspot's LAN |
+
+The key: `out/<run>/link-secrets/hs1.key` (64 hex digits, mode 0600, mounted read-only into both nodes), written by `run.sh`, never printed; the cases replace it by rename and keep the rotated key beside it
+as `rotated.key`; after the run `run.sh` scans the output directory for both (exit 5 on a hit). Admin logins: `out/<run>/node1g/central-admin.env`, `hotspot-admin.env` (mode 0600), plain HTTP from the tester
+(`dvtest.node1g.PlainAdmin`). The tester gets `DVT_NODE1G`, `DVT_N1G_HOTSPOT`, `DVT_N1G_ROUTER`, `DVT_N1G_ALIAS`. Not with `DVT_GUARDID2`, `DVT_RFPOS1B_LINK` or the web, nat, interlink, asl-edge, aprs profiles
+(`run.sh` exits 2). Free host numbers used: `.98`, `.99` (outside), `<nat-net>.2`, `.16`, `.30` (inside).
+
 ## Real client stack (profile mmdvm)
 
 `cases/test_mmdvm_stack.py` ([mmdvm-stack-cases.md](mmdvm-stack-cases.md)) runs the software of a Pi-Star hotspot against the reflector under test. The service

@@ -129,6 +129,14 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
   DVT_GUARDID2       on: GUARDID2 (DV-Router 9a8d1cb4, image wip-3f142cd): like DVT_RFPOS1B_LINK run.sh links the pair by a node link and adds a P25 server port (guardid2-p25.toml,
                      TG 31672 -> room G, no_radio_id fallback) to both nodes; cases/test_guardid2.py asserts that the source-id guard flag crosses the link (bit 0 of the StreamStart
                      carried field, no bytes added) and that a strike on one unmapped P25 talker leaves the other granted on node 2 (docs/guardid2-cases.md); off or unset: skip
+  DVT_NODE1G         on: NODE1g (DV-Router image wip-42d5473, node link v1): with --profile twonode run.sh makes dvr-peer a HOTSPOT behind a WAN router (wan-router .98, alias .99, the NAT
+                     router of the nat profile; netem-wan shapes both its interfaces: control `netem wan <args>`; wan-edge sets the hotspot's route) and the SUT its CENTRAL node
+                     (node1g-central.toml: account row, P25 on room C, admin on its rig address; node1g-hotspot.toml: the hotspot preset, one uplink row, P25 on room B), with a per-run
+                     link key out/<run>/link-secrets/hs1.key; cases/test_node1g.py tests delay, loss, blackouts of 20 s and 60 s, an over in flight, NAT rebinding (new source port and
+                     address) and a rotated key (docs/node1g-cases.md); off or unset: the cases skip naming this switch. Addresses for the tester: DVT_N1G_HOTSPOT (the hotspot on the inside
+                     network), DVT_N1G_ROUTER (the router's control server, TCP 9100), DVT_N1G_ALIAS (its second outside address)
+  DVT_LINKOBS1       on: LINKOBS1 (a future image: refusal log and counter on the hotspot, session-end counter with reasons, Bye{revoked}, bad-source counter): the RECORD-only case of
+                     cases/test_node1g.py notes which dv_edge_link_* series the hubs expose; off or unset: it skips naming this switch (the names are not known yet)
   DVT_RFPOS1C        on: RFPOS1 step C (DV-Router fb3167bb): with --profile asl-edge run.sh adds rfpos1c-usrp.toml (a static USRP row on module L, the tester as the peer);
                      cases/test_rfpos1c.py loses one IAX2 voice frame (a mini frame, and a full frame) of an AllStar call and asserts that the D-STAR, DMR and USRP listeners of the
                      room miss exactly that position and the room counts one gap and one lossy over, egress tx lost +0 (docs/rfpos1c-cases.md); off or unset: the cases skip naming this switch
