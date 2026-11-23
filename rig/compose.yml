@@ -651,6 +651,8 @@ services:
       # on for the image dv-router:wip-2ec9be4 (DV-Router b849a082, XSTALE1: the room's copy of an own talker on usrp / p25 / nxdn stays open for the over): cases/test_xstale1.py asserts,
       # the soak judges x_stale per edge (docs/xstale1-cases.md); unset: the cases skip, the soak records. DVT_XSTALE1_USRP_MODULE: the USRP module of the cases (default A); DVT_XSTALE1_WITNESS=dmr links a client of that protocol to the room during XS1-b (a diagnosis)
       DVT_XSTALE1: ${DVT_XSTALE1:-}
+      # XSTALE1c (docs/xstale1c-cases.md): the image has the leave / rejoin settlement and the no_radio_id refusal without an egress fold; unset: the cases skip
+      DVT_XSTALE1C: ${DVT_XSTALE1C:-}
       DVT_XSTALE1_USRP_MODULE: ${DVT_XSTALE1_USRP_MODULE:-}
       DVT_XSTALE1_WITNESS: ${DVT_XSTALE1_WITNESS:-}
       # SECRELOAD1 / SECRELOAD2 (cases/test_secret_reload.py): on = the APRS-IS edge and the image rule are EXPECTED, so a missing series or route

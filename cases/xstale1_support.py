@@ -11,6 +11,7 @@ the NXDN and P25 server ports of rig/config/dv-router/soak-edges.toml), so the r
   Endpoint.heard()     voice units received so far (USRP frames, P25 IMBE records, NXDN frames), terminators and polls not counted
   Endpoint.pump(s)     drains the socket (and keeps the link alive: P25 polls)
   Endpoint.close()     unlink and close
+  Endpoint.leave()     unlink and keep the socket (XSTALE1c); Endpoint.rejoin() links again from the same socket (the same address) and restarts the `heard` count
 """
 import os
 import time
@@ -43,10 +44,17 @@ class Endpoint:
     def close(self):
         raise NotImplementedError
 
+    def leave(self):
+        raise NotImplementedError
+
+    def rejoin(self):
+        raise NotImplementedError
+
 
 class UsrpEndpoint(Endpoint):
     def __init__(self, hub, index, module):
         self.peer = UsrpPeer(hub, callsign=USRP_CALLSIGNS[index], module=module)
+        self.base = 0
 
     def link(self):
         if not self.peer.link(timeout=8.0):
@@ -67,7 +75,16 @@ class UsrpEndpoint(Endpoint):
 
     def heard(self):
         self.peer.pump(0.02)
-        return len(self.peer.voice())
+        return len(self.peer.voice()) - self.base
+
+    def leave(self):
+        self.peer.unlink()
+        self.peer.pump(0.2)
+
+    def rejoin(self):
+        ok = self.link()                       # link() clears the inbox: the count restarts at 0
+        self.base = len(self.peer.voice())
+        return ok
 
     def pump(self, seconds):
         self.peer.pump(seconds)
@@ -84,6 +101,7 @@ class P25Endpoint(Endpoint):
     def __init__(self, ip, index, tg):
         self.ip = ip
         self.c = p25.P25Client("0.0.0.0", callsign=clients.CALLSIGNS[index], src_id=clients.DMR_IDS[index], tg=tg)
+        self.base = 0
 
     def link(self):
         return self.c.link(self.ip)
@@ -96,7 +114,19 @@ class P25Endpoint(Endpoint):
 
     def heard(self):
         self.c.pump(0.02)
+        return self._voice() - self.base
+
+    def _voice(self):
         return sum(1 for r in self.c.records() if not r["terminator"])
+
+    def leave(self):
+        self.c.unlink()
+        self.left, self.c.dest = self.c.dest, None          # no more polls: they would link the client again
+
+    def rejoin(self):
+        ok = self.c.link(self.left[0], port=self.left[1])
+        self.base = self._voice()
+        return ok
 
     def pump(self, seconds):
         self.c.pump(seconds)
@@ -113,6 +143,7 @@ class NxdnEndpoint(Endpoint):
     def __init__(self, ip, index, tg):
         self.ip = ip
         self.c = nxdn.NxdnClient("0.0.0.0", tg, nxdn_id=NXDN_IDS[index], callsign=clients.CALLSIGNS[index])
+        self.base = 0
 
     def link(self):
         return self.c.link(self.ip)
@@ -126,7 +157,19 @@ class NxdnEndpoint(Endpoint):
 
     def heard(self):
         self.c.client.pump(0.02)
+        return self._voice() - self.base
+
+    def _voice(self):
         return sum(len(nxdn.voice_frames(info["payload"])) for info in self.c.packets() if info["kind"] == "voice")
+
+    def leave(self):
+        self.c.unlink()
+        self.left, self.c.dest = self.c.dest, None
+
+    def rejoin(self):
+        ok = self.c.link(self.left[0], port=self.left[1])
+        self.base = self._voice()
+        return ok
 
     def pump(self, seconds):
         self.c.client.pump(seconds)
