@@ -13,7 +13,7 @@ one node per request, Content-Type: application/json, client timeout 15 s. The r
 DVT_ASL_REG_VARIANTS "node=variant,..."):
 
     ok         success, ipaddr = the sender, port = the request's port, refresh 180
-    port       success, but port = request port + 1 (the edge must report a mismatch)
+    port       success, but port = request port + 1 (the edge must report a mismatch) and refresh 60 (the edge floors it at 120 s)
     http500    HTTP 500 with a short text body
     notext     HTTP 200 JSON whose data has no "successfully registered"
     slow       the same answer as ok after SLOW_S (default 20 s: past the client's 15 s timeout)
@@ -71,6 +71,7 @@ def answer(variant, peer_ip, body):
     ok = {"ipaddr": peer_ip, "port": port, "refresh": 180, "data": "node %s successfully registered" % node}
     if variant == "port":
         ok["port"] = port + 1
+        ok["refresh"] = 60                      # below the edge's 120 s floor: the refresh stays max(120, min(interval, refresh))
     if variant == "http500":
         return 500, b"internal error\n"
     if variant in LIMITED:

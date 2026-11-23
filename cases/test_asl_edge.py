@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 """DV-Router's AllStar edge (dv-edge-allstar) against the asl-lab (--profile asl-edge,
-docs/asl-edge-results.md). The edge runs natively in xlxd-sut as node 2999, room L
+docs/asl-edge-results.md). The edge runs natively in xlxd-sut as node 2900, room L
 (rig/config/dv-router/allstar-lab.toml), next to the lab's app_rpt nodes A (199901),
 B (199902) and E (299901, left idle here; it is only the edge's own monitor-mode
 outbound target, DVT_ASL_EDGE_OUT=1). A node called "radio" with no account; "acct"
@@ -331,7 +331,7 @@ def test_t3_hub_l_lists_split_horizon(lab, request):
 # ------------------------------------------------------------------ T4: loop A + B + edge
 
 def _t4_pairs(a, b, edge, a_vars, b_vars):
-    """The set of node pairs that are linked, from the RPT_LINKS variables of A and B (entries like T199902 or R2999)."""
+    """The set of node pairs that are linked, from the RPT_LINKS variables of A and B (entries like T199902 or R2900)."""
     import re
 
     def links(text):
@@ -647,7 +647,7 @@ def test_t9_lossy_jittery_link_still_establishes_and_carries_audio(lab, edge_con
 
 # ------------------------------------------------------------------ T11: bounded NEW/POKE abuse
 
-def _fake_new(scall, called="2999", username="radio"):
+def _fake_new(scall, called="2900", username="radio"):
     ies = b"".join(iax2.information(code, value) for code, value in (
         (11, struct.pack("!H", 2)), (1, called.encode()), (2, b"6999"), (6, username.encode()),
         (9, struct.pack("!I", iax2.ULAW)), (8, struct.pack("!I", iax2.ULAW))))
@@ -874,7 +874,7 @@ def test_restart_then_over_five_times(lab, edge_control):
 # their timing checks look at the request cadence since the edge started.
 
 # Public node numbers must be >= 2000 and the register interval >= 120 s (DV-Router wip-1590f26; the lab used 1991..1996 and 60 s before,
-# rig/config/dv-router/allstar-lab-reg.toml). The edge itself is slot 0 (2999). With the two rate_limited nodes (2997, 2998) the edge has
+# rig/config/dv-router/allstar-lab-reg.toml). The edge itself is slot 0 (2900). With the two rate_limited nodes (2997, 2998) the edge has
 # nine public nodes: slot spacing S = 120 / 9 = 13.33 s (node k first registers at start + k * S, node 2998 at 106.7 s), a successful
 # refresh is max(120, min(120, 180)) = 120 s.
 # Failure retries (dv-router docs/design/allstar.md: rate_limited lines 59-72, ordinary failures lines 72-75 and 620-625, success 616-618, ASL1j): the n-th consecutive ordinary failure waits
@@ -886,7 +886,7 @@ def test_restart_then_over_five_times(lab, edge_control):
 # jitter); an absent or invalid one doubles the interval per consecutive failure (2998 with "Retry-After: invalid": 120, then 240 s).
 REG_NODES = {"2991": "ok", "2992": "port", "2993": "http500", "2994": "notext", "2995": "slow", "2996": "oversize",
              "2997": "429ra", "2998": "503bad"}
-EDGE_REG_NODE = 2999
+EDGE_REG_NODE = 2900
 
 
 def _edge_identity(edge_control):
@@ -930,6 +930,15 @@ def registrations(lab, edge_control):
         if time.time() >= (max(start + budget, began + 120.0) if start is not None else began + 300.0):
             break
         time.sleep(5)
+    # the edge's own log, read while the rig is up (control action `logs`, or DVT_ASL_SUT_LOG as an override): the cases judge
+    # next_retry_delay_ms of the allstar_registration_failed lines. The last attempt of an ordinary failure node ends up to 16.5 s after
+    # its request (client timeout), so wait until then.
+    if rows:
+        pause = max(r["t"] for r in rows) + 20.0 - time.time()
+        if pause > 0:
+            time.sleep(pause)
+    override = os.environ.get("DVT_ASL_SUT_LOG")
+    log = (Path(override).read_text(encoding="utf-8", errors="replace") if override else edge_control.logs("xlxd-sut")).splitlines()
     after = _edge_identity(edge_control)
     if after != identity:
         pytest.fail("the edge restarted during the registration window (dv-edge-allstar %s -> %s): a restart begins a new "
@@ -939,11 +948,13 @@ def registrations(lab, edge_control):
     (sdir / "requests.jsonl").write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in rows))
     metrics = edge_control.metrics("xlxd-sut") if os.environ.get("DVT_RIG_CONTROL") == "1" else ""
     (sdir / "metrics.txt").write_text("\n".join(ln for ln in metrics.splitlines() if "allstar" in ln) + "\n")
+    (sdir / "registration-log.txt").write_text("".join(
+        ln + "\n" for ln in log if any(mark in ln for mark in asl_reg_log.REG_LINE_MARKS)))
     (sdir / "schedule.json").write_text(json.dumps({"nodes": nodes, "interval_s": interval, "process_start": start,
                                                     "edge": list(identity)}) + "\n")
     return {"rows": rows, "per": {n: [r for r in rows if n in (r.get("body") or {}).get("data", {}).get("nodes", {})]
                                   for n in REG_NODES},
-            "metrics": metrics, "start": start, "nodes": nodes, "interval": interval}
+            "metrics": metrics, "start": start, "nodes": nodes, "interval": interval, "log": log}
 
 
 def _gaps(rows):
@@ -970,8 +981,8 @@ def test_r1_success_registers_and_refreshes(lab, registrations):
     _shape_ok(rows[0], "2991", lab)
     bounds = asl_register.refresh_gap(registrations["interval"])
     assert asl_register.gap_in(_gaps(rows)[0], bounds), \
-        "refresh cadence %s (max(60, min(interval, refresh)) = %.0f s, %.0f..%.0f)" % (
-            _gaps(rows), max(asl_register.MIN_INTERVAL_S, min(registrations["interval"], asl_register.STANDIN_REFRESH_S)), *bounds)
+        "refresh cadence %s (max(120, min(interval, refresh)) = %.0f s, %.0f..%.0f)" % (
+            _gaps(rows), asl_register.success_delay_s(registrations["interval"]), *bounds)
     # dv-router ruling 2026-11-04: the schedule of ONE edge process: node k (config order) first registers at start + k * S with
     # S = max(interval, 60) / (number of public nodes), +/- 1 s; the node list and the interval come from the rendered config
     first = asl_register.first_times(registrations["rows"], registrations["nodes"])
@@ -983,50 +994,54 @@ def test_r2_other_port_is_a_mismatch(lab, registrations):
     rows = registrations["per"]["2992"]
     _shape_ok(rows[0], "2992", lab)
     assert _counter(registrations["metrics"], "mismatch") >= 1, "no mismatch counted: %s" % registrations["metrics"][:400]
-    bounds = asl_register.refresh_gap(registrations["interval"])
+    # the stand-in answers refresh 60 for this node: max(120, min(interval, 60)) = 120 s, the floor, not 60
+    bounds = asl_register.refresh_gap(registrations["interval"], asl_register.PORT_VARIANT_REFRESH_S)
     assert asl_register.gap_in(_gaps(rows)[0], bounds), "refresh cadence after a mismatch %s (%.0f..%.0f)" % (_gaps(rows), *bounds)
 
 
-def _assert_retry_gaps(rows, node, timeout=False, want_retries=2):
-    """Rule (a) per consecutive failure number n: the gap between request n and n + 1 is the delay of failure_delay_range(n)
-    (120..144 s, then 192..288 s, ...) widened by the attempt duration (prompt answer: 0..1.5 s, client timeout: 14.9..16.5 s).
-    The first `want_retries` retries must have been observed (the fixture waits for the second one)."""
-    gaps = _gaps(rows)
-    assert len(gaps) >= want_retries, (
+def _assert_retries(registrations, node, timeout=False, want_retries=2):
+    """The back-off of one failing node, judged against the edge's own log field `next_retry_delay_ms` (ASL1j, rule (a)): the first
+    `want_retries` retries must have been observed (the fixture waits for the second one); the failure line of attempt 1 and of attempt
+    3 (the limiter admits those two) names the node and the result class, carries a delay inside rule (a) for its failure number (120..144 s,
+    then 384..576 s) and the next request follows that long after the line (+/- 1 s, asl_reg_log.judge_node). No wall-clock window of
+    its own: the delay is read from the log, the requests only confirm that the edge did what it logged."""
+    rows = registrations["per"][node]
+    assert len(rows) >= want_retries + 1, (
         "node %s: %d request(s) recorded, the first %d retries are expected inside the window (asl_register.window_budget_s); gaps %s"
-        % (node, len(rows), want_retries, gaps))
-    for n, gap in enumerate(gaps, 1):
-        lo, hi = asl_register.retry_gap_range(n, timeout)
-        assert lo <= gap <= hi, "node %s retry %d after the %d-th failure: gap %.1f s, expected %.0f..%.0f s (design doc lines 72-75, 620-625)" % (
-            node, n, n, gap, lo, hi)
+        % (node, len(rows), want_retries, _gaps(rows)))
+    problems = asl_reg_log.judge_node_log(registrations["log"], node, [r["t"] for r in rows], registrations["start"],
+                                          registrations["interval"], require_last=len(rows) == want_retries + 1)
+    assert not problems, problems
+    first = [f for f in asl_reg_log.parse_failures(registrations["log"]) if f["node"] == node]
+    assert first, "no allstar_registration_failed line for node %s in the edge log" % node
 
 
 def test_r3_http_500_is_retried_with_backoff(lab, registrations):
     rows = registrations["per"]["2993"]
     _shape_ok(rows[0], "2993", lab)
     assert rows[0]["status"] == 500
-    _assert_retry_gaps(rows, "2993")             # 120..144 s, then 192..288 s
+    _assert_retries(registrations, "2993")      # next_retry_delay_ms 120..144 s (attempt 1), 384..576 s (attempt 3)
 
 
 def test_r4_success_without_the_text_is_a_failure(lab, registrations):
     rows = registrations["per"]["2994"]
     _shape_ok(rows[0], "2994", lab)
     assert rows[0]["status"] == 200 and rows[0]["variant"] == "notext"
-    _assert_retry_gaps(rows, "2994")
+    _assert_retries(registrations, "2994")
 
 
 def test_r5_slow_reply_times_out_on_the_client(lab, registrations):
     rows = registrations["per"]["2995"]
     _shape_ok(rows[0], "2995", lab)
     # the reply would come after 20 s; the client gives up after 15 s (about 15.3 s measured), then the delay of rule (a) starts
-    _assert_retry_gaps(rows, "2995", timeout=True)
+    _assert_retries(registrations, "2995", timeout=True)
 
 
 def test_r6_oversize_reply_is_refused(lab, registrations):
     rows = registrations["per"]["2996"]
     _shape_ok(rows[0], "2996", lab)
     assert rows[0]["reply_bytes"] > 4096
-    _assert_retry_gaps(rows, "2996")
+    _assert_retries(registrations, "2996")
 
 
 def test_r7_metrics_count_every_outcome(registrations):
@@ -1039,46 +1054,48 @@ def test_r7_metrics_count_every_outcome(registrations):
 
 
 def test_r13_failure_log_lines_and_no_secret_in_the_registration_logging(registrations):
-    """Optional (DVT_ASL_SUT_LOG=<path of a file holding the edge's log with docker timestamps>): the SUT log is written by run.sh only
-    after pytest ends, so a normal run cannot read it; judge it afterwards with
-    `python3 -m dvtest.tools.asl_reg_log out/<run>/logs/xlxd-sut.log --register out/<run>/asl-lab/register` (same checks), or set the
-    variable when the log of THIS edge process is available (for example `docker logs --timestamps -f` into a file under out/).
+    """The edge's own log, read while the rig is up (control action `logs xlxd-sut`, fixture `registrations`; DVT_ASL_SUT_LOG=<file with
+    docker timestamps> overrides it): every allstar_registration_failed line of every lab node is judged, and the registration logging
+    is scanned for secrets. Offline the same checks run with
+    `python3 -m dvtest.tools.asl_reg_log out/<run>/logs/xlxd-sut.log --register out/<run>/asl-lab/register`.
     Checks (dvtest/tools/asl_reg_log.py): per failed attempt the 300 s limiter (design doc lines 726-737) decides whether there is
     exactly one `allstar_registration_failed` line; it names the node and the result class (http 2993, parse 2994 and 2996, timeout
     2995, mismatch 2992, rate_limited 2997 and 2998); its next_retry_delay_ms is inside the rule (or exact) and the next request comes
     that long after the line +/- 1 s; no line of the registration logging holds a password, a password file name or a URL."""
-    path = os.environ.get("DVT_ASL_SUT_LOG")
-    if not path:
-        pytest.skip("no DVT_ASL_SUT_LOG: run python3 -m dvtest.tools.asl_reg_log out/<run>/logs/xlxd-sut.log --register "
-                    "out/<run>/asl-lab/register after the run (docs/asl-lab.md)")
-    lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
     times = {n: sorted(r["t"] for r in rows) for n, rows in registrations["per"].items()}
-    problems = asl_reg_log.judge_run(lines, times, registrations["start"], registrations["interval"])
+    problems = asl_reg_log.judge_run(registrations["log"], times, registrations["start"], registrations["interval"])
     assert not problems, problems
+
+
+def _assert_rate_limited_log(registrations, node, require_last):
+    rows = registrations["per"][node]
+    problems = asl_reg_log.judge_node_log(registrations["log"], node, [r["t"] for r in rows], registrations["start"],
+                                          registrations["interval"], require_last=require_last)
+    assert not problems, problems
+    lines = [f for f in asl_reg_log.parse_failures(registrations["log"]) if f["node"] == node]
+    assert lines and lines[0]["result"] == "rate_limited", "node %s: no rate_limited failure line in the edge log: %s" % (node, lines)
+    return lines
 
 
 def test_r14_rate_limited_follows_retry_after_or_doubles_the_interval(lab, registrations):
     """HTTP 429 with Retry-After: 300 (node 2997) is used as is (bounded 120..86400 s, no downward jitter); HTTP 503 with an invalid
     Retry-After (node 2998) falls back to the interval doubled per consecutive failure (120, 240 s at interval 120 s), also without
     jitter. Both are result rate_limited (design doc lines 59-72, 620-621). A 503 WITHOUT Retry-After would be an ordinary http failure
-    (rule (a); the registrar variant "503" exists but no lab node uses it)."""
-    interval = registrations["interval"]
+    (rule (a); the registrar variant "503" exists but no lab node uses it). The delay is asserted on the log field next_retry_delay_ms
+    (exactly 300000 for 2997, 120000 then 240000 and 480000 for 2998), the requests only confirm that the edge waited that long."""
     rows = registrations["per"]["2997"]
     _shape_ok(rows[0], "2997", lab)
     assert rows[0]["status"] == 429 and rows[0]["reply_headers"] == {"Retry-After": str(asl_register.RETRY_AFTER_S)}, rows[0]
-    gaps = _gaps(rows)
-    assert gaps, "node 2997: one request only (the first retry is due %.0f s after it)" % asl_register.rate_limited_delay(
-        1, interval, asl_register.RETRY_AFTER_S)
-    lo, hi = asl_register.gap_with_attempt(asl_register.rate_limited_delay(1, interval, asl_register.RETRY_AFTER_S))
-    assert lo <= gaps[0] <= hi, "429 + Retry-After: 300: retry gap %s, expected %.0f..%.0f s" % (gaps, lo, hi)
+    assert len(rows) >= 2, "node 2997: one request only (the first retry is due %.0f s after it)" % asl_register.rate_limited_delay(
+        1, registrations["interval"], asl_register.RETRY_AFTER_S)
+    lines = _assert_rate_limited_log(registrations, "2997", require_last=False)
+    assert lines[0]["delay_s"] == float(asl_register.RETRY_AFTER_S), lines[0]
     rows = registrations["per"]["2998"]
     _shape_ok(rows[0], "2998", lab)
     assert rows[0]["status"] == 503 and rows[0]["reply_headers"] == {"Retry-After": "invalid"}, rows[0]
-    gaps = _gaps(rows)
-    assert len(gaps) >= 2, "node 2998: %d request(s), the second retry is expected inside the window; gaps %s" % (len(rows), gaps)
-    for n, gap in enumerate(gaps, 1):
-        lo, hi = asl_register.gap_with_attempt(asl_register.rate_limited_delay(n, interval))
-        assert lo <= gap <= hi, "503 + invalid Retry-After, retry %d: gap %.1f s, expected %.0f..%.0f s (interval doubling)" % (n, gap, lo, hi)
+    assert len(rows) >= 3, "node 2998: %d request(s), the second retry is expected inside the window; gaps %s" % (len(rows), _gaps(rows))
+    lines = _assert_rate_limited_log(registrations, "2998", require_last=len(rows) == 3)
+    assert lines[0]["delay_s"] == registrations["interval"], lines[0]
     if registrations["metrics"]:
         assert _counter(registrations["metrics"], "rate_limited") >= 2, registrations["metrics"][:600]
 
@@ -1185,7 +1202,7 @@ def test_r11_regreq_without_calltoken_is_dropped(lab, phone_reg):
 
 
 def test_r12_node_account_cannot_register_as_a_phone(lab, phone_reg):
-    """Registration is for kind=client accounts: the node account number 2999 (public node, password) is refused like any
+    """Registration is for kind=client accounts: the node account number 2900 (public node, password) is refused like any
     wrong proof (dv-router review-118: node accounts are refused)."""
     result, _doc = _register(lab, "r12-node-account", lab.node("edge").node, asl_lab.ACCT_SECRET)
     assert result.outcome == "REGREJ", "a node account registered as a phone: %s" % result.steps

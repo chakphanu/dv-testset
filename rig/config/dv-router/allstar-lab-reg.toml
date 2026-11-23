@@ -7,7 +7,7 @@
 # Numbers: public nodes must be 2000 or higher and the register interval at least 120 s (DV-Router wip-1590f26 refuses
 # 1991..1996 and "60s" at load time); the lab registrar is our own fake, so the lab uses 2991..2996 and "120s". Both values
 # are valid on older images too (they clamp the interval to max(60, ...)). Slot spacing of the initial spread is
-# S = max(interval, 60) / 9 nodes = 13.33 s (the edge 2999 is slot 0), a successful refresh is 120 s, an ordinary failure retries
+# S = max(interval, 60) / 9 nodes = 13.33 s (the edge 2900 is slot 0), a successful refresh is 120 s, an ordinary failure retries
 # after 120 s * 2^(n-1) +/- 20 percent (120..144, 192..288, ...; wip-1590f26 ASL1j), see docs/asl-lab.md, R1-R7 and R13-R14.
 # "insecure = true" sends the node password in clear text to a rig-internal address: fixture password only.
 [edges.allstar.register]

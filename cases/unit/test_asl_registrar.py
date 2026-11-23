@@ -60,6 +60,7 @@ def test_port_variant_answers_another_port(registrar):
     url, _log = registrar
     reply = json.loads(post(url, "2992", port=4569)[1])
     assert reply["port"] == 4570 and "successfully registered" in reply["data"]
+    assert reply["refresh"] == 60                                        # below the edge's 120 s floor (R2)
 
 
 def test_http500_notext_oversize(registrar):

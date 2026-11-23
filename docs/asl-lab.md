@@ -115,7 +115,7 @@ scenario.json          pcap sizes, recording names, notes (tone sha256, registry
 
 | Scenario | What happens | Frame types it yields |
 |----------|--------------|-----------------------|
-| `link-dns` (A, E, reg) | A dials E (`rpt fun 199901 *3299901`) as anonymous `radio`; the node number comes from the lab zone; A keys the 1 kHz tone; A hangs up | NEW (without and with call token), CALLTOKEN, ACCEPT, ANSWER, ACK, TEXT (`!NEWKEY1!`, `T`, `L`, `!!DISCONNECT!!`), voice full + mini, CNG, CONTROL RADIO_UNKEY, STOP_SOUND, HANGUP; DNS SRV / A |
+| `link-dns` (A, E, reg) | A dials E (`rpt fun 199901 *3290001`) as anonymous `radio`; the node number comes from the lab zone; A keys the 1 kHz tone; A hangs up | NEW (without and with call token), CALLTOKEN, ACCEPT, ANSWER, ACK, TEXT (`!NEWKEY1!`, `T`, `L`, `!!DISCONNECT!!`), voice full + mini, CNG, CONTROL RADIO_UNKEY, STOP_SOUND, HANGUP; DNS SRV / A |
 | `account-md5` (A, E) | A originates `IAX2/acct:<secret>@E/299901` running `Rpt(199901,X)`, and the same as `acct-ct`; tone from A | AUTHREQ (md5, challenge), AUTHREP (MD5_RESULT), NEW/CALLTOKEN with a user that needs no token and one that does |
 | `callee` (A, B, E) | B links A (its own link list), then E originates to B (mode C); tone from E reaches B and, through B, A | the above plus `L T199901` sent to the edge, a three-node chain |
 | `loop` (A, B, E) | three dials issued together close A to B to E to A before any L message has been exchanged | NEW x3, L lists with a node listed twice |
@@ -200,17 +200,17 @@ fake transcoder) to the lab; results and cases are in `docs/asl-edge-results.md`
 
 | Piece | Where | Notes |
 |-------|-------|-------|
-| edge node 2999, room L (1999 until wip-1590f26) | `rig/config/dv-router/allstar-lab.toml` (appended to the SUT template by `run.sh`) | public node, may_tx, account `acct`, static rows for the four lab/tester nodes; `allstar-lab-out.toml` (`DVT_ASL_EDGE_OUT=1`) adds two outbound rows |
+| edge node 2900, room L (1999 until wip-1590f26) | `rig/config/dv-router/allstar-lab.toml` (appended to the SUT template by `run.sh`) | public node, may_tx, account `acct`, static rows for the four lab/tester nodes; `allstar-lab-out.toml` (`DVT_ASL_EDGE_OUT=1`) adds two outbound rows |
 | `asl-tap` | compose service sharing xlxd-sut's network namespace, agent on `<net>.11:8099` | tcpdump on the edge's side (the DV-Router image is scratch: no shell, no tcpdump); host key `edge` in `dvtest.asl_lab` |
 | netem sidecars | `netem-xlxd-sut`, `netem-asl-a/b/e` | control actions `netem edge <args\|off>` (the edge's egress) and `netem asl <args\|off>` (the three lab nodes'); `RigControl.netem()` |
 | control allow-lists | `kill-proc xlxd-sut dv-edge-allstar KILL\|USR1`, `proc-stat xlxd-sut dv-edge-allstar`, `restart\|stop\|start\|kill asl-reg\|asl-a\|asl-b\|asl-e` | `scripts/lib/killproc.sh`, `scripts/lib/procstat.sh`, `dvtest/control.py`, unit tests agree |
-| lab zone | node 2999 -> `<net>.11` | `DVT_ASL_ZONE`, so app_rpt nodes find the edge by number |
+| lab zone | node 2900 -> `<net>.11` | `DVT_ASL_ZONE`, so app_rpt nodes find the edge by number |
 | source NAT sidecar (optional) | `asl-nat-a` in asl-a's namespace, alias `<net>.46`, control `<net>.42:9101` | `DVT_ASL_EDGE_NAT=1`, profile `asl-nat`, case T5n (below) |
 
 Secret files of the edge (fixture content `test-secret-not-real`): `run.sh` writes them to
 `out/<run>/asl-secrets/` (directory mode 700, files mode 600, regular, no symlink, as the edge demands) and mounts
 the directory read-only at `/etc/dv-router/asl-secrets` with the SUT running as the host uid:
-`node-2999.pw` (node password, `password_file`) and `acct.secret` (account `acct`).
+`node-2900.pw` (node password, `password_file`) and `acct.secret` (account `acct`).
 
 The control channel (kill-proc, proc-stat, netem, restart) only exists while `run.sh` runs its pytest: the host
 watcher stops with that run even under `--keep`. Cases that need it run inside one `run.sh -- cases/...` call;
@@ -253,7 +253,7 @@ tester drives it over JSON lines on `<net>.42:9101` (tester address only; ops `s
 Nothing forges a packet: there is no raw socket and no sender other than the real app_rpt node.
 
 The case (`cases/test_asl_edge.py::test_t5n_caller_behind_a_nat_is_refused_before_answer_and_right_address_answered`), one
-scenario `t5n-nat` with the edge's tap capture: `quiet`; mode `address`, A dials the edge (`rpt fun 199901 *32999`), A must have no
+scenario `t5n-nat` with the edge's tap capture: `quiet`; mode `address`, A dials the edge (`rpt fun 199901 *32900`), A must have no
 link after 8 s; `quiet`; mode `port`, A dials again and must reach ESTABLISHED; always `reset` at the end. Assertions, from
 `edge.pcap` (`asl_nat.edge_reaction`): the NEWs came from the translated source address and port (`<net>.46`, 44569 and
 `<net>.42`, 44569); for `<net>.46` at least one NEW, an ACCEPT to it, a HANGUP after the first ACCEPT and no ANSWER; for
@@ -287,19 +287,28 @@ and the rig keeps the low-rate behavioural cases (T11: unknown callers, rejected
 
 ### Registration cases R1-R7, R13, R14: one edge process only
 
-Why node 2999 and 2991..2998, interval 120 s (DV-Router wip-1590f26): the build refuses `public = true` with a node number below 2000
+Why node 2900 and 2991..2998, interval 120 s (DV-Router wip-1590f26): the build refuses `public = true` with a node number below 2000
 ("public node numbers must be at least 2000; private numbers cannot be registered") and a register interval below 120 s. The lead decided not to
 switch the lab node to `public = false` (the public-node path, registry identity and the caller IP check, would no longer be tested), so the lab
-was renumbered: edge 1999 -> 2999, registration nodes 1991..1996 -> 2991..2996 (one answer variant each, in the same order), `interval = "120s"`
+was renumbered: edge 1999 -> 2999 -> 2900 (see "Why the edge is 2900" below), registration nodes 1991..1996 -> 2991..2996 (one answer variant each, in the same order), `interval = "120s"`
 (was "60s"); 2997 and 2998 (HTTP 429 and HTTP 503 answers, R14) were added for the new retry rules. The lab registrar is our own fake, so the
 numbers are free; they are valid on older images too, hence one config for all generations (no `DVT_SUT_GEN` key). The lab's app_rpt nodes
 (199901, 199902, 299901, 299902) keep their numbers; `cases/unit/test_asl_lab_node_numbers.py` guards the config.
 
-Registrar variants (`rig/asl-lab-registrar.py`, node -> answer): 2991 ok, 2992 success with another port (Mismatch state), 2993 HTTP 500,
+**Why the edge is 2900 and not 2999.** app_rpt resolves the number while the digits are fed one by one (surprise 8 below: SRV for `1999`, `19990`,
+then `199902`) and follows the first prefix that resolves. The edge's own zone entry (`DVT_ASL_ZONE`, `<net>.11`) is therefore a trap for
+every lab node whose number starts with the edge's: with the edge at 2999, `rpt fun 199901 *3299901` dialled the EDGE (NEW with CALLED_NUMBER
+2999, `out/20261123T220142Z/asl-lab/t4b-loop/edge.pcap` of the testset worktree that ran it), and T4b failed with
+`asl-a: no ESTABLISHED link to 299901` while A's link table showed `2999 <net>.11 OUT ESTABLISHED`. (With the old edge 1999 the same trap sat
+on 199901 / 199902, so the T4 explanation above, A's slow lookup of B, may be this trap.) The edge number must not be a digit prefix of a lab node;
+`test_edge_number_is_not_a_digit_prefix_of_a_lab_node` guards it. Harness error, not a product difference: DV-Router's edge only answered
+the call it received.
+
+Registrar variants (`rig/asl-lab-registrar.py`, node -> answer): 2991 ok, 2992 success with another port (Mismatch state) and `refresh` 60 (below the 120 s floor), 2993 HTTP 500,
 2994 HTTP 200 without "successfully registered", 2995 the ok answer after 20 s (the client gives up after 15 s), 2996 a reply over 4 KiB,
 2997 HTTP 429 with `Retry-After: 300` (`429ra`), 2998 HTTP 503 with `Retry-After: invalid` (`503bad`). The variants `429` and `503` (no header)
 exist for `DVT_ASL_REG_VARIANTS` but no lab node uses them: per `register_worker.rs` only 429 and 503 WITH a Retry-After are `rate_limited`,
-a bare 503 is an ordinary `http` failure. `scripts/run.sh` writes `node-2991.pw` .. `node-2998.pw` (fixture password) next to `node-2999.pw`.
+a bare 503 is an ordinary `http` failure. `scripts/run.sh` writes `node-2991.pw` .. `node-2998.pw` (fixture password) next to `node-2900.pw`.
 
 **Retry rules since wip-1590f26 (ASL1j; authority: dv-router `docs/design/allstar.md` of the wip tree, lines 59-72 rate_limited, 72-75 and
 620-625 other failures, 616-618 success; checked against `crates/edge/allstar/src/register.rs` `retry_delay_ns`).** The 30 s +/- 20 % back-off
@@ -327,7 +336,7 @@ admits the first failure and then at most one line per node and result class eve
 
 The edge's registration schedule belongs to its PROCESS (dv-router ruling 2026-11-04, `debug-asl-r1-cadence`): every new dv-edge-allstar
 process, also after a quiet SIGUSR1 restart, starts a fresh initial spread. With N public nodes and interval I (120 s here) the slot spacing is
-S = max(I, 60) / N (nine nodes: 13.33 s) and node k (config order, 0-based: 2999 is slot 0, 2991 slot 1, ... 2998 slot 8) first registers at
+S = max(I, 60) / N (nine nodes: 13.33 s) and node k (config order, 0-based: 2900 is slot 0, 2991 slot 1, ... 2998 slot 8) first registers at
 start + k * S. A recording that spans a restart mixes schedules (a run of `test_restart_then_over_five_times`
 before R1 gave 16.1 s gaps and looked like a regression; it was not).
 
@@ -346,30 +355,32 @@ DVT_ASL_EDGE_REG=1 [DVT_RIG_CONTROL=1 ...as for asl-edge] scripts/run.sh --profi
 ```
 
 R1 asserts the slot of every node (+/- 1 s) and a refresh of 110..150 s (`asl_register.refresh_gap(interval)`: nominal
-max(60, min(interval, 180)) = 120 s, -10 s / +30 s); R2 the same window after a mismatch; **R3, R4, R6** per consecutive failure number n the
-gap between request n and n+1 lies in `asl_register.retry_gap_range(n)` (rule (a) widened by the attempt duration: n=1 120..145.5 s, n=2
-192..289.5 s) and both retries must have been observed; **R5** the same with the client timeout as attempt duration (n=1 134.9..160.5 s,
-n=2 206.9..304.5 s); R7 the counters of the last process (ok, mismatch, http + parse >= 4, timeout >= 1, unattributed 0). **R14** (nodes 2997,
+max(120, min(interval, 180)) = 120 s, -10 s / +30 s); R2 the same window after a mismatch, where the stand-in answers refresh 60 and the edge must still wait 120 s (the floor); **R3, R4, R6** the log field of attempts 1 and 3 (rule (a), see below) and the gap to the next request (field +/- 1 s); both retries must
+have been observed; **R5** the same with the client timeout as attempt duration (15.3 s); R7 the counters of the last process (ok, mismatch, http + parse >= 4, timeout >= 1, unattributed 0). **R14** (nodes 2997,
 2998): the registrar sent 429 + `Retry-After: 300` and 503 + `Retry-After: invalid`; the first retry of 2997 is 300 s (299..302.5 s), those of
 2998 are 120 s then 240 s (+/- 1 s plus the prompt attempt), and `rate_limited >= 2` in the metrics (when the control channel is on). The
 recording and the schedule are written to `out/<run>/asl-lab/register/` (`requests.jsonl`, `metrics.txt`, `schedule.json`).
 
-The SUT log (`out/<run>/logs/xlxd-sut.log`) is written by `run.sh` after pytest ends, so the tester cannot read it. The log checks are therefore
-a helper (`dvtest/tools/asl_reg_log.py`, unit-tested with the lines of run `20261107T034616Z`) used two ways. After the run (normal path):
+The edge's log is read while the rig is up: the control action `logs xlxd-sut` (`scripts/lib/logs.sh`, `RigControl.logs()`; read only,
+one service, `docker logs --timestamps`) because `out/<run>/logs/xlxd-sut.log` is written by `run.sh` only after pytest ends. The
+`registrations` fixture fetches it 20 s after the last recorded request (an attempt that hits the client timeout ends 16.5 s after its
+request) and stores the registration lines in `out/<run>/asl-lab/register/registration-log.txt`. **The backoff is asserted on the log field
+`next_retry_delay_ms`, not on wall-clock windows** (`dvtest/tools/asl_reg_log.py`, unit-tested): R3-R6 and R14 call `judge_node_log` per node
+and R13 `judge_run` for all nodes. Per failed attempt the limiter model (one line per node and result class per 300 s) decides whether
+there is exactly one `allstar_registration_failed` line; the line names the node and the class (http 2993, parse 2994 and 2996, timeout
+2995, mismatch 2992, rate_limited 2997 / 2998); `next_retry_delay_ms` is inside rule (a) for that attempt's failure number (the lines of
+attempt 1 and 3 are admitted: 120..144 s and 384..576 s; exact for rate_limited: 300000 for 2997, 120000, 240000, 480000 for 2998, and
+120000 for the Mismatch state); the next request arrives that long after the line (+/- 1 s); the line comes at most one attempt duration
+after its request; and no line of the registration logging (any line naming `allstar_registration`, `allstar_register` or `registrar`)
+contains a password (`test-secret-not-real`, `passwd`, `password`), a password file or directory (`.pw`, `asl-secrets`) or a URL (`://`).
+The only exception is the lab's own start-up WARNING `AllStar registrar insecure = true: LAB CLEARTEXT HTTP sends portal credentials without
+encryption` (it names no secret; on wip-1590f26 and later it carries no URL either). The same checks run offline on a finished run:
 
 ```
 python3 -m dvtest.tools.asl_reg_log out/<run>/logs/xlxd-sut.log --register out/<run>/asl-lab/register
 ```
 
-or as case R13 with `DVT_ASL_SUT_LOG=<path of a log file with docker timestamps>` when one exists while pytest runs (it skips otherwise). Both
-check: per failed attempt the limiter model decides whether there is exactly one `allstar_registration_failed` line (none for attempt 2, since it
-completes less than 300 s after attempt 1's line); the line names the node and the class (http 2993, parse 2994 and 2996, timeout 2995,
-mismatch 2992, rate_limited 2997 / 2998); `next_retry_delay_ms` is inside rule (a) for that failure number (exact for rate_limited, 120000 for
-the Mismatch state); the next request arrives that long after the line (+/- 1 s); the line comes at most one attempt duration after its request;
-and no line of the registration logging (any line naming `allstar_registration`, `allstar_register` or `registrar`) contains a password
-(`test-secret-not-real`, `passwd`, `password`), a password file or directory (`.pw`, `asl-secrets`) or a URL (`://`). The only exception is
-the lab's own start-up WARNING `AllStar registrar insecure = true: LAB CLEARTEXT HTTP sends portal credentials without encryption` (it names no
-secret; on wip-1590f26 it carries no URL either). Not verified against a rig yet: the second-retry gaps (R3-R6), R14 and the limiter model.
+(`DVT_ASL_SUT_LOG=<file>` replaces the fetched log with a file, for a re-judgement.)
 
 ## Profile asl-ext: the real node 400169 (external, outbound only)
 
@@ -415,7 +426,7 @@ noted. Nodes: A 199901, B 199902, E 299901, the tester 299902.
 | 3 | CALLTOKEN both directions; what Asterisk needs in an outbound NEW | NEW with empty CALLTOKEN IE (type 54, len 0), CALLTOKEN frame (IE 54, ASCII `<unix time>?<40 hex>`, 51 B), NEW again with the token; the CALLTOKEN frame comes from source call number 1 (a placeholder) to the caller's call number (oseq 0, iseq 1); the second NEW keeps the caller's call number and IEs, has a later timestamp (14 then 17 ms) and oseq/iseq 0/0. Asterisk accepted, without any other IE, the smallest NEW of the design: VERSION, CALLED_NUMBER, CALLING_NUMBER, USERNAME `radio`, FORMAT, FORMAT2, CAPABILITY, CAPABILITY2 (+ CALLTOKEN): ACCEPT, ANSWER and STOP_SOUND followed within 2 ms. It then looked the claimed CALLING_NUMBER up in DNS: from the wrong address it sent ACCEPT and then HANGUP (frames 195, 201, 1.5 ms apart, no ANSWER; log: "Node 199901 IP ... does not match link IP"). The reverse direction (Asterisk as the answerer of a NEW without token IE): accepted, no CALLTOKEN frame (tester client, `legacy-key`). | `minimal-new/e` 1-5, 11, 191-201; `link-dns/a` 13-15; `legacy-key/e` 1 |
 | 4 | RADIO_KEY vs voice-only on new-mode links; RADIO_UNKEY plus CNG | No RADIO_KEY in any new-mode call (A to E, E to B, tester `minimal-new`): the first voice frame is the key; E's `rpt show variables` during the voice shows the link keyed (`RPT_ALINKS=1,299902TK`, `RPT_TXKEYED=1`, in `scenario.json`) and E records the audio. At the end of an over the sender sends RADIO_UNKEY (control 13) and, in the same millisecond, a CNG frame (type 10, 0 B): frames 251-252 of `link-dns/a` (t 5.4795), 3679-3680 of `long-call/a`. The tester ends its over with RADIO_UNKEY only (no CNG, frame 187). With a legacy `!NEWKEY!` peer: RADIO_KEY from the client before its voice (74), RADIO_UNKEY from E every 2 s while idle (175, 375), RADIO_KEY refreshed every 2 s while E sends (418, 488, 592), UNKEY then CNG at its end (628-629). | `link-dns/a`, `long-call/a`, `minimal-new/e` 21-187, `legacy-key/e` 74-629 |
 | 5 | PING / LAGRQ cadence (timestamps) | LAGRQ every 10.0 s from each end, both ends at the same time (ts 10013/10023, 20013/20023, 30013/30020, ..., 70011/70018; 200 us apart in the capture); LAGRP in the same ms. PING every 21.0 s from each end (ts 21013/21023 at t 21.2 s, 42012/42019, 63011/63018); PONG immediately, PONG carries RR_JITTER/LOSS/PKTS/DELAY/DROPPED/OOO. | `long-call/a` 472-476, 981-986, 1042-1046, 1497-1502, 2117-2121, 3040-3043, 3200-3204, 3556-3560 |
-| 6 | an IAX2 phone client without a registrar | The tester's client (`dvtest.proto.iax2.Client`, stdlib, user `acct` md5, no `register`, CALLING_NAME `N0TEST`, CALLING_NUMBER `1999` in the `legacy-key` recording: a caller id number, not the edge's node, which is 2999): no REGREQ is needed, Asterisk accepts the NEW (AUTHREQ 3, AUTHREP 5, ACCEPT 7, ANSWER 9). It keys with RADIO_KEY (74) and unkeys with RADIO_UNKEY (390); no DTMF is sent or needed. CALLING_NAME is carried and ignored (the recording and the link list use the number: `L T1999`). The `acct` NEW has no CALLTOKEN IE; Asterisk's own client opens with the empty one. The REGREQ sequence of a registering client (with and without secret) is in `registration/reg`: REGREQ (USERNAME, REFRESH 60, empty CALLTOKEN), REGREQ with token, REGAUTH, REGREQ with MD5_RESULT, REGACK (refresh 180) or REGREJ. | `legacy-key/e` 1-9, 74, 390; `registration/reg` |
+| 6 | an IAX2 phone client without a registrar | The tester's client (`dvtest.proto.iax2.Client`, stdlib, user `acct` md5, no `register`, CALLING_NAME `N0TEST`, CALLING_NUMBER `1999` in the `legacy-key` recording: a caller id number, not the edge's node, which is 2900): no REGREQ is needed, Asterisk accepts the NEW (AUTHREQ 3, AUTHREP 5, ACCEPT 7, ANSWER 9). It keys with RADIO_KEY (74) and unkeys with RADIO_UNKEY (390); no DTMF is sent or needed. CALLING_NAME is carried and ignored (the recording and the link list use the number: `L T1999`). The `acct` NEW has no CALLTOKEN IE; Asterisk's own client opens with the empty one. The REGREQ sequence of a registering client (with and without secret) is in `registration/reg`: REGREQ (USERNAME, REFRESH 60, empty CALLTOKEN), REGREQ with token, REGAUTH, REGREQ with MD5_RESULT, REGACK (refresh 180) or REGREJ. | `legacy-key/e` 1-9, 74, 390; `registration/reg` |
 
 Not answered by the lab (no edge exists): the 10 minute hold (T1), TOT (T2), `check_ip` with a
 rewritten source (T5, only the wrong-address refusal above; the edge now has T5n), redial and restart cases, netem, flood.
@@ -466,7 +477,7 @@ Things the capture showed that the specs and the app_rpt reading did not make ob
 7. **PING every 21 s and LAGRQ every 10 s, both directions at once**; ACKs echo
    the timestamp of the frame they acknowledge. No retransmission (retrans bit),
    no VNAK in any scenario.
-8. **app_rpt probes DNS while a node number is typed.** `rpt fun 199901 *3299901`
+8. **app_rpt probes DNS while a node number is typed.** `rpt fun 199901 *3290001`
    resolved SRV for `1999`, `19990` (both NXDOMAIN) before `199902`, because
    the CLI feeds the digits one by one; only the final lookup is followed by an
    A query. TXT is never asked.

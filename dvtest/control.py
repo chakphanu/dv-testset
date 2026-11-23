@@ -15,6 +15,8 @@ with one line; the host watcher answers with <id>.ack ("ok", "error <rc>" or
   "metrics xlxd-sut|dvr-peer"                the Prometheus text of the sut hub (dvr-peer: the second node, profile twonode)
                                              (127.0.0.1:19108 inside its network
                                              namespace) in <id>.out
+  "logs xlxd-sut"                            the log of the sut container so far (docker logs
+                                             --timestamps, read only) in <id>.out
   "hup xlxd-sut"                             SIGHUP to the launcher of the sut (PID 1 of its
                                              container); SECRELOAD1 only, allowed by
                                              DV-Router; <id>.out has t_hup=<epoch s>
@@ -135,6 +137,22 @@ METRICS_ALLOWED = ("xlxd-sut", "dvr-peer")      # dvr-peer: the second DV-Router
 def metrics_allowed(service):
     """True when the host watcher would run `metrics service`."""
     return service in METRICS_ALLOWED
+
+
+# the one service whose log the host will read (scripts/lib/logs.sh), no arguments
+LOGS_ALLOWED = ("xlxd-sut",)
+
+
+def logs_allowed(service):
+    """True when the host watcher would run `logs service`."""
+    return service in LOGS_ALLOWED
+
+
+def logs_line(service):
+    """The request line, or ValueError for a service outside the allow-list."""
+    if not logs_allowed(service):
+        raise ValueError("logs %s is not allow-listed" % service)
+    return "logs %s" % service
 
 
 def metrics_line(service):
@@ -319,6 +337,14 @@ class RigControl:
         is not running, TimeoutError when the host does not answer in `timeout` seconds."""
         name = self._request(hup_line(service), timeout)
         return parse_hup_out((self.dir / (name + ".out")).read_text())
+
+    def logs(self, service="xlxd-sut", timeout=60.0):
+        """The log of `service` so far, docker `--timestamps` format (allow-list:
+        LOGS_ALLOWED; scripts/lib/logs.sh). ValueError before sending when not
+        allow-listed, TimeoutError when the host does not answer in `timeout`
+        seconds."""
+        name = self._request(logs_line(service), timeout)
+        return (self.dir / (name + ".out")).read_text(encoding="utf-8", errors="replace")
 
     def metrics(self, service="xlxd-sut", timeout=30.0):
         """The Prometheus text of the hub of `service` (allow-list:

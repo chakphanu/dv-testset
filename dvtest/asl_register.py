@@ -59,11 +59,14 @@ def parse_interval(text):
     return float(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600}[m.group(2)]
 
 
+PORT_VARIANT_REFRESH_S = 60.0     # the "refresh" the registrar variant "port" (node 2992) answers: below the 120 s floor
+
 def refresh_gap(interval_s, refresh_s=STANDIN_REFRESH_S):
     """(lo, hi) seconds expected between two requests of a node whose registration succeeded (ok, mismatch): the refresh is
-    max(60, min(interval, refresh)) seconds, so 120 s for the lab's interval "120s" and the stand-in's refresh 180; the window keeps
-    the old shape of REFRESH_GAP_S (-10 s, +30 s around the nominal value)."""
-    nominal = max(MIN_INTERVAL_S, min(interval_s, refresh_s))
+    max(120, min(interval, refresh)) seconds (wip-1590f26), so 120 s for the lab's interval "120s" with the stand-in's refresh 180 and
+    also with a refresh below 120 (node 2992 answers 60); the window keeps the old shape of REFRESH_GAP_S (-10 s, +30 s around the
+    nominal value)."""
+    nominal = max(SUCCESS_MIN_S, min(interval_s, refresh_s))
     return nominal - 10.0, nominal + 30.0
 
 

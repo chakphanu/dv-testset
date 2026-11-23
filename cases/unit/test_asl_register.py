@@ -11,7 +11,7 @@ TOML = """
 enable = true
 interval = "120s"
 [[edges.allstar.node]]
-number = 2999
+number = 2900
 public = true
 [[edges.allstar.node]]
 number = 2991
@@ -37,15 +37,17 @@ def test_parse_interval():
 
 
 def test_schedule_reads_public_nodes_in_config_order_and_the_interval():
-    assert ar.schedule(TOML) == ([2999, 2991, 2992], 120.0)
+    assert ar.schedule(TOML) == ([2900, 2991, 2992], 120.0)
     assert ar.schedule("[edges.allstar]\nenable = true\n") == ([], 180.0)
 
 
 def test_refresh_gap_follows_the_interval():
-    assert ar.refresh_gap(60) == ar.REFRESH_GAP_S == (50.0, 90.0)       # the old lab value
+    assert ar.REFRESH_GAP_S == (50.0, 90.0)                              # the old lab value (interval 60, images before wip-1590f26)
+    assert ar.refresh_gap(60) == (110.0, 150.0)                          # the floor is 120 s since wip-1590f26
     assert ar.refresh_gap(120) == (110.0, 150.0)                         # the lab since wip-1590f26 (interval "120s", refresh 180)
     assert ar.refresh_gap(600) == (170.0, 210.0)                         # min(interval, refresh) = refresh 180
-    assert ar.refresh_gap(10) == (50.0, 90.0)                            # the floor is 60 s
+    assert ar.refresh_gap(10) == (110.0, 150.0)                          # the floor is 120 s
+    assert ar.refresh_gap(120, ar.PORT_VARIANT_REFRESH_S) == (110.0, 150.0)   # a smaller refresh from the registrar is floored too
     assert ar.gap_in(120.4, ar.refresh_gap(120)) and not ar.gap_in(60.0, ar.refresh_gap(120))
 
 
@@ -67,29 +69,29 @@ def test_row_node_needs_exactly_one_node():
 
 def test_process_start_is_the_last_slot0_request_that_follows_too_soon():
     # the failing run of 20261103T232417Z: five quiet restarts, the slot-0 node (then numbered 1999) registers at each process start
-    rows = [row(t, 2999) for t in (0.0, 2.4, 18.5, 34.6, 50.7, 66.9, 126.9)] + [row(11.0, 2991), row(84.0, 2992)]
-    assert ar.process_start(rows, 2999) == 66.9
+    rows = [row(t, 2900) for t in (0.0, 2.4, 18.5, 34.6, 50.7, 66.9, 126.9)] + [row(11.0, 2991), row(84.0, 2992)]
+    assert ar.process_start(rows, 2900) == 66.9
     # no restart: the refresh 60 s later is not a start
-    assert ar.process_start([row(0.0, 2999), row(60.0, 2999), row(120.0, 2999)], 2999) == 0.0
-    assert ar.process_start([row(5.0, 2991)], 2999) is None
+    assert ar.process_start([row(0.0, 2900), row(60.0, 2900), row(120.0, 2900)], 2900) == 0.0
+    assert ar.process_start([row(5.0, 2991)], 2900) is None
 
 
 def test_trim_keeps_the_last_process_in_time_order():
-    rows = [row(84.0, 2992), row(0.0, 2999), row(66.9, 2999), row(75.4, 2991), row(50.7, 2999)]
+    rows = [row(84.0, 2992), row(0.0, 2900), row(66.9, 2900), row(75.4, 2991), row(50.7, 2900)]
     assert [r["t"] for r in ar.trim_rows(rows, 66.9)] == [66.9, 75.4, 84.0]
 
 
 def test_first_times_and_slot_problems():
-    nodes = [2999, 2991, 2992]
+    nodes = [2900, 2991, 2992]
     spacing = ar.slot_spacing(3, 60)                        # 20 s
-    rows = [row(100.0, 2999), row(100.0 + spacing, 2991), row(100.0 + 2 * spacing + 0.8, 2992), row(160.0, 2999)]
+    rows = [row(100.0, 2900), row(100.0 + spacing, 2991), row(100.0 + 2 * spacing + 0.8, 2992), row(160.0, 2900)]
     first = ar.first_times(rows, nodes)
-    assert first == {"2999": 100.0, "2991": 120.0, "2992": 140.8}
+    assert first == {"2900": 100.0, "2991": 120.0, "2992": 140.8}
     assert ar.slot_problems(first, nodes, 100.0, 60.0) == []
     first["2992"] = 150.0                                   # 10 s late
     bad = ar.slot_problems(first, nodes, 100.0, 60.0)
     assert len(bad) == 1 and "node 2992 (slot 2)" in bad[0] and "+50.0 s" in bad[0]
-    assert "no request" in ar.slot_problems({"2999": 100.0}, nodes, 100.0, 60.0)[0]
+    assert "no request" in ar.slot_problems({"2900": 100.0}, nodes, 100.0, 60.0)[0]
 
 
 def test_gaps_and_bounds():
@@ -144,11 +146,11 @@ def test_success_delay_and_exact_gap():
 def test_retry_wait_and_window_budget():
     assert ar.retry_wait_s(1) == 145.5 and ar.retry_wait_s(2) == 435.0
     assert ar.retry_wait_s(2, timeout=True) == 465.0
-    nodes = [2999] + list(range(2991, 2999))
+    nodes = [2900] + list(range(2991, 2999))
     budget = ar.window_budget_s(nodes, 120.0)
     # node 2995 (slot 5 at S = 13.33 s) is the slowest: 66.7 + 465 + 30
     assert round(budget, 1) == 561.7 and budget / 60 < 12
-    assert ar.window_budget_s([2999, 2991], 120.0) == 60.0 + 121.5 + 30.0          # slot 1, one refresh, margin
+    assert ar.window_budget_s([2900, 2991], 120.0) == 60.0 + 121.5 + 30.0          # slot 1, one refresh, margin
 
 
 def test_limiter_admits_the_first_failure_and_then_one_per_300_s():

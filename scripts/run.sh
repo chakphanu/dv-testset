@@ -251,6 +251,8 @@
 # sut hub, fetched from inside its network namespace by a throwaway tester-image
 # container (scripts/lib/metrics.sh; the DV-Router image has no shell or curl and
 # the hub listens on its loopback only). error 1 = the GET failed.
+# or "logs xlxd-sut" (no other word, no other service): READS the sut container's log so far (docker logs --timestamps) into <id>.out
+# (scripts/lib/logs.sh); the file out/<run>/logs/xlxd-sut.log is written only after pytest ends. For ASL1j case R13 (registration failure lines).
 # or "proc-stat xlxd-sut <process>" (an exact name of DVT_PROCSTAT_NAMES in scripts/lib/procstat.sh: the launcher
 # dv-router, the dv-edge-*, dv-svc-*, dv-room, dv-recorder and dv-codec-ambed processes; or the word "list"): READS the
 # cpu ticks (utime, stime), the clock ticks per second, the thread count, VmHWM/VmRSS, the number of open file
@@ -275,6 +277,7 @@ set -euo pipefail
 . "$(dirname "$0")/lib/killproc.sh"
 . "$(dirname "$0")/lib/metrics.sh"
 . "$(dirname "$0")/lib/hup.sh"
+. "$(dirname "$0")/lib/logs.sh"
 . "$(dirname "$0")/lib/procstat.sh"
 dvt_load_env
 cd "$DVT_ROOT"
@@ -1059,7 +1062,7 @@ fi
 if [ "$has_asl_edge" = 1 ]; then
   mkdir -p "$out/asl-secrets"
   chmod 700 "$out/asl-secrets"
-  for f in node-2999.pw acct.secret node-2991.pw node-2992.pw node-2993.pw node-2994.pw node-2995.pw node-2996.pw node-2997.pw node-2998.pw; do
+  for f in node-2900.pw acct.secret node-2991.pw node-2992.pw node-2993.pw node-2994.pw node-2995.pw node-2996.pw node-2997.pw node-2998.pw; do
     (umask 077; printf 'test-secret-not-real\n' > "$out/asl-secrets/$f")
     chmod 600 "$out/asl-secrets/$f"
   done
@@ -1269,7 +1272,7 @@ for row in sys.stdin:
 control="$out/control"
 
 watch_control() {
-  local req id line action svc extra rc sniffer args target node mt mcid mimg kp ksvc kproc ksig kcid kimg ps_ psvc pproc pcid pimg hs hcid
+  local req id line action svc extra rc sniffer args target node mt mcid mimg kp ksvc kproc ksig kcid kimg ps_ psvc pproc pcid pimg hs hcid ls_ lcid
   while :; do
     for req in "$control"/*.req; do
       [ -e "$req" ] || continue
@@ -1328,6 +1331,17 @@ watch_control() {
             echo "metrics: no running $mt or tester container" > "$control/$id.out"; rc=4
           else
             dvt_metrics_exec "$mcid" "$mimg" > "$control/$id.out" 2>> "$control/control.log" || rc=$?
+          fi
+        fi
+      elif [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$action" = logs ]; then
+        # "logs xlxd-sut": see scripts/lib/logs.sh (allow-list, read only)
+        if ls_="$(dvt_logs_parse "$line")"; then
+          lcid="$("${compose[@]}" ps -q "$ls_" 2>/dev/null | head -n 1 || true)"
+          rc=0
+          if [ -z "$lcid" ]; then
+            echo "logs: no running $ls_ container" > "$control/$id.out"; rc=4
+          else
+            dvt_logs_exec "$lcid" > "$control/$id.out" 2>> "$control/control.log" || rc=$?
           fi
         fi
       elif [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$action" = hup ]; then

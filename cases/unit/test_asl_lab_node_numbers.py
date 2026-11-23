@@ -2,7 +2,7 @@
 """Guard for the AllStar lab's edge node numbers and register interval (no rig, no image).
 
 DV-Router wip-1590f26 refuses `[[edges.allstar.node]] public = true` with a number below 2000 ("public node numbers must be at least
-2000; private numbers cannot be registered") and a `[edges.allstar.register] interval` below 120 s. The lab edge is therefore node 2999
+2000; private numbers cannot be registered") and a `[edges.allstar.register] interval` below 120 s. The lab edge is therefore node 2900
 and the eight registration nodes are 2991..2998 (2997 and 2998 are the rate_limited ones; the DV-Router lead decided to keep the nodes public, not to use public = false: that
 would stop testing the public-node path), with interval "120s". These tests keep the repo from drifting back: the snippets under
 rig/config/dv-router/allstar-lab*.toml, the files and variants that depend on the numbers (password files written by scripts/run.sh,
@@ -21,7 +21,7 @@ pytestmark = pytest.mark.unit
 
 ROOT = Path(__file__).resolve().parents[2]
 SNIPPETS = sorted((ROOT / "rig" / "config" / "dv-router").glob("allstar-lab*.toml"))
-EDGE_NODE = 2999
+EDGE_NODE = 2900
 REG_NODES = [2991, 2992, 2993, 2994, 2995, 2996, 2997, 2998]
 VARIANTS = ["ok", "port", "http500", "notext", "slow", "oversize", "429ra", "503bad"]       # one per registration node, in order
 MIN_PUBLIC_NUMBER = 2000
@@ -35,6 +35,18 @@ def _allstar(path):
 
 def _public_numbers(allstar):
     return [int(n["number"]) for n in allstar.get("node", []) if n.get("public") is True]
+
+
+def test_edge_number_is_not_a_digit_prefix_of_a_lab_node():
+    """app_rpt asks the lab zone for the prefixes of a dialled number first (1999, 19990, 199902) and the shortest hit wins: an edge
+    numbered 2999 captured every dial of 299901 / 299902 (T4b, run 20261123T220142Z). The same holds for every registration node."""
+    lab = [199901, 199902, 299901, 299902]
+    for node in [EDGE_NODE] + REG_NODES:
+        for other in lab:
+            assert not str(other).startswith(str(node)), "edge/registration node %d is a digit prefix of lab node %d" % (node, other)
+    for node in lab:
+        for other in [EDGE_NODE] + REG_NODES:
+            assert not str(other).startswith(str(node))
 
 
 def test_snippets_are_found():

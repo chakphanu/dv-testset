@@ -146,6 +146,60 @@ def judge_node(node, request_times, failures, result, process_start=None, timeou
     return problems
 
 
+def judge_last_attempt(node, request_times, failures, result, timeout=False, delay_fn=None, require_line=False):
+    """Problems of the failure line (when there is one) of a node's LAST recorded attempt, which judge_node cannot judge because no
+    request follows it: the line comes within one attempt duration after the last request; its result class is `result` and its
+    next_retry_delay_ms is inside rule (a) for failure number len(request_times) (or equal to `delay_fn(n)` when given). The limiter
+    may have suppressed the line (300 s rule): no line is not a problem here unless `require_line` (the caller knows the limiter admits it,
+    for example the third attempt of an ordinary failure node, which is always more than 300 s after the first one)."""
+    times = sorted(request_times)
+    if not times:
+        return []
+    n = len(times)
+    a_lo, a_hi = asl_register.attempt_bounds(timeout)
+    near = [f for f in failures if f["node"] == str(node) and f["t"] is not None
+            and times[-1] - 0.5 <= f["t"] <= times[-1] + a_hi + 2.0]
+    problems = []
+    if require_line and not near:
+        problems.append("node %s attempt %d: no allstar_registration_failed line within %.1f s after the request (the limiter admits it)"
+                        % (node, n, a_hi + 2.0))
+    for f in near[:1]:
+        if f["result"] != result:
+            problems.append("node %s attempt %d: result=%s, expected %s" % (node, n, f["result"], result))
+        if delay_fn is not None:
+            want_s = delay_fn(n)
+            if abs(f["delay_s"] - want_s) > 0.001:
+                problems.append("node %s attempt %d: next_retry_delay_ms=%d, expected %d" % (node, n, round(f["delay_s"] * 1000), want_s * 1000))
+        else:
+            lo, hi = asl_register.failure_delay_range(n)
+            if not lo - 0.001 <= f["delay_s"] <= hi + 0.001:
+                problems.append("node %s failure %d: next_retry_delay_ms=%d outside %.0f..%.0f s" % (node, n, round(f["delay_s"] * 1000), lo, hi))
+    return problems
+
+
+def node_delay_fn(node, interval_s):
+    """The exact-delay function of a node whose delays are not jittered (mismatch, rate_limited), None for rule (a) nodes."""
+    result = asl_register.REG_RESULTS.get(str(node))
+    if result == "mismatch":
+        return lambda n: asl_register.success_delay_s(interval_s)
+    if result == "rate_limited":
+        after = asl_register.RETRY_AFTER_S if str(node) == "2997" else None
+        return lambda n, after=after: asl_register.rate_limited_delay(n, interval_s, after)
+    return None
+
+
+def judge_node_log(lines, node, request_times, process_start=None, interval_s=120.0, require_last=False):
+    """Every problem of one lab node against the edge log `lines`: judge_node plus judge_last_attempt, with the result class and the
+    delay rule of the node (asl_register.REG_RESULTS). Used by the cases R3-R6 and R14 (next_retry_delay_ms is what is asserted)."""
+    result = asl_register.REG_RESULTS[str(node)]
+    failures = parse_failures(lines)
+    fixed = node_delay_fn(node, interval_s)
+    timeout = result == "timeout"
+    return (judge_node(node, request_times, failures, result, process_start, timeout=timeout, delay_fn=fixed)
+            + judge_last_attempt(node, request_times, failures, result, timeout=timeout, delay_fn=fixed,
+                                                   require_line=require_last))
+
+
 def judge_run(lines, rows_by_node, process_start=None, interval_s=120.0):
     """All log problems of one run: the leak scan over the registration logging and judge_node for every node that has a result class in
     asl_register.REG_RESULTS. `rows_by_node` maps a node (str) to its request times (epoch)."""
@@ -156,13 +210,7 @@ def judge_run(lines, rows_by_node, process_start=None, interval_s=120.0):
         if len(times) < 2:
             problems.append("node %s: fewer than two recorded requests, nothing to judge" % node)
             continue
-        fixed = None
-        if result == "mismatch":
-            fixed = lambda n: asl_register.success_delay_s(interval_s)
-        elif result == "rate_limited":
-            after = asl_register.RETRY_AFTER_S if node == "2997" else None
-            fixed = lambda n, after=after: asl_register.rate_limited_delay(n, interval_s, after)
-        problems += judge_node(node, times, failures, result, process_start, timeout=(result == "timeout"), delay_fn=fixed)
+        problems += judge_node_log(lines, node, times, process_start, interval_s)
     return problems
 
 

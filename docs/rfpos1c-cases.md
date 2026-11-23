@@ -21,7 +21,7 @@ The product test (`crates/edge/allstar/tests/runtime_support/frame_positions.rs`
 
 ## How one frame is lost
 
-The tester IS the IAX2 caller: `dvtest.proto.iax2.Client` (account `acct` of the edge, node 2999, room L, ulaw, the way `cases/test_asl_edge.py` T1b does) and it
+The tester IS the IAX2 caller: `dvtest.proto.iax2.Client` (account `acct` of the edge, node 2900, room L, ulaw, the way `cases/test_asl_edge.py` T1b does) and it
 does not send frame 40 (`Client.voice(drop=True)`): the call clock still advances by 20 ms, nothing leaves the socket, no sequence number is used (a real lost
 full frame would be NAKed and sent again by a real client; the tester has no retransmission to send, so "lost" means never delivered). No relay is needed: the
 cheapest deterministic loss is the sender's own, and the tester knows the index. The hole is proved at the receiving side: the edge's tap capture

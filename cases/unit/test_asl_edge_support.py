@@ -20,7 +20,7 @@ class Fake:
         self.waits.append(timeout)
         up = self.up_after_restart if self.restarts else self.up_at_start
         if not up:
-            raise AssertionError("asl-e: no ESTABLISHED (IN) link to 2999 after %.0f s:\nrpt lstats ..." % timeout)
+            raise AssertionError("asl-e: no ESTABLISHED (IN) link to 2900 after %.0f s:\nrpt lstats ..." % timeout)
 
     def restart(self):
         self.restarts += 1

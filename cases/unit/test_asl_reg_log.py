@@ -10,8 +10,8 @@ pytestmark = pytest.mark.unit
 
 
 def test_scan_counts_classes_and_finds_leaks():
-    lines = ["x allstar_client_registration account=acct result=ok", "level=info allstar_call event=setup direction=in kind=node peer=2999",
-             "level=info allstar_call event=hangup direction=in kind=node peer=2999", "allstar_client_registration account=unknown result=rejected",
+    lines = ["x allstar_client_registration account=acct result=ok", "level=info allstar_call event=setup direction=in kind=node peer=2900",
+             "level=info allstar_call event=hangup direction=in kind=node peer=2900", "allstar_client_registration account=unknown result=rejected",
              "noise", "oops password test-secret-not-real in a line"]
     out = al.scan(lines)
     assert out["counts"] == {"allstar_client_registration": 2, "allstar_call event=setup": 1, "allstar_call event=hangup": 1}
@@ -36,7 +36,7 @@ def test_main_exit_codes(tmp_path, capsys):
 P = "xlxd-sut-1  | "
 SAMPLE = [
     P + '2026-11-07T03:46:23.065225083Z WARNING: AllStar registrar insecure = true: LAB CLEARTEXT HTTP sends portal credentials without encryption',
-    P + '2026-11-07T03:46:23.076398071Z level=info allstar_registration node=2999 summary={"http_status":200,"content_type":"application/json","body_len":100,"json":{"data":"node 2999 successfully registered","ipaddr":"172.30.0.11","port":4569,"refresh":180},"ipaddr":"172.30.0.11","port":4569,"refresh_s":180,"success_path":"$[\\"data\\"]","attributed":true}',
+    P + '2026-11-07T03:46:23.076398071Z level=info allstar_registration node=2900 summary={"http_status":200,"content_type":"application/json","body_len":100,"json":{"data":"node 2900 successfully registered","ipaddr":"172.30.0.11","port":4569,"refresh":180},"ipaddr":"172.30.0.11","port":4569,"refresh_s":180,"success_path":"$[\\"data\\"]","attributed":true}',
     P + '2026-11-07T03:46:57.366490831Z level=warn event=allstar_registration_failed node=2992 result=mismatch http_status=200 error="registrar address or IAX port differs from configuration" next_retry_delay_ms=120000',
     P + '2026-11-07T03:47:14.506455049Z level=warn allstar_registration node=2993 summary={"http_status":500,"content_type":"text/plain","body_len":15,"json":null,"ipaddr":null,"port":null,"refresh_s":null,"success_path":null,"attributed":false}',
     P + '2026-11-07T03:47:14.506488418Z level=warn event=allstar_registration_failed node=2993 result=http http_status=500 error="registrar returned an unsuccessful HTTP status" next_retry_delay_ms=120000',
@@ -106,6 +106,25 @@ def test_judge_node_models_the_300_s_limiter_for_the_second_retry():
     extra = ok + [line(t0 + 125.005, 250.0 - 0.005)]                                  # a line the limiter would not admit
     assert any("inside the 300 s limit window" in p for p in al.judge_node("2993", times, extra, "http"))
     assert any("no allstar_registration_failed line" in p for p in al.judge_node("2993", times, ok[:1], "http"))
+
+
+def test_judge_last_attempt_checks_the_line_of_the_attempt_no_request_follows():
+    # three attempts (0, 125, 375): the third completes 5 ms after its request and is admitted by the limiter; its line carries the delay of
+    # failure number 3 (384..576 s)
+    t0 = 1794023000.0
+    times = [t0, t0 + 125.0, t0 + 375.0]
+    def line(at, delay, result="http"):
+        return {"line": 1, "t": at, "node": "2993", "result": result, "http_status": 500, "error": "x", "delay_s": delay}
+    assert al.judge_last_attempt("2993", times, [line(t0 + 375.005, 480.0)], "http") == []
+    assert al.judge_last_attempt("2993", times, [], "http") == []                          # no line: not judged here
+    assert any("outside 384..576" in p for p in al.judge_last_attempt("2993", times, [line(t0 + 375.005, 250.0)], "http"))
+    assert any("expected http" in p for p in al.judge_last_attempt("2993", times, [line(t0 + 375.005, 480.0, "parse")], "http"))
+    assert al.judge_last_attempt("2993", times, [line(t0 + 395.0, 250.0)], "http") == []   # a later attempt's line is not this one's
+    problems = al.judge_node_log([], "2993", times)                                        # judge_node + judge_last_attempt, no log
+    assert any("no allstar_registration_failed line" in p for p in problems)
+    exact = al.node_delay_fn("2998", 120.0)
+    assert [exact(n) for n in (1, 2, 3)] == [120.0, 240.0, 480.0] and al.node_delay_fn("2993", 120.0) is None
+    assert al.node_delay_fn("2997", 120.0)(1) == 300.0 and al.node_delay_fn("2992", 120.0)(2) == 120.0
 
 
 def test_judge_run_rate_limited_nodes_have_exact_delays():

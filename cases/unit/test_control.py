@@ -18,6 +18,7 @@ from dvtest import control
 pytestmark = pytest.mark.unit
 
 LIB = Path(__file__).resolve().parents[2] / "scripts" / "lib" / "killproc.sh"
+LOGS_LIB = Path(__file__).resolve().parents[2] / "scripts" / "lib" / "logs.sh"
 METRICS_LIB = Path(__file__).resolve().parents[2] / "scripts" / "lib" / "metrics.sh"
 HUP_LIB = Path(__file__).resolve().parents[2] / "scripts" / "lib" / "hup.sh"
 RUN_SH = Path(__file__).resolve().parents[2] / "scripts" / "run.sh"
@@ -795,3 +796,39 @@ def test_protocol_edges_are_killable_with_kill_only():
         assert not control.kill_proc_allowed("xlxd-ref", proc, "KILL")
     for name in ("dv-edge-dextra2", "dv-edge-", "dv-edge-d", "dv-edge-usrp", "dv-edge-radio"):
         assert not control.kill_proc_allowed("xlxd-sut", name, "KILL")
+
+
+# ---- logs: "logs xlxd-sut" (scripts/lib/logs.sh), python table and bash agree
+
+LOGS_SERVICES = ["xlxd-sut", "dvr-peer", "xlxd-ref", "tester", "transcoder-sut", "allstar", "asl-reg", "XLXD-SUT", "", "xlxd-sut ",
+                 "*", "xlxd-sut;id", "container:abc"]
+
+
+def test_logs_python_table():
+    assert control.LOGS_ALLOWED == ("xlxd-sut",)
+    for service in LOGS_SERVICES:
+        assert control.logs_allowed(service) == (service == "xlxd-sut"), service
+    assert control.logs_line("xlxd-sut") == "logs xlxd-sut"
+    for service in ("xlxd-ref", "tester", "dvr-peer", "", "xlxd-sut extra"):
+        with pytest.raises(ValueError):
+            control.logs_line(service)
+
+
+def test_logs_bash_and_python_agree():
+    if not shutil.which("bash"):
+        pytest.skip("bash is not installed")
+    feed = "".join("%s\n" % s for s in LOGS_SERVICES if "\n" not in s)
+    script = 'while IFS= read -r s; do if dvt_logs_allowed "$s"; then echo "1 $s"; else echo "0 $s"; fi; done'
+    run = subprocess.run(["bash", "-c", 'source "$1"; ' + script, "x", str(LOGS_LIB)], input=feed,
+                         capture_output=True, text=True, timeout=30)
+    assert run.returncode == 0, run.stderr
+    allowed_bash = {line[2:] for line in run.stdout.splitlines() if line.startswith("1 ")}
+    assert allowed_bash == {s for s in LOGS_SERVICES if control.logs_allowed(s)} == {"xlxd-sut"}
+
+
+def test_logs_bash_parse_takes_exactly_logs_and_one_service():
+    assert bash('dvt_logs_allowed xlxd-sut extra', lib=LOGS_LIB).returncode == 1
+    assert bash('dvt_logs_allowed', lib=LOGS_LIB).returncode == 1
+    assert bash('dvt_logs_parse "logs xlxd-sut"', lib=LOGS_LIB).stdout.strip() == "xlxd-sut"
+    for line in ("logs xlxd-ref", "logs xlxd-sut extra", "metrics xlxd-sut", "logs", "logs  "):
+        assert bash('dvt_logs_parse "%s"' % line, lib=LOGS_LIB).returncode == 1, line

@@ -969,6 +969,11 @@ Tester side: `rig_control.kill_proc(service, process, signal[, rooms="B"])` retu
 and `t_kill` (`dvtest/control.py`; `KILL_PROC_ALLOWED` mirrors
 `scripts/lib/killproc.sh`, a unit test checks both agree).
 
+`logs xlxd-sut` returns the log of the system under test container so far (`docker logs --timestamps`, stdout and stderr) in `<id>.out`: read
+only, one service, no argument (`scripts/lib/logs.sh`, `dvtest.control.LOGS_ALLOWED`, `RigControl.logs()`; a unit test checks the two tables
+agree). `run.sh` writes `out/<run>/logs/xlxd-sut.log` only after pytest ends; this lets a case judge log lines while the rig is up (the
+AllStar registration failure lines, case R13 of `cases/test_asl_edge.py`, `docs/asl-lab.md`).
+
 `metrics xlxd-sut` (or `metrics dvr-peer`, the second node of `--profile twonode`) returns the Prometheus text of the system under test's hub in
 `<id>.out`. The DV-Router image is `FROM scratch` (no shell, no `curl`) and the
 hub listens on `127.0.0.1:19108` of the container's own network namespace, which

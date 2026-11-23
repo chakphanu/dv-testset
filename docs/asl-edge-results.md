@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # DV-Router AllStar edge against the asl-lab (ASL1 phase 2)
 
-`dv-edge-allstar` running inside the asl-lab (`docs/asl-lab.md`), profile `asl-edge`: the edge is node 2999 (1999 until wip-1590f26),
+`dv-edge-allstar` running inside the asl-lab (`docs/asl-lab.md`), profile `asl-edge`: the edge is node 2900 (1999 until wip-1590f26, 2999 for one run: see docs/asl-lab.md "Why the edge is 2900"),
 room L, next to the lab's app_rpt nodes A (199901), B (199902) and E (299901). Cases:
 `cases/test_asl_edge.py`, marker `asl_lab`. Interop testing of builds under review: findings go to dv-router as
 pcap and note, never as patches to their source.
@@ -9,7 +9,7 @@ pcap and note, never as patches to their source.
 **Renumbered for wip-1590f26 (2026-11).** That build refuses `[[edges.allstar.node]] public = true` with a number below 2000 ("public node
 numbers must be at least 2000; private numbers cannot be registered") and a `[edges.allstar.register] interval` below 120 s. The DV-Router lead
 decided to keep the nodes public (so the public-node path stays tested: registry identity, caller IP check) and not to switch to
-`public = false`. The lab therefore uses the edge node **2999** (was 1999), the six registration nodes **2991..2996** (were 1991..1996, same
+`public = false`. The lab therefore uses the edge node **2900** (was 1999), the six registration nodes **2991..2996** (were 1991..1996, same
 answer variants one to one) and the register interval **"120s"** (was "60s"); the lab registrar is our own fake, so any number works, and
 numbers from 2000 up are valid on older images too. The app_rpt lab nodes 199901 / 199902 / 299901 / 299902 are unchanged. Everything below
 that was recorded before this change (runs up to `20261104T001310Z`, the tables, the F-R1 finding, the DVSwitch recordings) names the
@@ -30,6 +30,20 @@ max(120, min(interval, refresh)). R3-R6 now judge each failure number n inside `
 new R14 covers `rate_limited` (nodes 2997: 429 + `Retry-After: 300`, 2998: 503 + `Retry-After: invalid`) and R13 / `python3 -m
 dvtest.tools.asl_reg_log LOG --register DIR` the failure log lines. The registration run now waits about 9.5 minutes (nine public nodes,
 S = 13.33 s; was about 3). Details and the rules table: `docs/asl-lab.md`, "Registration cases". The R3-R6 rows of the tables below (24..36 s, 44..56 s) stay as the recorded results of the 30 s back-off builds. Not yet run on a rig with these cases.
+
+**R1-R7, R13, R14 on wip-42d5473 (run `20261123T222442Z`, 9 passed in 8:15; the backoff is now asserted on the log field `next_retry_delay_ms`,
+read while the rig is up through the control action `logs xlxd-sut`).** Slot of the first request after the process start (S = 13.3 s):
+2900 +0.0, 2991 +13.3, 2992 +26.7, 2993 +40.0, 2994 +53.3, 2995 +66.7, 2996 +80.0, 2997 +93.3, 2998 +106.7. R1 refresh 120.0 s (node 2991, three
+gaps); R2 (node 2992, the stand-in answers refresh 60) 120.0 s: the 120 s floor holds, log delay 120000. Logged `next_retry_delay_ms`, first
+failure then the third (the limiter suppresses the second): 2993 http 120000, 445057; 2994 parse 124271, 422944; 2995 timeout 120000, 467400;
+2996 parse 120000, 412004 (rule (a): 120..144 s, 384..576 s; half of the first retries are exactly 120000 because the 80..120 % draw is clamped
+to the 120 s floor); measured request gaps 120.0 / 251.0 s (2993), 124.3 / 204.2 (2994), 135.2 / 222.5 (2995, includes the 15.2 s client
+timeout), 120.0 / 272.8 (2996). R14: 2997 (429, `Retry-After: 300`) 300000 and a 300.0 s gap; 2998 (503, `Retry-After: invalid`) 120000, then
+240 s (gap 240.0) and 480000 on the third line. R7 counters: ok 9, mismatch 4, http 3, parse 6, rate_limited 5, timeout 3, unattributed 0.
+No FINDING: the product matches the ASL1j contract. T4b on the same image: `20261123T233808Z`, passed (after the lab renumbering of the
+edge to 2900, see `docs/asl-lab.md`, "Why the edge is 2900"; the earlier failure `20261123T220142Z` was the lab's number collision, a harness
+error): the chain A - E - B, then both dial the edge; the edge hung up on A at 0.05 s and 10.06 s and on B at 10.28 s, voice into the edge came
+from B only (106 packets), A none.
 
 ## Run
 
@@ -312,7 +326,7 @@ with no CALLTOKEN IE is dropped silently, REGAUTH has the same fields for a know
 | R9 `test_r9_wrong_secret_is_regrej` | REGREJ with CAUSE "authentication failed" and CAUSECODE 29 within a few seconds, no REGACK |
 | R10 `test_r10_unknown_user_is_indistinguishable_from_a_wrong_secret` | the same steps, cause and REGAUTH IEs (but the USERNAME echo) for a known and an unknown user |
 | R11 `test_r11_regreq_without_calltoken_is_dropped` | no reply of any kind to a REGREQ without a CALLTOKEN IE |
-| R12 `test_r12_node_account_cannot_register_as_a_phone` | the node account 2999 (the edge's own number; 1999 before wip-1590f26) is refused (REGREJ) |
+| R12 `test_r12_node_account_cannot_register_as_a_phone` | the node account 2900 (the edge's own number; 1999 before wip-1590f26) is refused (REGREJ) |
 
 The ASL1h log lines are `level=info allstar_call event=setup|hangup direction=in|out kind=node|client peer=... module=L result=ok|rejected:ip|
 rejected:refused ... cause_code=... duration_ms=...` and `allstar_client_registration ...`. They cannot be read during a run (run.sh writes
