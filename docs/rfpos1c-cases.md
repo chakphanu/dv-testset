@@ -174,6 +174,10 @@ Re-judged from the saved captures of run `20261123T191840Z` (wip-42d5473, testse
 All within the contract (80 / 20 / 20): the lateness of the fill frame is 41 ms (DMR) and 59-61 ms (P25), recovered by the next frame; the 7.4-7.8 ms of NXDN's later max is also in the
 control pair (d against a), the padded last frame, so it is noise. YSF and NXDN send the fill frame on time.
 
+Live, with the contract asserted (run `20261123T211158Z`, wip-42d5473, `DVT_RFPOS1C=on DVT_BUNDLEFILL1=on`, together with ASLDROP1): all four cases pass. ms over the control, fill frame / next
+frame / later max: DMR b 41.3 / -0.8 / 0.6, c 40.1 / -0.1 / 0.8; YSF b -0.8 / 0.1 / 0.5, c 0.9 / 1.0 / 1.0; P25 b 62.4 / 1.5 / 1.8, c 61.5 / 1.4 / 2.0; NXDN b 1.2 / 0.0 / 0.3, c 3.5 / 2.7 / 4.0
+(case d, the noise: at most 5.9 ms, NXDN).
+
 ### The before, dv-router:wip-e9fcc38 (step C, no BUNDLEFILL1)
 
 Run `20261123T160335Z` (testset of this commit's parent plus the BUNDLEFILL1 additions, `DVT_RFPOS1C=on DVT_BUNDLEFILL1=on`): 2 passed (a, d), 2 failed (b, c), 250 s; the same shapes in b and c. The run before it,
