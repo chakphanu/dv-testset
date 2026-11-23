@@ -46,6 +46,7 @@ LINK_WAIT_S = 150.0                 # node 1 dials the relay and the link comes 
 DEMAND_WAIT_S = 20.0                # node 2's Demand for the listener's profile reaches node 1
 TAIL_S = 3.0                        # after the talk: the last records cross the link and the listener drains
 GAP_S = 3.0                         # between two overs
+WORKER_SETTLE_S = 20.0              # after stopping transcoder-sut: node 1's worker session ends and its room stops offering transcoded profiles
 
 
 def note(target, case, tag, text):
@@ -90,6 +91,31 @@ def link(rig, target):
         note(target, "link", "RECORD", "relay at the end: forwarded %d, dropped %d, records %s" % (
             relay.forwarded, relay.dropped, rfpos1.kinds_seen(relay.snapshot())))
         relay.stop()
+
+
+@pytest.fixture(scope="module")
+def worker_off(link, rig_control):
+    """Node 1 without its codec worker (transcoder-sut stopped) for the whole module. link.md "Demand and transcoding": a node WITH a worker
+    transcodes node 2's demanded profile itself and sends it as a CARRIED profile, which node 2 publishes directly and never transcodes: the first
+    rig run (20261123T092713Z) showed 91 + 91 Units records per DMR over (ambe2-dmr and the carried ambe-dstar), so the dropped ambe2-dmr record
+    was invisible. Without the worker node 1 sends the source profile only (the hotspot uplink shape) and node 2's own transcoder
+    (transcoder-peer) makes the D-STAR output: the path RFPOS1 step B changes."""
+    tag = "ambed-fault-rfpos1b-node1-worker-off"
+    try:
+        rig_control.mark("begin", tag)
+    except (RuntimeError, TimeoutError, ValueError, OSError) as exc:
+        print("mark begin failed: %s" % exc)
+    rig_control("stop", "transcoder-sut")
+    time.sleep(WORKER_SETTLE_S)
+    note(link.target, "worker", "RECORD", "transcoder-sut stopped, node 1 has no codec worker for the cases")
+    try:
+        yield True
+    finally:
+        rig_control("start", "transcoder-sut")
+        try:
+            rig_control.mark("end", tag)
+        except (RuntimeError, TimeoutError, ValueError, OSError) as exc:
+            print("mark end failed: %s" % exc)
 
 
 def fake_on():
@@ -142,7 +168,8 @@ def expected_units(src_kind, frames):
 def judge(link, case, src_kind, wire_profile, drop, result):
     frames, got, repeats, events = result
     wire = rfpos1.over_records(events, wire_profile)
-    problems = [("link wire", p) for p in rfpos1.wire_problems(wire, wire_profile, COUNT, dropped=drop)]
+    problems = [("harness", p) for p in rfpos1.carry_problems(events, 1)] if src_kind == "dmr" else []
+    problems += [("link wire", p) for p in rfpos1.wire_problems(wire, wire_profile, COUNT, dropped=drop)]
     expected = expected_units(src_kind, frames)
     problems += [("listener", p) for p in rfpos1.gap_problems(got, COUNT, dropped=drop, expected=expected)]
     seqs = [r["sequence"] for r in wire]
@@ -152,12 +179,14 @@ def judge(link, case, src_kind, wire_profile, drop, result):
              len(wire), wire_profile, min(seqs, default=None), max(seqs, default=None), [r["sequence"] for r in wire if r["dropped"]],
              len(got), min(positions, default=None), max(positions, default=None), [q for q in range(COUNT) if q not in set(positions)][:10],
              repeats, "byte for byte" if expected is not None else "not predictable (a real transcoder)"))
+    note(link.target, case, "RECORD", "link: StreamStart carried masks %s, Units records by profile %s" % (
+        ["0x%04x" % m for m in rfpos1.carried_masks(events)], rfpos1.profile_counts(events)))
     for where, text in problems:
         note(link.target, case, "FINDING", "%s: %s" % (where, text))
     return problems
 
 
-def test_rfpos1b_a_no_loss_dmr_to_dstar_keeps_every_position(link):
+def test_rfpos1b_a_no_loss_dmr_to_dstar_keeps_every_position(link, worker_off):
     """No loss: the link carries the DMR over as one ambe2-dmr unit per Units record at sequence 0..N-1, and node 2's D-STAR listener gets the
     positions 0..N-1 once each, with the exact unit of each position when the transcoder is the fake."""
     result = talk_over(link, "dmr", 1, drop=None, case="a")
@@ -165,7 +194,7 @@ def test_rfpos1b_a_no_loss_dmr_to_dstar_keeps_every_position(link):
     assert not problems, "; ".join("%s: %s" % p for p in problems)
 
 
-def test_rfpos1b_b_one_lost_link_frame_is_a_gap_at_its_own_position(link):
+def test_rfpos1b_b_one_lost_link_frame_is_a_gap_at_its_own_position(link, worker_off):
     """One Units record (position DROP) is lost on the link: node 2's transcoded D-STAR output has exactly that one position missing and every
     other position at its own place (RFPOS1 step B). The pre-RFPOS1 output renumbered the survivors by arrival (contiguous 0..N-2, the gap at the
     end), which the judge reports as `missing positions [N-1]`."""
@@ -174,7 +203,7 @@ def test_rfpos1b_b_one_lost_link_frame_is_a_gap_at_its_own_position(link):
     assert not problems, "; ".join("%s: %s" % p for p in problems)
 
 
-def test_rfpos1b_c_dstar_link_stream_keeps_its_gap(link):
+def test_rfpos1b_c_dstar_link_stream_keeps_its_gap(link, worker_off):
     """An ambe-dstar link stream is unchanged by RFPOS1 step B: one lost record is a gap at its own position at node 2's D-STAR listener, the
     survivors carry their own frames."""
     result = talk_over(link, "dstar", 1, drop=DROP, case="c")

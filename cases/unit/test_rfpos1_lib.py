@@ -333,3 +333,24 @@ def test_run_sh_wires_the_link_for_the_switch_only():
 def test_strict_switch():
     assert rfpos1.strict_on({"DVT_RFPOS1B_LINK": "on"}) and rfpos1.strict_on({"DVT_RFPOS1B_LINK": "1"})
     assert not rfpos1.strict_on({}) and not rfpos1.strict_on({"DVT_RFPOS1B_LINK": "off"})
+
+
+# ---------------------------------------------------------------- carried profiles (the first rig run: node 1 carried ambe-dstar)
+
+def start(profile, carried, stream=11):
+    return event("c2s", {"kind": 19, "stream_id": stream, "profile": profile, "carried": carried, "pair": 0})
+
+
+def test_carry_problems_flag_a_node1_that_carries_the_listener_profile():
+    events = [start(2, 1 << 1)] + over(2, range(90), dropped=40)[1:] + over(1, range(90), stream=11)[1:]
+    problems = rfpos1.carry_problems(events, 1)
+    assert len(problems) == 1 and "node 1 carried ambe-dstar" in problems[0] and "90 Units records" in problems[0]
+    assert rfpos1.carried_masks(events) == [2]
+    assert rfpos1.profile_counts(events) == {2: 90, 1: 90}
+
+
+def test_carry_problems_pass_for_a_source_only_uplink_and_name_a_missing_start():
+    events = [start(2, 0)] + over(2, range(90))[1:]
+    assert rfpos1.carry_problems(events, 1) == []
+    assert rfpos1.profile_counts(events) == {2: 90}
+    assert rfpos1.carry_problems([], 1) == ["no StreamStart of the over seen on the link"]

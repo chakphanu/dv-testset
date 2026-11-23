@@ -270,6 +270,38 @@ def over_records(events, profile):
             for ev in events if ev["dir"] == "c2s" and ev.get("kind") == 20 and ev["profile"] == profile and ev["stream_id"] == stream]
 
 
+def carried_masks(events):
+    """The carried-profile masks of the client-to-server StreamStart records (kind 19), in order. link.md "Demand and transcoding": the sender
+    always sends the source profile PLUS every other profile of the receiver's demand set that ITS room publishes for the stream (the output of
+    its own codec worker), announced in this mask; the receiver publishes those carried units directly and never transcodes them again."""
+    return [ev["carried"] for ev in events if ev["dir"] == "c2s" and ev.get("kind") == 19]
+
+
+def profile_counts(events):
+    """{profile id: number of client-to-server Units records} of the logged events (dropped ones included)."""
+    out = {}
+    for ev in events:
+        if ev["dir"] == "c2s" and ev.get("kind") == 20:
+            out[ev["profile"]] = out.get(ev["profile"], 0) + 1
+    return out
+
+
+def carry_problems(events, listener_profile):
+    """Harness precondition of the transcoding cases: node 1 must NOT carry the listener's profile. When it does (it has a codec worker and node 2's
+    room demands the profile), node 2 publishes the carried units directly and its own transcoder never sees the over, so a unit lost on the
+    source-profile record cannot show: the output is complete from node 1's copy. A list of sentences, empty when node 2 has to transcode."""
+    out = []
+    masks = carried_masks(events)
+    if not masks:
+        out.append("no StreamStart of the over seen on the link")
+    for mask in masks:
+        if mask & (1 << listener_profile):
+            out.append("node 1 carried %s (mask 0x%04x) and sent %s Units records of it: node 2 does not transcode a carried profile, so the "
+                       "loss of a source record cannot show (node 1 needs no codec worker for that profile)" % (
+                           PROFILE_NAME.get(listener_profile, listener_profile), mask, profile_counts(events).get(listener_profile, 0)))
+    return out
+
+
 def wire_problems(records, profile, count, dropped=None):
     """What the link wire of one over must show (link.md "Units": one unit per record, `sequence` = the 20 ms position): every record holds
     exactly one unit of the profile, positions 0..count-1 each appear once (a retransmission does not exist), and exactly the armed record is
