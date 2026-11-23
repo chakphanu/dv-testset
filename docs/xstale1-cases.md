@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # DV-Router XSTALE1: the room's copy of an edge's own talker stays open for the whole over
 
-Status: written offline against DV-Router `b849a082` (image `dv-router:wip-2ec9be4`, code `ee4aae71`), NOT run on a rig. Cases: `cases/test_xstale1.py` (kits in `cases/xstale1_support.py`), the soak
+Status: DV-Router `b849a082` (image `dv-router:wip-2ec9be4`, code `ee4aae71`); first rig run `20261123T023414Z` (5 / 4), harness fixed, re-run `20261123T034743Z` (b[p25] and b/c/d[usrp]) 4 / 0 with the earlier passes of c/d p25 and nxdn (see "Results"). Cases: `cases/test_xstale1.py` (kits in `cases/xstale1_support.py`), the soak
 switch in `cases/test_web_soak.py` / `dvtest/soak.py` (`judge_xstale`), arithmetic and verdicts `dvtest/xstale1.py`; offline tests `cases/unit/test_xstale1_lib.py` and `cases/unit/test_soak.py`
 (section XSTALE1). Switch for both: `DVT_XSTALE1=on` (the image has XSTALE1); off, the rig cases skip with the reason and the soak keeps its old behaviour.
 
@@ -81,9 +81,28 @@ One protocol or case: add `-k "c_same and p25"`. Estimated time (not measured): 
 minutes. Run it alone: any other traffic on the edges of the three protocols moves the counters. Without `DVT_USRP_DYNAMIC=1` the usrp cases skip; without `soak-edges.toml` the p25 and nxdn cases fail with that hint (an
 edge that is not serving). Results: the `[RECORD]` lines in `out/<run>/xstale1.txt`.
 
-## Open points (not verified: no rig run)
+## Results (image dv-router:wip-2ec9be4)
 
-* The `proc` label of the three edges is assumed to be `usrp`, `p25`, `nxdn` (as `dmrhb`, `xlx`, `webrtc` in the other cases); the cases fail with the procs seen when `dv_edge_overs_total` has no series for the edge.
-* `dv_edge_overs_total` and `dv_edge_over_units_total` carry the `proc` label like every edge family (the hub re-exports each edge process); a rig where they do not would need the sum over procs.
-* The Rust unit tests use a static talker (a row) and a dynamic listener for USRP; here both are dynamic. If the fix is for static sources only, XS1-b/c on usrp will show it.
-* A `joined` fold needs the first unit of B's leg to be the first wanted; if the hub folds B's over as `complete` the case names it (`joined 0, complete 1`) and fails.
+| Run | Cases | Result |
+|-----|-------|--------|
+| `20261123T023414Z` | all 9 | 5 passed; b/c/d[usrp] failed (HARNESS, below); b[p25] failed (lossy 1, lost 392, PRODUCT, below) |
+| `20261123T033751Z` | b[usrp] with `DVT_XSTALE1_WITNESS=dmr` | harness error (the witness had no module): found the empty-string trap below |
+| `20261123T033822Z` | b[p25] cold, alone | passed (complete 1, lost 0) |
+| `20261123T034743Z` | b[p25], b/c/d[usrp] after the fix | 4 / 0: usrp b complete 1; c joined 1, heard 224 of 223 to come; d complete 2, both bursts heard whole |
+
+**HARNESS (usrp):** compose passes an unset `DVT_XSTALE1_USRP_MODULE` to the tester as an empty string, `env.get(name, default)` returned it, and the USRP clients linked to module "" (the DTMF named no room): nothing
+reached a room, no fold, B heard 0. Fixed (`env.get(name) or default`, unit test). The same trap applies to every `DVT_*` switch read with a default: use `or`.
+
+**PRODUCT (p25, intermittent, first over of a cold edge):** XS1-b[p25] in `20261123T023414Z` (the first P25 over after the SUT start): 396 units sent, tx fold `lossy` 1 with `lost` 392 (4 of 396 counted as arrived),
+x_stale, late, dropped, end_missing 0. The SUT had one P25 edge (`[edges.p25]` server port, module G, no peer rows), the talker was its only client. The same signature (first P25 over `lossy`, `lost` 95) is in
+the short soak `20261123T024326Z`. Not reproduced when the over came cold alone (`20261123T033822Z`) or first in `20261123T034743Z` (complete, lost 0), and not on nxdn or after a warm-up over (`d[p25]` then `b[p25]`: complete).
+In every cold run the P25 edge counted `dv_edge_drops_total{reason=id_held}` 2 before the first fold: the StreamStart was held for a radio id lookup. In the source (`ee4aae71`, `on_media`) units behind a held start go
+through `Accounting::observe`, which marks the profile wanted and counts them as arrived; the leg-less path of `b849a082` is skipped for them, so a leg-less over folds with `expected - arrived` lost when a few units
+arrive during the hold (about 4 at 20 ms, matching 392 of 396). status.md after `b849a082` says a stream without a listener leg adds no loss. The case therefore keeps asserting tx `lost` / `lossy` 0 (a hold race, not an
+XSTALE1 regression: end_missing, late and x_stale stayed 0).
+
+## Open points
+
+* Confirmed on the rig: the `proc` labels are `usrp`, `p25`, `nxdn`; both families carry them; dynamic USRP talker and listener fold as expected (b complete, c joined, d two overs).
+* A `joined` fold needs the first unit of B's leg to be the first wanted; if the hub folds B's over as `complete` the case names it (`joined 0, complete 1`) and fails (not seen: c folded joined on usrp, p25 and nxdn).
+* The first-over `lossy` of a cold P25 edge (id hold race, above) is intermittent: 1 of 3 cold runs.

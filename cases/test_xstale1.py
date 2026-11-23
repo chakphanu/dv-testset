@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 """XSTALE1 (DV-Router b849a082, image dv-router:wip-2ec9be4, code ee4aae71): the room's copy of an edge's own talker stays open for the whole over on the edges
 without a same-protocol fast path (usrp, p25, nxdn). docs/xstale1-cases.md; the arithmetic and the verdicts are dvtest/xstale1.py, the protocol kits
-cases/xstale1_support.py. Switch DVT_XSTALE1=on (the cases skip with the reason otherwise). NOT RUN on a rig: written against the sources of b849a082.
+cases/xstale1_support.py. Switch DVT_XSTALE1=on (the cases skip with the reason otherwise). Rig results: docs/xstale1-cases.md "Results".
 
 Before the fix the leg-less cross stream (the talker's own copy at its own edge) was closed by the 1.6 s silence timer 1.6 s into the over: every later
 unit counted dv_edge_drops_total{reason=x_stale}, the over folded with end_missing / late in the tx accounting, and a listener of the same edge that joined
