@@ -19,6 +19,10 @@ values are recorded when the proc-stat reply carries them); `python3 -m dvtest.s
 after 75 minutes at the latest (hard wall clock cap) and can be stopped with `touch out/<run>/web/soak.stop`;
 the teardown is the same in both cases, and in a failure.
 
+DVT_XSTALE1=on (image with XSTALE1, DV-Router b849a082; docs/xstale1-cases.md): the check `xstale:<proc>` per judged edge (usrp, p25, nxdn,
+those whose lane is in the mix) asserts dv_edge_drops_total{reason=x_stale} grew by at most max(3, 0.1/s x window) over the measured part;
+YSF and every other edge are recorded (soak.json counters.xstale). Without it the numbers are recorded and a FINDING names an edge above the bound.
+
 Recorded next to the verdict, never asserted (dvtest/events.py): `hub_events` / `events_note` (a thread counts the events of the public stream
 from the start of warmup to the end of measured: events per minute, the estimate events/min x 1.16 KiB against the dv-svc-status RSS slope, whether
 the ring of 10000 would be full) and `streams` (overs delivered per lane / module, streams per minute, KiB/min per stream of dv-router, dv-svc-status and dv-room).
@@ -275,7 +279,8 @@ def test_soak_sixty_minutes(soak_on, load_gen, load_ready, rig_control, target, 
         result = soak.evaluate(rows, events=events, expected=names,
                                params={"rss_scale": tm["rss_scale"], "rss_judged": not tm["short"], "measured_s": measured_s,
                                        "median_window_s": tm["median_window_s"],
-                                       "hub_event_times": ss.hub_event_times(reader)})
+                                       "hub_event_times": ss.hub_event_times(reader),
+                                       "xstale": {"strict": soak.xstale_on(env), "procs": soak.xstale_procs(lanes)}})
         gsum, gchecks = soak.generator_summary(gen_rows, min_packets=ROOMS_HEARD_MIN_PACKETS)
         tsum = traffic.summary()
         # hub events per minute and distinct streams next to the RSS slopes (recorded, never asserted)

@@ -90,6 +90,9 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
                      off or unset: those cases skip naming this switch (docs/rif5-cases.md "The image wip-f1f3777")
   DVT_PORTCTL1       on: the image has DV-Router PORTCTL1 (1ea6bd00, after wip-f1f3777): after the room's timeout the same talker's repeated headers open no new RTS
                      (`over_total{dir=rx,result=rts_suppressed}`): the case RIF5-PORTCTL1 (a 191 s D-STAR RF over with repeated headers, about 4 minutes); off or unset: it skips; no other case reads it
+  DVT_XSTALE1        on: the image has XSTALE1 (DV-Router b849a082, dv-router:wip-2ec9be4): the leg-less room copy of an own talker on usrp / p25 / nxdn stays open for the over;
+                     cases/test_xstale1.py asserts (own over folded clean, a same-edge joiner at 3 s hears the rest and folds as joined, real silence ends the stream) and the soak
+                     judges dv_edge_drops_total{reason=x_stale} per edge (docs/xstale1-cases.md); off or unset: the cases skip, the soak records (DVT_XSTALE1_USRP_MODULE: the USRP module, A)
   DVT_RADIOSEQ1      on: the image has RADIOSEQ1 (DV-Router 917b9e3b, dv-router:wip-37b7960): the radio hub numbers received DMR / YSF / NXDN / P25 voice by frame
                      ordinal, so a lossless radio over reaches a DMR (DMRD) client with the voice letters A..F in order (sync on A), the hub gap counters
                      (dv_edge_over_units_total{dir=rx,proc=radio,result=gap}, dv_room_over_units_total{result=gap}) stay 0 and the over is not counted lossy,

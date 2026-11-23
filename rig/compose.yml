@@ -639,6 +639,10 @@ services:
       # on for the image dv-router:wip-37b7960 (DV-Router 917b9e3b, RADIOSEQ1: the radio hub numbers voice by frame ordinal): the RADIOSEQ1-RX-* cases of
       # cases/test_rif5_mmdvm_serial.py assert the DMR letters A..F, gap 0, no lossy over, YSF FN and NXDN SACCH steps; unset: they only record (docs/radioseq1-cases.md)
       DVT_RADIOSEQ1: ${DVT_RADIOSEQ1:-}
+      # on for the image dv-router:wip-2ec9be4 (DV-Router b849a082, XSTALE1: the room's copy of an own talker on usrp / p25 / nxdn stays open for the over): cases/test_xstale1.py asserts,
+      # the soak judges x_stale per edge (docs/xstale1-cases.md); unset: the cases skip, the soak records. DVT_XSTALE1_USRP_MODULE: the USRP module of the cases (default A)
+      DVT_XSTALE1: ${DVT_XSTALE1:-}
+      DVT_XSTALE1_USRP_MODULE: ${DVT_XSTALE1_USRP_MODULE:-}
       # SECRELOAD1 / SECRELOAD2 (cases/test_secret_reload.py): on = the APRS-IS edge and the image rule are EXPECTED, so a missing series or route
       # fails instead of skipping. Not passing them made the strict mode inert in every rig run (cases/unit/test_tester_env.py guards the class).
       DVT_SECRELOAD1: ${DVT_SECRELOAD1:-}

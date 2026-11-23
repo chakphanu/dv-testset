@@ -33,6 +33,7 @@ Lead defaults of the criteria (DV-Router, 2026-11-02), all constants below:
   5  the public event stream is quiet while idle (dvtest.k22.idle_stream_verdict, judged by the case)
 """
 import json
+import os
 import random
 import re
 from dataclasses import dataclass, field
@@ -112,6 +113,18 @@ LAZY_FAMILIES = ("dv_edge_tx_refused_total", "dv_recorder_dropped_total", "dv_ro
 DROPS_FAMILY = "dv_edge_drops_total"
 DROPS_LEGIT = ("link_timeout", "no_session", "rx_ignored", "x_stale", "id_held")   # id_held: datagram held while a radio-id lookup is pending (DV-Router ruling)
 DROPS_RATE_FLAG_PER_S = 1.0
+
+# XSTALE1 (DV-Router b849a082, image dv-router:wip-2ec9be4; docs/xstale1-cases.md). Before it, the non-fast-path talker edges (usrp, p25, nxdn) kept a
+# leg-less cross stream (the room's copy of the edge's own talker) that the 1.6 s silence timer closed, so every later unit of the over counted
+# dv_edge_drops_total{reason=x_stale}. With DVT_XSTALE1=on the soak asserts that those three edges count (almost) none. The bound is a rate per
+# second over the measured part, 0.1/s with an absolute floor of 3 for a short window: the old behaviour was about 8.4 s of units per 10 s over (usrp
+# and p25 50 units/s, nxdn 12.5 units/s, one over a minute per lane): nxdn alone was 1.7/s, p25 7/s, the two usrp lanes 14/s, so 0.1/s is under a
+# tenth of the weakest and still leaves a few stray units (a unit behind its StreamEnd) a minute. YSF counts x_stale for another cause: recorded.
+XSTALE_ENV = "DVT_XSTALE1"
+XSTALE_EDGES = ("usrp", "p25", "nxdn")                 # the metrics label proc= of the edges that are judged
+XSTALE_REASON = "x_stale"
+XSTALE_MAX_PER_S = 0.1
+XSTALE_MIN_COUNT = 3.0
 SNAPSHOT_FAMILIES = FLAT_FAMILIES + (DROPS_FAMILY,)               # what the counter snapshots keep
 # Per-family overrides, {family: reason}: a family that grows with the traffic mix is NOT asserted but recorded with
 # its name and growth, until DV-Router rules on it. Starts empty on purpose.
@@ -238,11 +251,12 @@ def absent_row(name, t, phase, seq):
     return {"kind": "proc", "t": round(t, 3), "seq": seq, "phase": phase, "name": name, "absent": True}
 
 
-def counters_row(t, phase, counters, flat=None, series=None, families=None, reasons=None, gauges=None):
+def counters_row(t, phase, counters, flat=None, series=None, families=None, reasons=None, gauges=None, xstale=None):
     """A counter snapshot: `counters` = the error-like families (summed over labels), `flat` = {family: value or None
     (absent)} of SNAPSHOT_FAMILIES, `series` = their series, `families` = every family name on /metrics (first
     snapshot), `reasons` = {reason: value} of dv_edge_drops_total, `gauges` = {name: {"n", "sum"}} of the non-counter
-    families (discovery of the attribution names)."""
+    families (discovery of the attribution names), `xstale` = {proc: value} of dv_edge_drops_total{reason=x_stale} per edge
+    process (drops_by_proc)."""
     row = {"kind": "metrics", "t": round(t, 3), "phase": phase, "counters": dict(sorted(counters.items()))}
     if flat is not None:
         row["flat"] = dict(sorted(flat.items()))
@@ -254,6 +268,8 @@ def counters_row(t, phase, counters, flat=None, series=None, families=None, reas
         row["reasons"] = dict(sorted(reasons.items()))
     if gauges is not None:
         row["gauges"] = dict(sorted(gauges.items()))
+    if xstale is not None:
+        row["xstale"] = dict(sorted(xstale.items()))
     return row
 
 
@@ -333,6 +349,28 @@ def drop_reasons(samples, family=DROPS_FAMILY):
         if x.name == family and x.value == x.value and abs(x.value) != float("inf"):
             reason = x.labels.get("reason", "-")
             out[reason] = out.get(reason, 0.0) + x.value
+    return {k: round(v, 6) for k, v in sorted(out.items())}
+
+
+def xstale_on(environ=None):
+    """DVT_XSTALE1=on: the image has XSTALE1 (DV-Router b849a082): the x_stale of usrp, p25 and nxdn is asserted."""
+    return str((environ if environ is not None else os.environ).get(XSTALE_ENV, "")).strip().lower() in ("on", "1", "true", "yes")
+
+
+def xstale_procs(lane_names):
+    """The judged edges whose soak lane is in the mix: usrp when a usrp-* lane is, p25 and nxdn by their own lane."""
+    names = list(lane_names)
+    return [p for p in XSTALE_EDGES if (p == "usrp" and any(n.startswith("usrp") for n in names)) or p in names]
+
+
+def drops_by_proc(samples, reason=XSTALE_REASON, family=DROPS_FAMILY):
+    """{proc: value} of dv_edge_drops_total{reason=<reason>} summed per proc label (the edge process that reports; a series
+    without proc counts under "-"). A proc whose edge exports the family without that reason is absent."""
+    out = {}
+    for x in samples:
+        if x.name == family and x.labels.get("reason") == reason and x.value == x.value and abs(x.value) != float("inf"):
+            proc = x.labels.get("proc", "-")
+            out[proc] = out.get(proc, 0.0) + x.value
     return {k: round(v, 6) for k, v in sorted(out.items())}
 
 
@@ -811,7 +849,49 @@ def judge_drops(snapshots, legit=DROPS_LEGIT, flag_rate=DROPS_RATE_FLAG_PER_S):
     return record, checks, warnings
 
 
-def judge_counters(snapshots, overrides=None):
+def judge_xstale(snapshots, strict=False, procs=XSTALE_EDGES, max_per_s=XSTALE_MAX_PER_S, min_count=XSTALE_MIN_COUNT):
+    """(record, checks, warnings) of dv_edge_drops_total{reason=x_stale} per edge process over the measured part
+    (warmup_end -> measured_end), from the "xstale" maps of the counter snapshots. `procs` are the judged edges (those whose lane
+    is in the mix). Strict (DVT_XSTALE1=on): one check `xstale:<proc>` per judged edge, the growth must be at most
+    max(min_count, max_per_s x window); an edge with no x_stale series at either snapshot fails (the label may differ: the procs
+    seen are named). Not strict: the same numbers are recorded and a warning names a judged edge above the bound (the FINDING
+    of the old behaviour, nothing fails). Every other proc (YSF counts it for another cause) is only recorded."""
+    w, e = snapshots.get("warmup_end"), snapshots.get("measured_end")
+    record = {"strict": bool(strict), "procs": list(procs), "bound_per_s": max_per_s, "min_count": min_count}
+    checks, warnings = [], []
+    if not w or not e or "xstale" not in w or "xstale" not in e:
+        record["missing"] = True
+        if strict:
+            checks.append(Check("xstale", False, "no per-edge x_stale snapshot at the end of warmup and of the measured part"))
+        return record, checks, warnings
+    span = max(1.0, e["t"] - w["t"])
+    bound = max(min_count, max_per_s * span)
+    per = {}
+    for proc in sorted(set(w["xstale"]) | set(e["xstale"])):
+        a, b = w["xstale"].get(proc, 0.0), e["xstale"].get(proc, 0.0)
+        delta = round(b - a, 6)
+        per[proc] = {"start": a, "end": b, "delta": delta, "rate_per_s": round(max(0.0, delta) / span, 4), "judged": proc in procs}
+    record.update(window_s=round(span, 1), bound=round(bound, 3), edges=per,
+                  others={p: i for p, i in per.items() if not i["judged"]})
+    for proc in procs:
+        info = per.get(proc)
+        if info is None:
+            detail = "no dv_edge_drops_total{reason=x_stale} series for proc=%s (procs seen: %s)" % (proc, sorted(per) or "none")
+            record.setdefault("absent", []).append(proc)
+            if strict:
+                checks.append(Check("xstale:" + proc, False, detail))
+            continue
+        ok = info["delta"] <= bound
+        info["ok"] = ok
+        detail = "x_stale %g over %.0f s (%.3f/s), bound %.1f (%g/s, at least %g)" % (info["delta"], span, info["rate_per_s"], bound, max_per_s, min_count)
+        if strict:
+            checks.append(Check("xstale:" + proc, ok, detail))
+        elif not ok:
+            warnings.append("XSTALE1 (not asserted, DVT_XSTALE1 is off): proc=%s %s" % (proc, detail))
+    return record, checks, warnings
+
+
+def judge_counters(snapshots, overrides=None, xstale=None):
     """(record, checks) of the counters. `snapshots` = {label: counters row} with the labels idle0, warmup_end,
     measured_end, idle_start, idle_end (missing ones are skipped). The flat families must not grow over the measured
     part (judge_flat); dv_edge_drops_total is judged by reason (judge_drops); every error-like family is recorded with
@@ -831,6 +911,11 @@ def judge_counters(snapshots, overrides=None):
         record["drops"] = drops
         record["warnings"] = warnings
         checks.extend(dchecks)
+        if xstale is not None:                                   # per edge x_stale (XSTALE1); the params of evaluate, absent in older callers
+            xrec, xchecks, xwarn = judge_xstale(snapshots, xstale.get("strict", False), XSTALE_EDGES if xstale.get("procs") is None else xstale["procs"])
+            record["xstale"] = xrec
+            record["warnings"] = record["warnings"] + xwarn
+            checks.extend(xchecks)
     record["growing"] = sorted(k for k, v in (record["measured"] or {}).items() if v > 0 and k not in SNAPSHOT_FAMILIES)
     return record, checks
 
@@ -922,7 +1007,7 @@ def default_params():
             "threads_fraction": THREADS_FRACTION, "threads_floor": THREADS_FLOOR, "fds_fraction": FDS_FRACTION,
             "fds_floor": FDS_FLOOR, "flag_threads_floor": FLAG_THREADS_FLOOR, "flag_fds_floor": FLAG_FDS_FLOOR,
             "median_window_s": None, "idle_fds_slack": IDLE_FDS_SLACK, "rss_scale": 1.0, "flat_overrides": None,
-            "rss_judged": True, "measured_s": None, "hub_event_times": None}
+            "rss_judged": True, "measured_s": None, "hub_event_times": None, "xstale": None}
 
 
 def evaluate(rows, events=None, params=None, expected=()):
@@ -952,7 +1037,7 @@ def evaluate(rows, events=None, params=None, expected=()):
     for r in rows:
         if r.get("kind") == "metrics" and r.get("phase") in ("idle0", "warmup_end", "measured_end", "idle_start", "idle_end"):
             snaps[r["phase"]] = r
-    rec, checks = judge_counters(snaps, p.get("flat_overrides"))
+    rec, checks = judge_counters(snaps, p.get("flat_overrides"), xstale=p.get("xstale"))
     res.counters = rec
     res.checks.extend(checks)
     res.warnings.extend(rec.get("warnings", []))
@@ -1006,6 +1091,15 @@ def counters_table(result):
                                                               _f(info["delta"]), info["rate_per_s"]))
         lines.append("legit total %.3f/s over %.0f s (flag above %g/s)%s" % (drops["legit_rate_per_s"], drops["window_s"], drops["flag_rate_per_s"],
                                                                          ", FLAGGED" if drops.get("flagged") else ""))
+    xs = result.counters.get("xstale") or {}
+    if xs.get("edges") is not None:
+        lines.append("")
+        lines.append("%-42s %-9s %12s %12s %9s %9s" % (DROPS_FAMILY + " x_stale", "judged", "warmup end", "end", "delta", "per s"))
+        for proc, info in xs["edges"].items():
+            mark = ("ok" if info.get("ok") else "OVER") if info["judged"] else "no"
+            lines.append("%-42s %-9s %12s %12s %9s %9.3f" % ("proc=" + proc, mark, _f(info["start"]), _f(info["end"]), _f(info["delta"]), info["rate_per_s"]))
+        lines.append("XSTALE1 %s: bound %.1f per edge over %.0f s (%g/s, at least %g)" % ("asserted" if xs["strict"] else "recorded only (DVT_XSTALE1 off)",
+                                                                                  xs["bound"], xs["window_s"], xs["bound_per_s"], xs["min_count"]))
     return "\n".join(lines)
 
 

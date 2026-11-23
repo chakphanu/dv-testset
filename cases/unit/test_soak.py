@@ -50,13 +50,14 @@ REASONS_BASE = {"link_timeout": 30.0, "no_session": 10.0, "rx_ignored": 5.0, "x_
 WINDOW_S = 3000.0
 
 
-def counter_rows(growth=None, flat_growth=None, absent=(), flat_start=None, reasons=None, idle_reasons=None, window_s=WINDOW_S):
+def counter_rows(growth=None, flat_growth=None, absent=(), flat_start=None, reasons=None, idle_reasons=None, window_s=WINDOW_S, xstale=None):
     """Counter snapshots: `growth` adds to the error-like families (recorded only) from the end of the measured part
     on, `flat_growth` {family: delta} to the flat families at the same points, `absent` names flat families that are not
     on /metrics, `flat_start` {family: value} replaces the base values (all five snapshots), `reasons` {reason: delta}
     grows the dv_edge_drops_total reasons over the measured part (and stays), `idle_reasons` {reason: delta} grows them
     in the idle window only, `window_s` is the length of the measured part. The snapshots carry the time (idle0,
-    warmup_end 600 s, measured_end after `window_s`, idle_start 30 s later, idle_end 120 s after that)."""
+    warmup_end 600 s, measured_end after `window_s`, idle_start 30 s later, idle_end 120 s after that). `xstale` {proc: delta} adds the
+    per edge x_stale maps (base 1.0 each, growing by delta over the measured part); None: the rows carry no such map."""
     base = {"dv_hub_dropped_total": 5.0, "dv_panics_total": 0.0, "dv_edge_refused_total": 2.0}
     flat0 = {fam: None if fam in absent else v for fam, v in dict(FLAT_BASE, **(flat_start or {})).items()}
     times = {"idle0": T0 - 100, "warmup_end": T0 + 600, "measured_end": T0 + 600 + window_s, "idle_start": T0 + 630 + window_s,
@@ -75,7 +76,10 @@ def counter_rows(growth=None, flat_growth=None, absent=(), flat_start=None, reas
             for reason, v in (idle_reasons or {}).items():
                 rs[reason] = rs.get(reason, 0.0) + v
         series = {fam: {"reason=x": v} for fam, v in flat.items() if v is not None}
-        rows.append(soak.counters_row(times[label], label, counters, flat=flat, series=series, reasons=rs))
+        xs = None
+        if xstale is not None:
+            xs = {proc: 1.0 + (v if label in ("measured_end", "idle_start", "idle_end") else 0.0) for proc, v in xstale.items()}
+        rows.append(soak.counters_row(times[label], label, counters, flat=flat, series=series, reasons=rs, xstale=xs))
     return rows
 
 
@@ -926,3 +930,70 @@ def test_other_children_keep_the_whole_window_rule_with_event_times_given():
     res = verdict(rows, params={"measured_s": 3000.0, "hub_event_times": [T0 + i for i in range(20000)]})
     assert failed(res) == ["rss:dv-router"]
     assert "ring rule" not in next(c for c in res.checks if c.name == "rss:dv-router").detail
+
+
+# ---- XSTALE1: dv_edge_drops_total{reason=x_stale} per edge (docs/xstale1-cases.md)
+
+XS_ON = {"xstale": {"strict": True, "procs": ["usrp", "p25", "nxdn"]}}
+XS_OFF = {"xstale": {"strict": False, "procs": ["usrp", "p25", "nxdn"]}}
+
+
+def test_xstale_switch_and_lane_mapping():
+    assert soak.xstale_on({"DVT_XSTALE1": "on"}) and soak.xstale_on({"DVT_XSTALE1": "1"}) and not soak.xstale_on({}) and not soak.xstale_on({"DVT_XSTALE1": "off"})
+    assert soak.xstale_procs(["usrp-a", "usrp-b", "dstar", "nxdn", "p25", "ysf"]) == ["usrp", "p25", "nxdn"]
+    assert soak.xstale_procs(["usrp-a", "dstar", "ysf"]) == ["usrp"]
+    assert soak.xstale_procs(["dstar", "p25"]) == ["p25"]
+
+
+def test_drops_by_proc_sums_the_reason_per_edge():
+    text = ('dv_edge_drops_total{proc="usrp",reason="x_stale"} 4\ndv_edge_drops_total{proc="usrp",reason="x_stale",port="b"} 2\n'
+            'dv_edge_drops_total{proc="usrp",reason="no_session"} 9\ndv_edge_drops_total{proc="ysf",reason="x_stale"} 29\n'
+            'dv_edge_drops_total{reason="x_stale"} 1\ndv_other_total{proc="p25",reason="x_stale"} 7\n')
+    from dvtest import metrics
+    assert soak.drops_by_proc(metrics.parse(text)) == {"-": 1.0, "usrp": 6.0, "ysf": 29.0}
+
+
+def test_xstale_strict_passes_a_quiet_run_and_records_the_other_edges():
+    res = verdict(series(), params=XS_ON, extra=gauge_rows() + counter_rows(xstale={"usrp": 0.0, "p25": 2.0, "nxdn": 0.0, "ysf": 600.0}))
+    assert res.ok, failed(res)
+    names = {c.name for c in res.checks}
+    assert {"xstale:usrp", "xstale:p25", "xstale:nxdn"} <= names and "xstale:ysf" not in names
+    xs = res.counters["xstale"]
+    assert xs["strict"] and xs["bound"] == pytest.approx(300.0) and xs["edges"]["p25"]["delta"] == 2.0
+    assert xs["others"]["ysf"]["delta"] == 600.0 and not xs["others"]["ysf"]["judged"]
+    assert res.warnings == []
+    assert "proc=ysf" in soak.counters_table(res) and "asserted" in soak.counters_table(res)
+
+
+def test_xstale_strict_fails_the_edge_above_the_bound_only():
+    res = verdict(series(), params=XS_ON, extra=gauge_rows() + counter_rows(xstale={"usrp": 301.0, "p25": 300.0, "nxdn": 0.0}))      # 0.1/s x 3000 s = 300
+    assert failed(res) == ["xstale:usrp"]
+    assert "301" in next(c.detail for c in res.checks if c.name == "xstale:usrp")
+    old = verdict(series(), params=XS_ON, extra=gauge_rows() + counter_rows(xstale={"usrp": 4000.0, "p25": 1000.0, "nxdn": 500.0}))   # the pre XSTALE1 magnitudes
+    assert failed(old) == ["xstale:nxdn", "xstale:p25", "xstale:usrp"]
+
+
+def test_xstale_bound_scales_with_the_window_and_has_a_floor():
+    short = verdict(series(), params=XS_ON, extra=gauge_rows() + counter_rows(window_s=240.0, xstale={"usrp": 24.0, "p25": 0.0, "nxdn": 0.0}))
+    assert short.ok and short.counters["xstale"]["bound"] == pytest.approx(24.0)
+    assert failed(verdict(series(), params=XS_ON, extra=gauge_rows() + counter_rows(window_s=240.0, xstale={"usrp": 25.0, "p25": 0.0, "nxdn": 0.0}))) == ["xstale:usrp"]
+    tiny = verdict(series(), params=XS_ON, extra=gauge_rows() + counter_rows(window_s=10.0, xstale={"usrp": 3.0, "p25": 0.0, "nxdn": 0.0}))
+    assert not [n for n in failed(tiny) if n.startswith("xstale")] and tiny.counters["xstale"]["bound"] == 3.0       # (a 10 s window fails other checks)
+
+
+def test_xstale_strict_fails_when_a_judged_edge_has_no_series_or_there_is_no_snapshot():
+    res = verdict(series(), params=XS_ON, extra=gauge_rows() + counter_rows(xstale={"usrp": 0.0, "nxdn": 0.0}))
+    assert failed(res) == ["xstale:p25"] and "procs seen" in next(c.detail for c in res.checks if c.name == "xstale:p25")
+    res = verdict(series(), params=XS_ON)                                       # default rows carry no per-edge map
+    assert failed(res) == ["xstale"]
+    lanes = {"xstale": {"strict": True, "procs": ["usrp"]}}                     # nxdn and p25 lanes dropped: not judged
+    assert verdict(series(), params=lanes, extra=gauge_rows() + counter_rows(xstale={"usrp": 0.0, "p25": 900.0})).ok
+
+
+def test_xstale_off_records_and_names_a_finding_but_never_fails():
+    res = verdict(series(), params=XS_OFF, extra=gauge_rows() + counter_rows(xstale={"usrp": 4000.0, "p25": 0.0, "nxdn": 0.0, "ysf": 29.0}))
+    assert res.ok, failed(res)
+    assert not any(c.name.startswith("xstale") for c in res.checks)
+    assert len(res.warnings) == 1 and "XSTALE1 (not asserted" in res.warnings[0] and "proc=usrp" in res.warnings[0]
+    assert not res.counters["xstale"]["strict"] and "recorded only" in soak.counters_table(res)
+    assert verdict(series()).warnings == [] and "xstale" not in verdict(series()).counters                    # no params: nothing changes

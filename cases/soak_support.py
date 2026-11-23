@@ -161,7 +161,8 @@ class ChildSampler:
         names = {x.name for x in samples} if label == "idle0" else None            # the families on /metrics, once
         gauges = soak.gauge_values(samples) if label in ("idle0", "measured_end") else None      # names for soak.ATTR_INCLUDE
         self.sink.write(soak.counters_row(time.time(), label, soak.error_counters(samples), flat=flat, series=series, families=names,
-                                          reasons=soak.drop_reasons(samples), gauges=gauges))
+                                          reasons=soak.drop_reasons(samples), gauges=gauges,
+                                          xstale=soak.drops_by_proc(samples)))
 
     def _loop(self):
         nxt = time.monotonic()
