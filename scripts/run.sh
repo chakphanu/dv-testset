@@ -664,9 +664,9 @@ fi
 compose_all=(docker compose -p "${COMPOSE_PROJECT_NAME:-dvt}" "${compose_files[@]}" "${DVT_ENV_FILES[@]}"
   --profile core --profile twonode --profile allstar --profile nxdn --profile capture --profile capture-allstar
   --profile capture-nxdn --profile p25 --profile capture-p25 --profile interlink
-  --profile capture-interlink --profile load --profile netem --profile g3 --profile mmdvm --profile mapsrc
+  --profile capture-interlink --profile load --profile netem --profile g3 --profile mmdvm --profile mapsrc --profile node1g --profile capture-node1g
   --profile urfd --profile capture-urfd --profile mrefd --profile capture-mrefd --profile web --profile browser
-  --profile webload --profile nat --profile aprs --profile dw --profile node1g --profile asl-lab --profile asl-ext --profile asl-nat)
+  --profile webload --profile nat --profile aprs --profile dw --profile asl-lab --profile asl-ext --profile asl-nat)
 
 if [ "$down_only" = 1 ]; then
   take_lock
@@ -924,6 +924,11 @@ if [ "$capture" = 1 ]; then
   if [ "$has_mrefd" = 1 ]; then
     profiles+=(--profile capture-mrefd)
     capture_svcs+=(capture-mrefd)
+  fi
+  # NODE1g: a sniffer in the hotspot's namespace too (capture/dvr-peer.pcapng; the central node's is capture/xlxd-sut.pcapng)
+  if [ "$has_node1g" = 1 ]; then
+    profiles+=(--profile capture-node1g)
+    capture_svcs+=(capture-dvr-peer)
   fi
 fi
 

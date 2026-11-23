@@ -36,6 +36,7 @@ The assertions are the contract of answers-364-node1g.md. A difference is a FIND
 fails with it; nothing is loosened to pass. Observations that settle nothing are `[RECORD]` lines.
 """
 import contextlib
+import json
 import os
 import sys
 import threading
@@ -369,9 +370,17 @@ def test_node1g_0_link_is_up_through_the_nat(n1g):
 
 # ---------------------------------------------------------------- NODE1g-a / b: delay and loss
 
+def window(n, **rec):
+    """Append one observation window to out/<run>/node1g/windows.jsonl (epoch seconds of the host clock, which dumpcap shares): what
+    `python3 -m dvtest.node1g_capture out/<run>` reads together with the captures of a run with --capture."""
+    with open(n.out / "node1g" / "windows.jsonl", "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(rec, sort_keys=True) + "\n")
+
+
 def impaired_run(n, case, args, long_s, ns_seed):
     """One impairment: set it on the router, let the link run `long_s` seconds, one 10 s over each way; returns what the judge needs."""
     before = hubs(n)
+    t_epoch_on = time.time()
     n.control.netem("wan", args)
     event(n)
     t_on = time.monotonic()
@@ -387,6 +396,7 @@ def impaired_run(n, case, args, long_s, ns_seed):
             res[who] = {"share": n1.heard_share(arr, sent, since=t0), "first_ms": None if first is None else round((first - t0) * 1000.0)}
         idle(ns.all, max(0.0, long_s - (time.monotonic() - t_on)))
     rows = {node: get_row(n, node) for node in ("central", "hotspot")}
+    window(n, case=case, kind="delay" if args == n1.DELAY_ARGS else "loss", t_start=t_epoch_on, t_stop=time.time(), args=args)
     n.control.netem("wan", "off")
     event(n)
     after = hubs(n)
@@ -396,7 +406,8 @@ def impaired_run(n, case, args, long_s, ns_seed):
 def test_node1g_a_delay(n1g):
     """`delay 60ms 10ms` on each interface of the router (one way 60 ms, jitter 10 ms, below the 20 ms frame spacing so nothing reorders): the link
     stays up with no handshake, rtt_ms of the rows is about 2 x 60, an over each way is heard whole and its first frame arrives 40 to 200 ms
-    after the first frame was sent (the LAN path alone is a few ms)."""
+    after the first frame was sent (the LAN path alone is a few ms). RECORD: per node the late / lost / gap units of the room and of the link edge
+    and the rows' loss_ppm, and (host step, run with --capture) how many datagrams and frames the jitter reordered."""
     n = n1g
     case = "a"
     before, after, res, rows = impaired_run(n, case, n1.DELAY_ARGS, 25.0, "a")
@@ -419,6 +430,10 @@ def test_node1g_a_delay(n1g):
     note(n, case, "RECORD", "delay only: the rows' loss_ppm (a counter-gap estimate: a reordered datagram counts as a gap and is never subtracted) and the overs folded `lossy` "
          "tell whether the 10 ms jitter reordered datagrams (dgram.rx.replay moved: %s)" % {k: v.get("dgram.rx.replay", 0) for k, v in mv.items()})
     note(n, case, "RECORD", "heard %s; rows central %s / hotspot %s; moved %s" % (res, n1.row_summary(rows["central"]), n1.row_summary(rows["hotspot"]), mv))
+    for node in ("central", "hotspot"):
+        units = {k: v for k, v in sorted(mv[node].items()) if k.startswith(("ounits.", "eunits.")) or ".lossy" in k}
+        note(n, case, "RECORD", "%s node: late / lost / gap units of the room and of the link edge, lossy overs: %s; row loss_ppm %s" % (
+            node, units or "none moved", (rows[node] or {}).get("loss_ppm")))
     finish(n, case, problems)
 
 
@@ -630,6 +645,67 @@ def test_node1g_e2_over_in_flight_central_to_hotspot(n1g):
     judge_in_flight(n1g, "e2", in_flight(n1g, "c2h"), "hotspot", "B")
 
 
+FOLD_ENV = "DVT_NODE1G_FOLD"
+
+
+def fold_iteration(n, case, direction):
+    """One over of 12 s from one node, the WAN dark from 3 s for 20 s, and NOTHING else on the link until the hubs have counted it: the receiving node's room
+    folds exactly this over, so its hub delta says how (end_missing / complete / lossy). The epoch times go to windows.jsonl for the capture judge."""
+    h2c = direction == "h2c"
+    node, room = ("central", "C") if h2c else ("hotspot", "B")
+    before = hubs(n)
+    with lan(n) as ns:
+        talker = ns.hc if h2c else ns.cc
+        records = p25.call_records(frames_of(600, "%s/long" % case), talker.src_id, talker.tg)
+        thread = threading.Thread(target=lambda: talker.send(records, p25.GAP), daemon=True)
+        others = [c for c in ns.all if c is not talker]
+        t_start, t0 = time.time(), time.monotonic()
+        thread.start()
+        while time.monotonic() - t0 < 3.0:
+            tick(others)
+            time.sleep(0.01)
+        t_cut, m_cut = time.time(), time.monotonic()
+        n.wan.blackhole(True)
+        event(n)
+        while thread.is_alive():
+            tick(others)
+            time.sleep(0.02)
+        idle(ns.all, max(0.0, 20.0 - (time.monotonic() - m_cut)))
+        n.wan.blackhole(False)
+        t_end = time.time()
+        event(n)
+    after = hubs(n)
+    mv = moved(before, after)
+    fold = {k: {kk: vv for kk, vv in v.items() if kk.startswith("overs.")} for k, v in mv.items()}
+    window(n, case=case, kind="fold", dir=direction, t_start=t_start, t_cut=t_cut, t_end=t_end, fold=fold)
+    return node, room, fold[node], mv
+
+
+def test_node1g_m_fold_repeat(n1g):
+    """Opt-in investigation (DVT_NODE1G_FOLD=<n>: n isolated in-flight overs per direction; run with --capture): an over whose End and later units were lost in a
+    blackout must fold end_missing on the receiving node's room (dv-router's rule: complete only when the End arrived and no unit was lost). The
+    case asserts that by construction (the End of a 12 s over is sent 9 s into the blackout); `python3 -m dvtest.node1g_capture out/<run>` then checks the
+    same rule against the captured link datagrams and names the stream of a defect."""
+    try:
+        count = int(os.environ.get(FOLD_ENV, "0"))
+    except ValueError:
+        count = 0
+    if count < 1:
+        pytest.skip("%s=<n> is not set (an opt-in investigation of the fold of an over cut by a blackout; docs/node1g-cases.md)" % FOLD_ENV)
+    n = n1g
+    problems, seen = [], []
+    for i in range(count):
+        for direction in ("h2c", "c2h"):
+            node, room, fold, mv = fold_iteration(n, "m%d" % (i + 1), direction)
+            got = {k.split(".", 2)[2]: v for k, v in fold.items() if v}
+            seen.append("%s %s: %s" % ("m%d" % (i + 1), direction, got))
+            if got != {"end_missing": 1.0}:
+                problems.append("m%d %s: the over folded %s on the %s node (room %s), wanted exactly one end_missing (its End and later units were lost)" % (
+                    i + 1, direction, got or "nothing", node, room))
+    note(n, "m", "RECORD", "folds of the isolated overs cut by a blackout: %s" % "; ".join(seen))
+    finish(n, "m", problems)
+
+
 def test_node1g_e3_floor_release_window_hotspot_to_central(n1g):
     """As e1 with two early probes of the central node's own talker (9 frames, 1.0 s and 2.0 s after the cut): which of them is granted tells when the
     floor was freed (the contract: 1.6 s after the last Unit). The 3.0 s probe is asserted as in e1; how the room folds the over is only recorded
@@ -737,6 +813,13 @@ def judge_rebind(n, case, scenario, kind):
         if ev.resume_s is None or ev.resume_s > limit:
             problems.append("%s: after the second rebinding the first probe over was heard %s s later (%d probes), wanted at most %.1f s" % (
                 name, None if ev.resume_s is None else round(ev.resume_s, 2), ev.probes, n1.NAT_GAP_S))
+        if n1.linkrebind_on():
+            # LINKREBIND1 (the hotspot sends a keepalive at most every 1 s while it receives): the post-fix numbers, asserted on top of the contract ones
+            if ev.who == "c2h" and ev.gap >= n1.LINKREBIND_GAP_S:
+                problems.append("%s: LINKREBIND1: central-to-hotspot gap %.2f s, wanted below %.1f s" % (name, ev.gap, n1.LINKREBIND_GAP_S))
+            if ev.share < n1.LINKREBIND_SHARE:
+                problems.append("%s: LINKREBIND1: the over was heard %.1f percent, wanted at least %.0f (no cut over in any trial)" % (
+                    name, 100 * ev.share, 100 * n1.LINKREBIND_SHARE))
         seen_b = sorted((m["seen_ip"], m["seen_port"]) for m in ev.map_before)
         seen_a = sorted((m["seen_ip"], m["seen_port"]) for m in ev.map_after)
         if not seen_a or seen_a == seen_b:

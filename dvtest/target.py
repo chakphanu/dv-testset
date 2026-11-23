@@ -137,6 +137,11 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
                      network), DVT_N1G_ROUTER (the router's control server, TCP 9100), DVT_N1G_ALIAS (its second outside address)
   DVT_LINKOBS1       on: LINKOBS1 (a future image: refusal log and counter on the hotspot, session-end counter with reasons, Bye{revoked}, bad-source counter): the RECORD-only case of
                      cases/test_node1g.py notes which dv_edge_link_* series the hubs expose; off or unset: it skips naming this switch (the names are not known yet)
+  DVT_LINKREBIND1    on: LINKREBIND1 (a future image: while it receives a stream the hotspot sends a keepalive at most every 1 s, so a NAT rebinding no longer cuts a central-to-hotspot over):
+                     cases/test_node1g.py f and g then also assert the post-fix numbers (central-to-hotspot gap below 1.2 s, every over heard at least 97 percent, no cut over); off or unset:
+                     they assert the contract (gap at most 5 s, 90 percent heard) and fail on the defect (docs/node1g-cases.md, FINDING 1)
+  DVT_NODE1G_FOLD    <n>: the opt-in case m of cases/test_node1g.py: n isolated overs per direction cut by a blackout, each judged for its fold (end_missing) and, with --capture, against the
+                     link datagrams by `python3 -m dvtest.node1g_capture out/<run>`; unset: the case skips naming this variable
   DVT_RFPOS1C        on: RFPOS1 step C (DV-Router fb3167bb): with --profile asl-edge run.sh adds rfpos1c-usrp.toml (a static USRP row on module L, the tester as the peer);
                      cases/test_rfpos1c.py loses one IAX2 voice frame (a mini frame, and a full frame) of an AllStar call and asserts that the D-STAR, DMR and USRP listeners of the
                      room miss exactly that position and the room counts one gap and one lossy over, egress tx lost +0 (docs/rfpos1c-cases.md); off or unset: the cases skip naming this switch

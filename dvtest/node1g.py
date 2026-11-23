@@ -57,6 +57,17 @@ MUST_NOT_MOVE_HANDSHAKE = ("auth_replay", "auth_capacity", "amplification", "bad
 MUST_NOT_MOVE_DATAGRAM_RX = ("bad_tag", "unknown_session", "malformed")
 
 
+LINKREBIND_SWITCH = "DVT_LINKREBIND1"
+LINKREBIND_GAP_S = 1.2            # LINKREBIND1: the central-to-hotspot gap after a NAT rebinding stays below this (a hotspot keepalive at most every 1 s while it receives)
+LINKREBIND_SHARE = 0.97           # and every over of the trials is heard at least this much
+
+
+def linkrebind_on(environ=None):
+    """DVT_LINKREBIND1=on: the image has the LINKREBIND1 fix (the hotspot sends a keepalive at most every 1 s while it receives a stream); NODE1g-f / -g then
+    assert the post-fix numbers as well. Default off: they assert the contract (gap 5 s, 90 percent heard) and fail on the defect."""
+    return (environ if environ is not None else os.environ).get(LINKREBIND_SWITCH, "").strip().lower() in ("on", "1", "true", "yes")
+
+
 def on(environ=None):
     """DVT_NODE1G=on: run.sh made the pair a hotspot behind a WAN router and its central node (--profile twonode)."""
     return (environ if environ is not None else os.environ).get(SWITCH, "").strip().lower() in ("on", "1", "true", "yes")
@@ -80,6 +91,8 @@ def counters(text):
       refused.<reason>       dv_edge_link_refused_total{reason}
       restarts.<child>       dv_launcher_child_restarts_total{child}
       overs.<room>.<result>  dv_room_overs_total{room,result}, room as the label gives it
+      ounits.<room>.<result> dv_room_over_units_total{room,result} (late, lost, gap: the room's units of closed overs)
+      eunits.<proc>.<dir>.<result>  dv_edge_over_units_total{proc,dir,result} (the edges' units of closed overs: rx late, dropped, gap; tx late, dropped, lost)
       onair.<room>           dv_status_room_onair{room} (gauge; the hub labels rooms in lower case)
       procs_down             number of dv_status_process_up series that are 0
     Every series that is not in the text is absent (a delta treats absent as 0)."""
@@ -100,6 +113,10 @@ def counters(text):
             key = "restarts.%s" % lab["child"]
         elif s.name == "dv_room_overs_total" and "room" in lab and "result" in lab:
             key = "overs.%s.%s" % (lab["room"].upper(), lab["result"])
+        elif s.name == "dv_room_over_units_total" and "room" in lab and "result" in lab:
+            key = "ounits.%s.%s" % (lab["room"].upper(), lab["result"])
+        elif s.name == "dv_edge_over_units_total" and "dir" in lab and "result" in lab:
+            key = "eunits.%s.%s.%s" % (lab.get("proc", "-"), lab["dir"], lab["result"])
         elif s.name == "dv_status_room_onair" and "room" in lab:
             key = "onair.%s" % lab["room"].upper()
         elif s.name == "dv_status_process_up":

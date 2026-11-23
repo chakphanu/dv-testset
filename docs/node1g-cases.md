@@ -3,7 +3,8 @@
 
 Status: rig runs on image `dv-router:wip-42d5473` (`DVT_SUT_GEN=compat1`, `--profile twonode`, `DVT_NODE1G=on`): **`20261123T225943Z`: 11 passed, 2 failed (NODE1g-f and -g, FINDING 1), 1 skipped (the LINKOBS1
 note, no switch)** in 1092 s of pytest (about 21 minutes with the rig start and stop); **`20261123T231838Z`**: the cases f, g and h again after a harness fix (the row of the central node is waited for by
-address AND port): f and g fail the same way (FINDING 1), h passes. Two earlier runs (`20261123T220327Z`, `20261123T224316Z`) are what the harness was debugged with; they saw FINDING 2 once each.
+address AND port): f and g fail the same way (FINDING 1), h passes. Two earlier runs (`20261123T220327Z`, `20261123T224316Z`) are what the harness was debugged with; they saw FINDING 2 once each. **`20261123T234228Z`** (with `--capture`, `DVT_NODE1G_FOLD=4`, cases a and m
+only): the follow-up to dv-router's answers (FINDING 2 reproduced and judged against the captures, the reordering of case a counted).
 Case file `cases/test_node1g.py`, pure helpers `dvtest/node1g.py` (hub counters, refusal rate, key files, arrival evidence, the plain-HTTP admin client, the WAN router client), unit tests
 `cases/unit/test_node1g_lib.py`, switches `DVT_NODE1G` and `DVT_LINKOBS1` (documented in `dvtest/target.py`, passed to the tester by `rig/compose.yml`), templates
 `rig/config/dv-router/node1g-hotspot.toml` (complete template of the hotspot) and `node1g-central.toml` (snippet of the central node), compose `rig/compose.node1g.yml` and the services `wan-router`,
@@ -60,6 +61,7 @@ that no guard strike builds up, every 0.4 s) is an UPPER bound of the moment the
 | NODE1g-g | the same with a NEW SOURCE ADDRESS (`readdress`) | the same; the router's `firsts`: the first datagram of the hotspot from the new address and the first datagram of the central node to it come within 5 s |
 | NODE1g-h | the central node gets a new key (rename + `hup xlxd-sut`), the hotspot keeps the old one, 120 s; then the old key is put back | Reject{auth}: central `handshakes{auth}` grows and `handshakes{accepted}` does not, no session on either hub, no over crosses, both rows show `last_error` `refused_key`, the refusal RATE (growth between the first and the last hub refresh over the time between them) at most 1.1 per second (section 2: attempts 0.5 s doubling to 5 s, +-20 percent, Auth every 0.5 s: about 1.0), no count asserted; fixed key: link up within 10 s, one handshake each side, overs resume, `last_error` clear |
 | NODE1g-j | ten faults: 4 x 8 s blackout, 3 x port rebinding, 2 x address rebinding, 1 x delay 3 s | overs resume after each; at the end the central node's process pids, the `dv-edge-link` thread and fd counts are unchanged (`proc-stat`), no child restart, one session per hub, floors free, the collateral list (section 5) |
+| NODE1g-m | opt-in (`DVT_NODE1G_FOLD=<n>`, run with `--capture`): n isolated 12 s overs per direction, the WAN dark from 3 s for 20 s, nothing else on the link until the hubs have counted the over | the receiving node's room folds exactly one over and it is `end_missing` (the End and the later units were lost in the blackout); `python3 -m dvtest.node1g_capture out/<run>` then judges every window against the captured link datagrams with dv-router's rule (complete only when the End arrived outside the blackout AND no unit position is missing) and names the stream of a defect |
 | NODE1g-k | LINKOBS1 notes | `DVT_LINKOBS1=on` only: records the `dv_edge_link_*` series of both hubs and the four items below; without the switch it skips with the reason |
 
 The collateral list (section 5, "must NOT move after recovery"): handshakes `auth_replay`, `auth_capacity`, `amplification`, `bad_proof`; datagram rx `bad_tag`, `unknown_session`, `malformed`; every
@@ -84,6 +86,7 @@ fabric link to the room controller, not the node link).
 | g | FAIL (FINDING 1) | `20261123T231838Z`: address rebinding: first datagram of the hotspot from the new address 0.058 s (h2c); 3.307 s, 0.224 s, 4.914 s (c2h); the central node sent to the new address 0.007 s later each time; 2 of 3 central-to-hotspot overs cut (heard 38 percent), the one with 0.224 s survived (98 percent); first probe over after the way back 0.32 / 4.41 / 2.66 / 4.98 s |
 | h | pass | Reject{auth} rate **1.021 per second** over 110 s (112 refusals; 1.027, 1.021 and 0.998 in the other three runs), both rows `refused_key` all the time (the hotspot's `reconnecting`, the central node's `disconnected`), no session, no accepted; just after the reload the central row is `disconnected` and the hotspot still shows `connected`; key fixed: first probe over heard **7.85 s** after the fix (`20261123T231838Z`; 9.04 s, 6.11 s, 2.61 s in the other runs), one handshake each side |
 | j | pass | ten faults: central node processes 48 -> 48 pids, `dv-edge-link` threads 4 -> 4, fds 17 -> 17, no restart, `overs.C.complete` +40 and `overs.B.complete` +40 (overs resumed after every fault), one session per hub |
+| m | FAIL (FINDING 2) | `20261123T234228Z`: 8 isolated overs cut by a blackout: 6 `end_missing`, 2 `complete` (hotspot to central, link streams 2 and 3, 151 units each with no End); the capture judge agrees with the other six |
 | k | skip | `DVT_LINKOBS1=on` is not set |
 
 ## Findings
@@ -96,12 +99,24 @@ fabric link to the room controller, not the node link).
    change). The contract's "media gap at most 5 s" holds for the transport (largest first-datagram time 5.0 s, first probe over after a change within 4.98 s) but a perceivable gap above 1.6 s costs the whole
    remainder of an over. The hotspot-to-central direction is not affected (the hotspot sends continuously: first datagram 0.04 to 0.06 s after the change, the over heard 100 percent). Contract section 3 names the
    delay (the hotspot sends again within 5 s, sooner on a Demand change or StreamStart) but not the 1.6 s rule that turns it into a lost over; a hotspot datagram on receiving the first Unit that comes from a new
-   address, or a central node that also tells the hotspot, would remove it. The cases keep the contract numbers (gap 5 s, 90 percent of the over) and fail.
-2. **An over cut by a blackout is not always folded `end_missing`.** The contract says the room folds it `end_missing` (section 4); of eight such overs in four runs six were `end_missing`
-   (`20261123T225943Z`: e1 to e4, all four) and two were `complete`: e2 of `20261123T220327Z` (hotspot) and e1 of `20261123T224316Z` (central, with an early probe competing for the floor), with the same scenario
-   and the same floor release. The case asserts `end_missing` and passed in the final run; a repeat can fail. (The sum of `complete` + `end_missing` was the same, so the over was counted once, as `complete`.)
-3. Observation, no contract: with `delay 60ms 10ms` the rows count `loss_ppm` 9787 to 14610 and an over is folded `lossy` now and then (`overs.B.lossy` +1 in the final run) with no datagram dropped as replay: the
-   10 ms jitter reorders datagrams of one frame period (the loss estimate counts a gap and never subtracts a late datagram, status.md) and late units miss their place; about 1 percent of the frames were not heard.
+   address, or a central node that also tells the hotspot, would remove it. The cases keep the contract numbers (gap 5 s, 90 percent of the over) and fail. dv-router accepted it as a product defect (**LINKREBIND1**: while it receives a stream the hotspot sends a keepalive at
+   most every 1 s). `DVT_LINKREBIND1=on` (default off, a future image) makes f and g assert the post-fix numbers as well: central-to-hotspot gap below 1.2 s, every over heard at least 97 percent, no cut over in
+   any trial.
+2. **An over cut by a blackout is folded `complete` although its End never arrived (a defect by dv-router's rule: `complete` only when the End arrived AND no unit was lost).** Eight such overs in the first
+   four runs (no capture): six `end_missing`, two `complete` (e2 of `20261123T220327Z`, room B of the hotspot; e1 of `20261123T224316Z`, room C of the central node). By construction the End of a 12 s over is sent 9 s
+   into a 20 s blackout, so it cannot have crossed. Reproduced with captures in **`20261123T234228Z`** (case m, four isolated overs per direction, the receiving room's hub delta is exactly this over): hotspot to
+   central, **link stream 2 (m1) and link stream 3 (m2) folded `complete`** on the central node's room C; streams 4 and 5 (m3, m4) `end_missing`; central to hotspot four of four `end_missing`. The capture of the central
+   node for streams 2 and 3: 151 units (positions 0 to 150), none missing, the last one 0.01 s before the cut, **no StreamEnd record at all** (it is lost in the blackout; the edge ends the stream by silence), so
+   the rule says `end_missing`. `python3 -m dvtest.node1g_capture out/20261123T234228Z` prints `DEFECT` for m1 h2c and m2 h2c and `agree` for the other six. The pattern fits an edge that closes a silent stream with a
+   summary that counts every unit it got as the expected number (`lost` 0) and so makes the over `complete`; the first two overs of the run were folded that way, the later ones not. NODE1g-e1 / -e2 keep asserting
+   `end_missing` (the capture rule gives `end_missing` for them as well: End in the blackout), so a repeat of the intermittent fold fails them.
+3. Observation (case a, run `20261123T234228Z`, delay only, 10 s over each way; captures of both nodes): the 10 ms jitter reordered datagrams. The central node received 525 datagrams of which **12 arrived
+   out of order** (their session counter below the highest seen: back by up to 4 positions, late by up to 14 ms after the datagram that overtook them, 7 ms on average) and **4 of 505 units were out of order**
+   (back by up to 4 positions = 80 ms); the hotspot received 525 datagrams, 7 out of order (up to 4 back, up to 11 ms late, 3 ms on average), 2 of 505 units out of order. The counters count them late, not lost:
+   central node `dv_room_over_units_total{room=C,result=late}` +4 and `dv_edge_over_units_total{proc=link,dir=rx,result=late}` +4, lost 0, gap 0, one over `lossy`; hotspot room B late +1, edge late +1, lost 0,
+   gap 0, one over `lossy`. The late units were not played: the listeners heard 99.2 percent (4 of 500 frames missing each way). The rows' `loss_ppm` (central 22058, hotspot 13157) is the share of datagrams that arrived
+   out of order (12 / 525 = 22857 ppm, 7 / 525 = 13333 ppm): the row estimate counts a reordered datagram as a gap and never subtracts it (status.md), while the room and the edge count it late. At the hotspot the
+   numbers do not add up: 2 units out of order in the capture, 1 counted late, 4 frames missing at the listener (the central node: 4, 4, 4); the hotspot's missing frames are not all explained by its late counter.
 4. Observation: after the old key is put back on the central node the hotspot's link was up 2.61, 6.11, 7.85 and 9.04 s later (four runs): the hotspot is in an attempt that runs to its 5 s deadline or in a
    backoff of up to 6 s; the worst case of the two added is 11 s, above the 10 s used for the blackouts (the contract has no number for this case). No assertion above 10 s was needed in these runs.
 
@@ -135,6 +150,11 @@ DVT_NODE1G=on scripts/run.sh -m rig --profile twonode -- cases/test_node1g.py -r
 ```
 
 About 21 minutes (a single case: `-k node1g_c`; the cases need their own rig start of about 3 minutes). `DVT_TRANSCODER_FAKE=1` is not needed (no transcoder is involved; `transcoder-peer` starts unused).
+The investigation of FINDING 2 and the reordering of case a (about 7 minutes, with the wire check of `--capture` failing as it does for any rig with a host outside `<net>`: the hotspot's inside LAN):
+```
+... DVT_NODE1G=on DVT_NODE1G_FOLD=4 scripts/run.sh -m rig --capture --profile twonode -- cases/test_node1g.py -rA -k "node1g_a or node1g_m"
+python3 -m dvtest.node1g_capture out/<run>
+```
 Checks without a rig: `python3 -m pytest -m unit cases/unit/test_node1g_lib.py`; both configs against the image:
 `python3 -m dvtest.tools.config_check --image <image> --template rig/config/dv-router/node1g-hotspot.toml --gen compat1 --net 172.31.0 --own 16 --central-ip 172.30.0.11` (and the central node's
 template with `--extra rig/config/dv-router/node1g-central.toml`).

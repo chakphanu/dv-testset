@@ -313,6 +313,15 @@ def test_missing_run_is_the_silence_inside_one_over_with_its_lost_tail():
     assert n1.missing_run(arrivals, sent, since=45.0) == (pytest.approx(90 * 0.02), 0)   # earlier arrivals do not count when `since` is later
 
 
+def test_linkrebind1_gate_is_off_by_default_and_counters_read_the_unit_families():
+    assert not n1.linkrebind_on({}) and not n1.linkrebind_on({"DVT_NODE1G": "on"}) and n1.linkrebind_on({"DVT_LINKREBIND1": "on"})
+    assert n1.LINKREBIND_GAP_S == 1.2 and n1.LINKREBIND_SHARE == 0.97
+    text = ('dv_room_over_units_total{room="c",result="late"} 2\ndv_room_over_units_total{room="c",result="gap"} 18\n'
+            'dv_edge_over_units_total{dir="rx",proc="link",result="late"} 1\ndv_edge_over_units_total{dir="rx",proc="p25",result="gap"} 3\n')
+    c = n1.counters(text)
+    assert c["ounits.C.late"] == 2 and c["ounits.C.gap"] == 18 and c["eunits.link.rx.late"] == 1 and c["eunits.p25.rx.gap"] == 3
+
+
 def test_keybox_never_shows_the_key():
     box = n1.KeyBox("ab" * 32)
     assert box.value == "ab" * 32 and "ab" not in repr(box) and "ab" not in str(box)
