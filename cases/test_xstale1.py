@@ -34,6 +34,7 @@ pytestmark = [pytest.mark.rig]
 LOG = "xstale1.txt"
 HOLD_S = 3.0                         # after the End the endpoints stay linked: the edge folds 1.6 s later (its accounting horizon) with a listener present
 PROTOCOLS = ("usrp", "p25", "nxdn")
+WITNESS = "DVT_XSTALE1_WITNESS"      # kind of a client of ANOTHER protocol (dmr, dstar ...) linked to the room during XS1-b: a diagnosis of a fold that never comes, no verdict
 
 
 def note(target, case, tag, text):
@@ -130,14 +131,26 @@ def test_xs1_b_own_over_without_listener(edge, proto, target):
     before = xstale1.stable_baseline(read)
     snap = read.snapshot()
     a = open_endpoint(kit, 0, case)
+    w = None
+    seen = []
     try:
+        kind = os.environ.get(WITNESS, "").strip()
+        if kind:
+            w = kit.witness(target.xlxd_sut, kind)
+            if not w.link():
+                pytest.fail("%s: the %s witness cannot link to module %s" % (case, kind, kit.module))
         sent = a.burst(kit.units(xstale1.OVER_S), "b", True)
-        hold([a], HOLD_S)
+        hold([a] + ([w] if w else []), HOLD_S)
         own = a.heard()
+        seen = ["the %s witness heard %d datagrams" % (kind, w.heard())] if w else []
     finally:
-        a.close()
-    d = counted(read, before, case, 1, say, lambda: "%d units sent, the talker heard %d of itself" % (sent, own), snap)
+        for ep in (w, a):
+            if ep is not None:
+                ep.close()
+    d = counted(read, before, case, 1, say, lambda: "; ".join(["%d units sent, the talker heard %d of itself" % (sent, own)] + seen), snap)
     say("RECORD", "%d units sent, the talker heard %d of itself" % (sent, own))
+    for line in seen:
+        say("RECORD", line)
     problems = xstale1.judge_b(d, own)
     assert not problems, "%s: %s" % (case, "; ".join(problems))
 

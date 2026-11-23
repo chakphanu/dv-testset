@@ -62,6 +62,10 @@ closed the stream 1.6 s in (40 percent heard); x_stale <= 2 per case because the
 `test_p25_stream_timeout` `timeout_s` 1.6), USRP after 100 ms of ingress silence. So d) checks the observable outcome (two streams, both heard whole, two folds, no x_stale) and not the cross stream's own 1.6 s boundary;
 that boundary (1599 ms retained, 1600 ms closed, anchored to the last unit) is the Rust unit test `genuine_sixteen_hundred_ms_silence_closes_own_over`.
 
+Diagnosis switch: `DVT_XSTALE1_WITNESS=dmr` (or `dstar`, `m17`, `ysf`, `dplus`, `dcs`) links a client of that other protocol to the room of the edge for the whole of XS1-b and records how many datagrams it heard; it asserts nothing. When an edge
+never folds the over (the egress over count does not rise), the failure names what the clients heard and every series of the edge that moved (`series_diff`); the witness tells a talk that never reached the room from a room that never
+published the own copy back.
+
 ### Run
 
 Modules: A for USRP (`DVT_XSTALE1_USRP_MODULE`), P25 and NXDN by TG 31672 (`DVT_P25_TG` / `DVT_NXDN_TG`, the module follows `soak-edges.toml`: P25 G, NXDN F). No web profile, no `--capture` needed.

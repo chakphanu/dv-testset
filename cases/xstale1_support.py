@@ -139,15 +139,51 @@ class NxdnEndpoint(Endpoint):
             self.c.close()
 
 
+class WitnessEndpoint(Endpoint):
+    """A client of ANOTHER protocol (DVT_XSTALE1_WITNESS=dmr, dstar, ...) linked to the room of the edge under test for the whole case: a diagnosis, not a verdict. It
+    tells whether the talker's over reached the room at all when the edge under test never folds it (a room with only clients of one edge may publish nothing back)."""
+
+    def __init__(self, ip, kind, module):
+        self.ip, self.kind = ip, kind
+        self.c = clients.make(kind, module, 1)
+
+    def link(self):
+        if not self.c.link(self.ip):
+            return False
+        self.c.client.pump(0.3)
+        self.c.client.inbox.clear()
+        return True
+
+    def burst(self, units, seed, end=True):
+        raise NotImplementedError
+
+    def heard(self):
+        self.c.client.pump(0.02)
+        return len(self.c.client.inbox)
+
+    def pump(self, seconds):
+        self.c.client.pump(seconds)
+
+    def close(self):
+        try:
+            if self.c.dest:
+                self.c.unlink()
+        finally:
+            self.c.close()
+
+
 class Kit:
     """name: the id of the parametrization; proc: the metrics label of the edge; multiple: units of a burst are a multiple of it; slack: units a listener may
     hear beyond what was sent (the padding of a last P25 LDU of 9 records, a last NXDN packet of 4 frames)."""
 
-    def __init__(self, name, multiple, slack, make, hint=""):
-        self.name, self.proc, self.multiple, self.slack, self.make, self.hint = name, name, multiple, slack, make, hint
+    def __init__(self, name, multiple, slack, make, hint="", module="A"):
+        self.name, self.proc, self.multiple, self.slack, self.make, self.hint, self.module = name, name, multiple, slack, make, hint, module
 
     def endpoint(self, index):
         return self.make(index)
+
+    def witness(self, ip, kind):
+        return WitnessEndpoint(ip, kind, self.module)
 
     def units(self, seconds):
         return xstale1.units_for(seconds, self.multiple)
@@ -164,11 +200,13 @@ def kits(target, env=None):
         missing["usrp"] = why
     else:
         out["usrp"] = Kit("usrp", 1, 0, lambda i: UsrpEndpoint(hub, i, module),
-                          "run with DVT_USRP_DYNAMIC=1 (docs/rig.md): the dynamic USRP hub answers REG:OK")
+                          "run with DVT_USRP_DYNAMIC=1 (docs/rig.md): the dynamic USRP hub answers REG:OK", module)
     p25_tg = int(env.get("DVT_P25_TG") or TG)
     nxdn_tg = int(env.get("DVT_NXDN_TG") or TG)
     out["p25"] = Kit("p25", 9, p25.FRAMES_PER_LDU, lambda i: P25Endpoint(ip, i, p25_tg),
-                     "put rig/config/dv-router/soak-edges.toml into DVT_SUT_CONFIG_EXTRA (the SUT's own P25 server port, TG %d)" % p25_tg)
+                     "put rig/config/dv-router/soak-edges.toml into DVT_SUT_CONFIG_EXTRA (the SUT's own P25 server port, TG %d)" % p25_tg,
+                     env.get("DVT_P25_MODULE") or "G")
     out["nxdn"] = Kit("nxdn", 12, 4, lambda i: NxdnEndpoint(ip, i, nxdn_tg),
-                      "put rig/config/dv-router/soak-edges.toml into DVT_SUT_CONFIG_EXTRA (the SUT's own NXDN server port, TG %d)" % nxdn_tg)
+                      "put rig/config/dv-router/soak-edges.toml into DVT_SUT_CONFIG_EXTRA (the SUT's own NXDN server port, TG %d)" % nxdn_tg,
+                      env.get("DVT_NXDN_MODULE") or "F")
     return out, missing
