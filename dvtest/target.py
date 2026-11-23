@@ -135,6 +135,10 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
   DVT_BUNDLEFILL1    on: BUNDLEFILL1 (a bundled egress fills a missing unit and still sends its native frame at its own position and time): run.sh adds bundlefill1-edges.toml (SUT P25 / NXDN
                      ports for module L) and cases/test_rfpos1c.py also runs a YSF, a P25 and an NXDN listener of module L and asserts that the frame of the lost unit is carried, the others
                      at their positions, egress dropped +0 and tx lost +0 (docs/rfpos1c-cases.md); needs DVT_RFPOS1C=on; unset: those listeners do not run
+  DVT_ASLDROP1       on: ASLDROP1 (DV-Router image wip-42d5473): the AllStar edge counts a refused voice packet once in dv_edge_over_units_total{dir=rx,result=late} (before the over's first
+                     timestamp, more than 60 ms behind playout, or a repeat of a pending position); cases/test_asldrop1.py sends one mini frame 110 ms late (not heard, rx late +1), one 30 ms
+                     late (heard at its own position, +0) and a mini stamped before the first packet (rx late +1), nothing else moving (docs/asldrop1-cases.md); with --profile asl-edge, run.sh
+                     adds rfpos1c-usrp.toml; off or unset: the cases skip naming this switch
   DVT_MEDLOAD1       on: MEDLOAD1 (DV-Router fb6a2a51 .. 28fc1838, image wip-f1f3777): cases/test_medload1.py sends overs with controlled drops, a late frame, a duplicate and a counter wrap and
                      compares the per-over gap / lost / late counts of the hub (dv_edge_over_units_total, dv_room_over_units_total, dv_room_overs_total) with the edge's rule, plus the S7 analogue
                      (five rounds under busy loops, DVT_MEDLOAD1_BURN processes, default 16); off or unset: the cases skip naming this switch (docs/medload1-cases.md)

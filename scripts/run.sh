@@ -42,7 +42,8 @@
 #                      The tester gets DVT_ASL_EDGE=on. Select with -m asl_lab; docs/asl-edge-results.md
 #                      DVT_RFPOS1C=on (RFPOS1 step C, cases/test_rfpos1c.py, docs/rfpos1c-cases.md) also adds
 #                      rig/config/dv-router/rfpos1c-usrp.toml: a static USRP row on module L, the tester as its peer;
-#                      DVT_BUNDLEFILL1=on also adds bundlefill1-edges.toml (P25 and NXDN ports serving module L)
+#                      DVT_BUNDLEFILL1=on also adds bundlefill1-edges.toml (P25 and NXDN ports serving module L);
+#                      DVT_ASLDROP1=on (cases/test_asldrop1.py, docs/asldrop1-cases.md) adds the same USRP row
 #                      DVT_ASL_EDGE_NAT=1 adds the profile asl-nat: service asl-nat-a (the image of the NAT profile) shares
 #                      asl-a's namespace and holds one SNAT rule for its IAX2 socket towards the edge (case T5n,
 #                      docs/asl-lab.md "T5n"; alias address .46, control tcp <net>.42:9101, tester only)
@@ -367,8 +368,9 @@ if [ "$has_asl_edge" = 1 ]; then
   if [ "${DVT_ASL_EDGE_REG:-}" = 1 ]; then
     DVT_SUT_CONFIG_EXTRA="$DVT_SUT_CONFIG_EXTRA:rig/config/dv-router/allstar-lab-reg.toml"
   fi
-  # DVT_RFPOS1C=on (cases/test_rfpos1c.py, docs/rfpos1c-cases.md): a static USRP row on the edge's module L, the tester as its peer
-  if [ "${DVT_RFPOS1C:-}" = on ]; then
+  # DVT_RFPOS1C=on (cases/test_rfpos1c.py, docs/rfpos1c-cases.md) or DVT_ASLDROP1=on (cases/test_asldrop1.py, docs/asldrop1-cases.md): a static USRP
+  # row on the edge's module L, the tester as its peer
+  if [ "${DVT_RFPOS1C:-}" = on ] || [ "${DVT_ASLDROP1:-}" = on ]; then
     DVT_SUT_CONFIG_EXTRA="$DVT_SUT_CONFIG_EXTRA:rig/config/dv-router/rfpos1c-usrp.toml"
   fi
   # DVT_BUNDLEFILL1=on (the YSF, P25 and NXDN listeners of cases/test_rfpos1c.py): the SUT's P25 (41000) and NXDN (41400) ports serve module L

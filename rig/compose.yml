@@ -605,6 +605,8 @@ services:
       DVT_RFPOS1C: ${DVT_RFPOS1C:-}
       # on for DV-Router BUNDLEFILL1 (a bundled egress fills a missing unit and still sends the native frame): the YSF, P25 and NXDN listeners of cases/test_rfpos1c.py (docs/rfpos1c-cases.md; run.sh adds bundlefill1-edges.toml under --profile asl-edge); without it those listeners do not run
       DVT_BUNDLEFILL1: ${DVT_BUNDLEFILL1:-}
+      # on for DV-Router ASLDROP1 (image dv-router:wip-42d5473): cases/test_asldrop1.py (docs/asldrop1-cases.md; needs --profile asl-edge, run.sh adds rfpos1c-usrp.toml); the cases skip with a reason without it
+      DVT_ASLDROP1: ${DVT_ASLDROP1:-}
       # on for DV-Router MEDLOAD1 (fb6a2a51 .. 28fc1838, image dv-router:wip-f1f3777): cases/test_medload1.py (docs/medload1-cases.md); DVT_MEDLOAD1_BURN: busy-loop processes of the S7 analogue
       DVT_MEDLOAD1: ${DVT_MEDLOAD1:-}
       DVT_MEDLOAD1_BURN: ${DVT_MEDLOAD1_BURN:-}

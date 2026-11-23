@@ -296,6 +296,14 @@ class Client:
             self.socket.sendto(struct.pack("!HH", self.local, self.voice_timestamp & 0xffff) + network, self.peer)
             self.voice_log.append((self.voice_timestamp, "mini"))
 
+    def voice_at(self, timestamp, pcm, kind="late"):
+        """Send one mini voice frame with an explicit 32-bit call timestamp (only its low 16 bits travel), whatever the call clock is: a frame
+        delayed on the way (the timestamp of its own slot, sent after its successors) or a frame stamped before the first of the over. The call clock
+        is not touched; logged in `voice_log` as (timestamp, kind)."""
+        network = swap_pcm(pcm) if self.codec == SLIN else pcm
+        self.socket.sendto(struct.pack("!HH", self.local, timestamp & 0xffff) + network, self.peer)
+        self.voice_log.append((timestamp & 0xffffffff, kind))
+
     def ping(self):
         """IAX PING (the peer answers PONG)."""
         self.send(IAX, PING)
