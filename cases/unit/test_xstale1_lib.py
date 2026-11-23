@@ -238,3 +238,10 @@ def test_kits_follow_the_target_and_the_environment():
     assert set(table) | set(missing) == {"usrp", "p25", "nxdn"}
     assert table["p25"].units(8.0) == 396 and table["nxdn"].units(8.0) == 396 and table["p25"].slack == 9 and table["nxdn"].slack == 4
     assert all(k.proc in x.EDGES and "soak-edges" in k.hint for n, k in table.items() if n != "usrp")
+    # compose passes every unset switch to the tester as an EMPTY string: the defaults must win (the first rig run linked the USRP clients to module "" and no
+    # DTMF reached a room: no fold, nothing heard)
+    empty = {"DVT_XSTALE1_USRP_MODULE": "", "DVT_P25_TG": "", "DVT_NXDN_TG": "", "DVT_P25_MODULE": "", "DVT_NXDN_MODULE": ""}
+    table, _missing = xs.kits(SimpleNamespace(xlxd_sut="192.0.2.1", sut_profile="dvrouter"), env=empty)
+    assert table["p25"].module == "G" and table["nxdn"].module == "F"
+    assert table["usrp"].module == "A"
+    assert xs.kits(SimpleNamespace(xlxd_sut="192.0.2.1", sut_profile="dvrouter"), env={"DVT_XSTALE1_USRP_MODULE": "b"})[0]["usrp"].module == "B"

@@ -195,7 +195,7 @@ def kits(target, env=None):
     ip = target.xlxd_sut
     out, missing = {}, {}
     hub, why = usrp_hub(target)
-    module = env.get("DVT_XSTALE1_USRP_MODULE", USRP_MODULE)
+    module = (env.get("DVT_XSTALE1_USRP_MODULE") or USRP_MODULE).strip().upper()[:1] or USRP_MODULE   # compose passes an unset switch as ""
     if hub is None:
         missing["usrp"] = why
     else:
