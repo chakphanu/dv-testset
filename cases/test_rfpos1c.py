@@ -25,8 +25,10 @@ sends the native frame at its own position and time; egress `dropped` and `tx lo
 (frame of 5 units, FN), P25 (LDU of 9, record types 0x62..0x73) and NXDN (frame of 4, SACCH structure 3..0), served by bundlefill1-edges.toml (P25 41000, NXDN 41400,
 TG 31672 -> L). Their units are placed by the native counter (rfpos1c.cyclic_positions), never by arrival order, and compared with what the same listener
 received at that position in the control (case a): position 40 must hold a fill, every other position its control frame, the native frame of position 40 must
-be present, and no native frame may be further from its own time than in the control (+40 ms). Without the switch these listeners do not run. DMR asserts the same
-(burst B present with frames 39 and 41, slot 40 a fill, burst times) and `dropped` +0 on every egress.
+be present, and the timing contract of dv-router holds against the control (rfpos1c.lateness): the AllStar edge holds the unit after the lost one until its 60 ms late
+window gives up on it, so the native frame that carries the fill is at most 80 ms over the control, the next native frame and every later one within 20 ms (a lateness
+of more than that, or a lasting drift, is a defect). Without the switch these listeners do not run. DMR asserts the same (burst B present with frames 39 and 41,
+slot 40 a fill, the same timing contract) and `dropped` +0 on every egress. A run directory can be re-judged offline: python3 -m dvtest.rfpos1c out/<run>.
 
 Judged apart, so a failure names its owner: "harness" (the hole did not arrive at the edge as planned, a listener heard nothing, an egress edge never
 folded the over), "usrp" (the control listener), "dstar", "dmr", "counters". Numbers go to stdout and out/<run>/rfpos1c.txt (RECORD / FINDING) and, per
@@ -61,6 +63,7 @@ GAP_S = 4.0                 # between two overs
 RESULTS = {}
 REF = {}                    # the control's frame of every position per bundled listener kind (case a), the loss cases compare with it
 DEV = {}                    # the control's own timing deviation (ms) per listener kind
+CTRL = {}                   # the control's send time (ms after the first datagram) of every position per listener kind (rfpos1c.offsets), for the lateness contract
 
 
 def note(lab, case, tag, text):
@@ -288,6 +291,29 @@ def fill_text(bursts, dropped, per):
     return bursts[dropped // per][dropped % per].hex()
 
 
+def timing_verdict(lab, case, kind, name, off, dropped, problems):
+    """The timing contract of a bundled egress against the control (dv-router: the AllStar edge holds the unit after the lost one until its 60 ms late window gives
+    up, so the native frame that carries the fill is at most 80 ms over the control, the next one and every later one within 20 ms). The first control over
+    (case a) is the reference; a second control (case d) gets the same numbers as the measuring noise, not judged. Returns the numbers (or None for a control
+    that is the reference); a defect is appended to `problems`."""
+    if dropped is None:
+        if kind not in CTRL:
+            CTRL[kind] = off
+            return None
+        numbers = rfpos1c.lateness(CTRL[kind], off, kind)
+        note(lab, case, "RECORD", "%s lateness against the first control (measuring noise, not judged): fill frame %s ms, next %s ms, later max %s ms" % (
+            name, numbers["fill_ms"], numbers["next_ms"], numbers["after_max_ms"]))
+        return numbers
+    if kind not in CTRL or not off:
+        problems["harness"].append("%s: no control timing to judge the lateness against (case a did not give one)" % name)
+        return None
+    numbers = rfpos1c.lateness(CTRL[kind], off, kind)
+    problems[kind if kind in problems else "dmr"] += rfpos1c.judge_lateness(name, numbers)
+    note(lab, case, "RECORD", "%s lateness against the control: fill frame %s ms (limit %.0f), next frame %s ms (limit %.0f), later max %s ms (limit %.0f)" % (
+        name, numbers["fill_ms"], rfpos1c.FILL_MAX_MS, numbers["next_ms"], rfpos1c.RECOVER_MAX_MS, numbers["after_max_ms"], rfpos1c.RECOVER_MAX_MS))
+    return numbers
+
+
 def judge_bundled(lab, case, kind, bundle, dropped, problems):
     """Judge one YSF / P25 / NXDN listener (DVT_BUNDLEFILL1): units by counter position, content against the control's reference, the native frame of
     the lost unit present at its own position and time, the other units at their own positions. Problems go to problems[kind]; returns the facts."""
@@ -328,7 +354,7 @@ def judge_bundled(lab, case, kind, bundle, dropped, problems):
             else:
                 facts["dropped_slot"] = "the frame of position %d (a copy, not a fill): %s" % (slots[dropped], units[dropped].hex())
             facts["runs"] = rfpos1c.runs(slots)
-    out += rfpos1c.judge_timing(name, dev, DEV.get(kind, 0.0))
+    facts["lateness"] = timing_verdict(lab, case, kind, name, rfpos1c.offsets(bundle["times"], positions), dropped, problems)
     note(lab, case, "RECORD", "%s: %d native frames, %d units, positions %s, %s; timing deviation %s ms (control %s); lost unit's slot: %s" % (
         name, len(positions), len(units), "%s..%s" % (min(positions), max(positions)) if positions else None, facts.get("runs", "control"), dev,
         DEV.get(kind), facts["dropped_slot"]))
@@ -364,7 +390,10 @@ def judge(lab, case, frames, out, dropped, full=None):
     problems["dstar"] = rfpos1c.judge_slots("D-STAR", d_slots, COUNT, dropped)
     problems["dmr"] = rfpos1c.judge_dmr(m_slots, COUNT, dropped)
     dmr_dev = rfpos1c.timing_dev_ms(out["dmr_times"], rfpos1c.dmr_native_positions(out["dmr_datagrams"]), rfpos1c.DMR_NATIVE_MS)
-    problems["dmr"] += rfpos1c.judge_timing("DMR", dmr_dev, 0.0)
+    dmr_off = rfpos1c.offsets(out["dmr_times"], rfpos1c.dmr_native_positions(out["dmr_datagrams"]))
+    if dropped is None:
+        problems["dmr"] += rfpos1c.judge_timing("DMR", dmr_dev, 0.0)             # a control: the bursts are on their own times
+    dmr_late = timing_verdict(lab, case, "dmr", "DMR", dmr_off, dropped, problems)
     bundle_facts = {}
     for kind in out["kinds"]:
         bundle_facts[kind] = judge_bundled(lab, case, kind, out["bundles"][kind], dropped, problems)
@@ -392,7 +421,7 @@ def judge(lab, case, frames, out, dropped, full=None):
         "dropped_index": dropped, "full_frame_index": full, "count": COUNT,
         "capture_voice_frames": len(out["stamps"]), "capture_timestamp_holes": holes,
         "dstar": {"frames": len(d_slots), "missing_positions": absent["dstar"], "runs": rfpos1c.runs(d_slots)},
-        "dmr": {"frames": len(m_slots), "bursts": len(out["dmr_bursts"]), "seq_skips": rfpos1c.seq_gaps(out["dmr_seqs"]), "timing_dev_ms": dmr_dev,
+        "dmr": {"frames": len(m_slots), "bursts": len(out["dmr_bursts"]), "seq_skips": rfpos1c.seq_gaps(out["dmr_seqs"]), "timing_dev_ms": dmr_dev, "lateness": dmr_late,
                 "fill": fill_text(out["dmr_bursts"], dropped, 3), "missing_slots": absent["dmr"], "runs": rfpos1c.runs(m_slots), "fill_at_dropped": (
             None if dropped is None or dropped not in m_slots else m_slots[dropped])},
         "usrp": {"packets": len(out["usrp_rows"]), "frames_not_heard": absent["usrp"], "arrival_order": rfpos1c.runs(dict(enumerate(u_matched))), **usrp_facts,

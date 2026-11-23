@@ -379,6 +379,121 @@ def timing_dev_ms(times, positions, native_ms):
     return round(max(abs((t - times[0]) * 1000.0 - (p - positions[0]) * native_ms) for t, p in zip(times, positions)), 1)
 
 
+# ---------------------------------------------------------------- lateness against the control (dv-router's contract for the bundled egresses)
+#
+# The AllStar edge holds the unit after a lost one until its 60 ms late window gives up on the lost unit, so the native frame that carries the fill cannot leave
+# earlier than 60 ms + one unit (20 ms) after its position; the frames after it recover. Per bundled protocol (DMR burst, YSF frame, NXDN frame, P25 LDU), each
+# measured as the send time of the native frame (a P25 LDU: its latest record) relative to the first datagram of the over, minus the same time in the control:
+#   (1) the native frame that carries the fill is at most FILL_MAX_MS over the control
+#   (2) the next native frame is back within RECOVER_MAX_MS of the control
+#   (3) every later native frame up to the end of the over is within RECOVER_MAX_MS of the control
+FILL_MAX_MS = 80.0                  # 60 ms late window + one unit of 20 ms
+RECOVER_MAX_MS = 20.0
+DMR_SPORT = 62030                   # the DMR edge's source port in the tap capture (the server port of the other three is BUNDLED[kind]["port"])
+P25_LDU = 9                         # records of a P25 LDU: the native frame of the P25 listener, whose positions are single records
+
+
+def offsets(times, positions):
+    """{position: ms after the first datagram of the over} of the datagrams of one listener (the first datagram of a position wins). Empty when the counts disagree."""
+    if len(times) != len(positions) or not times:
+        return {}
+    out = {}
+    for t, p in zip(times, positions):
+        out.setdefault(p, (t - times[0]) * 1000.0)
+    return out
+
+
+def lateness(control, loss, kind, dropped=DROP, count=COUNT):
+    """How late each native frame of a loss over is against the control's, as numbers (ms, None when not measurable): `fill_ms` the native frame that carries the
+    lost unit, `next_ms` the next native frame, `after_max_ms` the worst of every later one up to the end of the over. `control` and `loss` are offsets() of the
+    same listener. A P25 position is one record (one unit) and its native frame is the LDU of 9 records, valued by its latest record; for DMR, YSF and NXDN a
+    position is the native frame itself (`per` units)."""
+    if kind == "p25":
+        units, frame_of = P25_LDU, lambda pos: pos // P25_LDU
+    else:
+        units = BUNDLED[kind]["per"] if kind in BUNDLED else 3
+        frame_of = lambda pos: pos                                  # noqa: E731
+    last = (count - 1) // units
+    worst = {}
+    for pos, t in loss.items():
+        frame = frame_of(pos)
+        if pos in control and frame <= last:
+            worst[frame] = max(worst.get(frame, float("-inf")), t - control[pos])
+    fill = dropped // units
+    later = [v for frame, v in worst.items() if frame > fill + 1]
+
+    def rounded(v):
+        return None if v is None else round(v, 1)
+
+    return {"fill_ms": rounded(worst.get(fill)), "next_ms": rounded(worst.get(fill + 1)), "after_max_ms": rounded(max(later)) if later else None,
+            "native_frames": len(worst)}
+
+
+def judge_lateness(name, numbers):
+    """Judge lateness(): the fill frame at most FILL_MAX_MS over the control, the next frame and every later one within RECOVER_MAX_MS. More than that is a
+    defect (a lasting drift is one even when the fill frame is on time). A list of sentences."""
+    out = []
+    if numbers["fill_ms"] is None:
+        return ["%s: no timing of the native frame that carries the lost unit (not sent, or the capture and the listener disagree)" % name]
+    if numbers["fill_ms"] > FILL_MAX_MS:
+        out.append("%s: the native frame that carries the fill is %.1f ms over the control, more than %.0f ms (60 ms late window + one unit)" % (name, numbers["fill_ms"], FILL_MAX_MS))
+    if numbers["next_ms"] is None:
+        out.append("%s: no native frame after the one that carries the fill" % name)
+    elif numbers["next_ms"] > RECOVER_MAX_MS:
+        out.append("%s: the next native frame is %.1f ms over the control, more than %.0f ms: no recovery" % (name, numbers["next_ms"], RECOVER_MAX_MS))
+    if numbers["after_max_ms"] is not None and numbers["after_max_ms"] > RECOVER_MAX_MS:
+        out.append("%s: a later native frame is %.1f ms over the control (more than %.0f ms): a lasting drift" % (name, numbers["after_max_ms"], RECOVER_MAX_MS))
+    return out
+
+
+def capture_offsets(path, edge_ip, kind):
+    """offsets() of the voice datagrams of `kind` ("dmr", "ysf", "p25", "nxdn") the edge sent in its tap capture `path` (the edge's source port names the protocol)."""
+    from dvtest import pcap
+    sport = DMR_SPORT if kind == "dmr" else BUNDLED[kind]["port"]
+    datagrams = [(dg.ts, bytes(dg.payload)) for dg in pcap.udp_datagrams(path) if dg.src == edge_ip and dg.sport == sport]
+    if kind == "dmr":
+        voice = [(t, d) for t, d in datagrams if dmr.is_voice(d)]
+        return offsets([t for t, _d in voice], dmr_native_positions([d for _t, d in voice]))
+    voice = [(t, d) for t, d in datagrams if native_rows(kind, [d])]
+    return offsets([t for t, _d in voice], native_units(kind, [d for _t, d in voice])[1])
+
+
+def rejudge_run(run_dir, edge_ip="172.30.0.11", loss=("b", "c"), control="a", noise="d"):
+    """Re-judge the timing of a run directory of cases/test_rfpos1c.py from its tap captures (asl-lab/rfpos1c-<case>/edge.pcap): per case in `loss` and per protocol
+    the lateness() numbers against the control `control` with their verdict, and for the second control `noise` the same numbers (the measuring noise: it has no
+    lost unit, the numbers are taken at the same positions). Returns {case: {kind: {numbers..., "problems": [...]}}}; a protocol with no voice in the
+    control is left out."""
+    from pathlib import Path
+    root = Path(run_dir) / "asl-lab"
+    kinds = ["dmr"] + list(BUNDLED)
+    ctrl = {k: capture_offsets(root / ("rfpos1c-%s" % control) / "edge.pcap", edge_ip, k) for k in kinds}
+    out = {}
+    for case in tuple(loss) + (noise,):
+        path = root / ("rfpos1c-%s" % case) / "edge.pcap"
+        if not path.exists():
+            continue
+        out[case] = {}
+        for kind in kinds:
+            if not ctrl[kind]:
+                continue
+            numbers = lateness(ctrl[kind], capture_offsets(path, edge_ip, kind), kind)
+            numbers["problems"] = [] if case == noise else judge_lateness(BUNDLED[kind]["name"] if kind in BUNDLED else "DMR", numbers)
+            out[case][kind] = numbers
+    return out
+
+
+def main(argv=None):
+    import json
+    import sys
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv or argv[0] in ("-h", "--help"):
+        print("usage: python3 -m dvtest.rfpos1c <out/run dir> [edge ip]  (re-judge the timing of cases b and c of a test_rfpos1c.py run from its tap captures)")
+        return 2
+    result = rejudge_run(argv[0], argv[1] if len(argv) > 1 else "172.30.0.11")
+    print(json.dumps(result, indent=1, sort_keys=True))
+    return 1 if any(n["problems"] for kinds in result.values() for n in kinds.values()) else 0
+
+
 def judge_timing(name, dev_ms, control_ms=0.0, slack=TIMING_SLACK_MS):
     """Timing verdict: `dev_ms` (timing_dev_ms) must not exceed `control_ms` (the control's own deviation; 0 for DMR) by more than `slack`. A list."""
     if dev_ms is None:
@@ -506,3 +621,7 @@ def rx_gaps(samples):
 def dstar_rows(datagrams):
     """[(position, frame9)] of a D-STAR listener's inbox (rfpos1.dstar_voice, counters unwrapped) and the repeat count."""
     return rfpos1.dstar_voice(list(datagrams))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

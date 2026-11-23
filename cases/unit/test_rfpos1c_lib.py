@@ -349,3 +349,79 @@ def test_an_absent_unit_without_fill_is_named():
     slots = {p: p for p in range(90) if p != 40}
     problems = rfpos1c.judge_native("P25", slots, 90, 40, 9)
     assert len(problems) == 1 and "slot (position 40) was not sent at all (no fill" in problems[0]
+
+
+# ---------------------------------------------------------------- the lateness contract of the bundled egresses
+
+def test_lateness_numbers_and_verdicts():
+    # DMR: 30 bursts of 60 ms; the burst that carries the fill (13) leaves 40 ms late, the rest on time
+    ctrl = {n: n * 60.0 for n in range(30)}
+    loss = dict(ctrl)
+    loss[13] += 40.0
+    numbers = rfpos1c.lateness(ctrl, loss, "dmr")
+    assert numbers["fill_ms"] == 40.0 and numbers["next_ms"] == 0.0 and numbers["after_max_ms"] == 0.0 and numbers["native_frames"] == 30
+    assert rfpos1c.judge_lateness("DMR", numbers) == []
+    # more than 80 ms on the fill frame, no recovery, a lasting drift: each is a defect
+    late = dict(ctrl)
+    late[13] += 81.0
+    assert "more than 80 ms" in rfpos1c.judge_lateness("DMR", rfpos1c.lateness(ctrl, late, "dmr"))[0]
+    slow = dict(ctrl)
+    slow.update({n: ctrl[n] + 30.0 for n in range(14, 30)})
+    problems = rfpos1c.judge_lateness("DMR", rfpos1c.lateness(ctrl, slow, "dmr"))
+    assert len(problems) == 2 and "no recovery" in problems[0] and "lasting drift" in problems[1]
+    drift = dict(ctrl)
+    drift[25] += 25.0
+    assert rfpos1c.judge_lateness("DMR", rfpos1c.lateness(ctrl, drift, "dmr")) == ["DMR: a later native frame is 25.0 ms over the control (more than 20 ms): a lasting drift"]
+    # exactly the limits pass
+    edge = dict(ctrl)
+    edge[13] += 80.0
+    edge[14] += 20.0
+    edge[29] += 20.0
+    assert rfpos1c.judge_lateness("DMR", rfpos1c.lateness(ctrl, edge, "dmr")) == []
+    # a protocol whose fill frame is on time passes with a negative lateness
+    assert rfpos1c.judge_lateness("YSF", {"fill_ms": -0.9, "next_ms": -0.9, "after_max_ms": -0.5}) == []
+    assert "not sent" in rfpos1c.judge_lateness("DMR", {"fill_ms": None, "next_ms": None, "after_max_ms": None})[0]
+    assert "no native frame after" in rfpos1c.judge_lateness("DMR", {"fill_ms": 10.0, "next_ms": None, "after_max_ms": None})[0]
+
+
+def test_lateness_of_p25_is_per_ldu_by_the_latest_record():
+    ctrl = {p: p * 20.0 for p in range(90)}
+    loss = dict(ctrl)
+    for p in range(40, 45):
+        loss[p] += 59.0                                       # records 40..44 held until the late window gave up on 40
+    numbers = rfpos1c.lateness(ctrl, loss, "p25")
+    assert numbers == {"fill_ms": 59.0, "next_ms": 0.0, "after_max_ms": 0.0, "native_frames": 10}
+    assert rfpos1c.judge_lateness("P25", numbers) == []
+    loss[47] += 21.0                                          # a record of the next LDU late
+    assert "no recovery" in rfpos1c.judge_lateness("P25", rfpos1c.lateness(ctrl, loss, "p25"))[0]
+    # the padded last NXDN frame is the 23rd (index 22): inside the over, counted
+    nx = {n: n * 80.0 for n in range(23)}
+    slow = dict(nx)
+    slow[22] += 500.0
+    assert rfpos1c.lateness(nx, slow, "nxdn")["after_max_ms"] == 500.0 and rfpos1c.lateness(nx, slow, "nxdn")["native_frames"] == 23
+
+
+def test_rejudge_run_from_captures(tmp_path):
+    from dvtest import pcap
+    from dvtest.proto import dmr
+    edge, tester = "172.30.0.11", "172.30.0.30"
+    frames = [bytes([i + 1]) * 9 for i in range(90)]
+    packets, _ = dmr.voice_packets(frames, 1023007, 4012, 0x1234)
+
+    def capture(case, late):
+        rows = [(100.0 + n * 0.060 + late.get(n, 0.0) / 1000.0, pcap.ethernet_udp(edge, rfpos1c.DMR_SPORT, tester, 40000, bytes(p))) for n, p in enumerate(packets)]
+        rows.append((99.0, pcap.ethernet_udp(edge, rfpos1c.DMR_SPORT, tester, 40000, b"RPTACK")))                      # not voice
+        rows.append((100.5, pcap.ethernet_udp("172.30.0.99", rfpos1c.DMR_SPORT, tester, 40000, bytes(packets[3]))))    # another source
+        path = tmp_path / "asl-lab" / ("rfpos1c-%s" % case) / "edge.pcap"
+        path.parent.mkdir(parents=True)
+        pcap.write(path, sorted(rows, key=lambda r: r[0]), "pcap", "<")
+
+    capture("a", {})
+    capture("b", {13: 41.0})
+    capture("c", {13: 41.0, **{n: 45.0 for n in range(14, 30)}})                                                       # a lasting drift
+    capture("d", {})
+    result = rfpos1c.rejudge_run(tmp_path, edge)
+    assert sorted(result) == ["b", "c", "d"] and sorted(result["b"]) == ["dmr"]
+    assert result["b"]["dmr"]["fill_ms"] == pytest.approx(41.0, abs=0.01) and result["b"]["dmr"]["problems"] == []
+    assert result["d"]["dmr"] == {"fill_ms": 0.0, "next_ms": 0.0, "after_max_ms": 0.0, "native_frames": 30, "problems": []}
+    assert len(result["c"]["dmr"]["problems"]) == 2 and rfpos1c.main([str(tmp_path), edge]) == 1

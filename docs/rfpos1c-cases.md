@@ -144,8 +144,35 @@ the file in the first run: module G, no voice at the P25 listener). Without the 
 Units are placed by that counter (`rfpos1c.cyclic_positions`: a value that does not advance starts the next cycle), never by arrival order. Content: the frames of YSF / P25 / NXDN are not
 predicted; the CONTROL over (case a, which must hold all 90 positions once each, distinct) is the reference, and a loss case compares each position with what the same listener got at that position
 in the control. Asserted in b and c, for each of DMR, YSF, P25, NXDN: every position but 40 holds its own frame; the native frame holding 40 is sent; the lost unit's slot is a fill that is neither frame 40 nor
-another position's frame (its bytes are recorded, not asserted); no native frame is more than 40 ms further from its own time than in the control (DMR: than its own position); egress `dropped` +0 on every
+another position's frame (its bytes are recorded, not asserted); the timing contract below holds; egress `dropped` +0 on every
 edge and `tx lost` +0 on YSF, P25 and NXDN (DMR, D-STAR and USRP: a rise is a FINDING).
+
+### Timing contract (dv-router, replaces the old "control + 40 ms" slack)
+
+The AllStar edge holds unit 41 until its 60 ms late window gives up on unit 40, so a native frame that carries the fill cannot leave earlier than 60 ms + one unit (20 ms)
+after its position; it is expected, not a defect. Per bundled protocol (DMR burst, YSF frame, NXDN frame, P25 LDU), cases b and c assert, against the control (case a) and
+measured as the send time of a native frame (a P25 LDU: its latest record) after the first datagram of the over minus the same time in the control (`rfpos1c.lateness`, from the
+tap capture times):
+
+1. the native frame that carries the fill is at most 80 ms over the control (`FILL_MAX_MS`);
+2. the next native frame (DMR burst C, the next YSF frame, the next NXDN frame, the next P25 LDU) is back within 20 ms of the control (`RECOVER_MAX_MS`);
+3. every later native frame up to the end of the over is within 20 ms of the control (no lasting drift).
+
+More than 80 ms or a lasting drift is a defect and is asserted. Numbers per protocol (`fill_ms`, `next_ms`, `after_max_ms`) go to the notes (`RECORD`) and to the case JSON
+(`dmr.lateness`, `bundled.<kind>.lateness`); case d (a second control) records the same numbers against case a as the measuring noise. A run directory can be re-judged offline from its
+tap captures: `python3 -m dvtest.rfpos1c out/<run>` (exit 1 on a defect).
+
+Re-judged from the saved captures of run `20261123T191840Z` (wip-42d5473, testset 6a091a3, which failed b and c on the old 40 ms slack only; the captures were enough):
+
+| ms over the control | b: fill frame / next / later max | c: fill frame / next / later max | d (noise): fill / next / later max |
+|---|---|---|---|
+| DMR | 40.8 / -0.5 / 0.8 | 41.4 / -0.2 / 1.4 | 0.1 / -1.0 / 0.4 |
+| YSF | -0.9 / -0.9 / -0.5 | -0.2 / -0.3 / 1.1 | -0.9 / -1.2 / 0.3 |
+| P25 | 59.2 / -0.4 / 0.1 | 61.0 / 1.6 / 1.8 | 0.5 / 0.8 / 0.9 |
+| NXDN | 0.7 / -0.3 / 7.4 | 1.3 / 0.9 / 1.5 | 0.3 / 0.3 / 7.8 |
+
+All within the contract (80 / 20 / 20): the lateness of the fill frame is 41 ms (DMR) and 59-61 ms (P25), recovered by the next frame; the 7.4-7.8 ms of NXDN's later max is also in the
+control pair (d against a), the padded last frame, so it is noise. YSF and NXDN send the fill frame on time.
 
 ### The before, dv-router:wip-e9fcc38 (step C, no BUNDLEFILL1)
 
