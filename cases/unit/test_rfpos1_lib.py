@@ -325,11 +325,11 @@ def test_the_two_snippets_share_the_account_and_never_use_the_xlx_modules_of_the
 def test_run_sh_wires_the_link_for_the_switch_only():
     text = (ROOT / "scripts" / "run.sh").read_text(encoding="utf-8")
     assert "rig/config/dv-router/rfpos1-link-a.toml" in text and "rig/config/dv-router/rfpos1-link-b.toml" in text
-    assert text.count("DVT_RFPOS1B") >= 4
+    assert text.count("DVT_RFPOS1B_LINK") >= 4
     compose = (ROOT / "rig" / "compose.yml").read_text(encoding="utf-8")
-    assert "link-secrets:/etc/dv-router/link-secrets:ro" in compose and "DVT_RFPOS1B: ${DVT_RFPOS1B:-}" in compose
+    assert "link-secrets:/etc/dv-router/link-secrets:ro" in compose and "DVT_RFPOS1B_LINK: ${DVT_RFPOS1B_LINK:-}" in compose
 
 
 def test_strict_switch():
-    assert rfpos1.strict_on({"DVT_RFPOS1B": "on"}) and rfpos1.strict_on({"DVT_RFPOS1B": "1"})
-    assert not rfpos1.strict_on({}) and not rfpos1.strict_on({"DVT_RFPOS1B": "off"})
+    assert rfpos1.strict_on({"DVT_RFPOS1B_LINK": "on"}) and rfpos1.strict_on({"DVT_RFPOS1B_LINK": "1"})
+    assert not rfpos1.strict_on({}) and not rfpos1.strict_on({"DVT_RFPOS1B_LINK": "off"})

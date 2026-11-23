@@ -106,7 +106,7 @@
 #                      the recorder archives are out/<utc>/recorder (SUT) and out/<utc>/recorder-peer (node 2). The
 #                      hub of node 2 is read by the control action `metrics dvr-peer`. The tester gets DVT_TWONODE=on,
 #                      DVT_DVR_PEER and DVT_DVR_PEER_TRANSCODER. Do not combine with --profile interlink.
-#                      With DVT_RFPOS1B=on (RFPOS1 step B, cases/test_rfpos1_link.py, docs/rfpos1-cases.md) the pair is also a NODE
+#                      With DVT_RFPOS1B_LINK=on (RFPOS1 step B, cases/test_rfpos1_link.py, docs/rfpos1-cases.md) the pair is also a NODE
 #                      LINK (edges.link): the SUT dials an uplink for room G at the tester (<tester>:31801, where the case runs its
 #                      relay), node 2 accepts it; run.sh adds rfpos1-link-a.toml to the SUT's extras, rfpos1-link-b.toml to node 2's
 #                      render and writes a per-run key out/<utc>/link-secrets/link.key (64 hex, mode 600, mounted read-only at
@@ -503,7 +503,7 @@ if [ "$has_twonode" = 1 ]; then
     *) DVT_SUT_CONFIG_EXTRA="${DVT_SUT_CONFIG_EXTRA:+$DVT_SUT_CONFIG_EXTRA:}rig/config/dv-router/dp15-twonode-a.toml" ;;
   esac
   # RFPOS1 step B: the node link of the pair (the uplink of the SUT; node 2's account row is added by render_dvr_peer)
-  case "${DVT_RFPOS1B:-}" in
+  case "${DVT_RFPOS1B_LINK:-}" in
     on|1|true|yes)
       case ":${DVT_SUT_CONFIG_EXTRA:-}:" in
         *:rig/config/dv-router/rfpos1-link-a.toml:*) ;;
@@ -955,7 +955,7 @@ if [ "$has_twonode" = 1 ]; then
   # the key directory of the node link (compose mounts it into dvr-peer for every twonode run); the key itself only for RFPOS1 step B
   (umask 077; mkdir -p "$out/link-secrets")
   chmod 700 "$out/link-secrets"
-  case "${DVT_RFPOS1B:-}" in
+  case "${DVT_RFPOS1B_LINK:-}" in
     on|1|true|yes)
       (umask 077; python3 -c 'import secrets; print(secrets.token_hex(32))' > "$out/link-secrets/link.key")
       chmod 600 "$out/link-secrets/link.key"
@@ -1099,7 +1099,7 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
     if [ "$svc" = xlxd-sut ] && [ "$has_recorder" = 1 ]; then
       printf '      - "%s/%s/recorder:/var/lib/dv-recorder"\n' "$DVT_ROOT" "$out"
     fi
-    # --profile twonode: the node link key directory (RFPOS1 step B; empty unless DVT_RFPOS1B=on), read-only
+    # --profile twonode: the node link key directory (RFPOS1 step B; empty unless DVT_RFPOS1B_LINK=on), read-only
     if [ "$svc" = xlxd-sut ] && [ "$has_twonode" = 1 ]; then
       printf '      - "%s/%s/link-secrets:/etc/dv-router/link-secrets:ro"\n' "$DVT_ROOT" "$out"
     fi
@@ -1116,7 +1116,7 @@ render_xlxd() {   # $1 service, $2 image, $3 own, $4 transcoder, $5 usrp, $6 nxd
 render_dvr_peer() {
   local net="${DVT_NET:-172.30.0}" cfg="$DVT_ROOT/$out/xlxd-config/dvr-peer" link_extra=()
   # RFPOS1 step B: the account row of the node link (the SUT's uplink is rfpos1-link-a.toml)
-  case "${DVT_RFPOS1B:-}" in on|1|true|yes) link_extra=(--extra rig/config/dv-router/rfpos1-link-b.toml) ;; esac
+  case "${DVT_RFPOS1B_LINK:-}" in on|1|true|yes) link_extra=(--extra rig/config/dv-router/rfpos1-link-b.toml) ;; esac
   mkdir -p "$cfg"
   python3 -m dvtest.sut_config "$DVT_SUT_CONFIG" "$cfg/dv-router.toml" --net "$net" --own 16 --transcoder 17 --tester 30 \
     --require-ident "${DVT_REQUIRE_IDENT:-true}" --dp15-tx-enable false --extra rig/config/dv-router/dp15-twonode-b.toml \

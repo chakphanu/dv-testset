@@ -32,7 +32,7 @@ import time
 
 from dvtest.proto import dextra
 
-SWITCH = "DVT_RFPOS1B"
+SWITCH = "DVT_RFPOS1B_LINK"
 LINK_PORT = 31801                  # the tester's side of the link: node 1 dials this, the relay forwards to node 2's server port
 SERVER_PORT = 31800                # edges.link.port default of node 2
 ROOM = "G"                         # the room both nodes map (an own room: no other case talks in it)
@@ -48,7 +48,7 @@ KIND_NAME = {1: "hello", 2: "challenge", 3: "auth", 4: "welcome", 5: "reject", 1
 
 
 def strict_on(environ=None):
-    """DVT_RFPOS1B=on: the image has RFPOS1 step B and the rig runs the link pair (rfpos1-link-a.toml / -b.toml, run.sh --profile twonode)."""
+    """DVT_RFPOS1B_LINK=on: the image has RFPOS1 step B and the rig runs the link pair (rfpos1-link-a.toml / -b.toml, run.sh --profile twonode)."""
     return (environ if environ is not None else os.environ).get(SWITCH, "").lower() in ("on", "1", "true", "yes")
 
 

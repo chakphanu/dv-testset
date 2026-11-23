@@ -2,9 +2,9 @@
 """RFPOS1 step B (DV-Router 47dac7b4 in image dv-router:wip-c3b24d2, code 5333e4fc): the node link edge states frame positions, so a frame lost on a
 link keeps its position through the room's transcoder. Document: link.md "Appendix A" (Units: one unit per record, `sequence` = the sender's 20 ms
 position), media-format.md "Unit granularity", floor-control.md RTS flags (RTS_FRAME_POSITIONS: a non-D-STAR link stream); docs/rfpos1-cases.md.
-Pure helpers: dvtest/rfpos1.py. Switch: DVT_RFPOS1B=on. NOT RUN on a rig: written against the sources of 47dac7b4.
+Pure helpers: dvtest/rfpos1.py. Switch: DVT_RFPOS1B_LINK=on. NOT RUN on a rig: written against the sources of 47dac7b4.
 
-The pair: node 1 = the SUT (XLX999), node 2 = dvr-peer (XLX998), profile twonode; with DVT_RFPOS1B=on scripts/run.sh also links them by a NODE LINK
+The pair: node 1 = the SUT (XLX999), node 2 = dvr-peer (XLX998), profile twonode; with DVT_RFPOS1B_LINK=on scripts/run.sh also links them by a NODE LINK
 (`[edges.link]`, rfpos1-link-a.toml / -b.toml, room G both sides; NOT the XLX interlink of DP15 7b-7d). Node 1's uplink dials the TESTER
 (<tester>:31801), where this file runs an opaque UDP relay (dvtest.rfpos1.LinkRelay) to node 2's link server. The datagrams are authenticated but not
 encrypted and the tester has no key: the relay reads the cleartext record header, forwards everything unchanged and drops exactly ONE kind-20
@@ -56,11 +56,11 @@ def note(target, case, tag, text):
 def link(rig, target):
     """The relay, with node 1's uplink through it and room G accepted for talk; skips with the reason otherwise."""
     if not rfpos1.strict_on():
-        pytest.skip("DVT_RFPOS1B=on is not set (the image has RFPOS1 step B, DV-Router 47dac7b4: dv-router:wip-c3b24d2 or later)")
+        pytest.skip("DVT_RFPOS1B_LINK=on is not set (the image has RFPOS1 step B, DV-Router 47dac7b4: dv-router:wip-c3b24d2 or later)")
     if target.sut_profile != "dvrouter" or os.environ.get("DVT_SUT_LAUNCH") != "native":
         pytest.skip("needs DVT_SUT_PROFILE=dvrouter DVT_SUT_LAUNCH=native")
     if os.environ.get("DVT_TWONODE") != "on":
-        pytest.skip("the second DV-Router node is not part of this rig: run scripts/run.sh --profile twonode with DVT_RFPOS1B=on")
+        pytest.skip("the second DV-Router node is not part of this rig: run scripts/run.sh --profile twonode with DVT_RFPOS1B_LINK=on")
     ip2 = os.environ.get("DVT_DVR_PEER", "")
     if not ip2:
         pytest.skip("DVT_DVR_PEER (the address of dvr-peer) is not set")
@@ -77,7 +77,7 @@ def link(rig, target):
     if ack is None:
         relay.stop()
         pytest.skip("the node link is not up after %.0f s (%s; records seen at the relay %s): is rfpos1-link-a.toml in the SUT's config "
-                    "(scripts/run.sh --profile twonode with DVT_RFPOS1B=on) and rfpos1-link-b.toml in dvr-peer's?" % (LINK_WAIT_S, why, seen))
+                    "(scripts/run.sh --profile twonode with DVT_RFPOS1B_LINK=on) and rfpos1-link-b.toml in dvr-peer's?" % (LINK_WAIT_S, why, seen))
     status, name = ack
     if status != 1:
         relay.stop()

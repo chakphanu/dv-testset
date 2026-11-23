@@ -829,7 +829,7 @@ a second DV-Router node next to the SUT. Nothing is built: it is the prebuilt im
   (the xlxd peer is also XLX998). Free host numbers used: `.16` and `.17` (`.12` to `.15` are the xlxd peers of `interlink`).
 * Limits: the second node has no web service (the proxy `web-proxy` forwards to `<net>.11:8081` only); the web-side observations of 7b-7d are not part of the rig (dp15-cases.md).
 * Run command: [dp15-cases.md](dp15-cases.md), "Two DV-Router nodes".
-* RFPOS1 step B (`DVT_RFPOS1B=on`): the pair is also a NODE LINK (`[edges.link]`, not the XLX interlink): `run.sh` adds `rfpos1-link-a.toml` (uplink of the SUT for room G to the TESTER at
+* RFPOS1 step B (`DVT_RFPOS1B_LINK=on`): the pair is also a NODE LINK (`[edges.link]`, not the XLX interlink): `run.sh` adds `rfpos1-link-a.toml` (uplink of the SUT for room G to the TESTER at
   `<NET>.30:31801`) to the SUT's extras and `rfpos1-link-b.toml` (the account, `talk = true`) to node 2's render, and writes a per-run key `out/<run>/link-secrets/link.key` (0600, mounted read-only at
   `/etc/dv-router/link-secrets` in both nodes; the directory is made, empty, for every twonode run). The tester runs the relay (`dvtest.rfpos1.LinkRelay`), so one datagram can be dropped black-box.
   Cases and run command: [rfpos1-cases.md](rfpos1-cases.md).

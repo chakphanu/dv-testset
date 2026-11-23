@@ -2,10 +2,10 @@
 # RFPOS1 step B cases: a frame lost on a node link keeps its position
 
 Status: written offline for the image `dv-router:wip-c3b24d2` (DV-Router code `5333e4fc`; RFPOS1 step B = `47dac7b4`). **Nothing here has run on a rig.** Case file `cases/test_rfpos1_link.py`,
-pure helpers and the link relay `dvtest/rfpos1.py`, unit tests `cases/unit/test_rfpos1_lib.py`, switch `DVT_RFPOS1B` (passed to the tester by `rig/compose.yml`, guarded by
+pure helpers and the link relay `dvtest/rfpos1.py`, unit tests `cases/unit/test_rfpos1_lib.py`, switch `DVT_RFPOS1B_LINK` (passed to the tester by `rig/compose.yml`, guarded by
 `cases/unit/test_tester_env.py`). Notes: stdout and `out/<run>/rfpos1.txt` (`RECORD`, `FINDING`).
 
-**Gate.** `DVT_RFPOS1B=on`, `--profile twonode`; without them every case skips with the reason (the module fixture `link` also skips when the node link does not come up within 150 s,
+**Gate.** `DVT_RFPOS1B_LINK=on`, `--profile twonode`; without them every case skips with the reason (the module fixture `link` also skips when the node link does not come up within 150 s,
 naming what the relay saw).
 
 ## What 47dac7b4 is (read from the sources)
@@ -30,12 +30,12 @@ The product's own test (`crates/edge/link/tests/support/frame_positions.rs`) dro
 | Need | Before | Now |
 |------|--------|-----|
 | A DV-Router pair | profile `twonode`: `xlxd-sut` (node 1, XLX999) and `dvr-peer` (node 2, XLX998, own transcoder `transcoder-peer`, the fake with `DVT_TRANSCODER_FAKE=1`) | unchanged |
-| A node link between them | NONE: the pair is an XLX interlink (`dp15-twonode-a/b.toml`), no `[edges.link]` row anywhere in `rig/config/dv-router/` | `rfpos1-link-a.toml` (node 1: uplink for room G) and `rfpos1-link-b.toml` (node 2: account, `talk = true`), added by `scripts/run.sh` under `DVT_RFPOS1B=on` |
+| A node link between them | NONE: the pair is an XLX interlink (`dp15-twonode-a/b.toml`), no `[edges.link]` row anywhere in `rig/config/dv-router/` | `rfpos1-link-a.toml` (node 1: uplink for room G) and `rfpos1-link-b.toml` (node 2: account, `talk = true`), added by `scripts/run.sh` under `DVT_RFPOS1B_LINK=on` |
 | A key | none | per-run `out/<run>/link-secrets/link.key` (64 hex, 0600), mounted read-only into both nodes at `/etc/dv-router/link-secrets`, never into the tester |
 | Dropping ONE link datagram | `--netem` / `netem-*` sidecars (profile `netem`): `tc netem` on the egress of tester / xlxd-ref / xlxd-sut and the ASL lab, random loss by percentage or burst model only; no sidecar on `dvr-peer`; it cannot pick one datagram | an opaque UDP relay in the tester (`dvtest.rfpos1.LinkRelay`): node 1's uplink dials `<tester>:31801`, the relay forwards every datagram unchanged to node 2's server `<dvr-peer>:31800` and back, and drops exactly the first client-to-server `Units` record of a given (profile, sequence). It reads only the cleartext header; the HMAC key never leaves the nodes, so every other record stays valid |
 
-Run changes (all inert unless `DVT_RFPOS1B=on`, except the always-created empty directory `out/<run>/link-secrets` and its read-only mount into `dvr-peer` / `xlxd-sut` for every `twonode` run):
-`scripts/run.sh` (the SUT extra `rfpos1-link-a.toml`, node 2's render gets `--extra rfpos1-link-b.toml`, the key, the SUT mount), `rig/compose.yml` (the `dvr-peer` mount, `DVT_RFPOS1B` for the
+Run changes (all inert unless `DVT_RFPOS1B_LINK=on`, except the always-created empty directory `out/<run>/link-secrets` and its read-only mount into `dvr-peer` / `xlxd-sut` for every `twonode` run):
+`scripts/run.sh` (the SUT extra `rfpos1-link-a.toml`, node 2's render gets `--extra rfpos1-link-b.toml`, the key, the SUT mount), `rig/compose.yml` (the `dvr-peer` mount, `DVT_RFPOS1B_LINK` for the
 tester). Room G is served by the template (A-Z) and is not in the XLX peer rows (modules DE), so there is no loop. Not run: the rendered configs were only checked by TOML parse and token
 substitution (`cases/unit/test_rfpos1_lib.py`); `python3 -m dvtest.tools.config_check --image dv-router:wip-c3b24d2 ...` on both renders is the first step of the first run.
 
@@ -54,7 +54,7 @@ The listener is a D-STAR (DExtra) client on node 2, module G. Expected units: wi
 ## Run command
 
 ```
-XLXD_SUT_IMAGE=dv-router:wip-c3b24d2 DVT_SUT_PROFILE=dvrouter DVT_SUT_LAUNCH=native DVT_SUT_GEN=compat1 DVT_SUT_CONFIG=<template> DVT_TRANSCODER_FAKE=1 DVT_RFPOS1B=on \
+XLXD_SUT_IMAGE=dv-router:wip-c3b24d2 DVT_SUT_PROFILE=dvrouter DVT_SUT_LAUNCH=native DVT_SUT_GEN=compat1 DVT_SUT_CONFIG=<template> DVT_TRANSCODER_FAKE=1 DVT_RFPOS1B_LINK=on \
 scripts/run.sh -m rig --profile twonode -- cases/test_rfpos1_link.py
 ```
 
