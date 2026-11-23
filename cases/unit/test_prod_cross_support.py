@@ -38,7 +38,7 @@ def test_good_configuration():
     assert (cfg.host, cfg.call_dstar, cfg.call_m17, cfg.module, cfg.dry) == ("HOST", "N0CALL T", "N0CALL", "E", False)
     assert cfg.ref is None and cfg.tag == "unknown"
     cfg = ps.config_from_env(dict(GOOD, DVT_PROD_CROSS_DRY="1", DVT_PROD_CROSS_REF="x.jsonl",
-                                  DVT_PROD_CROSS_TAG="vocoder-ambed:64s-pcm-688d9bf7-unity", DVT_PROD_MODULE="e"))
+                                  DVT_PROD_CROSS_TAG="ambed-image:64s-pcm-688d9bf7-unity", DVT_PROD_MODULE="e"))
     assert cfg.dry and cfg.ref == "x.jsonl" and cfg.tag == "688d9bf7-unity" and cfg.module == "E"
 
 

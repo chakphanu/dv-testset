@@ -53,8 +53,8 @@ About 10 minutes a tag (30 overs per source protocol, three source protocols, th
 The vocoder image of a run is selected by one variable, `TRANSCODER_IMAGE` (`.env.example`; `rig/compose.yml` services `transcoder-ref` and
 `transcoder-sut`). Do not set the per-side overrides `TRANSCODER_REF_IMAGE` / `TRANSCODER_SUT_IMAGE` for this case (both must run the tag, and the
 tester reads the tag for its rows from `TRANSCODER_IMAGE` through `DVT_TRANSCODER_TAG`). `VAMBED_IMAGE` is DV-Router's production compose variable
-and is not read by this repository. The tags in the local docker store: `vocoder-ambed:64s-pcm-823ce72a` (production, rollback),
-`vocoder-ambed:64s-pcm-688d9bf7-unity`, `vocoder-ambed:64s-pcm-688d9bf7-gain`; later images (49f237f0) are loaded with `docker load` first. The SUT
+and is not read by this repository. The tags in the local docker store: `ambed-image:64s-pcm-823ce72a` (production, rollback),
+`ambed-image:64s-pcm-688d9bf7-unity`, `ambed-image:64s-pcm-688d9bf7-gain`; later images (49f237f0) are loaded with `docker load` first. The SUT
 image must be the same for both runs of a comparison. Run the two tags one after the other (one rig at a time), the production tag and the candidate:
 
 ```sh
@@ -65,7 +65,7 @@ for tag in 823ce72a 688d9bf7-unity; do                  # production first, then
   # CPU of transcoder-sut for the load case (read only, docker stats); it starts when the container exists and ends 60 s after it is gone
   ( until [ -n "$(docker ps -q --filter name=dvt-transcoder-sut-1)" ]; do sleep 2; done
     scripts/transcoder-cpu-sample.sh out/voc1/cpu-$tag.txt ) &
-  TRANSCODER_IMAGE=vocoder-ambed:64s-pcm-$tag scripts/run.sh -m rig -- cases/test_transcoder_levels.py
+  TRANSCODER_IMAGE=ambed-image:64s-pcm-$tag scripts/run.sh -m rig -- cases/test_transcoder_levels.py
   run="$(ls -d out/2* | tail -1)"                       # the run just finished
   cp "$run/transcoder-levels.jsonl" out/voc1/levels-$tag.jsonl
   cp "$run/transcoder-levels-load.json" out/voc1/load-$tag.json
@@ -97,7 +97,7 @@ python3 -m dvtest.tools.voc1_rule \
 
 For a carrier image that must not change anything (the unity tag), `--identical-ok` replaces rule 3: every row, the Codec2 tones included, must equal
 production (delta within the identical tolerance, tone rms within 1 percent, all tone frames delivered). Recorded on wip-0348b98:
-`vocoder-ambed:64s-pcm-688d9bf7-unity` against `64s-pcm-823ce72a` (out 20261107T091839Z and 20261107T090732Z): rules 1, 2, 4 pass, all 9 speech pairs
+`ambed-image:64s-pcm-688d9bf7-unity` against `64s-pcm-823ce72a` (out 20261107T091839Z and 20261107T090732Z): rules 1, 2, 4 pass, all 9 speech pairs
 +0.0 dB, Codec2 tone rms 438 (m17>dmr) and 985 (m17>dstar) on both tags; with `--identical-ok` the verdict is SHIP as a carrier. Without the flag the same
 files give "DO NOT SHIP (rule 3 FAIL)" because unity carries no tone fix: rule 3 in its normal form is the acceptance of the 49f237f0 tone-fix pair.
 

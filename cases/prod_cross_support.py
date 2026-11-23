@@ -106,7 +106,7 @@ def require_module(module):
 
 
 def short_tag(tag):
-    """The image tag without repository and prefix: 'repo/vocoder-ambed:64s-pcm-688d9bf7-unity' -> '688d9bf7-unity'."""
+    """The image tag without repository and prefix: 'repo/ambed-image:64s-pcm-688d9bf7-unity' -> '688d9bf7-unity'."""
     return (tag or "").split(":")[-1].replace("64s-pcm-", "")
 
 

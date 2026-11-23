@@ -409,7 +409,7 @@ It is a rig-side pytest file (marker `rig`) that uses the rig's `transcoder-ref`
 `cases/test_transcoder_levels.py` does: the talker's PCM is encoded into the talker's codec by the local transcoder, the production
 reflector transcodes, and the listener's frames are decoded by the same local transcoder and scored (rms, active dBFS, dominant
 frequency for the tone, envelope correlation for the speech). The rig's `xlxd-sut` is not used. The production transcoder tag and the
-local one should be the same image (`vocoder-ambed:64s-pcm-688d9bf7-unity`), otherwise the reference decoder differs from the rig run.
+local one should be the same image (`ambed-image:64s-pcm-688d9bf7-unity`), otherwise the reference decoder differs from the rig run.
 
 **Echo split.** Module E replays every over to everybody on the module about a second after its end, so the listener of the other
 protocol hears the live cross-mode copy first and may hear an echo copy after it. Only the FIRST stream (it starts before the talker
@@ -452,7 +452,7 @@ python3 cases/prod_cross_support.py out/prod-cross/<stamp>/prod-cross.jsonl --re
 ```
 
 `python3 -m pytest cases/test_prod_cross.py --collect-only -q` works without a rig (the case skips without the variables).
-`DVT_PROD_CROSS_TAG` names the tag of both sides (the long form `vocoder-ambed:64s-pcm-688d9bf7-unity` is shortened); a reference
+`DVT_PROD_CROSS_TAG` names the tag of both sides (the long form `ambed-image:64s-pcm-688d9bf7-unity` is shortened); a reference
 file with one tag needs no `--tag`. Output: one JSON line per measurement in `<out>/<stamp>/prod-cross.jsonl` (keys of
 `transcoder-levels.jsonl`: `tag`, `pair`, `signal`, `in_active_dbfs`, `sent`, `got`, `rms`, `out_active_dbfs`, `delta_db`,
 `dominant`, `share`, `env_corr`, `ok`, plus `live`, `echo_overs`, `echo_frames`; `python3 -m dvtest.tools.levels_table` reads it too) and
