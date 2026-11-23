@@ -90,6 +90,12 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
                      off or unset: those cases skip naming this switch (docs/rif5-cases.md "The image wip-f1f3777")
   DVT_PORTCTL1       on: the image has DV-Router PORTCTL1 (1ea6bd00, after wip-f1f3777): after the room's timeout the same talker's repeated headers open no new RTS
                      (`over_total{dir=rx,result=rts_suppressed}`): the case RIF5-PORTCTL1 (a 191 s D-STAR RF over with repeated headers, about 4 minutes); off or unset: it skips; no other case reads it
+  DVT_SMALL5         on: the image has SMALL5 (DV-Router d09e388f, in 5333e4fc, dv-router:wip-c3b24d2): `frames_total{dir=tx,result=ok}` counts NXDN and P25 frames too, so RIF5-M1
+                     asserts its growth equals the native frames of all five modes the modem logged (unset: a FINDING, the old rule), and the reload replies must carry `truncated`
+                     (cases/test_secret_reload.py; unset: optional); docs/rfpos1b-cases.md "SMALL5"
+  DVT_RFPOS1B        on: the image has RFPOS1 step B (DV-Router 47dac7b4, in 5333e4fc): an end-hint unit no longer widens the egress width, so a YSF over ends without a false
+                     end-of-over gap or lost count on its egress edges; cases/test_rfpos1b.py asserts (YSF -> YSF, YSF -> DMR, YSF -> D-STAR; unset: records and writes FINDING
+                     lines, nothing fails); needs the MEDLOAD1 series (docs/rfpos1b-cases.md)
   DVT_XSTALE1        on: the image has XSTALE1 (DV-Router b849a082, dv-router:wip-2ec9be4): the leg-less room copy of an own talker on usrp / p25 / nxdn stays open for the over;
                      cases/test_xstale1.py asserts (own over folded clean, a same-edge joiner at 3 s hears the rest and folds as joined, real silence ends the stream) and the soak
                      judges dv_edge_drops_total{reason=x_stale} per edge (docs/xstale1-cases.md); off or unset: the cases skip, the soak records (DVT_XSTALE1_USRP_MODULE: the USRP module, A)

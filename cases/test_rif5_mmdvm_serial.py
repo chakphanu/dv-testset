@@ -1815,7 +1815,14 @@ def test_m1_counters_account_for_the_overs(ctx, web):
     by_type = Counter(ms.name_of(f.ftype) for f in written if f.ftype not in (ms.GET_STATUS, ms.GET_VERSION))
     note(ctx.target, case, "RECORD", "frames the host wrote since the baseline (status polls left out): native %d, by type %s; tallied native frames of the "
                                     "room overs %d" % (len(native), dict(by_type), TALLY["tx_native_frames"]))
-    if since is not None and grown["frames_tx_ok"] != len(native):
+    if since is not None and rif5.small5_on(os.environ):
+        # SMALL5 (DV-Router d09e388f): the counter counts NXDN and P25 frames too, so the growth is the sum over all five modes (the image before it: +1073 = D-STAR + DMR
+        # + YSF, without NXDN 55 and P25 24, rig run of wip-f1f3777). DVT_SMALL5=on asserts it; unset keeps the FINDING below.
+        by_mode = rif5.native_by_mode(written)
+        note(ctx.target, case, "RECORD", "SMALL5: native frames by mode since the baseline %s, sum %d; frames_total{dir=tx,result=ok} grew by %s" % (
+            by_mode, sum(by_mode.values()), grown["frames_tx_ok"]))
+        problems += rif5.small5_problems(grown["frames_tx_ok"], by_mode)
+    elif since is not None and grown["frames_tx_ok"] != len(native):
         note(ctx.target, case, "FINDING", "frames_total{dir=tx,result=ok} grew by %s, the modem logged %d native frames since the baseline (all types %s; the "
                                           "document: ok is byte-link acceptance)" % (grown["frames_tx_ok"], len(native), dict(by_type)))
     if grown.get("frames_rx_mode_busy") or grown.get("over_tx_mode_busy"):

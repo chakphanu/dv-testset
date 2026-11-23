@@ -585,7 +585,7 @@ def test_secreload2_preview_and_reload_apply_a_replaced_secret(target, rig_contr
     # ---- R0 the preview of an unchanged file: the shape, no_change, the ETag of the file
     assert first.status == 200, "GET config/reload answered %d: %s" % (first.status, ctx.client.scrub(first.text())[:300])
     body = jbody(first)
-    problems = sr.preview_problems(body, first.headers.get("etag"))
+    problems = sr.preview_problems(body, first.headers.get("etag"), require_truncated=sr.small5_on())
     assert not problems, "the preview of an unchanged file: %s" % "; ".join(problems)
     assert body["no_change"] is True and body["changed"] == [] and body["actions"] == [], \
         "the preview of an unchanged file lists changes: %s" % json.dumps({k: body[k] for k in ("changed", "no_change", "actions")})[:300]
@@ -603,7 +603,7 @@ def test_secreload2_preview_and_reload_apply_a_replaced_secret(target, rig_contr
     prev = reload_get(ctx)
     assert prev.status == 200, "preview after the replacement answered %d: %s" % (prev.status, ctx.client.scrub(prev.text())[:300])
     body = jbody(prev)
-    problems = sr.preview_problems(body, prev.headers.get("etag"))
+    problems = sr.preview_problems(body, prev.headers.get("etag"), require_truncated=sr.small5_on())
     assert not problems, "the preview after the replacement: %s" % "; ".join(problems)
     assert body["changed"] == [sr.RELOAD_KEY] and body["no_change"] is False, \
         "preview changed %s no_change %s, want exactly [%s] and false" % (body["changed"], body["no_change"], sr.RELOAD_KEY)
@@ -619,7 +619,7 @@ def test_secreload2_preview_and_reload_apply_a_replaced_secret(target, rig_contr
     resp = reload_post(ctx, prev.headers.get("etag"))
     assert resp.status == 200, "POST config/reload answered %d: %s" % (resp.status, ctx.client.scrub(resp.text())[:300])
     applied = jbody(resp)
-    problems = sr.applied_problems(applied, resp.headers.get("etag"))
+    problems = sr.applied_problems(applied, resp.headers.get("etag"), require_truncated=sr.small5_on())
     assert not problems, "the reload reply: %s" % "; ".join(problems)
     assert applied["changed"] == [sr.RELOAD_KEY] and applied["no_change"] is False and applied["pending_restart"] == [], \
         "reload reply changed %s no_change %s pending_restart %s" % (applied["changed"], applied["no_change"], applied["pending_restart"])
@@ -638,7 +638,7 @@ def test_secreload2_preview_and_reload_apply_a_replaced_secret(target, rig_contr
     again = reload_post(ctx, resp.headers.get("etag"))
     assert again.status == 200, "second POST answered %d: %s" % (again.status, ctx.client.scrub(again.text())[:300])
     second = jbody(again)
-    problems = sr.applied_problems(second, again.headers.get("etag"))
+    problems = sr.applied_problems(second, again.headers.get("etag"), require_truncated=sr.small5_on())
     assert not problems, "the second reload reply: %s" % "; ".join(problems)
     assert second["no_change"] is True and second["changed"] == [] and second["actions"] == [], \
         "second reload: no_change %s changed %s actions %s" % (second["no_change"], second["changed"], json.dumps(second["actions"])[:200])

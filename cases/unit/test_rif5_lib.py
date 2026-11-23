@@ -640,3 +640,41 @@ def test_damaged_dmr_copy_fails_the_colour_code_check_and_nothing_else():
     assert rf.parse_data_burst(good)["cc"] == 1
     assert rif5.dmr_damaged_copy(1023007, 4017, 15)[1:] == rf.data_burst(dmrp.full_lc(dmrp.FLCO_GROUP, 1023007, 4017), rf.DT_VOICE_LC_HEADER, 0)
     assert rif5.NATIVE_OVER_TIMEOUT_S == 0.3
+
+
+def _host_frames(**counts):
+    """HostFrame rows of the native types: counts by mode name (dstar counts a header, data and an EOT in one)."""
+    out = []
+    for mode, n in counts.items():
+        for _ in range(n):
+            out.append(ms.HostFrame(0.0, 0.0, ms.TX_TYPES[mode][0], b""))
+    return out
+
+
+def test_small5_switch_reads_the_environment():
+    assert rif5.small5_on({"DVT_SMALL5": "on"}) and rif5.small5_on({"DVT_SMALL5": " ON "})
+    assert not rif5.small5_on({}) and not rif5.small5_on({"DVT_SMALL5": "off"})
+
+
+def test_native_by_mode_counts_every_native_type_of_the_five_modes():
+    frames = _host_frames(dstar=3, dmr=5, ysf=7, nxdn=2, p25=1)
+    frames.append(ms.HostFrame(0.0, 0.0, ms.TX_TYPES["dstar"][2], b""))        # the D-STAR EOT counts
+    frames.append(ms.HostFrame(0.0, 0.0, ms.TX_TYPES["p25"][1], b""))          # a P25 LDU counts
+    frames.append(ms.HostFrame(0.0, 0.0, ms.GET_STATUS, b""))                  # a status poll does not
+    by_mode = rif5.native_by_mode(frames)
+    assert by_mode == {"dstar": 4, "dmr": 5, "ysf": 7, "p25": 2, "nxdn": 2}
+    assert set(by_mode) == set(ms.TX_TYPES)
+
+
+def test_small5_problems_is_empty_when_the_growth_is_the_sum_of_all_five_modes():
+    by_mode = rif5.native_by_mode(_host_frames(dstar=3, dmr=5, ysf=7, nxdn=2, p25=1))
+    assert rif5.small5_problems(18, by_mode) == []
+
+
+def test_small5_problems_names_the_image_before_small5():
+    by_mode = {"dstar": 500, "dmr": 400, "ysf": 173, "nxdn": 55, "p25": 24}
+    lines = rif5.small5_problems(1073, by_mode)
+    assert len(lines) == 1 and "grew by 1073" in lines[0] and "1152" in lines[0] and "before SMALL5" in lines[0]
+    other = rif5.small5_problems(1100, by_mode)
+    assert len(other) == 1 and "before SMALL5" not in other[0]
+    assert rif5.small5_problems(None, by_mode) == ["frames_total{dir=tx,result=ok} could not be read (no counters)"]

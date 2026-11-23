@@ -235,10 +235,18 @@ def read_only_reply(status, body):
 PREVIEW_KEYS = {"mode", "etag", "changed", "no_change", "actions", "warnings"}
 APPLIED_KEYS = {"status", "etag", "changed", "no_change", "inc", "gen", "actions", "pending_restart"}
 # BUD1b (docs/design/fabric.md, "Aggregated hub reply bounds"): a reload reply may carry `truncated`, an object naming the lists the
-# launcher cut ({list: {dropped?, cut?}}; empty when nothing was cut). openapi-admin.yaml ReloadPreview / ReloadApplied do not list it
-# (additionalProperties false) on bc9af2b1: an optional key here, the gap is a documentation difference, not a case failure.
+# launcher cut ({list: {dropped?, cut?}}; empty when nothing was cut). openapi-admin.yaml ReloadPreview / ReloadApplied did not list it
+# (additionalProperties false) on bc9af2b1: an optional key there, the gap was a documentation difference, not a case failure. SMALL5
+# (DV-Router d09e388f) lists it and REQUIRES it in both schemas (app_reload.rs always emits an object, {} when nothing was cut): under
+# DVT_SMALL5=on the caller passes require_truncated=True and a reply without it is a problem; unset, it stays optional (older images).
 OPTIONAL_KEYS = {"truncated"}
+ENV_SMALL5 = "DVT_SMALL5"
 RELOAD_KEY = "edges.aprsis.passcode_file"        # the dotted key name `changed` lists for the APRS-IS passcode file
+
+
+def small5_on(environ=None):
+    """DVT_SMALL5=on: the image has SMALL5 (DV-Router d09e388f or later): `truncated` is a required key of the reload replies."""
+    return str((environ if environ is not None else os.environ).get(ENV_SMALL5, "")).strip().lower() in ("on", "1", "true", "yes")
 
 
 def etag_value(header):
@@ -262,10 +270,10 @@ def weak_etag(current):
     return 'W/"%s"' % etag_value(current)
 
 
-def _truncated_problems(body):
-    """`truncated`, when present, is an object of list name -> {dropped, cut} with positive integers."""
+def _truncated_problems(body, required=False):
+    """`truncated`, when present, is an object of list name -> {dropped, cut} with positive integers; `required` (SMALL5): it must be present."""
     if "truncated" not in body:
-        return []
+        return ["truncated is missing (required by the reload schemas since SMALL5, an empty object when nothing was cut)"] if required else []
     value = body["truncated"]
     if not isinstance(value, dict):
         return ["truncated is not an object"]
@@ -282,7 +290,7 @@ def _list_of_str(value):
     return isinstance(value, list) and all(isinstance(v, str) for v in value)
 
 
-def preview_problems(body, header_etag=None):
+def preview_problems(body, header_etag=None, require_truncated=False):
     """What is wrong with a GET /config/reload 200 body (ReloadPreview: the exact keys, types, mode `preview`, and an `etag` equal to
     the ETag header when given; an empty `actions` goes with no_change true). [] when it is as specified."""
     if not isinstance(body, dict):
@@ -290,7 +298,7 @@ def preview_problems(body, header_etag=None):
     out = []
     if set(body) - OPTIONAL_KEYS != PREVIEW_KEYS:
         out.append("keys %s, want %s (and optionally %s)" % (sorted(body), sorted(PREVIEW_KEYS), sorted(OPTIONAL_KEYS)))
-    out += _truncated_problems(body)
+    out += _truncated_problems(body, require_truncated)
     if body.get("mode") != "preview":
         out.append("mode %r, want preview" % (body.get("mode"),))
     out += _common_problems(body, header_etag)
@@ -299,7 +307,7 @@ def preview_problems(body, header_etag=None):
     return out
 
 
-def applied_problems(body, header_etag=None):
+def applied_problems(body, header_etag=None, require_truncated=False):
     """The same for a POST /config/reload 200 body (ReloadApplied): status `applied`, inc and gen non-negative integers,
     pending_restart a list of strings."""
     if not isinstance(body, dict):
@@ -307,7 +315,7 @@ def applied_problems(body, header_etag=None):
     out = []
     if set(body) - OPTIONAL_KEYS != APPLIED_KEYS:
         out.append("keys %s, want %s (and optionally %s)" % (sorted(body), sorted(APPLIED_KEYS), sorted(OPTIONAL_KEYS)))
-    out += _truncated_problems(body)
+    out += _truncated_problems(body, require_truncated)
     if body.get("status") != "applied":
         out.append("status %r, want applied" % (body.get("status"),))
     for name in ("inc", "gen"):

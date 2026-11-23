@@ -302,6 +302,20 @@ def test_truncated_is_an_optional_object_of_cut_lists():
     assert any("keys" in p for p in sr.preview_problems(dict(PREVIEW_OK, other=1, truncated={})))
 
 
+def test_truncated_is_required_under_small5():
+    """SMALL5 (DV-Router d09e388f): ReloadPreview and ReloadApplied list `truncated` as required; the switch DVT_SMALL5=on makes the case ask for it."""
+    assert sr.preview_problems(PREVIEW_OK, require_truncated=False) == [] and sr.applied_problems(APPLIED_OK, require_truncated=False) == []
+    assert any("truncated is missing" in p for p in sr.preview_problems(PREVIEW_OK, require_truncated=True))
+    assert any("truncated is missing" in p for p in sr.applied_problems(APPLIED_OK, require_truncated=True))
+    assert sr.preview_problems(dict(PREVIEW_OK, truncated={}), require_truncated=True) == []
+    assert sr.applied_problems(dict(APPLIED_OK, truncated={"actions": {"cut": 2}}), require_truncated=True) == []
+    assert any("truncated[actions]" in p for p in sr.preview_problems(dict(PREVIEW_OK, truncated={"actions": {"x": 1}}), require_truncated=True))
+
+
+def test_small5_switch():
+    assert sr.small5_on({"DVT_SMALL5": "on"}) and not sr.small5_on({}) and not sr.small5_on({"DVT_SMALL5": "off"})
+
+
 def test_preview_etag_must_equal_the_header():
     assert any("ETag header" in p for p in sr.preview_problems(PREVIEW_OK, '"f-ffffffffffffffff"'))
 

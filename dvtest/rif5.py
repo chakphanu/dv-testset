@@ -61,6 +61,7 @@ ENV_FW_PROFILE = "DVT_RIF5FW_PROFILE"   # mmdvm (default) or hs: the FIFO sizes 
 ENV_FW_DELAY = "DVT_RIF5FW_TXDELAY_MS"  # the TX delay of the preamble; unset: the SET_CONFIG value of the row (0-500)
 ENV_J = "DVT_RIF5J"                     # on: the image has RIF5j (flow control, O3 frequencies, RXD silence fill): the fix-image cases run
 ENV_PORTCTL1 = "DVT_PORTCTL1"           # on: the image has PORTCTL1 (1ea6bd00, after wip-f1f3777): no new RTS for the same talker after a room timeout
+ENV_SMALL5 = "DVT_SMALL5"               # on: the image has SMALL5 (DV-Router d09e388f): frames_total{dir=tx,result=ok} counts NXDN and P25 frames too (RIF5-M1 asserts the sum)
 ENV_N = "DVT_RIF5N"                     # on: the image has RIF5d NXDN, RIF5e P25, RIF5h ride-along, RIF5k / RIF5l (dv-router:wip-f1f3777, bc9af2b1)
 
 
@@ -78,6 +79,34 @@ def j_on(environ):
 
 def n_on(environ):
     return _switch(environ, ENV_N)
+
+
+def small5_on(environ):
+    return _switch(environ, ENV_SMALL5)
+
+
+def native_by_mode(frames):
+    """{mode: number of host frames of the native voice types of that mode} over `frames` (HostFrame rows), for the five modes in TX_TYPES order; a mode
+    with none is 0. The sum is what the byte-link counter frames_total{dir=tx,result=ok} counts once it counts every mode (SMALL5, DV-Router d09e388f):
+    D-STAR header + data + EOT, DMR slot-2 bursts (repeated copies and silence fill too), YSF frames, NXDN frames, P25 header + LDU."""
+    counted = Counter(f.ftype for f in frames)
+    return {mode: sum(counted[t] for t in types) for mode, types in ms.TX_TYPES.items()}
+
+
+def small5_problems(grown, by_mode):
+    """What breaks the SMALL5 rule: the growth of frames_total{dir=tx,result=ok} over the run equals the sum of the native frames of ALL five modes the modem
+    logged in the same time (`by_mode`, native_by_mode). [] when equal; the line names the growth, the sum and the modes (a growth short by exactly the NXDN and
+    P25 frames is the image before SMALL5)."""
+    total = sum(by_mode.values())
+    if grown is None:
+        return ["frames_total{dir=tx,result=ok} could not be read (no counters)"]
+    if grown == total:
+        return []
+    short = total - grown
+    hint = ""
+    if short > 0 and short == by_mode.get("nxdn", 0) + by_mode.get("p25", 0):
+        hint = " (short by exactly the NXDN and P25 frames: the image counts D-STAR, DMR and YSF only, before SMALL5)"
+    return ["frames_total{dir=tx,result=ok} grew by %s, the modem logged %d native frames in the five modes %s%s" % (grown, total, dict(by_mode), hint)]
 
 
 def portctl1_on(environ):
