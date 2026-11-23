@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # RFPOS1 step B cases: a frame lost on a node link keeps its position
 
-Status: written offline for the image `dv-router:wip-c3b24d2` (DV-Router code `5333e4fc`; RFPOS1 step B = `47dac7b4`). **Nothing here has run on a rig.** Case file `cases/test_rfpos1_link.py`,
+Status: rig run `20261123T093254Z` (testset `08afc6e`, image `dv-router:wip-c3b24d2`, `--capture --profile twonode`, fake transcoder): **3 passed in 97 s**, dvcheck 0 errors (warnings: the PING to the stopped `transcoder-sut`, expected, and the link handshake datagrams that no protocol claims). Written offline first for the image `dv-router:wip-c3b24d2` (DV-Router code `5333e4fc`; RFPOS1 step B = `47dac7b4`). Case file `cases/test_rfpos1_link.py`,
 pure helpers and the link relay `dvtest/rfpos1.py`, unit tests `cases/unit/test_rfpos1_lib.py`, switch `DVT_RFPOS1B_LINK` (passed to the tester by `rig/compose.yml`, guarded by
 `cases/unit/test_tester_env.py`). Notes: stdout and `out/<run>/rfpos1.txt` (`RECORD`, `FINDING`).
 
@@ -25,6 +25,17 @@ room's transcoder numbered its output by arrival; after it:
 
 The product's own test (`crates/edge/link/tests/support/frame_positions.rs`) drops the record with a given wire sequence in a relay; this case does the same black-box.
 
+## Finding of the first rig run (20261123T092713Z): a node with a codec worker CARRIES the demanded profile
+
+Case b failed (`missing positions [], wanted [40]`) and the verdict is HARNESS, not product. `link.md` "Demand and transcoding": the sender always sends the source profile PLUS every profile of
+the receiver's demand set that ITS OWN room publishes (the output of its codec worker), announced in the StreamStart carried mask; the receiver publishes carried units directly and never transcodes
+them. With `transcoder-sut` running, node 1 transcoded DMR to D-STAR itself (the fake gives the same bytes as node 2's, hence "byte for byte") and sent it as a carried ambe-dstar stream: the relay
+counted 455 Units records for three overs (91 ambe2-dmr + 91 carried ambe-dstar for each of a and b, 91 for c) and the dropped ambe2-dmr record 40 was irrelevant, node 2's transcoder never saw the
+over. The XLX interlink was not involved (room G is not on it). The case therefore stops `transcoder-sut` for the module (fixture `worker_off`, dvcheck mark `ambed-fault-rfpos1b-node1-worker-off`):
+node 1 then sends the source profile only (the hotspot uplink shape; carried mask 0x0000, 91 ambe2-dmr records, none of ambe-dstar) and node 2's own transcoder makes the D-STAR output, which is the
+path RFPOS1 step B changes. The judge also refuses the over as a harness error when node 1 carried the listener's profile (`carry_problems`), instead of passing without testing anything. Not run:
+the same b with the worker ON and the drop on the carried ambe-dstar record would only repeat case c.
+
 ## What the rig has
 
 | Need | Before | Now |
@@ -47,7 +58,7 @@ The listener is a D-STAR (DExtra) client on node 2, module G. Expected units: wi
 
 | Case | Setup | Assertion |
 |------|-------|-----------|
-| RFPOS1B-a | DMR talker on node 1 module G, no loss, D-STAR listener on node 2 (ambe2-dmr to ambe-dstar in node 2's room) | link wire: every `Units` record of profile 2 holds one 9-byte unit, sequences 0..89 each once, none dropped; listener: positions 0..89 each once (counter modulo 21 unwrapped), none missing, units byte for byte with the fake |
+| RFPOS1B-a | (all three: `transcoder-sut` stopped, node 1 carries nothing) DMR talker on node 1 module G, no loss, D-STAR listener on node 2 (ambe2-dmr to ambe-dstar in node 2's room) | link wire: every `Units` record of profile 2 holds one 9-byte unit, sequences 0..89 each once, none dropped; listener: positions 0..89 each once (counter modulo 21 unwrapped), none missing, units byte for byte with the fake |
 | RFPOS1B-b | the same over, the record of sequence 40 dropped on the link | link wire: exactly that record marked dropped; listener: exactly ONE missing position and it is 40 (lost count 1), every other position 0..89 present with the unit of its own position (a shifted stream fails the byte compare), the output reaches position 89 (not truncated). The pre-RFPOS1 shape (a contiguous run 0..88, the gap at the end) fails as `missing positions [89], wanted [40]` |
 | RFPOS1B-c | D-STAR talker on node 1 module G (ambe-dstar link stream), the record of sequence 40 dropped | link wire as above with profile 1; listener: one missing position, 40, every other frame at its own position byte for byte: the D-STAR link stream behaves as before (positioned by profile) |
 
