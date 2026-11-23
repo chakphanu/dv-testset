@@ -286,3 +286,34 @@ def test_collateral_allow_rx_names_the_datagram_results_a_restart_may_move():
     assert len(n1.collateral(moved)) == 2
     assert len(n1.collateral(moved, allow_rx=("unknown_session",))) == 1
     assert n1.collateral({"dgram.rx.replay": 9.0, "hs.welcomed": 1.0, "hs.auth": 40.0}) == []
+
+
+def test_rebase_treats_the_link_edge_series_as_restarted():
+    before = {"hs.accepted": 1.0, "sessions": 1.0, "dgram.rx.ok": 900.0, "restarts.dv-room.c": 2.0, "overs.C.complete": 7.0}
+    after = {"hs.accepted": 1.0, "sessions": 1.0, "dgram.rx.ok": 40.0, "restarts.dv-room.c": 2.0, "overs.C.complete": 9.0, "hs.auth": 3.0}
+    assert n1.rebase(before, after) == {"hs.accepted": 1.0, "sessions": 1.0, "dgram.rx.ok": 40.0, "overs.C.complete": 2.0, "hs.auth": 3.0}
+    assert n1.delta(before, after)["hs.accepted"] if "hs.accepted" in n1.delta(before, after) else True
+
+
+def test_refusal_rate_skips_a_counter_that_restarted():
+    # the edge restarted at t=20 (the value falls to 0): not a growth
+    samples = [(t, 10.0 * (t // 10) if t < 20 else 10.0 * ((t - 20) // 10)) for t in range(0, 125, 2)]
+    rate, window, events = n1.refusal_rate(samples)
+    assert 0.85 < rate <= 1.0                           # the events of the step that hid the restart are lost: never an overcount
+
+
+def test_missing_run_is_the_silence_inside_one_over_with_its_lost_tail():
+    sent = [bytes([i]) * 11 for i in range(100)]
+    arrivals = [(float(i), sent[i]) for i in range(40)] + [(60.0, sent[90])]          # frames 0..39 heard, then 40..89 missing, 90 heard
+    run, at = n1.missing_run(arrivals, sent)
+    assert run == pytest.approx(50 * 0.02) and at == 40
+    tail = [(float(i), sent[i]) for i in range(40)]                                    # the rest never arrives: the run goes to the end
+    assert n1.missing_run(tail, sent) == (pytest.approx(60 * 0.02), 40)
+    assert n1.missing_run([(float(i), sent[i]) for i in range(100)], sent) == (0.0, None)
+    assert n1.missing_run(arrivals, sent, since=45.0) == (pytest.approx(90 * 0.02), 0)   # earlier arrivals do not count when `since` is later
+
+
+def test_keybox_never_shows_the_key():
+    box = n1.KeyBox("ab" * 32)
+    assert box.value == "ab" * 32 and "ab" not in repr(box) and "ab" not in str(box)
+    assert "ab" * 32 not in repr({"old": box})

@@ -1,13 +1,15 @@
 <!-- SPDX-License-Identifier: MIT -->
 # NODE1g cases: a hotspot linked to a central node over an emulated WAN
 
-Status: RESULTS_PLACEHOLDER
+Status: rig runs on image `dv-router:wip-42d5473` (`DVT_SUT_GEN=compat1`, `--profile twonode`, `DVT_NODE1G=on`): **`20261123T225943Z`: 11 passed, 2 failed (NODE1g-f and -g, FINDING 1), 1 skipped (the LINKOBS1
+note, no switch)** in 1092 s of pytest (about 21 minutes with the rig start and stop); **`20261123T231838Z`**: the cases f, g and h again after a harness fix (the row of the central node is waited for by
+address AND port): f and g fail the same way (FINDING 1), h passes. Two earlier runs (`20261123T220327Z`, `20261123T224316Z`) are what the harness was debugged with; they saw FINDING 2 once each.
 Case file `cases/test_node1g.py`, pure helpers `dvtest/node1g.py` (hub counters, refusal rate, key files, arrival evidence, the plain-HTTP admin client, the WAN router client), unit tests
 `cases/unit/test_node1g_lib.py`, switches `DVT_NODE1G` and `DVT_LINKOBS1` (documented in `dvtest/target.py`, passed to the tester by `rig/compose.yml`), templates
 `rig/config/dv-router/node1g-hotspot.toml` (complete template of the hotspot) and `node1g-central.toml` (snippet of the central node), compose `rig/compose.node1g.yml` and the services `wan-router`,
 `wan-edge`, `netem-wan` of `rig/compose.yml`. Notes: stdout and `out/<run>/node1g.txt` (`RECORD` = what was seen, `FINDING` = differs from the contract, `GAP` = could not be observed).
-The contract is dv-router's answer `answers-364-node1g.md` (section numbers below are its own: 1 protocol, 2 credential, 3 recovery bounds, 4 overs during and after faults, 5 counters, 6 open
-questions); its source references are DV-Router `docs/design/link.md` and `status.md`.
+The contract is dv-router's answer `answers-364-node1g.md` (its section numbers below: 1 protocol, 2 credential, 3 recovery bounds, 4 overs during and after faults, 5 counters, 6 open questions); its source
+references are DV-Router `docs/design/link.md` and `status.md`.
 
 **Gate.** `DVT_NODE1G=on`, `--profile twonode`, `DVT_SUT_PROFILE=dvrouter DVT_SUT_LAUNCH=native`; without them every case skips with the reason. Not with `DVT_GUARDID2`, `DVT_RFPOS1B_LINK`
 or the web, nat, interlink, asl-edge, aprs profiles (`run.sh` exits 2: the central node's admin service and state dir are its own, the NAT router is the WAN).
@@ -25,20 +27,21 @@ How a fault is made (only through the allow-listed channels, never by hand):
 |-------|-----|
 | delay, loss | control channel `netem wan <args>` (the sidecar shapes both interfaces of the router: each direction once) |
 | blackout | router control `blackhole on|off` (UDP both ways between inside and outside; the tester's LAN to the hotspot and the TCP control are untouched) |
-| NAT rebinding, new source port | router control `nat_mode symmetric` (MASQUERADE --random) and its flush of the UDP translations: the hotspot's next datagram gets a new random source port; `nat_mode port_restricted` puts it back |
+| NAT rebinding, new source port | router control `nat_mode symmetric` (MASQUERADE --random) and its flush of the UDP translations: the hotspot's next datagram gets a new random source port; `nat_mode port_restricted` puts it back (a second rebinding) |
 | NAT rebinding, new source address | router control `readdress on|off` (SNAT of the hotspot's UDP to the router's alias address `.99`, flush) |
-| rotated key | the tester replaces `hs1.key` by rename (the documented rotation, link.md) and sends `hup xlxd-sut` (control channel; SIGHUP is the documented "re-read every secret file" path) |
+| rotated key | the tester replaces `hs1.key` by rename (the documented rotation, link.md) and sends `hup xlxd-sut` (control channel; SIGHUP is the documented "re-read every secret file" path; the action exists for SECRELOAD1 and is used here as it is, no allow-list entry was added) |
 
-Evidence: media heard by P25 listeners with arrival times; the hubs' link counters (`metrics xlxd-sut` / `metrics dvr-peer`, refreshed about every 10 s: a read is taken 12 s after the last event);
-the admin API of BOTH nodes over plain HTTP (`GET /api/v1/admin/status`, `link_edges`: `state`, `rtt_ms`, `loss_ppm`, `last_error`, `ip`, `port`); the router's `mappings` (the source address and port the
-central node sees) and `firsts`. A link is "up" when an over crosses it: the arrival time of the first heard frame of a train of short probe overs (9 frames, a new unmapped radio id each so that no guard
-strike builds up, every 0.4 s) is an UPPER bound of the moment the link carried media again.
+Evidence: media heard by P25 listeners with arrival times; the hubs' link counters (`metrics xlxd-sut` / `metrics dvr-peer`, refreshed about every 10 s: a read is taken 12 s after the last event; the series
+of `dv-edge-link` restart with the process, so a case that reloads the key reads the central node's link series from the restart on, `dvtest.node1g.rebase`); the admin API of BOTH nodes over plain HTTP
+(`GET /api/v1/admin/status`, `link_edges`: `state`, `rtt_ms`, `loss_ppm`, `last_error`, `ip`, `port`); the router's `mappings` (the source address and port the central node sees) and `firsts` (the first
+datagram of each side after an address change). A link is "up" when an over crosses it: the arrival time of the first heard frame of a train of short probe overs (9 frames, a new unmapped radio id each so
+that no guard strike builds up, every 0.4 s) is an UPPER bound of the moment the link carried media again.
 
 ## Why these netem values
 
 | Setting | Value (each direction) | Why |
 |---------|------------------------|-----|
-| delay | `delay 60ms 10ms` | a consumer broadband or LTE uplink to a distant data centre: a round trip of about 120 ms (EU to US 100-150 ms). The 10 ms jitter stays below the 20 ms spacing of voice frames, so the shaper does not reorder; reordering is not what the cases test (a datagram with a counter at or below the highest is counted `replay`) |
+| delay | `delay 60ms 10ms` | a consumer broadband or LTE uplink to a distant data centre: a round trip of about 120 ms (EU to US 100-150 ms). The 10 ms jitter stays below the 20 ms spacing of voice frames, so the shaper should not reorder; reordering is not what the cases test (observed anyway, see the RECORD of NODE1g-a) |
 | loss | `loss 3%` | the order of a poor WiFi or LTE uplink (1 to 5 percent). The session ends only when NO datagram arrives for 30 s, i.e. six keepalives in a row are lost: 0.03^6 = 7e-10, so the link must stay up; units have no repair (link.md: no ARQ), so an over must be heard at 97 percent in expectation, asserted at 85 |
 
 ## Cases and contract
@@ -52,8 +55,9 @@ strike builds up, every 0.4 s) is an UPPER bound of the moment the link carried 
 | NODE1g-d | blackout of 60 s | 42 s in: rows `reconnecting` (hotspot) and `disconnected` (central) with `last_error` `timeout`, no session on either hub; after the end ONE handshake each side (`welcomed` +1, `accepted` +1), link up within 10 s, overs resume both ways, floors free, `last_error` clear |
 | NODE1g-e1 | an over of 12 s from the hotspot, the WAN dark from 3 s for 20 s | a probe over of a central talker 3.0 s after the cut is granted (floor free about 1.6 s after the last Unit, not at the 30 s expiry: section 4), `dv_room_overs_total{room=C,result=end_missing}` +1, no handshake (the session survives 20 s), overs resume both ways |
 | NODE1g-e2 | the same from the central node towards the hotspot | the probe over of a hotspot talker 3.0 s after the cut is granted, `dv_room_overs_total{room=B,result=end_missing}` +1 on the hotspot hub, no handshake, overs resume |
-| NODE1g-f | a 20 s over each way; 8 s in the NAT mapping gets a NEW SOURCE PORT | no handshake (section 3: not a new peer), the central row shows the new port (the session was moved), media gap at most 5 s (+0.2 s of measurement slack), at least 90 percent of the over heard, the router's `mappings` differ before and after |
-| NODE1g-g | the same with a NEW SOURCE ADDRESS (`readdress`) | the same; the source address differs; the router's `firsts` (first datagram of each side after the change) is recorded |
+| NODE1g-e3, e4 | e1 and e2 with two early probe overs of the talker of the receiving node (9 frames, 1.0 s and 2.0 s after the cut) | the 3.0 s probe is asserted as before; which early probe is granted narrows the release time (RECORD); how the over is folded is only recorded (a second talker competes for the floor) |
+| NODE1g-f | NAT rebinding to a NEW SOURCE PORT in the middle of one 20 s over from the hotspot and three 8 s overs from the central node (rebinding 3 s in), then the way back with a train of probe overs started at it | no handshake (section 3: not a new peer), the central row shows the new address and port, the longest silence inside each over (a lost tail counts) at most 5 s, at least 90 percent of each over heard (only the gap may be lost), the first probe over after the way back heard within 5 s |
+| NODE1g-g | the same with a NEW SOURCE ADDRESS (`readdress`) | the same; the router's `firsts`: the first datagram of the hotspot from the new address and the first datagram of the central node to it come within 5 s |
 | NODE1g-h | the central node gets a new key (rename + `hup xlxd-sut`), the hotspot keeps the old one, 120 s; then the old key is put back | Reject{auth}: central `handshakes{auth}` grows and `handshakes{accepted}` does not, no session on either hub, no over crosses, both rows show `last_error` `refused_key`, the refusal RATE (growth between the first and the last hub refresh over the time between them) at most 1.1 per second (section 2: attempts 0.5 s doubling to 5 s, +-20 percent, Auth every 0.5 s: about 1.0), no count asserted; fixed key: link up within 10 s, one handshake each side, overs resume, `last_error` clear |
 | NODE1g-j | ten faults: 4 x 8 s blackout, 3 x port rebinding, 2 x address rebinding, 1 x delay 3 s | overs resume after each; at the end the central node's process pids, the `dv-edge-link` thread and fd counts are unchanged (`proc-stat`), no child restart, one session per hub, floors free, the collateral list (section 5) |
 | NODE1g-k | LINKOBS1 notes | `DVT_LINKOBS1=on` only: records the `dv_edge_link_*` series of both hubs and the four items below; without the switch it skips with the reason |
@@ -65,13 +69,53 @@ restarts that edge twice on purpose.)
 Not asserted, on the contract's advice: whether a new handshake happened at exactly 30 s (a race, section 3); a count of refusals (a rate only, section 6 item 4); `dv_room_rts_total{result=link_down}` (that is the
 fabric link to the room controller, not the node link).
 
+## Results (run `20261123T225943Z` unless another run is named)
+
+| Case | Result | Key numbers |
+|------|--------|-------------|
+| 0 | pass | both rows connected, the central node sees the hotspot at `172.30.0.98` (the router), `handshakes` welcomed 1 / accepted 1, an over each way heard whole |
+| a | pass | rows `rtt_ms` 129 (central) / 130 (hotspot) for 2 x 60 ms; overs heard 99.0 / 99.2 percent; first frame 160 ms after sending (100 ms without delay, case b); no handshake |
+| b | pass | overs heard 96.4 / 97.6 percent (3 percent loss each way), `loss_ppm` 21645 (central) / 18998 (hotspot); no handshake, link stayed up 60 s |
+| c | pass | blackout 20.0 s: no handshake; the first probe over was heard 0.1 s after the end (survived: no relink needed); floors free |
+| d | pass | 42 s into a 60 s blackout: central `disconnected`, hotspot `reconnecting`, `last_error` `timeout` on both, no session on either hub; after the end `welcomed` +1, `accepted` +1; time to relink (first probe over heard after the end): **0.68 s** (this run; 1.85 s and 0.68 s in the earlier runs) |
+| e1, e2 | pass | the last Unit reached the receiving node 0.0 s after the cut; the 3.0 s probe over was heard 100 percent (floor free); the over in flight was heard 25 percent (the 3 s before the cut of 12 s); `end_missing` +1 on the receiving node's room (C for e1, B for e2); no handshake; first probe over after the end 0.1 s; FINDING 2 |
+| e3, e4 | pass | probe at 1.0 s after the cut: not heard (0 percent, floor held); probe at 2.0 s: heard 100 percent (floor free) in both directions: the floor was freed between 1.0 s and 2.0 s after the last Unit, the contract says 1.6 s; the 3.0 s probe 100 percent |
+| f | FAIL (FINDING 1) | `20261123T231838Z`: port rebinding: the first probe over after the way back 0.11 s (hotspot to central), 4.78 / 4.19 / 2.45 s (central to hotspot; limit 5.2 s); no handshake; central row follows the new port; but 2 of 3 central-to-hotspot overs were heard 38 percent (cut) |
+| g | FAIL (FINDING 1) | `20261123T231838Z`: address rebinding: first datagram of the hotspot from the new address 0.058 s (h2c); 3.307 s, 0.224 s, 4.914 s (c2h); the central node sent to the new address 0.007 s later each time; 2 of 3 central-to-hotspot overs cut (heard 38 percent), the one with 0.224 s survived (98 percent); first probe over after the way back 0.32 / 4.41 / 2.66 / 4.98 s |
+| h | pass | Reject{auth} rate **1.021 per second** over 110 s (112 refusals; 1.027, 1.021 and 0.998 in the other three runs), both rows `refused_key` all the time (the hotspot's `reconnecting`, the central node's `disconnected`), no session, no accepted; just after the reload the central row is `disconnected` and the hotspot still shows `connected`; key fixed: first probe over heard **7.85 s** after the fix (`20261123T231838Z`; 9.04 s, 6.11 s, 2.61 s in the other runs), one handshake each side |
+| j | pass | ten faults: central node processes 48 -> 48 pids, `dv-edge-link` threads 4 -> 4, fds 17 -> 17, no restart, `overs.C.complete` +40 and `overs.B.complete` +40 (overs resumed after every fault), one session per hub |
+| k | skip | `DVT_LINKOBS1=on` is not set |
+
+## Findings
+
+1. **A NAT rebinding in the middle of an over from the central node to the hotspot cuts that over in about two cases out of three (NODE1g-f, -g; runs `20261123T225943Z` and `20261123T231838Z`, two of three overs
+   each time, both NAT changes).** The central node moves the session as soon as a valid datagram from the new source arrives (0.007 to 0.019 s after the hotspot's first datagram: router evidence, address change), and that
+   datagram is the hotspot's next keepalive, which comes 0.2 to 5.0 s after the change (observed 0.224, 0.308, 3.3, 3.5, 4.9 and 5.0 s). Until then the central node sends the over's units to the old
+   mapping (166 to 250 datagrams to the old address in the cut overs, router evidence `to_old`). A gap longer than 1.6 s ends the stream at the hotspot's link edge by silence (the room folds the over `end_missing`/`lossy`), and the
+   units that follow once the session has moved are refused as late datagrams of a closed over: the rest of the over is never heard (heard 38 percent of an 8 s over rebound at 3 s; the heard part stops at the
+   change). The contract's "media gap at most 5 s" holds for the transport (largest first-datagram time 5.0 s, first probe over after a change within 4.98 s) but a perceivable gap above 1.6 s costs the whole
+   remainder of an over. The hotspot-to-central direction is not affected (the hotspot sends continuously: first datagram 0.04 to 0.06 s after the change, the over heard 100 percent). Contract section 3 names the
+   delay (the hotspot sends again within 5 s, sooner on a Demand change or StreamStart) but not the 1.6 s rule that turns it into a lost over; a hotspot datagram on receiving the first Unit that comes from a new
+   address, or a central node that also tells the hotspot, would remove it. The cases keep the contract numbers (gap 5 s, 90 percent of the over) and fail.
+2. **An over cut by a blackout is not always folded `end_missing`.** The contract says the room folds it `end_missing` (section 4); of eight such overs in four runs six were `end_missing`
+   (`20261123T225943Z`: e1 to e4, all four) and two were `complete`: e2 of `20261123T220327Z` (hotspot) and e1 of `20261123T224316Z` (central, with an early probe competing for the floor), with the same scenario
+   and the same floor release. The case asserts `end_missing` and passed in the final run; a repeat can fail. (The sum of `complete` + `end_missing` was the same, so the over was counted once, as `complete`.)
+3. Observation, no contract: with `delay 60ms 10ms` the rows count `loss_ppm` 9787 to 14610 and an over is folded `lossy` now and then (`overs.B.lossy` +1 in the final run) with no datagram dropped as replay: the
+   10 ms jitter reorders datagrams of one frame period (the loss estimate counts a gap and never subtracts a late datagram, status.md) and late units miss their place; about 1 percent of the frames were not heard.
+4. Observation: after the old key is put back on the central node the hotspot's link was up 2.61, 6.11, 7.85 and 9.04 s later (four runs): the hotspot is in an attempt that runs to its 5 s deadline or in a
+   backoff of up to 6 s; the worst case of the two added is 11 s, above the 10 s used for the blackouts (the contract has no number for this case). No assertion above 10 s was needed in these runs.
+
+Intermittent harness problems found on the way and fixed (not findings): a key held in a fixture namespace was printed by pytest (`run.sh` found it by its scan: now a `KeyBox`), the central node's link counters
+restart with the edge on a reload (delta against zero: `rebase`), the media gap was measured between arrived frames only (a lost tail did not count: now the longest run of missing frames), the central row was waited
+for by port only (an address change keeps the port), `--down` did not know the profile `node1g`.
+
 ### LINKOBS1 (a future image): RECORD-only
 
 | Item | Today | Where it is recorded |
 |------|-------|----------------------|
 | a refusal log and counter on the hotspot | the hotspot only sets `last_error` `refused_key` (a Reject is a hint); NODE1g-h asserts that | NODE1g-k notes the series names |
 | a session-end counter with reasons | none; reconnects are derived from `handshakes{welcomed}` (NODE1g-d asserts +1) | NODE1g-k |
-| `Bye{revoked}` | `ByeReason::Revoked` is never sent; a rekey shows as `Bye{reload}`, the hotspot row `closed_by_peer` | NODE1g-h records the row labels it saw |
+| `Bye{revoked}` | `ByeReason::Revoked` is never sent; a rekey shows as `Bye{reload}`: NODE1g-h records the rows right after the reload (central `disconnected`, the hotspot still `connected`, then `refused_key`; no `closed_by_peer` was seen) | NODE1g-h |
 | a bad-source counter | a reply from a changed CENTRAL source is dropped without a count (section 3 end, 6 item 8) | not built: moving the central side's source needs a second central address; GAP |
 
 ## Not built
@@ -80,6 +124,8 @@ fabric link to the room controller, not the node link).
   restart allow-list, and the allow-list was not extended).
 * A change of the CENTRAL side's source address (section 3: "the hotspot silently drops its replies, the session dies at 30 s"): the rig has one central address.
 * The hotspot's own process counters (`proc-stat` is read-only for `xlxd-sut` only): the thread / fd / pid evidence of NODE1g-j is the central node's.
+* The key is rotated on the central node only (the hotspot keeps the old one and the fix puts the old key back on the central node): `hup` exists for `xlxd-sut` alone.
+* No capture (`--capture`): the wire checker does not know the WAN router; the evidence is the hubs, the admin rows and the router's own counters.
 
 ## Run command
 
@@ -88,8 +134,7 @@ XLXD_SUT_IMAGE=dv-router:wip-42d5473 DVT_SUT_PROFILE=dvrouter DVT_SUT_LAUNCH=nat
 DVT_NODE1G=on scripts/run.sh -m rig --profile twonode -- cases/test_node1g.py -rA
 ```
 
-About RUNTIME_PLACEHOLDER (a case of this file alone: `-k node1g_c`). `DVT_TRANSCODER_FAKE=1` is not needed (no transcoder is involved; `transcoder-peer` starts unused).
-
-## Results and findings
-
-RESULTS_TABLE_PLACEHOLDER
+About 21 minutes (a single case: `-k node1g_c`; the cases need their own rig start of about 3 minutes). `DVT_TRANSCODER_FAKE=1` is not needed (no transcoder is involved; `transcoder-peer` starts unused).
+Checks without a rig: `python3 -m pytest -m unit cases/unit/test_node1g_lib.py`; both configs against the image:
+`python3 -m dvtest.tools.config_check --image <image> --template rig/config/dv-router/node1g-hotspot.toml --gen compat1 --net 172.31.0 --own 16 --central-ip 172.30.0.11` (and the central node's
+template with `--extra rig/config/dv-router/node1g-central.toml`).

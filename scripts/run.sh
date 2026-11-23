@@ -663,7 +663,7 @@ compose_all=(docker compose -p "${COMPOSE_PROJECT_NAME:-dvt}" "${compose_files[@
   --profile capture-nxdn --profile p25 --profile capture-p25 --profile interlink
   --profile capture-interlink --profile load --profile netem --profile g3 --profile mmdvm --profile mapsrc
   --profile urfd --profile capture-urfd --profile mrefd --profile capture-mrefd --profile web --profile browser
-  --profile webload --profile nat --profile aprs --profile dw --profile asl-lab --profile asl-ext --profile asl-nat)
+  --profile webload --profile nat --profile aprs --profile dw --profile node1g --profile asl-lab --profile asl-ext --profile asl-nat)
 
 if [ "$down_only" = 1 ]; then
   take_lock

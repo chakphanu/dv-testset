@@ -19,8 +19,11 @@ with state, rtt_ms, loss_ppm, last_error), the WAN router's own counters.
   NODE1g-e1 an over in flight from the hotspot when the link goes dark (20 s blackout): the central floor is free about 1.6 s after the last Unit
             (a probe over 3.0 s after the cut is granted), the room folds the over end_missing, the session survives, overs resume
   NODE1g-e2 the same from the central node towards the hotspot
-  NODE1g-f  NAT rebinding, NEW SOURCE PORT, mid-over in each direction: no handshake, the central node moves the session to the new source (its
-            row's port), media gap at most 5 s
+  NODE1g-e3 e1 with two early probes (1.0 s and 2.0 s after the cut): when was the floor freed (RECORD; the 3.0 s probe is asserted)
+  NODE1g-e4 the same as e2
+  NODE1g-f  NAT rebinding, NEW SOURCE PORT, mid-over (one 20 s over from the hotspot, three 8 s overs from the central node): no handshake, the
+            central node moves the session to the new source (its row's port), media gap at most 5 s (the longest silence inside the over, a lost
+            tail included; the first probe over after a second rebinding is heard within 5 s)
   NODE1g-g  NAT rebinding, NEW SOURCE ADDRESS (the router's alias address), the same assertions, plus the router's evidence of the first datagram
             of each side after the change
   NODE1g-h  rotated key: the central node has a new key, the hotspot the old one: Reject{auth} (central handshakes{auth} grows, never accepted),
@@ -125,7 +128,7 @@ def n1g(rig, target, rig_control):
                 pass
         if n.key_changed and n.old_key:
             try:
-                n1.write_key(n.key_path, n.old_key)
+                n1.write_key(n.key_path, n.old_key.value)
             except OSError:
                 pass
 
@@ -413,9 +416,8 @@ def test_node1g_a_delay(n1g):
         lo, hi = n1.RTT_RANGE_MS
         if rtt is None or not lo <= rtt <= hi:
             problems.append("%s row rtt_ms %s, wanted %g..%g (2 x %g ms)" % (node, rtt, lo, hi, n1.DELAY_ONE_WAY_MS))
-    for node in ("central", "hotspot"):
-        r = after[node].get("rtt_ms", 0.0)
-        note(n, case, "RECORD", "%s hub dv_edge_link_rtt_ms %g" % (node, r))
+    note(n, case, "RECORD", "delay only: the rows' loss_ppm (a counter-gap estimate: a reordered datagram counts as a gap and is never subtracted) and the overs folded `lossy` "
+         "tell whether the 10 ms jitter reordered datagrams (dgram.rx.replay moved: %s)" % {k: v.get("dgram.rx.replay", 0) for k, v in mv.items()})
     note(n, case, "RECORD", "heard %s; rows central %s / hotspot %s; moved %s" % (res, n1.row_summary(rows["central"]), n1.row_summary(rows["hotspot"]), mv))
     finish(n, case, problems)
 
@@ -531,9 +533,11 @@ def test_node1g_d_blackout_60s_relinks(n1g):
 
 # ---------------------------------------------------------------- NODE1g-e: an over in flight
 
-def in_flight(n, direction):
+def in_flight(n, direction, early_probes=False):
     """One over of 600 frames (12 s) from one node while the WAN goes dark 3 s into it for 20 s. A talker of the RECEIVING node sends a 54 frame
-    probe over 3.0 s after the cut: granted (heard at its node's listener) means the floor of the room was free by then. Returns the evidence."""
+    probe over 3.0 s after the cut: granted (heard at its node's listener) means the floor of the room was free by then. With `early_probes` two
+    more probes (9 frames, unmapped radio ids) go 1.0 s and 2.0 s after the cut and tell WHEN the floor became free; they are a second talker
+    competing for the floor, so those runs are separate cases (the way the in-flight over is folded is judged only without them). Returns the evidence."""
     h2c = direction == "h2c"
     before = hubs(n)
     with lan(n) as ns:
@@ -554,6 +558,17 @@ def in_flight(n, direction):
         t_cut = time.monotonic()
         n.wan.blackhole(True)
         event(n)
+        # two early probes (9 frames, unmapped radio ids: no guard strike) narrow down WHEN the floor became free: RECORD only
+        early, prober_id = [], prober.src_id
+        for at, kk in ((1.0, 0), (2.0, 1)) if early_probes else ():
+            while time.monotonic() - t_cut < at:
+                tick(others)
+                time.sleep(0.01)
+            ef = frames_of(9, "e-%s/early%d" % (direction, kk))
+            prober.src_id = n1.unmapped_id(PROBE_BASE, 500 + kk)
+            te, _ = over(prober, ef, others)
+            early.append((at, ef, te))
+        prober.src_id = prober_id
         while time.monotonic() - t_cut < 3.0:
             tick(others)
             time.sleep(0.01)
@@ -573,14 +588,17 @@ def in_flight(n, direction):
         last_unit = max(times) if times else None
         probe_share = n1.heard_share(arr_recv, probe, since=t_probe)
         local_share = n1.heard_share(arr_local, sent, since=t0)
+        early_heard = {at: round(n1.heard_share(arr_recv, ef, since=te), 2) for at, ef, te in early}
         rel, more = resume_both_ways(ns, t_end, n1.RELINK_S, "e-%s" % direction)
     event(n)
     after = hubs(n)
     return types.SimpleNamespace(before=before, after=after, probe_share=probe_share, last_unit=last_unit, t_cut=t_cut, t_probe=t_probe,
-                                 local_share=local_share, rel=rel, more=more, sent_share=n1.heard_share(arr_recv, sent, since=t0))
+                                 local_share=local_share, rel=rel, more=more, sent_share=n1.heard_share(arr_recv, sent, since=t0),
+                                 early_heard=early_heard)
 
 
-def judge_in_flight(n, case, ev, room_node, room):
+def judge_in_flight(n, case, ev, room_node, room, fold=True):
+    """`fold`: assert that the room folds the over in flight as end_missing (contract section 4); the runs with early probes only record it."""
     problems = list(ev.more)
     release = None if ev.last_unit is None else ev.last_unit - ev.t_cut
     if not n1.floor_probe_ok(ev.probe_share):
@@ -590,11 +608,11 @@ def judge_in_flight(n, case, ev, room_node, room):
     problems += counters_problems(mv, (0, 0))
     problems += floor_free(n, ev.after, (("central", "C"), ("hotspot", "B")))
     got = mv[room_node].get("overs.%s.end_missing" % room, 0.0)
-    if got < 1:
+    if fold and got < 1:
         problems.append("%s hub: dv_room_overs_total{room=%s,result=end_missing} moved by %g, wanted at least 1 (the over in flight ends by stream silence)" % (room_node, room, got))
-    note(n, case, "RECORD", "last Unit heard %s s after the cut; probe sent %.1f s after the cut, heard %.0f percent; the over was heard %.0f percent on the receiving node and "
-         "%.0f percent on its own node; first probe after the end heard %s s after it; moved %s" % (
-             None if release is None else round(release, 2), ev.t_probe - ev.t_cut, 100 * ev.probe_share, 100 * ev.sent_share, 100 * ev.local_share,
+    note(n, case, "RECORD", "last Unit heard %s s after the cut; early probes (seconds after the cut: share heard) %s; probe sent %.1f s after the cut, heard %.0f percent; "
+         "the over was heard %.0f percent on the receiving node and %.0f percent on its own node; first probe after the end heard %s s after it; moved %s" % (
+             None if release is None else round(release, 2), ev.early_heard, ev.t_probe - ev.t_cut, 100 * ev.probe_share, 100 * ev.sent_share, 100 * ev.local_share,
              None if ev.rel is None else round(ev.rel, 2), mv))
     finish(n, case, problems)
 
@@ -612,91 +630,136 @@ def test_node1g_e2_over_in_flight_central_to_hotspot(n1g):
     judge_in_flight(n1g, "e2", in_flight(n1g, "c2h"), "hotspot", "B")
 
 
+def test_node1g_e3_floor_release_window_hotspot_to_central(n1g):
+    """As e1 with two early probes of the central node's own talker (9 frames, 1.0 s and 2.0 s after the cut): which of them is granted tells when the
+    floor was freed (the contract: 1.6 s after the last Unit). The 3.0 s probe is asserted as in e1; how the room folds the over is only recorded
+    (a second talker was competing for the floor)."""
+    judge_in_flight(n1g, "e3", in_flight(n1g, "h2c", early_probes=True), "central", "C", fold=False)
+
+
+def test_node1g_e4_floor_release_window_central_to_hotspot(n1g):
+    """As e2 with the two early probes of a hotspot talker."""
+    judge_in_flight(n1g, "e4", in_flight(n1g, "c2h", early_probes=True), "hotspot", "B", fold=False)
+
+
 # ---------------------------------------------------------------- NODE1g-f / g: NAT rebinding
 
-def rebind_scenario(n, case, kind):
-    """A long over (20 s) each way with the NAT mapping of the hotspot changed 8 s into it: `kind` port (the NAT type symmetric + a flush: a new
-    random source port) or address (readdress: the router's alias address). Returns the evidence of both directions."""
-    res = {}
-    rows, ok = both_connected(n, 30.0)
-    for who in ("h2c", "c2h"):
-        before = hubs(n)
-        map_before = n.wan.mappings()
-        with lan(n) as ns:
-            talker, listener = (ns.hc, ns.lc) if who == "h2c" else (ns.cc, ns.lh)
-            sent = frames_of(1000, "%s-%s" % (case, who))
-            records = p25.call_records(sent, talker.src_id, talker.tg)
-            box = {}
-            thread = threading.Thread(target=lambda: (box.update(start=time.monotonic()), talker.send(records, p25.GAP), box.update(end=time.monotonic())), daemon=True)
-            others = [c for c in ns.all if c is not talker]
-            t0 = time.monotonic()
-            thread.start()
-            while time.monotonic() - t0 < 8.0:
-                tick(others)
-                time.sleep(0.01)
-            t_rebind = time.monotonic()
-            if kind == "port":
-                n.wan.mode("symmetric")
-            else:
-                n.wan.readdress(True)
-            event(n)
-            while thread.is_alive():
-                tick(others)
-                time.sleep(0.02)
-            idle(ns.all, 2.0)
-            arr = n1.voice_arrivals(listener)
-            gap, gap_at = n1.stream_gap(arr, sent, t0, time.monotonic())
-            share = n1.heard_share(arr, sent, since=t0)
-            map_after = n.wan.mappings()
-            firsts = n.wan.firsts() if kind == "address" else None
-            row_c = None
-            if n.admin["central"] is not None:
-                new_ports = sorted(m["seen_port"] for m in map_after)
-                # the central row moves to the new source when its snapshot is next published; wait for the row to show the translated port
-                row_c, waited = wait_row(n, "central", lambda r: connected(r) and (not new_ports or r.get("port") == new_ports[-1]), 15.0)
-            idle(ns.all, 1.0)
+def rebind_trial(n, case, kind, who, over_s, rebind_at):
+    """One trial: an over from one node (`who`: h2c = hotspot talker, c2h = central talker) of `over_s` seconds; `rebind_at` seconds into it the NAT
+    mapping of the hotspot changes: `kind` port (NAT type symmetric + the flush: a new random source port) or address (readdress: the router's alias
+    address). Afterwards the way back (a second rebinding) with a train of probe overs started AT it, in the same direction."""
+    map_before = n.wan.mappings()
+    with lan(n) as ns:
+        talker, listener = (ns.hc, ns.lc) if who == "h2c" else (ns.cc, ns.lh)
+        sent = frames_of(int(over_s / FRAME_S), "%s-%s-%d" % (case, who, int(time.monotonic()) % 1000))
+        records = p25.call_records(sent, talker.src_id, talker.tg)
+        thread = threading.Thread(target=lambda: talker.send(records, p25.GAP), daemon=True)
+        others = [c for c in ns.all if c is not talker]
+        t0 = time.monotonic()
+        thread.start()
+        while time.monotonic() - t0 < rebind_at:
+            tick(others)
+            time.sleep(0.01)
+        t_rebind = time.monotonic()
+        if kind == "port":
+            n.wan.mode("symmetric")
+        else:
+            n.wan.readdress(True)
         event(n)
-        after = hubs(n)
-        res[who] = types.SimpleNamespace(before=before, after=after, map_before=map_before, map_after=map_after, gap=gap, gap_after_rebind=None if gap_at is None else gap_at - t_rebind,
-                                         share=share, firsts=firsts, row_c=row_c, t_rebind=t_rebind)
+        while thread.is_alive():
+            tick(others)
+            time.sleep(0.02)
+        idle(ns.all, 2.0)
+        arr = n1.voice_arrivals(listener)
+        # the silence a listener perceives INSIDE the over, its lost tail included (the frames that never arrived are the gap)
+        gap, gap_idx = n1.missing_run(arr, sent, since=t0)
+        gap_at = None if gap_idx is None else t0 + gap_idx * FRAME_S
+        share = n1.heard_share(arr, sent, since=t0)
+        map_after = n.wan.mappings()
+        firsts = n.wan.firsts() if kind == "address" else None
+        row_c = None
+        if n.admin["central"] is not None:
+            want = sorted((m["seen_ip"], m["seen_port"]) for m in map_after)
+            # the central row moves to the new source when its snapshot is next published; wait for the row to show the translated address AND port
+            row_c, waited = wait_row(n, "central", lambda r: connected(r) and (not want or (r.get("ip"), r.get("port")) == want[-1]), 12.0)
+        idle(ns.all, 1.0)
+        # the way back (a second rebinding) with a probe train started AT it, in the direction under test: how soon does media flow again?
+        t_back = time.monotonic()
         if kind == "port":
             n.wan.mode("port_restricted")
         else:
             n.wan.readdress(False)
         event(n)
-        idle([], 6.0)
-    return res
+        t_heard, probes = probe_until_heard(ns, talker, listener, 9.0, "%s-%s-back" % (case, who))
+        resume_s = None if t_heard is None else t_heard - t_back
+    idle([], 3.0)
+    return types.SimpleNamespace(who=who, map_before=map_before, map_after=map_after, gap=gap, gap_after_rebind=None if gap_at is None else gap_at - t_rebind,
+                                 share=share, firsts=firsts, row_c=row_c, resume_s=resume_s, probes=probes, over_s=over_s, rebind_at=rebind_at)
 
 
-def judge_rebind(n, case, res, kind):
+# one 20 s over from the hotspot, then three 8 s overs from the central node (the gap of the central-to-hotspot direction is the time until the
+# hotspot's next datagram, which depends on the phase of its 5 s keepalive: one trial would be luck either way)
+REBIND_TRIALS = (("h2c", 20.0, 8.0), ("c2h", 8.0, 3.0), ("c2h", 8.0, 3.0), ("c2h", 8.0, 3.0))
+
+
+def rebind_scenario(n, case, kind):
+    rows, ok = both_connected(n, 30.0)
+    before = hubs(n)
+    trials = [rebind_trial(n, case, kind, who, over_s, at) for who, over_s, at in REBIND_TRIALS]
+    event(n)
+    after = hubs(n)
+    return before, after, trials
+
+
+def judge_rebind(n, case, scenario, kind):
+    before, after, trials = scenario
     problems = []
     limit = n1.NAT_GAP_S + n1.NAT_GAP_SLACK_S
-    for who, ev in res.items():
-        mv = moved(ev.before, ev.after)
-        problems += ["%s: %s" % (who, p) for p in counters_problems(mv, (0, 0))]
+    mv = moved(before, after)
+    problems += counters_problems(mv, (0, 0))
+    cut = [t for t in trials if t.who == "c2h" and t.share < 0.9]
+    for i, ev in enumerate(trials):
+        name = "%s#%d" % (ev.who, i)
         if ev.gap > limit:
-            problems.append("%s: media gap %.2f s across the rebinding, wanted at most %.1f s (one keepalive period)" % (who, ev.gap, n1.NAT_GAP_S))
-        if ev.share < 0.9:
-            problems.append("%s: the over was heard %.0f percent (wanted at least 90: only the frames of the gap may be lost)" % (who, 100 * ev.share))
+            problems.append("%s: media gap %.2f s inside the over that was on the air at the rebinding (the longest run of its frames that never arrived, its lost tail "
+                            "included), wanted at most %.1f s (one keepalive period); %.0f percent of the over was heard" % (name, ev.gap, n1.NAT_GAP_S, 100 * ev.share))
+        elif ev.share < 0.9:
+            problems.append("%s: the over was CUT by the rebinding: %.0f percent of it was heard (wanted at least 90: only the frames of the gap may be lost); the rest was never "
+                            "delivered although the session moved (the receiving link edge ends a stream after 1.6 s without a Unit, and later Units of that stream are "
+                            "refused)" % (name, 100 * ev.share))
+        if ev.firsts:
+            sides = ev.firsts.get("sides", {})
+            for side in ("from_new", "to_new"):
+                first = (sides.get(side) or {}).get("first_s")
+                if first is None or first > limit:
+                    problems.append("%s: router evidence: the first datagram %s came %s s after the readdress (wanted at most %.1f s: the hotspot's next keepalive "
+                                    "tells the central node where to send)" % (name, side, first, n1.NAT_GAP_S))
+        if ev.resume_s is None or ev.resume_s > limit:
+            problems.append("%s: after the second rebinding the first probe over was heard %s s later (%d probes), wanted at most %.1f s" % (
+                name, None if ev.resume_s is None else round(ev.resume_s, 2), ev.probes, n1.NAT_GAP_S))
         seen_b = sorted((m["seen_ip"], m["seen_port"]) for m in ev.map_before)
         seen_a = sorted((m["seen_ip"], m["seen_port"]) for m in ev.map_after)
         if not seen_a or seen_a == seen_b:
-            problems.append("%s: the central node sees the hotspot at %s before and %s after: the rebinding did not happen" % (who, seen_b, seen_a))
+            problems.append("%s: the central node sees the hotspot at %s before and %s after: the rebinding did not happen" % (name, seen_b, seen_a))
         elif kind == "address" and all(ip == seen_b[0][0] for ip, _ in seen_a):
-            problems.append("%s: the source ADDRESS did not change (%s -> %s)" % (who, seen_b, seen_a))
+            problems.append("%s: the source ADDRESS did not change (%s -> %s)" % (name, seen_b, seen_a))
         elif kind == "port" and all(port == seen_b[0][1] for _, port in seen_a):
-            problems.append("%s: the source PORT did not change (%s -> %s)" % (who, seen_b, seen_a))
+            problems.append("%s: the source PORT did not change (%s -> %s)" % (name, seen_b, seen_a))
         row = ev.row_c
         if row is not None and seen_a:
             want_ip, want_port = seen_a[-1]
             if (row.get("ip"), row.get("port")) != (want_ip, want_port):
                 problems.append("%s: the central row shows the peer at %s:%s, the router translates it to %s:%s (the session was not moved)" % (
-                    who, row.get("ip"), row.get("port"), want_ip, want_port))
-        note(n, case, "RECORD", "%s: gap %.2f s (at %s s after the rebinding), heard %.0f percent; the central node saw %s then %s; central row %s; moved %s" % (
-            who, ev.gap, None if ev.gap_after_rebind is None else round(ev.gap_after_rebind, 2), 100 * ev.share, seen_b, seen_a, n1.row_summary(ev.row_c), mv))
+                    name, row.get("ip"), row.get("port"), want_ip, want_port))
+        note(n, case, "RECORD", "%s (over %.0f s, rebinding at %.0f s): longest silence inside the over %.2f s (starting %s s after the rebinding), heard %.0f percent; first probe %s s "
+             "after the second rebinding (%d probes); the central node saw %s then %s; central row %s" % (
+                 name, ev.over_s, ev.rebind_at, ev.gap, None if ev.gap_after_rebind is None else round(ev.gap_after_rebind, 2), 100 * ev.share,
+                 None if ev.resume_s is None else round(ev.resume_s, 2), ev.probes, seen_b, seen_a, n1.row_summary(ev.row_c)))
         if ev.firsts:
             sides = ev.firsts.get("sides", {})
-            note(n, case, "RECORD", "%s router evidence after the readdress: %s" % (who, {k: {"first_s": v.get("first_s"), "n": v.get("n")} for k, v in sides.items()}))
+            note(n, case, "RECORD", "%s router evidence after the readdress (seconds to the first datagram of each side): %s" % (
+                name, {k: {"first_s": v.get("first_s"), "n": v.get("n")} for k, v in sides.items()}))
+    note(n, case, "RECORD", "central-to-hotspot overs cut by the rebinding: %d of %d; moved %s" % (len(cut), len([t for t in trials if t.who == "c2h"]), mv))
     finish(n, case, problems)
 
 
@@ -725,15 +788,18 @@ def test_node1g_h_rotated_key(n1g):
     rows, ok = both_connected(n, 30.0)
     before = hubs(n)
     problems = []
-    old = n1.read_key(n.key_path)
+    old = n1.KeyBox(n1.read_key(n.key_path))                         # a KeyBox never shows its key (pytest prints the locals of a failing test)
     n.old_key = old
-    new = n1.new_key_hex()
-    n1.write_key(n.key_path.with_name(n1.ROTATED_NAME), new)          # beside the live key, so the run's secret scan covers it
-    n1.write_key(n.key_path, new)
+    new = n1.KeyBox(n1.new_key_hex())
+    n1.write_key(n.key_path.with_name(n1.ROTATED_NAME), new.value)    # beside the live key, so the run's secret scan covers it
+    n1.write_key(n.key_path, new.value)
     n.key_changed = True
     t_rot = time.time()
     n.control.hup()
     event(n)
+    # the rows right after the reload: the edge restarted and sent Bye{reload}; the hotspot shows closed_by_peer until its first refused attempt (RECORD)
+    first_rows = {node: n1.row_summary(get_row(n, node)) for node in ("central", "hotspot")}
+    note(n, case, "RECORD", "rows right after the reload: central %s / hotspot %s" % (first_rows["central"], first_rows["hotspot"]))
     window = 120.0
     t_start = time.monotonic()
     samples, rows_seen = [], {"central": [], "hotspot": []}
@@ -763,7 +829,8 @@ def test_node1g_h_rotated_key(n1g):
         problems.append("handshakes{auth} on the central node did not grow while the keys differ (no Reject{auth} counted; samples %d)" % len(samples))
     elif rate[0] > n1.REFUSAL_RATE_MAX:
         problems.append("Reject{auth} rate %.3f per second over %.0f s, wanted at most %.1f (about %g refusals)" % (rate[0], rate[1], n1.REFUSAL_RATE_MAX, rate[2]))
-    mv_mid = moved(before, mid)
+    # the central dv-edge-link was restarted by the reload: its series start again at zero (rebase), the hotspot's edge was not
+    mv_mid = {"central": n1.rebase(before["central"], mid["central"]), "hotspot": n1.delta(before["hotspot"], mid["hotspot"])}
     if mv_mid["central"].get("hs.accepted", 0):
         problems.append("the central node accepted a session with the wrong key (handshakes{accepted} +%g)" % mv_mid["central"]["hs.accepted"])
     for node in ("central", "hotspot"):
@@ -776,7 +843,7 @@ def test_node1g_h_rotated_key(n1g):
             problems.append("the %s row never showed last_error refused_key (labels seen %s)" % (node, sorted(set(str(e) for e in errs))))
     # the hotspot's refusal-time rows: connected is never seen after the first sample
     # fix: the old key back
-    n1.write_key(n.key_path, old)
+    n1.write_key(n.key_path, old.value)
     n.key_changed = False
     t_fix = time.monotonic()
     n.control.hup()
@@ -787,8 +854,9 @@ def test_node1g_h_rotated_key(n1g):
         rows_after = {node: wait_row(n, node, connected, 15.0)[0] for node in ("central", "hotspot")}
     event(n)
     after = hubs(n)
-    mv = moved(before, after)
-    # the central edge was restarted twice on purpose: datagrams of the old session may reach the new one (unknown_session), nothing else may move
+    mv = {"central": n1.rebase(before["central"], after["central"]), "hotspot": n1.delta(before["hotspot"], after["hotspot"])}
+    # the central edge was restarted twice on purpose (its series count from the last restart): datagrams of the old session may reach the new
+    # one (unknown_session), nothing else may move
     problems += counters_problems(mv, (1, 1), allow_restarts=("dv-edge-link",), allow_rx=("unknown_session",))
     for node in ("central", "hotspot"):
         if mv[node].get("dgram.rx.unknown_session"):

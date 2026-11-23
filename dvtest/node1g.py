@@ -142,6 +142,24 @@ def collateral(moved, allow_restarts=(), allow_rx=()):
     return out
 
 
+LINK_PROCESS_PREFIXES = ("hs.", "dgram.", "refused.", "sessions", "rtt_ms")      # the series of the dv-edge-link process: they restart with it
+
+
+def rebase(before, after, restarted=LINK_PROCESS_PREFIXES):
+    """Like `delta`, for a node whose dv-edge-link was restarted between the two reads (a key reload): the series of that process start again at
+    zero, so for those names the later value IS the movement since the restart; every other series (the launcher's, the room controllers', the
+    hub's) is a plain difference."""
+    out = {}
+    for key in set(before) | set(after):
+        if key.startswith(restarted):
+            d = after.get(key, 0.0)
+        else:
+            d = after.get(key, 0.0) - before.get(key, 0.0)
+        if d:
+            out[key] = d
+    return out
+
+
 def link_active(counts):
     """True when a scrape shows one connected link session."""
     return counts.get("sessions", 0.0) >= 1.0
@@ -151,19 +169,22 @@ def link_active(counts):
 
 def refusal_rate(samples):
     """(rate per second, window seconds, events) of a counter that grows in bursts, from [(t, value)] reads taken while it grows. The hub
-    refreshes its counters every 10 s, so a read shows the value of the last refresh: the instants at which the value CHANGES from one read to the
-    next are the refreshes (known to within one read interval). The rate is the growth between the first and the last change instant over the time
-    between them; the events before the first refresh and after the last one are not counted. None when fewer than two changes were seen."""
+    refreshes its counters every 10 s, so a read shows the value of the last refresh: the instants at which the value GROWS from one read to the
+    next are the refreshes (known to within one read interval). The rate is the growth between the first and the last growth instant over the
+    time between them; the events before the first refresh and after the last one are not counted. A read that is LOWER than the one before is a
+    counter that restarted with its process (an edge restarted by a reload): that step is not a growth and is skipped. None when fewer than two
+    growths were seen."""
     changes = []
     for (t0, v0), (t1, v1) in zip(samples, samples[1:]):
-        if v1 != v0:
-            changes.append((t1, v1))
+        if v1 > v0:
+            changes.append((t1, v1 - v0))
     if len(changes) < 2:
         return None
-    (ta, va), (tb, vb) = changes[0], changes[-1]
-    if tb <= ta:
+    window = changes[-1][0] - changes[0][0]
+    if window <= 0:
         return None
-    return (vb - va) / (tb - ta), tb - ta, vb - va
+    events = sum(step for _, step in changes[1:])          # the first growth only marks where the window starts
+    return events / window, window, events
 
 
 # ---------------------------------------------------------------- key files
@@ -347,6 +368,40 @@ def stream_gap(arrivals, sent, start, end):
     after the last one (end of the over) are not gaps. (0.0, None) when fewer than two of its frames arrived."""
     want = set(bytes(f) for f in sent)
     return max_gap([t for t, imbe in arrivals if start <= t <= end and imbe in want])
+
+
+def missing_run(arrivals, sent, since=0.0, frame_s=0.020):
+    """(seconds, index of the first missing frame) of the longest run of consecutive frames of `sent` (in sending order, one frame per `frame_s`)
+    that never arrived at or after `since`, the tail of an over that stopped arriving included: the silence a listener perceives inside ONE over
+    (or from its first frame to its end). (0.0, None) when every frame arrived."""
+    heard = set(imbe for t, imbe in arrivals if t >= since)
+    best, best_at, run, run_at = 0, None, 0, None
+    for i, frame in enumerate(sent):
+        if bytes(frame) in heard:
+            run = 0
+            continue
+        if run == 0:
+            run_at = i
+        run += 1
+        if run > best:
+            best, best_at = run, run_at
+    return best * frame_s, best_at
+
+
+class KeyBox:
+    """A key held in memory whose repr and str never show it (pytest prints the namespace of a failing test, and a case must never print a key)."""
+
+    def __init__(self, key_hex):
+        self._key = key_hex
+
+    @property
+    def value(self):
+        return self._key
+
+    def __repr__(self):
+        return "<key hidden>"
+
+    __str__ = __repr__
 
 
 def floor_probe_ok(share, floor=0.8):
