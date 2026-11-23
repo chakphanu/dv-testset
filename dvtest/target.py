@@ -132,6 +132,9 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
   DVT_RFPOS1C        on: RFPOS1 step C (DV-Router fb3167bb): with --profile asl-edge run.sh adds rfpos1c-usrp.toml (a static USRP row on module L, the tester as the peer);
                      cases/test_rfpos1c.py loses one IAX2 voice frame (a mini frame, and a full frame) of an AllStar call and asserts that the D-STAR, DMR and USRP listeners of the
                      room miss exactly that position and the room counts one gap and one lossy over, egress tx lost +0 (docs/rfpos1c-cases.md); off or unset: the cases skip naming this switch
+  DVT_BUNDLEFILL1    on: BUNDLEFILL1 (a bundled egress fills a missing unit and still sends its native frame at its own position and time): run.sh adds bundlefill1-edges.toml (SUT P25 / NXDN
+                     ports for module L) and cases/test_rfpos1c.py also runs a YSF, a P25 and an NXDN listener of module L and asserts that the frame of the lost unit is carried, the others
+                     at their positions, egress dropped +0 and tx lost +0 (docs/rfpos1c-cases.md); needs DVT_RFPOS1C=on; unset: those listeners do not run
   DVT_MEDLOAD1       on: MEDLOAD1 (DV-Router fb6a2a51 .. 28fc1838, image wip-f1f3777): cases/test_medload1.py sends overs with controlled drops, a late frame, a duplicate and a counter wrap and
                      compares the per-over gap / lost / late counts of the hub (dv_edge_over_units_total, dv_room_over_units_total, dv_room_overs_total) with the edge's rule, plus the S7 analogue
                      (five rounds under busy loops, DVT_MEDLOAD1_BURN processes, default 16); off or unset: the cases skip naming this switch (docs/medload1-cases.md)

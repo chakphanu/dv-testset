@@ -184,7 +184,7 @@ def test_dmr_bursts_are_placed_by_letter_not_by_arrival():
     slots, _ = rfpos1c.dmr_burst_slots(bursts, want)
     assert sorted(set(range(count)) - set(slots)) == [39, 40, 41] and all(slots[p] == p for p in slots)
     problems = rfpos1c.judge_dmr(slots, count, 40)
-    assert len(problems) == 1 and "whole burst" in problems[0] and "[39, 41]" in problems[0] and "burst granularity" in problems[0]
+    assert len(problems) == 1 and "whole native frame" in problems[0] and "[39, 41]" in problems[0] and "native frame granularity" in problems[0]
     # the old image: nothing missing in letters but the frames closed up (every later frame one position early, the last burst padded)
     shifted = list(want[:40]) + list(want[41:]) + [bytes(9)]
     slots, _ = rfpos1c.dmr_burst_slots(rfpos1c.dmr_bursts(dmr_datagrams(shifted))[0], want)
@@ -230,7 +230,11 @@ def test_judge_counters_loss_and_control():
     idle = reading(radioseq1.Counts(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), dextra=(0, 0, 0, 0, 0, 2, 3, 0))
     problems, findings, _x = rfpos1c.judge_counters(idle, 0, ["dextra"])
     assert any(p.startswith("harness: no over closed") for p in problems) and any(p.startswith("harness: egress edge dextra") for p in problems)
-    assert findings == ["egress edge dextra counted late 2, dropped 3"]
+    assert findings == ["egress edge dextra counted late 2"]
+    # dropped is asserted everywhere (BUNDLEFILL1: wip-e9fcc38 dmrhb dropped +2 for the two survivors of a burst); tx lost of the bundled listeners too
+    dropped = reading(radioseq1.Counts(1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 2), dmrhb=(0, 0, 1, 0, 0, 0, 2, 0), ysf=(0, 1, 0, 0, 0, 0, 0, 1))
+    problems = rfpos1c.judge_counters(dropped, 1, ["dmrhb", "ysf"], strict_lost=("ysf",))[0]
+    assert len(problems) == 2 and any("proc=dmrhb,result=dropped} rose by 2" in p for p in problems) and any("proc=ysf,result=lost} rose by 1" in p for p in problems)
 
 
 def test_egress_procs():
@@ -246,3 +250,102 @@ def test_the_usrp_snippet_is_one_static_row_for_module_l():
     assert rows[0]["peer"] == "<TESTER_IP>:%d" % rfpos1c.USRP_PEER_PORT
     # none of the ports of the other USRP rows (usrp-rig.toml 34001-34003) and not the dynamic hub (34101)
     assert rfpos1c.USRP_SUT_PORT not in (34001, 34002, 34003, 34101)
+
+
+# ---------------------------------------------------------------- BUNDLEFILL1: the bundled egresses
+
+def test_bundle_switch():
+    assert rfpos1c.bundlefill_on({"DVT_BUNDLEFILL1": "on"})
+    assert not rfpos1c.bundlefill_on({"DVT_BUNDLEFILL1": ""}) and not rfpos1c.bundlefill_on({})
+
+
+def test_cyclic_positions():
+    assert rfpos1c.cyclic_positions([0, 1, 2, 3, 4, 5, 6, 0, 1], 7) == [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    assert rfpos1c.cyclic_positions([0, 1, 2, 4, 5, 6, 0], 7) == [0, 1, 2, 4, 5, 6, 7]                   # a native frame not sent is a hole
+    assert rfpos1c.cyclic_positions([3, 2, 1, 0, 3, 2], 4, descending=True) == [0, 1, 2, 3, 4, 5]       # NXDN SACCH structure
+    assert rfpos1c.cyclic_positions([3, 2, 0, 3], 4, descending=True) == [0, 1, 3, 4]
+    assert rfpos1c.cyclic_positions([2, 3], 7) == [0, 1] and rfpos1c.cyclic_positions([], 7) == []
+
+
+def p25_records(frames, skip=()):
+    from dvtest.proto import p25
+    records = p25.voice_records(frames, 1023007, 31672)[:-1]
+    return [r for n, r in enumerate(records) if n not in skip]
+
+
+def test_p25_units_by_record_type():
+    frames = [bytes([i]) * 11 for i in range(36)]
+    units, positions = rfpos1c.native_units("p25", p25_records(frames))
+    assert positions == list(range(36)) and [units[p] for p in range(36)] == frames
+    units, positions = rfpos1c.native_units("p25", p25_records(frames, skip=(20,)))
+    assert sorted(set(range(36)) - set(units)) == [20] and units[21] == frames[21] and len(positions) == 35
+    # the position of a unit comes from its type, not from arrival order
+    ref = rfpos1c.reference({p: frames[p] for p in range(36)}, 36)
+    slots = rfpos1c.native_slots(units, ref)
+    assert slots[19] == 19 and slots[21] == 21 and 20 not in slots
+
+
+def test_ysf_and_nxdn_units():
+    from dvtest.proto import nxdn, ysf
+    frames = [bytes([i + 1]) * 9 for i in range(40)]
+    packets = ysf.stream_packets(frames, "N0CALL", 0)
+    voice = [p for p in packets if ysf.is_voice(p)]
+    assert len(voice) == 8
+    units, positions = rfpos1c.native_units("ysf", voice)
+    assert positions == list(range(8)) and len(units) == 40
+    assert [units[p] for p in range(40)] == [ysf.vch_decode(ysf.vch_encode(f)) for f in frames]
+    units, positions = rfpos1c.native_units("ysf", voice[:3] + voice[4:])                  # the fourth native frame (units 15..19) not sent
+    assert positions == [0, 1, 2, 4, 5, 6, 7] and sorted(set(range(40)) - set(units)) == [15, 16, 17, 18, 19]
+    nframes = [bytes([i + 1]) * 6 + b"\x80" for i in range(24)]
+    nvoice = [p for p in nxdn.stream_packets(nframes, 1001, 31672) if nxdn.is_voice(p)]
+    assert len(nvoice) == 6
+    units, positions = rfpos1c.native_units("nxdn", nvoice)
+    assert positions == list(range(6)) and [units[p] for p in range(24)] == nframes
+    units, positions = rfpos1c.native_units("nxdn", nvoice[:2] + nvoice[3:])
+    assert positions == [0, 1, 3, 4, 5] and sorted(set(range(24)) - set(units)) == [8, 9, 10, 11]
+
+
+def test_judge_native_whole_frame_and_filled_unit():
+    count = 90
+    filled = {p: p for p in range(count)}
+    filled[40] = None
+    for per in (3, 4, 5, 9):
+        assert rfpos1c.judge_native("X", filled, count, 40, per) == []
+    gone = {p: p for p in range(count) if not 40 - 40 % 5 <= p < 40 - 40 % 5 + 5}
+    problems = rfpos1c.judge_native("YSF", gone, count, 40, 5)
+    assert len(problems) == 1 and "whole native frame" in problems[0] and "[40, 41, 42, 43, 44]" in problems[0] and "[41, 42, 43, 44]" in problems[0]
+    shifted = {p: (p if p < 40 else p + 1) for p in range(count)}
+    assert "first position 40 holds frame 41" in rfpos1c.judge_native("NXDN", shifted, count, 40, 4)[0]
+
+
+def test_reference_and_timing():
+    assert rfpos1c.reference({0: b"a", 1: b"b"}, 2) == [b"a", b"b"]
+    assert rfpos1c.reference({0: b"a", 1: b"a"}, 2) is None and rfpos1c.reference({0: b"a"}, 2) is None
+    t = [0.0, 0.06, 0.18, 0.24]                          # a native frame (60 ms) skipped between the second and third, the rest on time
+    assert rfpos1c.timing_dev_ms(t, [0, 1, 3, 4], 60) == 0.0
+    assert rfpos1c.timing_dev_ms(t, [0, 1, 2, 3], 60) == 60.0       # compacted in time
+    assert rfpos1c.timing_dev_ms([0.0], [0], 60) is None
+    assert rfpos1c.judge_timing("DMR", 2.0) == [] and rfpos1c.judge_timing("DMR", 60.0)
+    assert rfpos1c.judge_timing("YSF", 90.0, control_ms=60.0) == [] and rfpos1c.judge_timing("YSF", 140.0, control_ms=60.0)
+    assert rfpos1c.judge_timing("YSF", None)
+
+
+def test_the_bundlefill_snippet_serves_module_l():
+    cfg = tomllib.loads((ROOT / "rig" / "config" / "dv-router" / "bundlefill1-edges.toml").read_text())
+    assert cfg["edges"]["p25"]["server_module"] == "L" and cfg["edges"]["p25"]["server_tg"] == rfpos1c.P25_TG
+    assert cfg["edges"]["nxdn"]["tg_modules"] == "%d:L" % rfpos1c.P25_TG
+
+
+def test_a_copy_in_the_lost_slot_is_named():
+    # wip-e9fcc38 YSF (run 20261123T155348Z): the native frame is sent, every unit but 40 at its own position, slot 40 repeats the frame of position 35
+    slots = {p: p for p in range(90)}
+    slots[40] = 35
+    problems = rfpos1c.judge_native("YSF", slots, 90, 40, 5)
+    assert len(problems) == 1 and "slot (position 40) holds the frame of position 35" in problems[0] and "not a fill" in problems[0]
+
+
+def test_an_absent_unit_without_fill_is_named():
+    # wip-e9fcc38 P25 (run 20261123T160335Z): one record per unit, the record of position 40 is not sent, the rest at their own positions
+    slots = {p: p for p in range(90) if p != 40}
+    problems = rfpos1c.judge_native("P25", slots, 90, 40, 9)
+    assert len(problems) == 1 and "slot (position 40) was not sent at all (no fill" in problems[0]

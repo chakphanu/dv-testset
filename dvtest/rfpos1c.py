@@ -22,7 +22,7 @@ import random
 import struct
 
 from dvtest import asl_lab, crossmode, medload1, rfpos1, rfpos1b
-from dvtest.proto import dmr, usrp
+from dvtest.proto import dmr, nxdn, p25, usrp, ysf
 
 ENV = "DVT_RFPOS1C"
 ROOM = "L"                          # room / module of the AllStar edge in the asl-lab (rig/config/dv-router/allstar-lab.toml)
@@ -229,20 +229,163 @@ def seq_gaps(seqs):
     return [(a, b) for a, b in zip(seqs, seqs[1:]) if (b - a) & 0xFF != 1]
 
 
-def judge_dmr(slots, count=COUNT, dropped=None):
-    """The DMR listener: positions = burst * 3 + frame, judged like judge_slots(filled=True) (the lost frame's slot exists and carries a fill, every
-    other slot its own frame) with one named partial result: when the output lacks exactly the three positions of the lost frame's burst and every other
-    position holds its own frame, the edge dropped the WHOLE burst (the survivors of the burst are not carried) but kept the later bursts at their
-    positions. dv-router's expectation is that the burst still carries the other two frames."""
+def judge_native(name, slots, count=COUNT, dropped=None, per=3):
+    """A listener whose native frame packs `per` 20 ms units (DMR burst 3, YSF frame 5, NXDN frame 4, P25 LDU 9): positions = native frame * per + unit,
+    judged like judge_slots(filled=True) (the lost unit's slot exists and carries a fill that is not its own frame, every other slot holds its own frame)
+    with one named partial result: when the output lacks exactly the `per` positions of the lost unit's native frame and every other position holds its
+    own frame, the edge dropped the WHOLE native frame (the survivors of it are not carried) but kept the later ones at their positions. dv-router's
+    expectation (BUNDLEFILL1): the native frame is still sent at its own position and time, the missing unit filled."""
     if dropped is not None and slots:
-        burst = [p for p in range(dropped - dropped % 3, dropped - dropped % 3 + 3)]
+        first = dropped - dropped % per
+        native = list(range(first, first + per))
         absent = [p for p in range(count) if p not in slots]
         rest = [p for p in range(count) if p in slots and slots[p] != p]
-        if absent == burst and not rest:
-            others = [p for p in burst if p != dropped]
-            return ["DMR: the whole burst of the lost frame (positions %s) was not sent: frames %s are not carried; every other burst holds its own frames "
-                    "(positions kept at burst granularity, not compacted)" % (burst, others)]
-    return judge_slots("DMR", slots, count, dropped, filled=True)
+        if absent == native and not rest:
+            others = [p for p in native if p != dropped]
+            return ["%s: the whole native frame of the lost unit (positions %s) was not sent: units %s are not carried; every other native frame holds its own "
+                    "units (positions kept at native frame granularity, not compacted)" % (name, native, others)]
+        if absent == [dropped] and not rest and per > 1:
+            return ["%s: the lost unit's slot (position %d) was not sent at all (no fill, the unit is simply absent); every other position holds its own unit" % (
+                name, dropped)]
+    return judge_slots(name, slots, count, dropped, filled=True)
+
+
+def judge_dmr(slots, count=COUNT, dropped=None):
+    """The DMR listener (burst of 3 units); see judge_native."""
+    return judge_native("DMR", slots, count, dropped, 3)
+
+
+# ---------------------------------------------------------------- the bundled egresses (BUNDLEFILL1: DMR 3, YSF 5, NXDN 4, P25 LDU 9 units per native frame)
+
+BUNDLE_ENV = "DVT_BUNDLEFILL1"
+# per listener kind: units per native frame, the proc label of its egress edge in the hub counters, the port of the SUT server, the time step of one position of the
+# counter (ms): a YSF frame 100, an NXDN frame 80, a P25 record 20 (one unit; its LDU of 9 is the native frame)
+BUNDLED = {"ysf": {"name": "YSF", "per": 5, "proc": "ysf", "port": 42000, "native_ms": 100},
+           "p25": {"name": "P25", "per": 9, "proc": "p25", "port": 41000, "native_ms": 20},
+           "nxdn": {"name": "NXDN", "per": 4, "proc": "nxdn", "port": 41400, "native_ms": 80}}
+DMR_NATIVE_MS = 60
+P25_TG = 31672                      # the talkgroup of the P25 and NXDN rows of bundlefill1-edges.toml (module L), as soak-edges.toml's
+TIMING_SLACK_MS = 40.0              # the arrival time of a native frame may differ this much from the control's deviation (or from its own position for DMR)
+YSF_FN_MODULUS = 7
+P25_RECORDS = 18                    # LDU1 0x62..0x6A then LDU2 0x6B..0x73
+
+
+def bundlefill_on(environ=None):
+    """DVT_BUNDLEFILL1=on: the image has BUNDLEFILL1 and the rig serves the P25, YSF and NXDN listeners of module L (bundlefill1-edges.toml); the cases then
+    run those listeners and assert them. Unset, they do not run at all."""
+    return str((environ if environ is not None else os.environ).get(BUNDLE_ENV, "")).strip().lower() in ("on", "1", "true", "yes")
+
+
+def cyclic_positions(values, modulus, descending=False):
+    """Position of each native frame from a counter that cycles modulo `modulus` (YSF FN 0..6 ascending, P25 record type index 0..17 ascending, NXDN SACCH
+    structure 3..0 descending): a value that does not advance starts the next cycle, so a native frame the edge did not send is a hole in the positions,
+    not a shift of the later ones. Relative to the first (position 0)."""
+    out, cycle, prev = [], 0, None
+    for v in values:
+        w = (modulus - 1 - v) if descending else v
+        if prev is not None and w <= prev:
+            cycle += 1
+        prev = w
+        out.append(cycle * modulus + w)
+    base = out[0] if out else 0
+    return [x - base for x in out]
+
+
+def native_rows(kind, datagrams):
+    """[(counter value, [unit frames], datagram)] of the voice datagrams of `kind` ("ysf", "p25", "nxdn"), in arrival order."""
+    rows = []
+    for data in datagrams:
+        data = bytes(data)
+        if kind == "ysf":
+            info = ysf.parse(data)
+            if info is not None and info["kind"] == "voice":
+                rows.append((info["fich"]["fn"], [bytes(f) for f in info["frames"]], data))
+        elif kind == "p25":
+            info = p25.parse(data)
+            if info is not None and not info["terminator"] and "imbe" in info:
+                rows.append((info["type"] - 0x62, [bytes(info["imbe"])], data))
+        elif kind == "nxdn":
+            info = nxdn.parse(data)
+            if info is not None and info["kind"] == "voice":
+                rows.append((nxdn.parse_sacch(info["payload"][1:5])["structure"], [bytes(f) for f in nxdn.voice_frames(info["payload"])], data))
+        else:
+            raise ValueError(kind)
+    return rows
+
+
+def native_units(kind, datagrams):
+    """({unit position: frame bytes}, [native frame position of each voice datagram]) of a listener of `kind`. A P25 record is one unit; P25 positions come
+    from the record type (0x62..0x73) cycle, YSF from FN modulo 7, NXDN from the SACCH structure (3, 2, 1, 0)."""
+    rows = native_rows(kind, datagrams)
+    modulus = {"ysf": YSF_FN_MODULUS, "p25": P25_RECORDS, "nxdn": 4}[kind]
+    positions = cyclic_positions([r[0] for r in rows], modulus, descending=(kind == "nxdn"))
+    units = {}
+    for pos, (_v, frames, _d) in zip(positions, rows):
+        for i, frame in enumerate(frames):
+            units[pos if kind == "p25" else pos * len(frames) + i] = frame
+    return units, positions
+
+
+def dmr_native_positions(datagrams):
+    """The burst index of each DMR voice datagram (what dmr_bursts uses), in arrival order."""
+    out, superframe, prev = [], 0, None
+    for data in datagrams:
+        if not dmr.is_voice(data):
+            continue
+        letter = data[15] & 0x0F
+        if prev is not None and letter <= prev:
+            superframe += 1
+        prev = letter
+        out.append(superframe * 6 + letter)
+    return out
+
+
+def reference(units, count=COUNT):
+    """The control's frame of each position as a list, or None when a position is missing or two positions hold the same frame (then a loss case can
+    only judge the structure). The loss cases of the YSF, P25 and NXDN listeners compare with it: the same seeded PCM goes through the same codec
+    path, so the frame the control received at position p is what p must hold in a loss case (no assumption on gain bits or codec details)."""
+    if any(p not in units for p in range(count)):
+        return None
+    frames = [units[p] for p in range(count)]
+    return frames if len(set(frames)) == count else None
+
+
+def native_slots(units, ref):
+    """{position: matched reference index or None} of a listener's units against the control's reference list."""
+    return _slots(sorted(units.items()), ref)[0]
+
+
+def native_times(path, edge_ip, port, kind):
+    """Send times (s) of the voice datagrams of `kind` ("dmr" too) the edge sent to local port `port` of the tester in its tap capture, in order."""
+    from dvtest import pcap
+    out = []
+    for dg in pcap.udp_datagrams(path):
+        if dg.src != edge_ip or dg.dport != port:
+            continue
+        if kind == "dmr":
+            if not dmr.is_voice(dg.payload):
+                continue
+        elif not native_rows(kind, [dg.payload]):
+            continue
+        out.append(dg.ts)
+    return out
+
+
+def timing_dev_ms(times, positions, native_ms):
+    """Largest |(t_i - t_0) - (pos_i - pos_0) * native_ms| in ms over the native frames sent (None for fewer than two or when the counts disagree): how
+    far a native frame is from its own position in time. A frame sent at its position and time keeps this near 0 whatever the hole before it."""
+    if len(times) != len(positions) or len(times) < 2:
+        return None
+    return round(max(abs((t - times[0]) * 1000.0 - (p - positions[0]) * native_ms) for t, p in zip(times, positions)), 1)
+
+
+def judge_timing(name, dev_ms, control_ms=0.0, slack=TIMING_SLACK_MS):
+    """Timing verdict: `dev_ms` (timing_dev_ms) must not exceed `control_ms` (the control's own deviation; 0 for DMR) by more than `slack`. A list."""
+    if dev_ms is None:
+        return ["%s: no timing (the capture and the listener disagree on the native frames sent)" % name]
+    if dev_ms > control_ms + slack:
+        return ["%s: a native frame arrives %.0f ms from its own position in time (control %.0f ms, slack %.0f ms)" % (name, dev_ms, control_ms, slack)]
+    return []
 
 
 def _slots(rows, want):
@@ -292,7 +435,10 @@ def judge_slots(name, slots, count=COUNT, dropped=None, filled=False):
     if absent != want_absent:
         out.append("%s: missing positions %s, wanted %s (lost count %d, wanted %d)" % (name, absent[:10], want_absent, len(absent), len(want_absent)))
     wrong = [p for p in range(count) if p in slots and ((p != dropped and slots[p] != p) or (p == dropped and slots[p] not in (None, p)))]
-    if wrong:
+    if wrong == [dropped] and slots[dropped] is not None:
+        out.append("%s: the lost unit's slot (position %d) holds the frame of position %d, a copy of another unit and not a fill; every other position holds its own frame" % (
+            name, dropped, slots[dropped]))
+    elif wrong:
         out.append("%s: %d positions do not hold their own frame, first position %d holds %s (the lost frame is closed up: later frames moved)" % (
             name, len(wrong), wrong[0], "frame %d" % slots[wrong[0]] if slots[wrong[0]] is not None else "a frame of no position"))
     if dropped is not None and slots.get(dropped) == dropped:
@@ -311,14 +457,16 @@ def egress_procs(seen):
     return have, [p for p in ("dextra", "dmrhb") if p not in seen]
 
 
-def judge_counters(change, dropped_count, procs):
+def judge_counters(change, dropped_count, procs, strict_lost=()):
     """Judge a rfpos1b.Reading delta of one over with `dropped_count` frames lost on the IAX2 side (0: a control, 1: the loss case). Returns (problems,
     findings, facts).
 
     Room side (step C does not change it; the same on wip-3f142cd): with one lost frame the ingress edge counts gap +1, the room gap +1, lost +0 and the over
     `lossy` +1; with none all of them stay 0. Egress side (dv-router, since MEDLOAD1b an egress counts only loss on ITS OWN leg: a hole the room already
     published as an upstream gap is upstream loss): `tx lost` rises by 0 at every edge in `procs`, with or without loss. A rise is a FINDING, not asserted.
-    Every egress edge folded the over (else a harness slip); late / dropped are findings."""
+    Every egress edge folded the over (else a harness slip); `dropped` rises by 0 everywhere (BUNDLEFILL1: a bundled egress fills a missing unit and sends
+    the native frame; wip-e9fcc38's dmrhb dropped +2 for the two survivors of the burst); the procs in `strict_lost` (the bundled YSF / P25 / NXDN
+    listeners of DVT_BUNDLEFILL1) also hold `tx lost` at 0 as a problem; `late` is a finding."""
     problems, findings = [], []
     room = change.room
     facts = {"room": dict(room._asdict()), "egress": {proc: dict(c._asdict()) for proc, c in change.egress}}
@@ -335,10 +483,14 @@ def judge_counters(change, dropped_count, procs):
         folds = c.complete + c.lossy + c.end_missing + c.joined
         if folds < 1:
             problems.append("harness: egress edge %s folded no over: its listener did not take the stream" % proc)
-        if c.lost:
+        if c.lost and proc in strict_lost:
+            problems.append("dv_edge_over_units_total{dir=tx,proc=%s,result=lost} rose by %g, wanted 0 (the hole is upstream loss)" % (proc, c.lost))
+        elif c.lost:
             findings.append("dv_edge_over_units_total{dir=tx,proc=%s,result=lost} rose by %g (dv-router: +0, the hole is upstream loss; recorded, not asserted)" % (proc, c.lost))
-        if c.late or c.dropped:
-            findings.append("egress edge %s counted late %g, dropped %g" % (proc, c.late, c.dropped))
+        if c.dropped:
+            problems.append("dv_edge_over_units_total{dir=tx,proc=%s,result=dropped} rose by %g, wanted 0 (a native frame with a missing unit is filled and sent, not dropped)" % (proc, c.dropped))
+        if c.late:
+            findings.append("egress edge %s counted late %g" % (proc, c.late))
     return problems, findings, facts
 
 

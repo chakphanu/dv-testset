@@ -20,6 +20,14 @@ peer (static row, PCM, no codec: the control that already kept positions).
   RFPOS1C-c  the same with one FULL voice frame lost (position 40 is a full frame of the call, as Asterisk sends them now and then)
   RFPOS1C-d  control for c: the same over with a full frame at position 40, nothing lost
 
+DVT_BUNDLEFILL1=on (DV-Router BUNDLEFILL1: an egress that packs several 20 ms units into one native frame fills a missing unit with the codec's fill and still
+sends the native frame at its own position and time; egress `dropped` and `tx lost` stay 0 because the loss is upstream) adds three listeners of module L: YSF
+(frame of 5 units, FN), P25 (LDU of 9, record types 0x62..0x73) and NXDN (frame of 4, SACCH structure 3..0), served by bundlefill1-edges.toml (P25 41000, NXDN 41400,
+TG 31672 -> L). Their units are placed by the native counter (rfpos1c.cyclic_positions), never by arrival order, and compared with what the same listener
+received at that position in the control (case a): position 40 must hold a fill, every other position its control frame, the native frame of position 40 must
+be present, and no native frame may be further from its own time than in the control (+40 ms). Without the switch these listeners do not run. DMR asserts the same
+(burst B present with frames 39 and 41, slot 40 a fill, burst times) and `dropped` +0 on every egress.
+
 Judged apart, so a failure names its owner: "harness" (the hole did not arrive at the edge as planned, a listener heard nothing, an egress edge never
 folded the over), "usrp" (the control listener), "dstar", "dmr", "counters". Numbers go to stdout and out/<run>/rfpos1c.txt (RECORD / FINDING) and, per
 case, out/<run>/rfpos1c.json.
@@ -37,7 +45,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "proto"))
 
 from dvtest import asl_lab, clients, medload1, metrics, rfpos1b, rfpos1c, xstale1  # noqa: E402
 from dvtest.control import RigControl  # noqa: E402
-from dvtest.proto import iax2  # noqa: E402
+from dvtest.proto import iax2, nxdn, p25, ysf  # noqa: E402
 
 import data_support as ds  # noqa: E402
 
@@ -51,6 +59,8 @@ LEAD_S = 0.3                # after RADIO_KEY, before the first voice frame
 TAIL_S = 4.0                # after the unkey: the egress clocks drain and the listeners collect
 GAP_S = 4.0                 # between two overs
 RESULTS = {}
+REF = {}                    # the control's frame of every position per bundled listener kind (case a), the loss cases compare with it
+DEV = {}                    # the control's own timing deviation (ms) per listener kind
 
 
 def note(lab, case, tag, text):
@@ -119,13 +129,35 @@ def iax_caller(lab):
     return c
 
 
-class Listeners:
-    """The three listeners of room L: D-STAR (DExtra), DMR and a USRP peer socket."""
+def bundled_kinds():
+    """The extra native-frame listeners (YSF, P25, NXDN) of DVT_BUNDLEFILL1=on; none without the switch."""
+    return list(rfpos1c.BUNDLED) if rfpos1c.bundlefill_on() else []
 
-    def __init__(self, ip):
+
+def make_bundled(kind, ip):
+    """A linked YSF / P25 / NXDN listener of module L (the P25 and NXDN rows of bundlefill1-edges.toml, the YSF DG-ID of the template)."""
+    if kind == "ysf":
+        c = ysf.YsfClient("0.0.0.0", callsign="N0YSFL", module=rfpos1c.ROOM)
+    elif kind == "p25":
+        c = p25.P25Client("0.0.0.0", callsign="N0P25L", tg=rfpos1c.P25_TG)
+    else:
+        c = nxdn.NxdnClient("0.0.0.0", tg=rfpos1c.P25_TG, callsign="N0NXDL")
+    if not c.link(ip):
+        c.close()
+        raise AssertionError("%s link to %s:%d failed: is bundlefill1-edges.toml in the SUT's config (scripts/run.sh adds it under DVT_BUNDLEFILL1=on)?" % (
+            kind, ip, rfpos1c.BUNDLED[kind]["port"]))
+    return c
+
+
+class Listeners:
+    """The three listeners of room L: D-STAR (DExtra), DMR and a USRP peer socket; with DVT_BUNDLEFILL1=on also YSF, P25 and NXDN."""
+
+    def __init__(self, ip, bundled=()):
         self.ip = ip
         self.dstar = self.dmr = self.usrp = None
         self.usrp_in = []
+        self.bundled = {}
+        self.want_bundled = list(bundled)
 
     def __enter__(self):
         try:
@@ -136,11 +168,16 @@ class Listeners:
             self.usrp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self.usrp.bind(("0.0.0.0", rfpos1c.USRP_PEER_PORT))
             self.usrp.setblocking(False)
+            for kind in self.want_bundled:
+                self.bundled[kind] = make_bundled(kind, self.ip)
             time.sleep(SETUP_S)
             self.dstar.client.drain()
             self.dstar.client.inbox.clear()
             self.dmr.client.drain()
             self.dmr.client.inbox.clear()
+            for c in self.bundled.values():
+                c.client.drain()
+                c.client.inbox.clear()
             self.drain()
             self.usrp_in.clear()
         except BaseException:
@@ -149,6 +186,8 @@ class Listeners:
         return self
 
     def __exit__(self, *exc):
+        for c in self.bundled.values():
+            c.close()
         if self.usrp is not None:
             self.usrp.close()
         if self.dmr is not None:
@@ -160,6 +199,8 @@ class Listeners:
     def drain(self):
         self.dstar.client.drain()
         self.dmr.client.drain()
+        for c in self.bundled.values():
+            c.client.drain()
         try:
             while True:
                 self.usrp_in.append(self.usrp.recv(2048))
@@ -194,7 +235,8 @@ def run_over(lab, hub, frames, case, drop=None, full=None):
     """One over with the three listeners; returns everything the judges need."""
     ulaw, want = frames
     ip = lab.node("edge").ip
-    procs = list(rfpos1c.EGRESS.values())
+    kinds = bundled_kinds()
+    procs = list(rfpos1c.EGRESS.values()) + [rfpos1c.BUNDLED[k]["proc"] for k in kinds]
 
     def read():
         return rfpos1b.reading(hub(), procs, room=rfpos1c.ROOM_LABEL, ingress=rfpos1c.INGRESS_PROC)
@@ -202,7 +244,7 @@ def run_over(lab, hub, frames, case, drop=None, full=None):
     before = rfpos1b.stable_baseline(read)
     rx_before = rfpos1c.rx_gaps(hub())
     drops, fulls = ({drop} if drop is not None else set()), ({full} if full is not None else set())
-    with Listeners(ip) as listeners:
+    with Listeners(ip, kinds) as listeners:
         with lab.scenario("rfpos1c-" + case, capture=["edge"]) as sc:
             caller = iax_caller(lab)
             call = caller.local
@@ -216,6 +258,9 @@ def run_over(lab, hub, frames, case, drop=None, full=None):
         dmr_bursts, dmr_seqs = rfpos1c.dmr_bursts(listeners.dmr.client.inbox)
         usrp_rows = rfpos1c.usrp_voice(listeners.usrp_in)
         usrp_other = len(listeners.usrp_in) - len(usrp_rows)
+        dmr_datagrams = list(listeners.dmr.client.inbox)
+        dmr_port = listeners.dmr.client.local[1]
+        bundles = {k: {"datagrams": list(c.client.inbox), "port": c.client.local[1]} for k, c in listeners.bundled.items()}
     fold = [p for p in procs]
     try:
         after = rfpos1b.wait_settled(read, before, fold_procs=fold)
@@ -225,10 +270,69 @@ def run_over(lab, hub, frames, case, drop=None, full=None):
     samples = hub()
     stamps = rfpos1c.edge_voice_stamps(sc.dir / "edge.pcap", ip, lab.port, call)
     usrp_times = rfpos1c.usrp_times(sc.dir / "edge.pcap", ip)
+    pcap_path = sc.dir / "edge.pcap"
+    dmr_times = rfpos1c.native_times(pcap_path, ip, dmr_port, "dmr")
+    for kind, b in bundles.items():
+        b["times"] = rfpos1c.native_times(pcap_path, ip, b["port"], kind)
     time.sleep(GAP_S)
     return {"dstar_rows": dstar_rows, "dstar_repeats": dstar_repeats, "dmr_bursts": dmr_bursts, "dmr_seqs": dmr_seqs, "usrp_rows": usrp_rows, "usrp_other": usrp_other,
-            "usrp_times": usrp_times, "stamps": stamps, "change": rfpos1b.delta(after, before), "procs_seen": xstale1.procs_seen(samples),
+            "usrp_times": usrp_times, "stamps": stamps, "dmr_datagrams": dmr_datagrams, "dmr_times": dmr_times, "bundles": bundles, "procs": procs,
+            "kinds": kinds, "change": rfpos1b.delta(after, before), "procs_seen": xstale1.procs_seen(samples),
             "rx_gap": {k: v - rx_before.get(k, 0) for k, v in rfpos1c.rx_gaps(samples).items()}, "voice_log": list(caller.voice_log)}
+
+
+def fill_text(bursts, dropped, per):
+    """What the lost unit's slot of a DMR burst holds (hex of the 9 bytes), or None."""
+    if dropped is None or dropped // per not in bursts:
+        return None
+    return bursts[dropped // per][dropped % per].hex()
+
+
+def judge_bundled(lab, case, kind, bundle, dropped, problems):
+    """Judge one YSF / P25 / NXDN listener (DVT_BUNDLEFILL1): units by counter position, content against the control's reference, the native frame of
+    the lost unit present at its own position and time, the other units at their own positions. Problems go to problems[kind]; returns the facts."""
+    spec = rfpos1c.BUNDLED[kind]
+    name = spec["name"]
+    units, positions = rfpos1c.native_units(kind, bundle["datagrams"])
+    dev = rfpos1c.timing_dev_ms(bundle["times"], positions, spec["native_ms"])
+    facts = {"native_frames": len(positions), "units": len(units), "timing_dev_ms": dev, "dropped_slot": None}
+    if not units:
+        problems["harness"].append("the %s listener heard nothing" % name)
+        return facts
+    out = problems[kind]
+    if dropped is None:
+        ref = rfpos1c.reference(units)
+        if ref is None:
+            out.append("%s: the control over does not hold all %d positions once each (missing %s, units %d)" % (
+                name, COUNT, [p for p in range(COUNT) if p not in units][:10], len(units)))
+        elif kind not in REF:
+            REF[kind] = ref
+            DEV[kind] = dev if dev is not None else 0.0
+        elif ref != REF[kind]:
+            problems["harness"].append("%s: the control over differs from the first control (the frames of a position are not deterministic)" % name)
+        slots = {p: p for p in units if p < COUNT}
+        out += rfpos1c.judge_slots(name, slots, COUNT, None, filled=True)
+    else:
+        ref = REF.get(kind)
+        if ref is None:
+            problems["harness"].append("%s: no control reference (case a did not give one): content not judged" % name)
+        else:
+            slots = rfpos1c.native_slots(units, ref)
+            out += rfpos1c.judge_native(name, slots, COUNT, dropped, spec["per"])
+            if dropped not in units:
+                facts["dropped_slot"] = "absent (no fill sent)"
+            elif slots.get(dropped) is None:
+                facts["dropped_slot"] = "a fill that is no position's frame: %s" % units[dropped].hex()
+            elif slots[dropped] == dropped:
+                facts["dropped_slot"] = "THE LOST FRAME"
+            else:
+                facts["dropped_slot"] = "the frame of position %d (a copy, not a fill): %s" % (slots[dropped], units[dropped].hex())
+            facts["runs"] = rfpos1c.runs(slots)
+    out += rfpos1c.judge_timing(name, dev, DEV.get(kind, 0.0))
+    note(lab, case, "RECORD", "%s: %d native frames, %d units, positions %s, %s; timing deviation %s ms (control %s); lost unit's slot: %s" % (
+        name, len(positions), len(units), "%s..%s" % (min(positions), max(positions)) if positions else None, facts.get("runs", "control"), dev,
+        DEV.get(kind), facts["dropped_slot"]))
+    return facts
 
 
 def judge(lab, case, frames, out, dropped, full=None):
@@ -236,6 +340,7 @@ def judge(lab, case, frames, out, dropped, full=None):
     _ulaw, want = frames
     dropped_count = 0 if dropped is None else 1
     problems = {"harness": [], "usrp": [], "dstar": [], "dmr": [], "counters": []}
+    problems.update({k: [] for k in out["kinds"]})
     holes, off = rfpos1c.holes(out["stamps"])
     want_holes = [] if dropped is None else [dropped]
     if holes != want_holes or off:
@@ -258,16 +363,22 @@ def judge(lab, case, frames, out, dropped, full=None):
     problems["usrp"] = [p for p in usrp_problems if not p.startswith("harness:")]
     problems["dstar"] = rfpos1c.judge_slots("D-STAR", d_slots, COUNT, dropped)
     problems["dmr"] = rfpos1c.judge_dmr(m_slots, COUNT, dropped)
-    procs = [p for p in rfpos1c.EGRESS.values()]
-    c_problems, c_findings, facts = rfpos1c.judge_counters(out["change"], dropped_count, procs)
+    dmr_dev = rfpos1c.timing_dev_ms(out["dmr_times"], rfpos1c.dmr_native_positions(out["dmr_datagrams"]), rfpos1c.DMR_NATIVE_MS)
+    problems["dmr"] += rfpos1c.judge_timing("DMR", dmr_dev, 0.0)
+    bundle_facts = {}
+    for kind in out["kinds"]:
+        bundle_facts[kind] = judge_bundled(lab, case, kind, out["bundles"][kind], dropped, problems)
+    strict = [rfpos1c.BUNDLED[k]["proc"] for k in out["kinds"]]
+    c_problems, c_findings, facts = rfpos1c.judge_counters(out["change"], dropped_count, out["procs"], strict_lost=strict)
     problems["counters"] = c_problems
     absent = {n: [p for p in range(COUNT) if p not in s] for n, s in (("dstar", d_slots), ("dmr", m_slots))}
     absent["usrp"] = [i for i in range(COUNT) if i not in set(u_matched)]
     note(lab, case, "RECORD", "dropped index %s (full frame at %s); the edge's capture: %d voice frames, timestamp holes %s, off grid %d" % (
         dropped, full, len(out["stamps"]), holes, len(off)))
     note(lab, case, "RECORD", "D-STAR: %d frames, missing positions %s, %s" % (len(d_slots), absent["dstar"][:8], rfpos1c.runs(d_slots)))
-    note(lab, case, "RECORD", "DMR: %d frames in %d bursts (placed by burst letter), slots missing %s, %s; DMRD seq skips %s" % (
-        len(m_slots), len(out["dmr_bursts"]), absent["dmr"][:8], rfpos1c.runs(m_slots), rfpos1c.seq_gaps(out["dmr_seqs"])))
+    note(lab, case, "RECORD", "DMR: %d frames in %d bursts (placed by burst letter), slots missing %s, %s; DMRD seq skips %s; timing deviation %s ms; fill at %s: %s" % (
+        len(m_slots), len(out["dmr_bursts"]), absent["dmr"][:8], rfpos1c.runs(m_slots), rfpos1c.seq_gaps(out["dmr_seqs"]), dmr_dev,
+        dropped, fill_text(out["dmr_bursts"], dropped, 3)))
     note(lab, case, "RECORD", "USRP: %d keyed packets (+%d other), frames not heard %s, arrival order %s; seq %s..%s (the edge's running counter); %s" % (
         len(out["usrp_rows"]), out["usrp_other"], absent["usrp"][:8], rfpos1c.runs(dict(enumerate(u_matched))),
         out["usrp_rows"][0][0] if out["usrp_rows"] else None, out["usrp_rows"][-1][0] if out["usrp_rows"] else None, usrp_facts))
@@ -281,11 +392,12 @@ def judge(lab, case, frames, out, dropped, full=None):
         "dropped_index": dropped, "full_frame_index": full, "count": COUNT,
         "capture_voice_frames": len(out["stamps"]), "capture_timestamp_holes": holes,
         "dstar": {"frames": len(d_slots), "missing_positions": absent["dstar"], "runs": rfpos1c.runs(d_slots)},
-        "dmr": {"frames": len(m_slots), "bursts": len(out["dmr_bursts"]), "seq_skips": rfpos1c.seq_gaps(out["dmr_seqs"]), "missing_slots": absent["dmr"], "runs": rfpos1c.runs(m_slots), "fill_at_dropped": (
+        "dmr": {"frames": len(m_slots), "bursts": len(out["dmr_bursts"]), "seq_skips": rfpos1c.seq_gaps(out["dmr_seqs"]), "timing_dev_ms": dmr_dev,
+                "fill": fill_text(out["dmr_bursts"], dropped, 3), "missing_slots": absent["dmr"], "runs": rfpos1c.runs(m_slots), "fill_at_dropped": (
             None if dropped is None or dropped not in m_slots else m_slots[dropped])},
         "usrp": {"packets": len(out["usrp_rows"]), "frames_not_heard": absent["usrp"], "arrival_order": rfpos1c.runs(dict(enumerate(u_matched))), **usrp_facts,
                  "seq_first": out["usrp_rows"][0][0] if out["usrp_rows"] else None, "seq_last": out["usrp_rows"][-1][0] if out["usrp_rows"] else None},
-        "counters": facts, "ingress_gap_by_proc": out["rx_gap"], "problems": problems})
+        "bundled": bundle_facts, "counters": facts, "ingress_gap_by_proc": out["rx_gap"], "problems": problems})
     return problems
 
 

@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, docs/rfpos1c-cases.md "BUNDLEFILL1"): the SUT's own NXDN (UDP 41400) and P25 (UDP 41000) client ports,
+# both serving module L, the room of the AllStar edge of the asl-lab (allstar-lab.toml), so that the tester can be a P25 and an NXDN listener of that
+# room next to the YSF listener (the template's [edges.ysf] has dgid_modules) and the D-STAR / DMR / USRP ones. TG 31672 as in soak-edges.toml. The
+# template's [edges.nxdn] / [edges.p25] are enable = "auto" without a served module (the edges are not spawned); this file is merged key by key.
+# scripts/run.sh adds it under --profile asl-edge with DVT_BUNDLEFILL1=on. Do not combine with soak-edges.toml / mmdvm-edges.toml (other modules).
+[edges.nxdn]
+enable = true
+tg_modules = "31672:L"
+
+[edges.p25]
+enable = true
+server_module = "L"
+server_tg = 31672

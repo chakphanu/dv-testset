@@ -126,6 +126,45 @@ frames 39 and 41 are not carried, whereas dv-router's expectation is that the bu
 (inference from the counts: 3 units, 1 missing, 2 dropped; the egress fold is `lossy`). The judge reports exactly this as one sentence ("the whole burst of the lost frame ... was not sent:
 frames [39, 41] are not carried; ... positions kept at burst granularity") and the case still fails on it until the burst carries them.
 
+## BUNDLEFILL1 (switch DVT_BUNDLEFILL1=on): the bundled egresses
+
+dv-router ruled the DMR whole-burst drop a defect and opened BUNDLEFILL1: an egress that packs several 20 ms units into one native frame (DMR burst 3, YSF frame 5, NXDN frame 4,
+P25 LDU 9) fills a missing unit with the codec's fill and still sends the native frame at its own position and time; egress `dropped` and `tx lost` stay 0 (the loss is upstream).
+Not a different image gate: the switch only decides whether the extra listeners run. `DVT_BUNDLEFILL1=on` makes `run.sh` add `rig/config/dv-router/bundlefill1-edges.toml` (the SUT's P25
+port 41000 and NXDN port 41400 serving module L, TG 31672) and export `DVT_P25_MODULE=L` (the module of the P25 port is pinned by the environment `DV_P25_SERVER_MODULE`, which beat
+the file in the first run: module G, no voice at the P25 listener). Without the switch the YSF, P25 and NXDN listeners do not run.
+
+| Listener | Native frame | Position from | Time step |
+|----------|--------------|---------------|-----------|
+| DMR (always) | burst, 3 units | voice letter A..F | 60 ms |
+| YSF | frame, 5 units | FICH FN modulo 7 | 100 ms |
+| NXDN | frame, 4 units (7 B each) | SACCH structure 3, 2, 1, 0 | 80 ms |
+| P25 | LDU, 9 records of 1 unit | record type 0x62..0x73 (LDU1 + LDU2) | 20 ms per record |
+
+Units are placed by that counter (`rfpos1c.cyclic_positions`: a value that does not advance starts the next cycle), never by arrival order. Content: the frames of YSF / P25 / NXDN are not
+predicted; the CONTROL over (case a, which must hold all 90 positions once each, distinct) is the reference, and a loss case compares each position with what the same listener got at that position
+in the control. Asserted in b and c, for each of DMR, YSF, P25, NXDN: every position but 40 holds its own frame; the native frame holding 40 is sent; the lost unit's slot is a fill that is neither frame 40 nor
+another position's frame (its bytes are recorded, not asserted); no native frame is more than 40 ms further from its own time than in the control (DMR: than its own position); egress `dropped` +0 on every
+edge and `tx lost` +0 on YSF, P25 and NXDN (DMR, D-STAR and USRP: a rise is a FINDING).
+
+### The before, dv-router:wip-e9fcc38 (step C, no BUNDLEFILL1)
+
+Run `20261123T160335Z` (testset of this commit's parent plus the BUNDLEFILL1 additions, `DVT_RFPOS1C=on DVT_BUNDLEFILL1=on`): 2 passed (a, d), 2 failed (b, c), 250 s; the same shapes in b and c. The run before it,
+`20261123T155348Z`, had the P25 module pinned to G (harness, fixed) and gave the same YSF, NXDN and DMR shapes. Controls a and d: every listener holds all positions, all egress counters 0.
+
+| | Native frame of unit 40 | Other units | Slot of unit 40 | Egress counters (b, c) | Time |
+|---|---|---|---|---|---|
+| DMR | NOT sent: burst B (units 39, 40, 41) absent, seq contiguous, letters C.. follow | 0-38 and 42-89 at their own positions | (absent with its burst) | dropped +2, lossy over | bursts at their own times, 0.7-0.9 ms |
+| YSF | sent (18 frames, FN contiguous) | 0-39 and 41-89 own | the frame of position 35 (a copy of another unit, not a fill) | dropped 0, lost 0 | 1.1 ms (control 3.9) |
+| P25 | the LDU's other 8 records are sent | 0-39 and 41-89 own | record 0x66 NOT sent (no fill, the unit is absent) | dropped 0, lost 0 | +30 ms over the control (36-40 ms, control 6.6) |
+| NXDN | NOT sent: frame 10 (units 40..43) absent, 22 frames instead of 23, the SACCH structure continues without a gap | 0-39 own; 40-85 hold 44-89 (counter closed up), 86-87 pad | (absent with its frame) | dropped +3 (the three survivors), lossy over | 144-149 ms (control 69): later frames are one native frame (80 ms) late |
+| D-STAR, USRP (unchanged) | counter skips 40 / hole in time 79.8-80 ms | own | absent | lost 0, dropped 0 | |
+
+So on wip-e9fcc38: only YSF keeps the native frame (its fill is a copy of unit 35); P25 omits the single record; DMR and NXDN drop the whole native frame, and NXDN also closes the SACCH counter up (the later
+frames keep their time only up to a native frame of delay). The judge words are `the whole native frame of the lost unit ... was not sent` (DMR, NXDN), `the lost unit's slot ... holds the frame of position N, a copy
+of another unit and not a fill` (YSF) and `was not sent at all (no fill)` (P25). The `lost unit's slot` text in the case's own JSON of this run (`bundled.<kind>.dropped_slot`, field written by the first version) says
+"OWN FRAME" for YSF and NXDN when the slot held any matched frame: read the judge sentences instead (fixed in the code, not in the recorded file).
+
 ## Run command
 
 ```
@@ -134,7 +173,7 @@ XLXD_SUT_IMAGE=dv-router:wip-3f142cd DVT_SUT_PROFILE=dvrouter DVT_SUT_LAUNCH=nat
 ```
 
 About 4 minutes (the baseline took 233 s of pytest). No web, no `--capture` (the lab agent captures the edge's namespace itself), no `DVT_ASL_EDGE_OUT` (no outbound rows).
-For the step C image use its tag in `XLXD_SUT_IMAGE`. One rig, nothing else at the same time. `run.sh` adds `allstar-lab.toml` and, under the switch, `rfpos1c-usrp.toml` to
+For the step C image use its tag in `XLXD_SUT_IMAGE`. With the BUNDLEFILL1 listeners add `DVT_BUNDLEFILL1=on` (about 4 minutes, 250 s measured; the YSF, P25 and NXDN clients link in `Listeners`). One rig, nothing else at the same time. `run.sh` adds `allstar-lab.toml` and, under the switch, `rfpos1c-usrp.toml` to
 `DVT_SUT_CONFIG_EXTRA`.
 
 ## GAPs
