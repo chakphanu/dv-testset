@@ -174,19 +174,13 @@ def get_row(n, node):
     return n1.link_row(status, name)
 
 
-def clients_row(n, node):
-    """The same link row as a second view: the `link_edges` of the admin `GET /clients?limit=1` (the status hub's private answer, which `GET /status` projects).
-    None when the call fails or its answer has no link_edges."""
-    client = n.admin.get(node)
-    if client is None:
-        return None
-    name = "account:%s" % n1.ACCOUNT if node == "central" else "uplink:%s" % n1.UPLINK
-    try:
-        client.step_up()
-        body = client.get(client.path("/clients") + "?limit=1", expect=200).json()
-    except (OSError, web.WebError, ValueError, AttributeError):
-        return None
-    return n1.link_row(body, name)
+def end_cleared(n, node, who, budget_s=15.0):
+    """LINKFIX2: once the link is up again the row shows no session end any more (the next successful handshake clears `last_session_end`): wait for a connected
+    row with none; [] when it comes, else the sentence with the value still shown."""
+    row, waited = wait_row(n, node, lambda r: connected(r) and n1.row_end_reason(r) is None, budget_s)
+    if waited is not None or row is None:
+        return []
+    return ["%s: the %s row still shows last_session_end %s after the relink (wanted null: the next successful handshake clears it)" % (who, node, n1.row_end_reason(row))]
 
 
 def wait_row(n, node, ok, budget_s, step_s=1.0):
@@ -583,6 +577,10 @@ def test_node1g_d_blackout_60s_relinks(n1g):
     for node, row in rows_after.items():
         if row is not None and row.get("last_error") not in (None, ""):
             problems.append("%s row keeps last_error %s after the link came back" % (node, row.get("last_error")))
+    if n1.linkfix2_on():
+        for node in ("central", "hotspot"):
+            problems += end_cleared(n, node, "d")
+            problems += n1.end_vs_hub_problems("d " + node, n1.row_end_reason(seen_mid.get(node)), n1.delta(before[node], hub_mid[node]))
     note(n, case, "RECORD", "mid-blackout rows: central %s / hotspot %s; first probe heard %s s after the end; moved %s" % (
         n1.row_summary(seen_mid.get("central")), n1.row_summary(seen_mid.get("hotspot")), None if rel is None else round(rel, 2), moved(before, after)))
     finish(n, case, problems)
@@ -1026,6 +1024,8 @@ def test_node1g_h_rotated_key(n1g):
     for node, row in rows_after.items():
         if row is not None and row.get("last_error") not in (None, ""):
             problems.append("%s row keeps last_error %s after the key was fixed" % (node, row.get("last_error")))
+    if n1.linkfix2_on():
+        problems += end_cleared(n, "hotspot", "h")
     note(n, case, "RECORD", "key fixed: first probe heard %s s after the fix; handshakes moved central %s / hotspot %s" % (
         None if rel is None else round(rel, 2), {k: v for k, v in mv["central"].items() if k.startswith("hs.")}, {k: v for k, v in mv["hotspot"].items() if k.startswith("hs.")}))
     finish(n, case, problems)
@@ -1200,12 +1200,6 @@ def test_node1g_r_revoked_account(n1g):
                     ends_seen.append((row.get("state"), row.get("last_error"), n1.row_end_reason(row)))
             k += 1
             tick(ns.all)
-        if n1.linkfix2_on():
-            alt = clients_row(n, "hotspot")
-            if alt is None:
-                note(n, case, "GAP", "the admin /clients answer carries no link_edges for the hotspot: the two views of the row were not compared")
-            else:
-                problems += ["r: the two views of the hotspot row differ: %s" % p for p in n1.rows_disagree(get_row(n, "hotspot"), alt)]
         mid = hubs(n, quiet=False)
         t_dead, sent = probe_until_heard(ns, ns.hc, ns.lc, 3.0, "r-dead")
         if t_dead is not None:
@@ -1220,6 +1214,8 @@ def test_node1g_r_revoked_account(n1g):
         problems.append("after the revocation the central node counted Reject{auth} at %.3f per second, wanted at most %.1f" % (rate[0], n1.REFUSAL_RATE_MAX))
     mv_mid = {"central": n1.rebase(before["central"], mid["central"]), "hotspot": n1.delta(before["hotspot"], mid["hotspot"])}
     problems += ["hotspot: %s" % p for p in n1.ends_problems(mv_mid["hotspot"], {"revoked": 1})]
+    if n1.linkfix2_on():                                  # the admin status view against the hub's counters
+        problems += n1.end_vs_hub_problems("r", next((e for _, _, e in reversed(ends_seen) if e), None), mv_mid["hotspot"])
     hints = mv_mid["hotspot"].get("hs.auth", 0)
     if not 1 <= hints <= window / 5.0 + 1:
         problems.append("the hotspot counted %g Reject{auth} hints in %.0f s (once per attempt: wanted 1..%d)" % (hints, window, window / 5 + 1))
@@ -1245,9 +1241,7 @@ def test_node1g_r_revoked_account(n1g):
     problems += counters_problems(mv, (1, 1), allow_restarts=("dv-edge-link",), allow_rx=("unknown_session",), ends={"hotspot": {"revoked": 1}})
     problems += floor_free(n, after, (("central", "C"), ("hotspot", "B")))
     if n1.linkfix2_on():
-        row = wait_row(n, "hotspot", connected, 15.0)[0]
-        note(n, case, "RECORD", "hotspot row after the next successful handshake: last_session_end %s (the field keeps the last session end), last_error %s" % (
-            n1.row_end_reason(row), (row or {}).get("last_error")))
+        problems += end_cleared(n, "hotspot", "r")
     note(n, case, "RECORD", "row put back: first probe heard %s s after the reload; hotspot moved %s" % (
         None if rel is None else round(rel, 2), {k: v for k, v in mv["hotspot"].items() if k.startswith(("hs.", "se."))}))
     finish(n, case, problems)
@@ -1281,10 +1275,14 @@ def test_node1g_s_reload_with_the_same_key_is_a_bye(n1g):
             problems += ["%s: %s" % (step, p) for p in more]
             labels = sampler.finish()
         if n1.linkfix2_on():
-            final = wait_row(n, "hotspot", connected, 10.0)[0]
-            seen_ends = {e for _, _, e in sampler.full} | {n1.row_end_reason(final)}
-            if "bye" not in seen_ends:
-                problems.append("LINKFIX2: %s: the hotspot row never showed last_session_end bye after Bye{reload} (values seen %s)" % (step, sorted(str(e) for e in seen_ends)))
+            # `bye` can only be on the row between the Bye and the end of the relink (0.5 s): any sample in between must show it, and when no 0.25 s sample lands there it is
+            # recorded, not failed; after the relink the next handshake has cleared it
+            between = [e for _, _, e in sampler.full if e is not None]
+            if between and set(between) != {"bye"}:
+                problems.append("LINKFIX2: %s: the hotspot row showed last_session_end %s after Bye{reload} (wanted bye)" % (step, sorted(set(between))))
+            if not between:
+                note(n, case, "RECORD", "%s: no 0.25 s sample landed between the Bye and the relink (0.5 s): last_session_end bye was not seen" % step)
+            problems += end_cleared(n, "hotspot", "s " + step)
         note(n, case, "RECORD", "%s: hotspot row after the reload (state, last_error): %s" % (step, labels[:30]))
         if "revoked" in [e for _, e in labels]:
             problems.append("%s: the hotspot row shows revoked although the key did not change" % step)

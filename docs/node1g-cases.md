@@ -183,12 +183,17 @@ dv-router answered both findings as defects, fixed in LINKFIX2:
 * FINDING 5: the 40 ms window is the contract, the 2-unit cap only a safety bound. NODE1g-a with `DVT_LINKSEQ1=on` already asserts it whatever the position count: the listener hears 100 percent, and the host step
   (`python3 -m dvtest.node1g_capture`) fails a link-edge late count above the number of units reordered by more than 40 ms; its line now also says how many reordered units were within 40 ms but more than 2 positions back
   (2 of 3 at the central node and 1 of 3 at the hotspot in `20261124T054120Z`). No new gate.
-* FINDING 6: the hotspot row keeps the reason of the last session end apart from the last attempt error, in the field **`last_session_end`** (values `timeout | bye | replaced | revoked`; on the status row, the admin
-  row and in the OpenAPI shape; dv-router, 2026-11-24: the only name read, `dvtest.node1g.END_REASON_FIELDS`). New gate `DVT_LINKFIX2=on` (default off, which keeps the wip-4732c43 assert that last_error shows revoked,
-  which fails): h and r assert that the row shows `last_session_end` `revoked` in EVERY sample while the hotspot is `reconnecting` (h: the 10 s after the rekey; r: those 10 s and every 4th round of the 60 s window) with
-  `last_error` `refused_key` (the attempt error, no longer `revoked`); r also compares the status row (`GET /status`) with the admin `GET /clients` view of the same row (state, last_error, last_session_end; a GAP note
-  when `/clients` carries no `link_edges`) and only records the field after the next successful handshake; d asserts `last_session_end` `timeout` on BOTH rows during the 60 s blackout; s asserts `bye` on the hotspot's row
-  after each Bye{reload} (seen in the 8 s of samples or on the row once it is connected again). The reorder cap is now 6 units per profile with the window unchanged at 40 ms: nothing changes in a.
+* FINDING 6: the hotspot row keeps the reason of the last session end apart from the last attempt error, in the field **`last_session_end`** (values `timeout | bye | replaced | revoked`; in the admin status view
+  `Status.link_edges`, the OpenAPI `LinkEdge` shape; dv-router, 2026-11-24: the only name read, `dvtest.node1g.END_REASON_FIELDS`); **the next successful handshake clears it to null**. New gate `DVT_LINKFIX2=on`
+  (default off, which keeps the wip-4732c43 assert that last_error shows revoked, which fails):
+  * h and r: `revoked` in EVERY sample while the hotspot is `reconnecting` (h: the 10 s after the rekey; r: those 10 s and every 4th round of the 60 s window) with `last_error` `refused_key` (the attempt error, no longer
+    `revoked`), then null once the link is up again (h after the key fix, r after the row is put back);
+  * d: `timeout` on BOTH rows during the 60 s blackout, null on both once linked;
+  * s: `bye` can only be on the hotspot's row between the Bye and the end of the relink (0.5 s): any 0.25 s sample in between must show `bye` (and nothing else), when none lands there it is RECORDED, not failed; after the
+    relink the row must be null;
+  * the admin status view against the hub: the reason a row shows must be a reason whose `dv_edge_link_session_ends_total{reason}` moved on that node (d mid-blackout, r window). The hub's own HTTP listener serves
+    `/metrics` only, so its counter is the hub's view; the admin `GET /clients` is not used (the link rows are in `Status.link_edges` only).
+  The reorder cap is now 6 units per profile with the window unchanged at 40 ms: nothing changes in a.
 * Relink after a key fix: the bound stays 12 s (`RELINK_FIX_S`).
 * `session_ends{reason=replaced}`: not added. It needs the same hotspot to open a second session from a new source port while the first is alive, i.e. a second handshake the tester would have to play with the key
   (the rig cannot force one: a rebinding alone moves the existing session, the hotspot cannot be restarted through the control channel).

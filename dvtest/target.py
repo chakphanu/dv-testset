@@ -144,8 +144,9 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
                      they assert the contract (gap at most 5 s, 90 percent heard) and fail on the defect (docs/node1g-cases.md, FINDING 1)
   DVT_LINKFIX2       on: LINKFIX2 (a future image: the hotspot's link row keeps the reason of the last session end apart from the attempt error `last_error`): cases/test_node1g.py h and r assert
                      that the row shows the end reason `revoked` in the field `last_session_end` (timeout | bye | replaced | revoked, separate from last_error, in the status row, the admin row and the
-                     OpenAPI shape) in every sample while the hotspot retries and is refused, with `last_error` refused_key; d asserts timeout on both rows during the blackout and s bye on the hotspot's
-                     after each Bye{reload}; r compares the status row with the admin /clients view; off or unset: they assert last_error revoked (the wip-4732c43 behaviour, which fails: FINDING 6)
+                     OpenAPI LinkEdge shape; the next successful handshake clears it to null) in every sample while the hotspot retries and is refused, with `last_error` refused_key, and null after the
+                     relink; d asserts timeout on both rows during the blackout and null once linked, s bye on the hotspot's row only before the relink completes (recorded when no sample lands there)
+                     and null after; the shown reason must match a moved dv_edge_link_session_ends_total on that hub; off or unset: they assert last_error revoked (the wip-4732c43 behaviour, which fails: FINDING 6)
   DVT_LINKSEQ1       on: LINKSEQ1 (DV-Router 7d2af17d, image wip-4732c43 and later): cases/test_node1g.py a (delay only, 60 ms +- 10 ms) also asserts that the listener hears 100 percent, that every missing frame is visible in a
                      late / lost / gap counter of some node or edge, and that the rows' loss_ppm is within 5000 ppm of the missing-unit share; the host step
                      `python3 -m dvtest.node1g_capture out/<run>` checks that no unit reordered within 40 ms was counted late; off or unset: a only records (docs/node1g-cases.md)

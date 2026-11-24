@@ -402,9 +402,9 @@ def test_linkfix2_end_reason_is_read_from_a_separate_row_field():
     assert n1.row_end_reason({"state": "connected", "last_session_end": "bye"}) == "bye" and n1.row_end_reason({"state": "connected"}) is None
     assert n1.row_end_reason({"last_session_end": ""}) is None and n1.row_end_reason(None) is None
     assert n1.row_end_reason({"end_reason": "bye", "last_end_reason": "bye"}) is None                      # only the one name is read
-    a = {"state": "reconnecting", "last_error": "refused_key", "last_session_end": "revoked"}
-    assert n1.rows_disagree(a, dict(a)) == [] and n1.rows_disagree(a, None) == []
-    assert n1.rows_disagree(a, dict(a, last_session_end="timeout")) == ["last_session_end: 'revoked' against 'timeout'"]
+    assert n1.end_vs_hub_problems("r", None, {}) == [] and n1.end_vs_hub_problems("r", "revoked", {"se.revoked": 1.0}) == []
+    out = n1.end_vs_hub_problems("r", "timeout", {"se.revoked": 1.0})
+    assert len(out) == 1 and "session_ends{reason=timeout}" in out[0] and "se.revoked" in out[0]
     good = [("connected", None, None), ("reconnecting", "refused_key", "revoked"), ("reconnecting", "refused_key", "revoked")]
     assert n1.end_reason_problems(good, "r") == []
     # today's image: last_error carries the reason for under a second, then refused_key; no end-reason field at all
