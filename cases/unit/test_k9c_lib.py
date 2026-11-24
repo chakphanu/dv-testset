@@ -123,3 +123,36 @@ def test_judge_switch_to_room_to_from_room_wants_voice_before_and_none_after():
 
 def test_heard_share():
     assert k9c.heard_share(60, 75) == 0.8 and k9c.heard_share(1, 0) == 0.0
+
+
+FOLDS = """\
+dv_room_overs_total{room="M",result="complete"} 4
+dv_room_overs_total{room="M",result="lossy"} 1
+dv_edge_overs_total{proc="usrp",dir="rx",result="end_missing"} 2
+dv_edge_overs_total{proc="usrp",dir="tx",result="complete"} 7
+dv_edge_uptime_seconds{proc="usrp"} 100
+dv_room_floor_revoked_total{room="M"} 0
+dv_edge_sessions{kind="peer"} 3
+"""
+
+
+def test_all_series_keeps_every_sample_and_folds_selects_the_over_ones():
+    before = k9c.all_series(FOLDS)
+    assert len(before) == 7
+    after = k9c.all_series(FOLDS.replace('result="complete"} 4', 'result="complete"} 5').replace('end_missing"} 2', 'end_missing"} 3')
+                           .replace("uptime_seconds{proc=\"usrp\"} 100", "uptime_seconds{proc=\"usrp\"} 130").replace("floor_revoked_total{room=\"M\"} 0", "floor_revoked_total{room=\"M\"} 1"))
+    moved = k9c.delta(before, after)
+    assert len(moved) == 4
+    cut = k9c.folds(moved)
+    assert {k[0] for k in cut} == {"dv_room_overs_total", "dv_edge_overs_total", "dv_room_floor_revoked_total"}      # the uptime is not a fold
+    assert k9c.fold_results(moved, "dv_room_overs_total") == {"complete": 1.0}
+    assert k9c.fold_results(moved, "dv_edge_overs_total", dir="rx") == {"end_missing": 1.0}
+    assert k9c.fold_results(moved, "dv_edge_overs_total", dir="tx") == {}
+    assert k9c.fold_results({}, "dv_room_overs_total") == {}
+
+
+def test_new_lines_are_the_ones_after_the_old_text_that_name_a_word():
+    old = "a start\nb over\n"
+    new = old + "c nothing\nd direction changed\ne OVER cut\n"
+    assert k9c.new_lines(old, new) == ["d direction changed", "e OVER cut"]
+    assert k9c.new_lines(new, new) == []

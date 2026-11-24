@@ -136,3 +136,47 @@ def judge_switch(heard, t_switch, wait, expect_after):
 def heard_share(heard, sent):
     """heard / sent as a float (0 when nothing was sent)."""
     return (heard / float(sent)) if sent else 0.0
+
+
+# ---------------------------------------------------------------- what a cut over leaves in /metrics and the log (case d)
+
+FOLD_WORDS = ("over", "revok", "cut", "leave", "end_missing", "lossy", "complete", "policy", "direction", "tx_acl", "abort", "settle")
+
+
+def all_series(text):
+    """{(family, ((label, value), ...)): value} of every sample of a /metrics text (NaN samples left out)."""
+    out = {}
+    for s in metrics.parse(text):
+        if s.value == s.value:
+            out[(s.name, tuple(sorted(s.labels.items())))] = s.value
+    return out
+
+
+def is_fold(key):
+    """True for a series whose family or label values name an over fold, a revoke, a cut or a leave (FOLD_WORDS)."""
+    name, labels = key
+    hay = [name] + [str(v) for _, v in labels]
+    return any(w in h.lower() for h in hay for w in FOLD_WORDS)
+
+
+def folds(moved):
+    """The part of a delta dict that is about overs, revokes, cuts and leaves, sorted by key text."""
+    return {k: v for k, v in sorted(moved.items(), key=str) if is_fold(k)}
+
+
+def fold_results(moved, family, **labels):
+    """{result label: delta} of a family (dv_room_overs_total, dv_edge_overs_total) summed over the other labels, restricted to the given labels
+    (dir="rx"); empty without such a moved series."""
+    out = {}
+    for (name, lab), d in moved.items():
+        d_lab = dict(lab)
+        if name == family and all(d_lab.get(k) == v for k, v in labels.items()):
+            out[d_lab.get("result", "")] = out.get(d_lab.get("result", ""), 0.0) + d
+    return out
+
+
+def new_lines(before, after, words=("direction", "cut", "revok", "leave", "tx_acl", "txacl", "over", "binding", "k9")):
+    """The lines of the log text `after` that `before` does not have (prefix compared by line count), reduced to those naming one of `words`."""
+    old = before.splitlines()
+    new = after.splitlines()[len(old):]
+    return [ln for ln in new if any(w in ln.lower() for w in words)]

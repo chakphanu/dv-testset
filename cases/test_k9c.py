@@ -7,10 +7,12 @@ allows one USRP row per module, so the two directions live in two rooms.
   a  k9c-from keys up twice: every over is refused, `dv_edge_drops_total{reason="deny_tx_acl"}` moves exactly once per over, the third party of room K hears
      nothing, the refused talker is sent no voice (no busy tone); it still hears the room (the third party talks)
   b  k9c-to keys up: the third party of room M hears it, no TxAcl; the row hears nothing while the third party talks
-  c  k9c-from is switched to both in the middle of its over (rendered-config edit + `hup xlxd-sut`): same processes, an over of its own after the
-     switch is heard in full; the over in progress is recorded (FINDING: it stays refused until its unkey), asserted only with DVT_K9C_INPROGRESS=on
-  d  k9c-to is switched to from_room in the middle of its over: same processes, the over is heard until the switch and not after it; the next RTS of
-     the row is refused (TxAcl, +1 for that over; the over cut at the switch is not counted) and it hears the room now
+  c  k9c-from is switched to both in the middle of its over (rendered-config edit + `hup xlxd-sut`): same processes; the over in progress stays refused
+     until it unkeys (floor decisions are made at RTS: dv-router's contract) and the next RTS is admitted (an over after the switch is heard)
+  d  k9c-to is switched to from_room in the middle of its over: same processes, the over is cut at once (heard until the switch, not after it); the next
+     RTS of the row is refused (TxAcl +1: it counts RTS refusals only, the cut over is not one) and it hears the room now. RECORDED, not asserted: how the
+     cut over folds (dv_room_overs_total, dv_edge_overs_total{dir="rx"}), every over / revoke / cut / leave / direction series that moved and the new log
+     lines (out/<run>/k9c-d-metrics.json), to tell whether anything marks a policy cut
   e  the file and the rows are back to their start, no process was replaced in the whole run
 
 Needs (docs/k9c-cases.md): DVT_K9C=on DVT_SUT_GEN=k9 DVT_SUT_LAUNCH=native DVT_SUT_CONFIG_RW=1 DVT_USRP_DYNAMIC=1,
@@ -39,7 +41,6 @@ LONG_FRAMES = 500                   # 10 s: the switch lands about 2 s in
 SWITCH_AT = 2.0
 APPLY_S = 4.0                       # time allowed for the edge to apply a reload after the SIGHUP
 HEARD_MIN = 0.8                     # share of the frames of an over that a listener must hear
-INPROGRESS = os.environ.get("DVT_K9C_INPROGRESS") == "on"   # assert that a from_room over refused before a switch to both is heard after it (FINDING of run 20261124T102040Z)
 TELEMETRY_S = 12.0                  # one hub telemetry period plus margin (cases/test_echo.py waits 11 s)
 
 
@@ -132,6 +133,12 @@ class Rig:
         time.sleep(TELEMETRY_S)
         series = self.deny()
         return series, k9c.delta(base, series)
+
+    def all_series(self):
+        return k9c.all_series(self.control.metrics("xlxd-sut"))
+
+    def log_text(self):
+        return self.control.logs("xlxd-sut")
 
     def procs(self):
         return sorted((pid, comm) for pid, _ppid, comm in self.control.proc_list("xlxd-sut"))
@@ -313,10 +320,37 @@ def procs_problems(ctx, what):
 
 
 def switch_note(ctx, case, what, t_write, t_hup, start, facts):
-    note(ctx.target, case, "RECORD", "%s: the file was written %.2f s into the over, SIGHUP %.2f s after the write; the third party heard %s (first packet %s s "
-         "and last %s s after the write; %d of the %d packets sent)" % (
-             what, t_write - start, t_hup - t_write, {k: facts[k] for k in ("total", "before", "after")}, facts["first_after"], facts["last"],
-             facts["total"], LONG_FRAMES))
+    note(ctx.target, case, "RECORD", "%s: the file was written %.2f s into the over, SIGHUP %.2f s after the write; the third party heard %d of the %d packets sent "
+         "(%s)" % (what, t_write - start, t_hup - t_write, facts["total"], LONG_FRAMES,
+                   {k: facts[k] for k in ("before", "after", "first_after", "last") if k in facts}))
+
+
+def fold_text(moved):
+    room = k9c.fold_results(moved, "dv_room_overs_total")
+    edge = k9c.fold_results(moved, "dv_edge_overs_total", dir="rx")
+    return "dv_room_overs_total %s; dv_edge_overs_total{dir=rx} %s" % (
+        {k or "-": v for k, v in sorted(room.items())} or "no series moved", {k or "-": v for k, v in sorted(edge.items())} or "no series moved")
+
+
+def record_cut_fold(ctx, all0, log0):
+    """Case d: how the over cut at the switch folds. One telemetry period after the cut (the third party's room is quiet, the talker has unkeyed) the hub's
+    /metrics is compared with the snapshot before the over: the over folds of the room and the edge (rx), every series about an over, revoke, cut, leave or
+    direction that moved, and the new log lines about them. The full delta goes to out/<run>/k9c-d-metrics.json. Nothing is asserted here."""
+    time.sleep(TELEMETRY_S)
+    moved = k9c.delta(all0, ctx.all_series())
+    cut = k9c.folds(moved)
+    lines = k9c.new_lines(log0, ctx.log_text())
+    note(ctx.target, "d", "RECORD", "fold of the cut over (deltas one telemetry period after it): %s" % fold_text(moved))
+    note(ctx.target, "d", "RECORD", "series about overs, revokes, cuts, leaves and directions that moved (%d of %d moved): %s" % (
+        len(cut), len(moved), k9c.describe(cut)))
+    note(ctx.target, "d", "RECORD", "new log lines naming direction, cut, revoke, leave, over or TxAcl (%d): %s" % (len(lines), " | ".join(l[:200] for l in lines[:12]) or "none"))
+    try:
+        import json
+        (Path(ctx.target.out) / "k9c-d-metrics.json").write_text(json.dumps({
+            "moved": [{"name": n, "labels": dict(l), "delta": v} for (n, l), v in sorted(moved.items(), key=str)],
+            "log_lines": lines}, indent=1) + "\n", encoding="utf-8")
+    except OSError:
+        pass
 
 
 def test_k9c_c_from_room_to_both_in_the_middle_of_an_over(scene):
@@ -328,14 +362,10 @@ def test_k9c_c_from_room_to_both_in_the_middle_of_an_over(scene):
         t_write, t_hup, start = switch_during(ctx, f, (ok,), text)
         pump_all(APPLY_S, f, ok)
         wait = (t_hup - t_write) + APPLY_S
-        bad, facts = k9c.judge_switch(ok.voice_times(), t_write, wait, expect_after=True)
-        switch_note(ctx, "c", "from_room -> both mid-over", t_write, t_hup, start, facts)
-        if INPROGRESS:
-            problems += ["third party: " + b for b in bad]
-        else:
-            # run 20261124T102040Z (wip-ae11b8f): the over that was refused before the switch stays refused until its unkey, the next over is heard
-            for b in bad:
-                note(ctx.target, "c", "FINDING", "in-progress over, not asserted without DVT_K9C_INPROGRESS=on: third party: " + b)
+        # dv-router (2026-11-24): floor decisions are made at RTS, so the over refused before the switch STAYS refused until it unkeys
+        heard = ok.voice_times()
+        switch_note(ctx, "c", "from_room -> both mid-over", t_write, t_hup, start, {"total": len(heard), "wait": round(wait, 2)})
+        problems += heard_problems("the third party (the over in progress was refused at its RTS and stays refused until its unkey)", len(heard), LONG_FRAMES)
         problems += procs_problems(ctx, "c after the reload")
         ok.inbox.clear()
         f.talk(FRAMES, others=(ok,))
@@ -356,6 +386,7 @@ def test_k9c_d_to_room_to_from_room_in_the_middle_of_an_over(scene):
     ctx, f, t, ok, om = scene
     problems = []
     base = ctx.deny()
+    all0, log0 = ctx.all_series(), ctx.log_text()
     try:
         text = k9c.set_direction(ctx.original, "k9c-to", "from_room")
         t_write, t_hup, start = switch_during(ctx, t, (om,), text)
@@ -365,6 +396,7 @@ def test_k9c_d_to_room_to_from_room_in_the_middle_of_an_over(scene):
         problems += ["third party: " + b for b in bad]
         switch_note(ctx, "d", "to_room -> from_room mid-over", t_write, t_hup, start, facts)
         problems += procs_problems(ctx, "d after the reload")
+        record_cut_fold(ctx, all0, log0)
         om.inbox.clear()
         t.inbox.clear()
         om.talk(FRAMES, drain_with=(t,))
