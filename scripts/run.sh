@@ -1048,6 +1048,9 @@ fi
 if [ "$has_node1g" = 1 ]; then
   (umask 077; python3 -c 'import secrets; print(secrets.token_hex(32))' > "$out/link-secrets/hs1.key")
   chmod 600 "$out/link-secrets/hs1.key"
+  # the key of the second (unused) account row of the central node, which keeps dv-edge-link alive when the revocation case removes the row of hs1
+  (umask 077; python3 -c 'import secrets; print(secrets.token_hex(32))' > "$out/link-secrets/hs2.key")
+  chmod 600 "$out/link-secrets/hs2.key"
   (umask 077; mkdir -p "$out/node1g" "$out/sut-state/admin" "$out/hotspot-state/admin")
   chmod 700 "$out/node1g" "$out/sut-state" "$out/sut-state/admin" "$out/hotspot-state" "$out/hotspot-state/admin"
   for n1g_node in sut hotspot; do
@@ -1545,11 +1548,11 @@ fi
 # NODE1g: the link keys (the per-run key and the rotated one the cases write beside it) must be in no other file of the output directory
 # (logs, case notes, captures); the hub, admin API and logs never carry them. Paths only, never a value; the state dirs hold hashes only.
 if [ "$has_node1g" = 1 ]; then
-  for n1g_key in hs1.key rotated.key; do
+  for n1g_key in hs1.key hs2.key rotated.key hs1b.key; do
     [ -f "$out/link-secrets/$n1g_key" ] || continue
     scan_rc=0
     PYTHONPATH="$DVT_ROOT" python3 -m dvtest.secretscan --secret-file "$out/link-secrets/$n1g_key" --root "$out" \
-      --skip link-secrets/hs1.key --skip link-secrets/rotated.key || scan_rc=$?
+      --skip link-secrets/hs1.key --skip link-secrets/hs2.key --skip link-secrets/rotated.key --skip link-secrets/hs1b.key || scan_rc=$?
     if [ "$scan_rc" != 0 ]; then
       echo "run.sh: the NODE1g link key $n1g_key was found in the output above (exit $scan_rc)" >&2
       [ "$rc" != 0 ] || rc=5

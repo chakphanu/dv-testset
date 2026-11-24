@@ -123,6 +123,32 @@ def test_judge_checks_linkseq1_late_counts_against_the_capture(tmp_path):
     assert cap.judge(str(run), out=lines.append) == 1 and any("DEFECT: a unit reordered inside 40 ms was counted late" in x for x in lines)
 
 
+def test_bye_records_carry_their_reason():
+    rec = rfpos1.parse_record(rfpos1.build_record(24, SESSION, 9, bytes([2])))
+    assert rec["kind"] == 24 and rec["reason"] == 2 and rfpos1.BYE_REASON[rec["reason"]] == "revoked"
+    assert rfpos1.BYE_REASON[rfpos1.parse_record(rfpos1.build_record(24, SESSION, 10, bytes([3])))["reason"]] == "reload"
+
+
+def log_line(sec, side="central", reason="auth", suppressed=0, frac="005819540"):
+    return "xlxd-sut-1  | 2026-11-24T05:%02d:%02d.%sZ dv-edge-link: handshake refused side=%s reason=%s suppressed=%d" % (sec // 60, sec % 60, frac, side, reason, suppressed)
+
+
+def test_refusal_log_is_at_most_one_line_per_reason_per_30_s():
+    good = [log_line(20), log_line(50, suppressed=39), log_line(80, suppressed=30)]
+    found, problems = cap.refusal_log(good, "central")
+    assert problems == [] and [f[3] for f in found] == [0, 39, 30] and found[1][0] - found[0][0] == pytest.approx(30.0)
+    _, problems = cap.refusal_log([log_line(20), log_line(35)], "central")
+    assert len(problems) == 1 and "apart" in problems[0]
+    # another reason is its own window; a restart of the edge starts a new one
+    assert cap.refusal_log([log_line(20), log_line(25, reason="unknown_session")], "central")[1] == []
+    restart = "xlxd-sut-1  | 2026-11-24T05:00:30.000000000Z dv-edge-link: stopping"
+    assert cap.refusal_log([log_line(20), restart, log_line(36)], "central")[1] == []
+    # the side must be the node's half; an extra word (an address, an account) makes the line unreadable
+    assert "side=hotspot" in cap.refusal_log([log_line(20, side="hotspot")], "central")[1][0]
+    assert "unexpected shape" in cap.refusal_log([log_line(20) + " peer=172.30.0.98"], "central")[1][0]
+    assert cap.refusal_log(["something else"], "central") == ([], [])
+
+
 def test_judge_prints_a_defect_with_the_stream_id(tmp_path):
     run = tmp_path / "20990101T000000Z"
     (run / "node1g").mkdir(parents=True)

@@ -30,7 +30,11 @@ with state, rtt_ms, loss_ppm, last_error), the WAN router's own counters.
             both rows refused_key, the refusal RATE at most 1.1 per second; the old key put back: link up within 10 s, overs resume
   NODE1g-j  ten fault cycles (blackouts that survive, rebindings, netem on and off): nothing stale afterwards (child pids, dv-edge-link threads and
             fds, restarts, sessions, floor)
-  NODE1g-k  LINKOBS1 (DVT_LINKOBS1=on, future image): RECORD-only notes of the observations the product does not have yet
+  NODE1g-k  LINKOBS1 (DVT_LINKOBS1=on, image wip-4732c43): the new series exist, a datagram from another source is counted bad_source, a record of an
+            unknown session unknown_session
+  NODE1g-r  LINKOBS1 + DVT_SUT_CONFIG_RW=1: the hotspot's account row removed and the node reloaded: Bye{revoked}, session end `revoked`, last_error revoked, a backoff
+            no faster than case h's limit; the row put back
+  NODE1g-s  LINKOBS1 + DVT_SUT_CONFIG_RW=1: only the secret-file path changes: Bye{reload}, session end `bye` (not revoked), the link back within 10 s
 
 The assertions are the contract of answers-364-node1g.md. A difference is a FINDING: a line `[FINDING]` in out/<run>/node1g.txt AND an assertion that
 fails with it; nothing is loosened to pass. Observations that settle nothing are `[RECORD]` lines.
@@ -48,7 +52,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "proto"))
 
-from dvtest import admin as admin_mod, metrics, nat, node1g as n1, web  # noqa: E402
+from dvtest import admin as admin_mod, metrics, nat, node1g as n1, rfpos1, web  # noqa: E402
 from dvtest.audio import signals  # noqa: E402
 from dvtest.proto import p25  # noqa: E402
 from dvtest.webload import parse_procstat_out  # noqa: E402
@@ -96,7 +100,7 @@ def n1g(rig, target, rig_control):
     except (OSError, nat.NatError, ValueError) as exc:
         pytest.skip("the WAN router does not answer at %s:9100: %s" % (router, exc))
     n = types.SimpleNamespace(target=target, control=rig_control, wan=wan, ip_c=rig.xlxd_sut, ip_h=ip_h, out=out, key_path=key_path,
-                              admin={"central": None, "hotspot": None}, why={}, t_event=time.monotonic(), key_changed=False, old_key=None)
+                              admin={"central": None, "hotspot": None}, why={}, t_event=time.monotonic(), key_changed=False, old_key=None, rw_restore=None)
     for node, ip, name in (("central", rig.xlxd_sut, "central-admin.env"), ("hotspot", ip_h, "hotspot-admin.env")):
         path = out / "node1g" / name
         if not path.is_file():
@@ -131,6 +135,12 @@ def n1g(rig, target, rig_control):
             try:
                 n1.write_key(n.key_path, n.old_key.value)
             except OSError:
+                pass
+        if n.rw_restore:                                       # a revocation case that did not finish: the account row back, one more reload
+            try:
+                (n.out / "xlxd-config" / "xlxd-sut" / "rw" / "dv-router.toml").write_text(n.rw_restore, encoding="utf-8")
+                rig_control.hup()
+            except Exception:                                  # noqa: BLE001
                 pass
 
 
@@ -316,8 +326,10 @@ def finish(n, case, problems, extra=None):
     assert not problems, "; ".join(problems)
 
 
-def counters_problems(moved_by_node, handshakes, allow_restarts=(), allow_rx=()):
-    """`handshakes` = (welcomed on the hotspot, accepted on the central): exact deltas expected; plus what must not move on either node."""
+def counters_problems(moved_by_node, handshakes, allow_restarts=(), allow_rx=(), ends=None):
+    """`handshakes` = (welcomed on the hotspot, accepted on the central): exact deltas expected; plus what must not move on either node. With
+    DVT_LINKOBS1=on (LINKOBS1 image) also the session ends of each node (`ends`: {node: {reason: n}}, every other reason 0: a fault the session survives ends
+    none), and `bad_source` / `unknown_session` must not move."""
     problems = []
     want_w, want_a = handshakes
     got_w, got_a = int(moved_by_node["hotspot"].get("hs.welcomed", 0)), int(moved_by_node["central"].get("hs.accepted", 0))
@@ -326,7 +338,9 @@ def counters_problems(moved_by_node, handshakes, allow_restarts=(), allow_rx=())
     if got_a != want_a:
         problems.append("central handshakes{accepted} moved by %d, wanted %d" % (got_a, want_a))
     for node in ("central", "hotspot"):
-        problems += ["%s: %s" % (node, p) for p in n1.collateral(moved_by_node[node], allow_restarts, allow_rx)]
+        problems += ["%s: %s" % (node, p) for p in n1.collateral(moved_by_node[node], allow_restarts, allow_rx, linkobs=n1.linkobs_on())]
+        if n1.linkobs_on():
+            problems += ["%s: %s" % (node, p) for p in n1.ends_problems(moved_by_node[node], (ends or {}).get(node))]
     return problems
 
 
@@ -547,7 +561,7 @@ def test_node1g_d_blackout_60s_relinks(n1g):
     for node in ("central", "hotspot"):
         if hub_mid[node].get("sessions", 1.0) != 0.0:
             problems.append("%s hub shows %g link session(s) 42 s into the blackout (the session must be dead: 30 s without a datagram)" % (node, hub_mid[node].get("sessions", 0.0)))
-    problems += counters_problems(moved(before, after), (1, 1))
+    problems += counters_problems(moved(before, after), (1, 1), ends={"central": {"timeout": 1}, "hotspot": {"timeout": 1}})
     problems += floor_free(n, after, (("central", "C"), ("hotspot", "B")))
     for node, row in rows_after.items():
         if row is not None and row.get("last_error") not in (None, ""):
@@ -871,6 +885,31 @@ def test_node1g_g_nat_rebinding_new_source_address(n1g):
 
 # ---------------------------------------------------------------- NODE1g-h: a rotated key
 
+class RowSampler:
+    """The link row of one node read every 0.25 s for `seconds` on a thread (a label such as last_error revoked lasts well under a second): `finish()`
+    joins and returns [(state, last_error)] in time order. Used only around a reload, before the main thread reads rows again."""
+
+    def __init__(self, n, node, seconds):
+        self.n, self.node, self.seconds, self.rows = n, node, seconds, []
+        self.thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self):
+        end = time.monotonic() + self.seconds
+        while time.monotonic() < end:
+            row = get_row(self.n, self.node)
+            if row is not None:
+                self.rows.append((row.get("state"), row.get("last_error")))
+            time.sleep(0.25)
+
+    def start(self):
+        self.thread.start()
+        return self
+
+    def finish(self):
+        self.thread.join(self.seconds + 5.0)
+        return list(self.rows)
+
+
 def test_node1g_h_rotated_key(n1g):
     """The central node gets a NEW key (the file replaced at the same path by rename, then SIGHUP through the control channel: link.md rotation), the
     hotspot keeps the old one. The edge restarts and sends Bye{reload}; every attempt of the hotspot ends in Reject{auth}: the central node's
@@ -889,11 +928,14 @@ def test_node1g_h_rotated_key(n1g):
     n1.write_key(n.key_path, new.value)
     n.key_changed = True
     t_rot = time.time()
+    # the hotspot's row sampled every 0.25 s around the reload: a rekey is a revocation (LINKOBS1: Bye{revoked}, last_error revoked until the first refused attempt)
+    sampler = RowSampler(n, "hotspot", 10.0).start()
     n.control.hup()
     event(n)
-    # the rows right after the reload: the edge restarted and sent Bye{reload}; the hotspot shows closed_by_peer until its first refused attempt (RECORD)
-    first_rows = {node: n1.row_summary(get_row(n, node)) for node in ("central", "hotspot")}
-    note(n, case, "RECORD", "rows right after the reload: central %s / hotspot %s" % (first_rows["central"], first_rows["hotspot"]))
+    first_labels = sampler.finish()
+    note(n, case, "RECORD", "hotspot row right after the reload (state, last_error): %s" % first_labels[:40])
+    if n1.linkobs_on() and "revoked" not in [e for _, e in first_labels]:
+        problems.append("LINKOBS1: the hotspot row never showed last_error revoked after the rekey (labels seen %s)" % sorted(set(str(e) for _, e in first_labels)))
     window = 120.0
     t_start = time.monotonic()
     samples, rows_seen = [], {"central": [], "hotspot": []}
@@ -939,11 +981,11 @@ def test_node1g_h_rotated_key(n1g):
     # fix: the old key back
     n1.write_key(n.key_path, old.value)
     n.key_changed = False
-    t_fix = time.monotonic()
-    n.control.hup()
-    event(n)
     with lan(n) as ns:
-        rel, more = resume_both_ways(ns, t_fix, n1.RELINK_S, "h-fix")
+        t_fix = time.monotonic()
+        n.control.hup()
+        event(n)
+        rel, more = resume_both_ways(ns, t_fix, n1.RELINK_FIX_S, "h-fix")
         problems += more
         rows_after = {node: wait_row(n, node, connected, 15.0)[0] for node in ("central", "hotspot")}
     event(n)
@@ -951,7 +993,11 @@ def test_node1g_h_rotated_key(n1g):
     mv = {"central": n1.rebase(before["central"], after["central"]), "hotspot": n1.delta(before["hotspot"], after["hotspot"])}
     # the central edge was restarted twice on purpose (its series count from the last restart): datagrams of the old session may reach the new
     # one (unknown_session), nothing else may move
-    problems += counters_problems(mv, (1, 1), allow_restarts=("dv-edge-link",), allow_rx=("unknown_session",))
+    problems += counters_problems(mv, (1, 1), allow_restarts=("dv-edge-link",), allow_rx=("unknown_session",), ends={"hotspot": {"revoked": 1}})
+    if n1.linkobs_on():
+        hints = mv_mid["hotspot"].get("hs.auth", 0)
+        if not 1 <= hints <= window / 5.0 + 1:
+            problems.append("LINKOBS1: the hotspot counted %g Reject{auth} hints in %.0f s (once per attempt: wanted 1..%d, an attempt lasts 5 s)" % (hints, window, window / 5 + 1))
     for node in ("central", "hotspot"):
         if mv[node].get("dgram.rx.unknown_session"):
             note(n, case, "RECORD", "%s: dgram rx unknown_session +%g (datagrams of the session the restarted edge no longer knows)" % (node, mv[node]["dgram.rx.unknown_session"]))
@@ -1031,27 +1077,182 @@ def test_node1g_j_ten_fault_cycles_leave_nothing_stale(n1g):
     finish(n, case, problems)
 
 
-# ---------------------------------------------------------------- NODE1g-k: LINKOBS1 (a future image)
+# ---------------------------------------------------------------- NODE1g-k, -r, -s: LINKOBS1 (image wip-4732c43, DV-Router 06fc9c55)
 
-LINKOBS_ITEMS = (
-    ("refusal log and counter on the hotspot", "a counter or log line for a received Reject{auth}; today the hotspot only sets last_error refused_key"),
-    ("session-end counter with reasons", "dv_edge_link_session_ends_total{reason=timeout|bye|replaced}; today the reconnects are derived from handshakes{welcomed}"),
-    ("Bye{revoked}", "ByeReason::Revoked on a removed row or a rekey; today the central node sends Bye{reload} and the hotspot shows closed_by_peer"),
-    ("bad-source counter", "datagram_rx{result=bad_source} for a reply from a changed central source; today the hotspot drops it without a count"),
-)
+def rw_config(n):
+    """The central node's rendered config of this run when it is replaceable (DVT_SUT_CONFIG_RW=1), else a skip with the reason."""
+    path = n.out / "xlxd-config" / "xlxd-sut" / "rw" / "dv-router.toml"
+    if not path.is_file():
+        pytest.skip("the central node's config is not replaceable: run with DVT_SUT_CONFIG_RW=1 (the case edits the run's own rendered copy and puts it back)")
+    return path
 
 
-def test_node1g_k_linkobs1_record_only(n1g):
-    """LINKOBS1 is not in the image yet (a refusal log and counter on the hotspot, a session-end counter with reasons, Bye{revoked}, a bad-source
-    counter). Without DVT_LINKOBS1=on the case skips with that reason. With it, it only RECORDS which dv_edge_link_* series each hub exposes and the
-    row labels seen after a short wrong-key episode is NOT repeated here (case h): no assertion, the names are not known yet."""
+def inject(ip, port, payloads):
+    """One datagram per payload from a throw-away socket of the tester (its address on the network of `ip`): a source the receiving socket does not expect."""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        for data in payloads:
+            s.sendto(data, (ip, port))
+            time.sleep(0.05)
+
+
+def test_node1g_k_linkobs1_counters(n1g):
+    """LINKOBS1 counters, behind DVT_LINKOBS1=on (an older image skips with the reason): every new series exists on both hubs
+    (`dv_edge_link_session_ends_total` for timeout, bye, replaced and revoked, `handshakes{result=unknown_session}`, `datagrams{dir=rx,result=bad_source}`),
+    a datagram from a source that is not the central node reaches the hotspot's uplink socket 3 times and is counted `bad_source` exactly 3 times with the link
+    unchanged, and 3 records for a session id the central node does not know are counted `datagrams{unknown_session}` 3 times and answered with at least one
+    stateless `Reject{unknown_session}` (`handshakes{unknown_session}`). The session ends by reason are asserted in d (timeout), h and r (revoked) and s (bye);
+    the Reject counter of the hotspot in h and r."""
     n = n1g
     if not n1.linkobs_on():
         pytest.skip(n1.LINKOBS_REASON)
-    known = {"dv_edge_link_sessions", "dv_edge_link_datagrams_total", "dv_edge_link_handshakes_total", "dv_edge_link_refused_total", "dv_edge_link_rtt_ms"}
-    for node, svc in (("central", "xlxd-sut"), ("hotspot", "dvr-peer")):
-        names = sorted(f for f in metrics.families(n.control.metrics(svc)) if f.startswith("dv_edge_link_"))
-        new = [f for f in names if f not in known]
-        note(n, "k", "RECORD", "%s hub: dv_edge_link_* series %s; not in the NODE1d set: %s" % (node, names, new or "none yet"))
-    for what, today in LINKOBS_ITEMS:
-        note(n, "k", "RECORD", "LINKOBS1 item: %s (%s)" % (what, today))
+    case = "k"
+    problems = []
+    rows, ok = both_connected(n, 30.0)
+    first = {"central": n1.counters(n.control.metrics("xlxd-sut")), "hotspot": n1.counters(n.control.metrics("dvr-peer"))}
+    wanted = ["se.%s" % r for r in n1.SE_REASONS] + ["hs.unknown_session", "dgram.rx.bad_source"]
+    for node, c in first.items():
+        absent = [k for k in wanted if k not in c]
+        if absent:
+            problems.append("%s hub: the LINKOBS1 series %s are not exposed (every series exists at zero)" % (node, absent))
+    before = hubs(n)
+    port = n.wan.mappings()[0]["browser_port"]
+    inject(n.ip_h, port, [bytes([40 + i]) * 64 for i in range(3)])
+    session = bytes([7, 7, 7, 7])
+    inject(n.ip_c, n1.LINK_PORT, [rfpos1.build_record(23, int.from_bytes(session, "little") + i, 1, b"") for i in range(3)])
+    event(n)
+    after = hubs(n)
+    mv = moved(before, after)
+    if mv["hotspot"].get("dgram.rx.bad_source") != 3:
+        problems.append("hotspot: datagrams{rx,bad_source} moved by %g after 3 datagrams from another source, wanted exactly 3" % mv["hotspot"].get("dgram.rx.bad_source", 0))
+    if mv["central"].get("dgram.rx.unknown_session") != 3:
+        problems.append("central: datagrams{rx,unknown_session} moved by %g after 3 records of an unknown session, wanted exactly 3" % mv["central"].get("dgram.rx.unknown_session", 0))
+    if mv["central"].get("hs.unknown_session", 0) < 1:
+        problems.append("central: handshakes{unknown_session} (the stateless Reject hint) did not move")
+    for node in ("central", "hotspot"):
+        if after[node].get("sessions") != 1.0:
+            problems.append("%s hub shows %s link sessions after the injections, wanted 1" % (node, after[node].get("sessions")))
+        problems += ["%s: %s" % (node, p) for p in n1.ends_problems(mv[node])]
+    for node in ("central", "hotspot"):
+        row = get_row(n, node)
+        if row is not None and not connected(row):
+            problems.append("%s row is %s after the injections" % (node, row.get("state")))
+    note(n, case, "RECORD", "moved %s" % {node: {k: v for k, v in m.items() if k.startswith(("dgram.", "hs.", "se."))} for node, m in mv.items()})
+    finish(n, case, problems)
+
+
+def test_node1g_r_revoked_account(n1g):
+    """Behind DVT_LINKOBS1=on and DVT_SUT_CONFIG_RW=1: the hotspot's account row is removed from the central node's config and the node reloads (`hup xlxd-sut`;
+    a second account row keeps dv-edge-link running). The central node sends Bye{revoked}: the hotspot ends its session with reason `revoked`
+    (`dv_edge_link_session_ends_total{reason=revoked}` +1, nothing else), its row shows last_error revoked, it never connects again, and it backs off: the central
+    node's Reject{auth} rate stays at most 1.1 per second (the limit of case h) and the hotspot counts at most one Reject hint per 5 s attempt. The row put back
+    (and a reload): the link is up within 10 s, one handshake each side, overs resume both ways."""
+    n = n1g
+    if not n1.linkobs_on():
+        pytest.skip(n1.LINKOBS_REASON)
+    path = rw_config(n)
+    case = "r"
+    rows, ok = both_connected(n, 30.0)
+    before = hubs(n)
+    problems = []
+    original = path.read_text(encoding="utf-8")
+    n.rw_restore = original
+    path.write_text(n1.remove_account(original, n1.ACCOUNT), encoding="utf-8")
+    sampler = RowSampler(n, "hotspot", 10.0).start()
+    n.control.hup()
+    event(n)
+    labels = sampler.finish()
+    note(n, case, "RECORD", "hotspot row right after the reload (state, last_error): %s" % labels[:40])
+    if "revoked" not in [e for _, e in labels]:
+        problems.append("the hotspot row never showed last_error revoked (labels seen %s)" % sorted(set(str(e) for _, e in labels)))
+    window, t_start, samples, seen = 60.0, time.monotonic(), [], []
+    with lan(n) as ns:
+        k = 0
+        while time.monotonic() - t_start < window:
+            samples.append((time.monotonic(), n1.counters(n.control.metrics("xlxd-sut")).get("hs.auth", 0.0)))
+            if k % 4 == 0:
+                row = get_row(n, "hotspot")
+                if row is not None:
+                    seen.append((round(time.monotonic() - t_start, 1), row.get("state"), row.get("last_error")))
+            k += 1
+            tick(ns.all)
+        mid = hubs(n, quiet=False)
+        t_dead, sent = probe_until_heard(ns, ns.hc, ns.lc, 3.0, "r-dead")
+        if t_dead is not None:
+            problems.append("an over crossed the link after the account was revoked")
+    rate = n1.refusal_rate(samples)
+    note(n, case, "RECORD", "revoked at +0 s; central Reject{auth} rate %s; hotspot rows %s" % (
+        None if rate is None else "%.3f per s over %.0f s (%g)" % rate, seen[::2]))
+    if rate is not None and rate[0] > n1.REFUSAL_RATE_MAX:
+        problems.append("after the revocation the central node counted Reject{auth} at %.3f per second, wanted at most %.1f" % (rate[0], n1.REFUSAL_RATE_MAX))
+    mv_mid = {"central": n1.rebase(before["central"], mid["central"]), "hotspot": n1.delta(before["hotspot"], mid["hotspot"])}
+    problems += ["hotspot: %s" % p for p in n1.ends_problems(mv_mid["hotspot"], {"revoked": 1})]
+    hints = mv_mid["hotspot"].get("hs.auth", 0)
+    if not 1 <= hints <= window / 5.0 + 1:
+        problems.append("the hotspot counted %g Reject{auth} hints in %.0f s (once per attempt: wanted 1..%d)" % (hints, window, window / 5 + 1))
+    if mv_mid["central"].get("hs.accepted", 0):
+        problems.append("the central node accepted a session of the revoked account")
+    for node in ("central", "hotspot"):
+        if mid[node].get("sessions", 1.0) != 0.0:
+            problems.append("%s hub shows %g link session(s) after the revocation" % (node, mid[node].get("sessions", 0.0)))
+    if any(s == "connected" for _, s, _ in seen):
+        problems.append("the hotspot row says connected while its account is revoked")
+    # the row back, reload, the link comes up again
+    path.write_text(original, encoding="utf-8")
+    n.rw_restore = None
+    with lan(n) as ns:
+        t_fix = time.monotonic()
+        n.control.hup()
+        event(n)
+        rel, more = resume_both_ways(ns, t_fix, n1.RELINK_FIX_S, "r-fix")
+        problems += more
+    event(n)
+    after = hubs(n)
+    mv = {"central": n1.rebase(before["central"], after["central"]), "hotspot": n1.delta(before["hotspot"], after["hotspot"])}
+    problems += counters_problems(mv, (1, 1), allow_restarts=("dv-edge-link",), allow_rx=("unknown_session",), ends={"hotspot": {"revoked": 1}})
+    problems += floor_free(n, after, (("central", "C"), ("hotspot", "B")))
+    note(n, case, "RECORD", "row put back: first probe heard %s s after the reload; hotspot moved %s" % (
+        None if rel is None else round(rel, 2), {k: v for k, v in mv["hotspot"].items() if k.startswith(("hs.", "se."))}))
+    finish(n, case, problems)
+
+
+def test_node1g_s_reload_with_the_same_key_is_a_bye(n1g):
+    """Behind DVT_LINKOBS1=on and DVT_SUT_CONFIG_RW=1: only the secret-file PATH of the hotspot's account row changes (the same key in another file): an ordinary
+    reload, Bye{reload}, no revocation. The hotspot counts one session end `bye` (not `revoked`), reconnects within one backoff (10 s) with the same key and
+    overs resume; the same again for the way back."""
+    n = n1g
+    if not n1.linkobs_on():
+        pytest.skip(n1.LINKOBS_REASON)
+    path = rw_config(n)
+    case = "s"
+    rows, ok = both_connected(n, 30.0)
+    before = hubs(n)
+    problems = []
+    original = path.read_text(encoding="utf-8")
+    other = n.key_path.with_name("hs1b.key")
+    n1.write_key(other, n1.read_key(n.key_path))                        # the same key in a second file (scanned for by run.sh like the others)
+    n.rw_restore = original
+    rels = []
+    for step, text in (("to hs1b.key", n1.set_account_secret_file(original, n1.ACCOUNT, "/etc/dv-router/link-secrets/hs1b.key")), ("back", original)):
+        path.write_text(text, encoding="utf-8")
+        with lan(n) as ns:                                      # the clients are linked BEFORE the reload: the probes start with it
+            t0 = time.monotonic()
+            sampler = RowSampler(n, "hotspot", 8.0).start()
+            n.control.hup()
+            event(n)
+            rel, more = resume_both_ways(ns, t0, n1.RELINK_S, "s-%s" % step.split()[0])
+            problems += ["%s: %s" % (step, p) for p in more]
+            labels = sampler.finish()
+        note(n, case, "RECORD", "%s: hotspot row after the reload (state, last_error): %s" % (step, labels[:30]))
+        if "revoked" in [e for _, e in labels]:
+            problems.append("%s: the hotspot row shows revoked although the key did not change" % step)
+        rels.append(rel)
+    n.rw_restore = None
+    event(n)
+    after = hubs(n)
+    mv = {"central": n1.rebase(before["central"], after["central"]), "hotspot": n1.delta(before["hotspot"], after["hotspot"])}
+    problems += counters_problems(mv, (2, 1), allow_restarts=("dv-edge-link",), allow_rx=("unknown_session",), ends={"hotspot": {"bye": 2}})
+    problems += floor_free(n, after, (("central", "C"), ("hotspot", "B")))
+    note(n, case, "RECORD", "two reloads with the same key: first probe heard %s s after each; hotspot moved %s" % (
+        [None if r is None else round(r, 2) for r in rels], {k: v for k, v in mv["hotspot"].items() if k.startswith(("hs.", "se."))}))
+    finish(n, case, problems)

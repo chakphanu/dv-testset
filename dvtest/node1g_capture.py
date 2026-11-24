@@ -18,8 +18,10 @@ counted, and for every delay window the reordering the receiving node saw. The r
 the listener (outside the blackout) AND no unit before it was lost; in every other case `end_missing`. Exit 0 when every fold window agrees, 1 when one does not
 (a defect: the run id, the stream id and the numbers are printed), 2 on a usage error. Stdlib only.
 """
+import calendar
 import json
 import os
+import re
 import sys
 
 from dvtest import pcap, rfpos1
@@ -59,9 +61,14 @@ def streams(records, t_lo, t_hi):
     for ts, rec in records:
         if rec["kind"] == 19 and t_lo <= ts <= t_hi and rec["stream_id"] not in found:
             found[rec["stream_id"]] = {"stream_id": rec["stream_id"], "t_start": ts, "seqs": set(), "t_last": None, "end_ts": None, "end_reason": None}
+    closed = set()
     for ts, rec in records:
-        s = found.get(rec.get("stream_id"))
-        if s is None or ts < s["t_start"]:
+        sid = rec.get("stream_id")
+        s = found.get(sid)
+        if s is None or ts < s["t_start"] or sid in closed:
+            continue
+        if rec["kind"] == 19 and ts > s["t_start"] + 0.5:       # stream ids restart with a new link session: the same id again is another stream
+            closed.add(sid)
             continue
         if rec["kind"] == 20:
             s["seqs"].add(rec["sequence"])
@@ -109,7 +116,7 @@ def reorder(records, t_lo, t_hi):
     {datagrams, reordered, max_counter_back, max_late_ms, mean_late_ms, units, units_reordered, max_seq_back}."""
     top, top_ts, session = -1, None, None
     out = {"datagrams": 0, "reordered": 0, "max_counter_back": 0, "max_late_ms": 0.0, "units": 0, "units_reordered": 0, "max_seq_back": 0}
-    lates, seq_top, unit_arrivals, unit_late = [], {}, {}, []
+    lates, seq_top, unit_arrivals, unit_late, unit_back = [], {}, {}, [], []
     for ts, rec in records:
         if not t_lo <= ts <= t_hi:
             continue
@@ -136,11 +143,67 @@ def reorder(records, t_lo, t_hi):
                 # how late: after the FIRST unit of the stream that came with a higher position (the one that overtook it)
                 over = [t for t, q in unit_arrivals.get(sid, ()) if q > seq]
                 unit_late.append((ts - min(over)) * 1000.0)
+                unit_back.append(seq_top[sid] - seq)
             unit_arrivals.setdefault(sid, []).append((ts, seq))
     out["mean_late_ms"] = sum(lates) / len(lates) if lates else 0.0
-    out["unit_late_ms"] = sorted(unit_late)
+    out["unit_late_ms"] = list(unit_late)
+    out["unit_back"] = list(unit_back)
     out["units_over_40ms"] = sum(1 for x in unit_late if x > RESEQ_MS)
     return out
+
+
+# ---------------------------------------------------------------- the refusal log (LINKOBS1)
+
+LOG_NODE = {"xlxd-sut.log": "central", "dvr-peer.log": "hotspot"}
+REFUSED = re.compile(r"(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)\.(\d+)Z dv-edge-link: handshake refused side=(\S+) reason=(\S+) suppressed=(\d+)\s*$")
+RESTART = re.compile(r"dv-edge-link: (?:stopping|started \(pid)")
+LOG_WINDOW_S = 30.0       # LINKOBS1: at most one log line per Reject reason per half in 30 seconds; suppressed ones are summarized in the next line
+
+
+def refusal_log(lines, node):
+    """The refusal diagnostics of a collected log: ([(epoch s, side, reason, suppressed)], problems). Problems (sentences): a line whose `side=` is not the
+    node's half, two lines of one reason closer than LOG_WINDOW_S (less 1 s of timestamp noise) without a restart of the edge between them, and a line that
+    carries more than `side`, `reason` and a count (no account name, address or key material is allowed in it: the pattern is fixed, so an extra word
+    makes the line no match and it is reported)."""
+    out, problems, last = [], [], {}
+    for line in lines:
+        if RESTART.search(line):
+            last.clear()                                   # a new process starts its own 30 s window
+            continue
+        if "handshake refused" not in line:
+            continue
+        m = REFUSED.search(line)
+        if m is None:
+            problems.append("a refusal line of an unexpected shape: %s" % line.strip()[-120:])
+            continue
+        y, mo, d, h, mi, s, frac, side, reason, suppressed = m.groups()
+        ts = calendar.timegm((int(y), int(mo), int(d), int(h), int(mi), int(s))) + float("0." + frac)
+        if side != node:
+            problems.append("the %s log has a refusal line of side=%s" % (node, side))
+        key = (side, reason)
+        if key in last and ts - last[key] < LOG_WINDOW_S - 1.0:
+            problems.append("two %s lines of reason=%s %.1f s apart (at most one per %.0f s)" % (side, reason, ts - last[key], LOG_WINDOW_S))
+        last[key] = ts
+        out.append((ts, side, reason, int(suppressed)))
+    return out, problems
+
+
+def judge_logs(run_dir, out=print):
+    """Print the refusal log verdict of both collected logs; the number of problems."""
+    run = os.path.basename(os.path.normpath(run_dir))
+    bad = 0
+    for name, node in LOG_NODE.items():
+        path = os.path.join(run_dir, "logs", name)
+        if not os.path.isfile(path):
+            continue
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            found, problems = refusal_log(fh.read().splitlines(), node)
+        if not found and not problems:
+            continue
+        bad += len(problems)
+        out("%s %s log: %d refusal lines (reasons %s), %d refusals summarized as suppressed -> %s" % (
+            run, node, len(found), sorted({r for _, _, r, _ in found}), sum(s for *_, s in found), "ok" if not problems else "DEFECT: " + "; ".join(problems)))
+    return bad
 
 
 # ---------------------------------------------------------------- the host step
@@ -197,13 +260,13 @@ def judge(run_dir, out=print):
                     allowed = r["units_over_40ms"]
                     seq_ok = lates <= allowed
                     bad += 0 if seq_ok else 1
-                    out("%s %s %s LINKSEQ1: %d units reordered (lateness ms %s), %d later than %.0f ms; link-edge late units counted %g, at most %d expected -> %s" % (
-                        run, w["case"], node, r["units_reordered"], [round(x) for x in r["unit_late_ms"]], allowed, RESEQ_MS, lates, allowed,
+                    out("%s %s %s LINKSEQ1: %d units reordered (lateness ms %s, positions back %s), %d later than %.0f ms; link-edge late units counted %g, at most %d expected -> %s" % (
+                        run, w["case"], node, r["units_reordered"], [round(x) for x in r["unit_late_ms"]], r["unit_back"], allowed, RESEQ_MS, lates, allowed,
                         "ok" if seq_ok else "DEFECT: a unit reordered inside %.0f ms was counted late" % RESEQ_MS))
                 out("%s %s %s receives: %d datagrams, %d reordered (back by up to %d, late by up to %.0f ms, mean %.0f ms); %d units, %d reordered (back by up to %d positions)" % (
                     run, w["case"], node, r["datagrams"], r["reordered"], r["max_counter_back"], r["max_late_ms"], r["mean_late_ms"], r["units"],
                     r["units_reordered"], r["max_seq_back"]))
-    return bad
+    return bad + judge_logs(run_dir, out)
 
 
 def main(argv=None):

@@ -608,11 +608,11 @@ services:
       DVT_GUARDID2: ${DVT_GUARDID2:-}
       # on for DV-Router NODE1g (image dv-router:wip-42d5473): cases/test_node1g.py (docs/node1g-cases.md; needs --profile twonode, run.sh adds the WAN router, the hotspot template and the link key); the cases skip with a reason without it
       DVT_NODE1G: ${DVT_NODE1G:-}
-      # on for DV-Router LINKOBS1 (a future image: hotspot refusal counter, session-end counter with reasons, Bye{revoked}, bad-source counter): the RECORD-only part of cases/test_node1g.py
+      # on for DV-Router LINKOBS1 (image wip-4732c43 and later: hotspot Reject counter, refusal log, session-end counter with reasons, Bye{revoked}, bad_source, unknown_session): cases k, r, s and the session ends of cases/test_node1g.py
       DVT_LINKOBS1: ${DVT_LINKOBS1:-}
-      # on for DV-Router LINKREBIND1 (the hotspot sends a keepalive at most every 1 s while it receives a stream; a future image): NODE1g-f / -g also assert the post-fix numbers (docs/node1g-cases.md)
+      # on for DV-Router LINKREBIND1 (the hotspot sends a keepalive at most every 1 s while it receives a stream; image wip-4732c43 and later): NODE1g-f / -g also assert the post-fix numbers (docs/node1g-cases.md)
       DVT_LINKREBIND1: ${DVT_LINKREBIND1:-}
-      # on for DV-Router LINKSEQ1 (a future image: a unit reordered within about 40 ms is resequenced and played; every missing frame is counted; loss_ppm counts missing units): NODE1g-a asserts it
+      # on for DV-Router LINKSEQ1 (image wip-4732c43 and later: a unit reordered within about 40 ms is resequenced and played; every missing frame is counted; loss_ppm counts missing units): NODE1g-a asserts it
       DVT_LINKSEQ1: ${DVT_LINKSEQ1:-}
       # NODE1g opt-in investigation (cases/test_node1g.py, case m): n isolated in-flight overs per direction, judged against the captures (python3 -m dvtest.node1g_capture)
       DVT_NODE1G_FOLD: ${DVT_NODE1G_FOLD:-}

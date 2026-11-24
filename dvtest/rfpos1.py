@@ -45,6 +45,7 @@ TAG = 16
 UNIT_BYTES = {1: 9, 2: 9, 3: 8, 4: 11, 5: 320}
 PROFILE_NAME = {1: "ambe-dstar", 2: "ambe2-dmr", 3: "codec2-3200", 4: "imbe", 5: "pcm-s16le-8k"}
 ACK_STATUS = {0: "listen_only", 1: "talk", 2: "not_permitted", 3: "not_served"}
+BYE_REASON = {1: "stop", 2: "revoked", 3: "reload", 4: "replaced"}
 KIND_NAME = {1: "hello", 2: "challenge", 3: "auth", 4: "welcome", 5: "reject", 16: "roommap", 17: "roommapack", 18: "demand",
              19: "streamstart", 20: "units", 21: "streamend", 22: "refused", 23: "keepalive", 24: "bye"}
 
@@ -103,6 +104,8 @@ def parse_record(data):
         elif kind == 22:
             stream_id, reason = struct.unpack_from("<IB", body, 0)
             rec.update(stream_id=stream_id, reason=reason)
+        elif kind == 24:                       # Bye: reason u8 (stop 1, revoked 2, reload 3, replaced 4: link.md)
+            rec["reason"] = body[0]
     except (struct.error, IndexError):
         return None
     return rec

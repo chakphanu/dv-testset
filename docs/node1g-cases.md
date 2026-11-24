@@ -5,6 +5,10 @@ Status: rig runs on image `dv-router:wip-42d5473` (`DVT_SUT_GEN=compat1`, `--pro
 note, no switch)** in 1092 s of pytest (about 21 minutes with the rig start and stop); **`20261123T231838Z`**: the cases f, g and h again after a harness fix (the row of the central node is waited for by
 address AND port): f and g fail the same way (FINDING 1), h passes. Two earlier runs (`20261123T220327Z`, `20261123T224316Z`) are what the harness was debugged with; they saw FINDING 2 once each. **`20261123T234228Z`** (with `--capture`, `DVT_NODE1G_FOLD=4`, cases a and m
 only): the follow-up to dv-router's answers (FINDING 2 reproduced and judged against the captures, the reordering of case a counted).
+**Image `dv-router:wip-4732c43` (LINKOBS1 `06fc9c55`, LINKREBIND1 `6f055ae8`, LINKFOLD1 + LINKSEQ1 `7d2af17d`; code `7d2af17d`)**: runs `20261124T052220Z` (all cases but m, r, s: 12 passed, 2 failed),
+`20261124T054120Z` (a, h, m, r, s with `--capture`: m passed), `20261124T055605Z` (h, r, s again after harness fixes: s passed); the result per case and the findings are in "Results on wip-4732c43" below. The rest of this document
+(sections "Results" and "Findings") is the run on `wip-42d5473`, where FINDING 1 and 2 were made.
+
 Case file `cases/test_node1g.py`, pure helpers `dvtest/node1g.py` (hub counters, refusal rate, key files, arrival evidence, the plain-HTTP admin client, the WAN router client), unit tests
 `cases/unit/test_node1g_lib.py`, switches `DVT_NODE1G` and `DVT_LINKOBS1` (documented in `dvtest/target.py`, passed to the tester by `rig/compose.yml`), templates
 `rig/config/dv-router/node1g-hotspot.toml` (complete template of the hotspot) and `node1g-central.toml` (snippet of the central node), compose `rig/compose.node1g.yml` and the services `wan-router`,
@@ -124,40 +128,69 @@ Intermittent harness problems found on the way and fixed (not findings): a key h
 restart with the edge on a reload (delta against zero: `rebase`), the media gap was measured between arrived frames only (a lost tail did not count: now the longest run of missing frames), the central row was waited
 for by port only (an address change keeps the port), `--down` did not know the profile `node1g`.
 
-### LINKOBS1 (a future image): RECORD-only
+### LINKOBS1
 
-| Item | Today | Where it is recorded |
-|------|-------|----------------------|
-| a refusal log and counter on the hotspot | the hotspot only sets `last_error` `refused_key` (a Reject is a hint); NODE1g-h asserts that | NODE1g-k notes the series names |
-| a session-end counter with reasons | none; reconnects are derived from `handshakes{welcomed}` (NODE1g-d asserts +1) | NODE1g-k |
-| `Bye{revoked}` | `ByeReason::Revoked` is never sent; a rekey shows as `Bye{reload}`: NODE1g-h records the rows right after the reload (central `disconnected`, the hotspot still `connected`, then `refused_key`; no `closed_by_peer` was seen) | NODE1g-h |
-| a bad-source counter | a reply from a changed CENTRAL source is dropped without a count (section 3 end, 6 item 8) | not built: moving the central side's source needs a second central address; GAP |
+Built on `wip-4732c43` (cases k, r, s and the asserts of d and h, see below); on the older image these notes were RECORD-only.
 
-## The next image: LINKFOLD1, LINKSEQ1 and LINKREBIND1 (asserts prepared, not run)
+## Results on wip-4732c43
 
-dv-router opened LINKFOLD1 (FINDING 2) and LINKSEQ1 (the reordering of case a) and carries them with LINKREBIND1 (FINDING 1) in one image. Three gates, all default off (the current behaviour is kept):
+Gates (all default off, so the older images still run the contract cases): `DVT_LINKOBS1=on` (k, r, s, and in the other cases the session ends by reason and `bad_source` / `unknown_session` must not move),
+`DVT_LINKREBIND1=on` (f and g: gap below 1.2 s, every over heard at least 97 percent, no cut over), `DVT_LINKSEQ1=on` (a: 100 percent heard, every missing frame in a counter, `loss_ppm` within 5000 ppm of the
+missing-unit share; the host step checks the reorders against the capture), `DVT_NODE1G_FOLD=<n>` (m), and `DVT_SUT_CONFIG_RW=1` (r and s edit the central node's rendered config and put it back; without it they skip).
 
-| Gate | Row | What it turns on |
-|------|-----|------------------|
-| `DVT_LINKREBIND1=on` | LINKREBIND1 | NODE1g-f and -g also assert: central-to-hotspot gap below 1.2 s, every over heard at least 97 percent, no cut over in any trial (the contract asserts stay on regardless) |
-| `DVT_LINKSEQ1=on` | LINKSEQ1 | NODE1g-a (delay only, 60 ms +- 10 ms) also asserts, in the case: (a) both overs heard 100 percent; (b) accounting: the frames the listeners miss, both directions, are at most the sum of the late / lost / gap / dropped unit counters of both nodes (the room's `dv_room_over_units_total` and the edges' `dv_edge_over_units_total`); (c) each row's `loss_ppm` is within 5000 ppm of the missing-unit share of the direction it receives (zero missing gives about 0), no longer the share of reordered datagrams. The host step then checks the lateness of every reorder against the capture: the link edge's late units must not exceed the number of units reordered by more than 40 ms (a reorder inside 40 ms is resequenced and played, so late 0 for it); units later than 40 ms may stay late |
-| (LINKFOLD1) | LINKFOLD1 | no gate: NODE1g-e1 and -e2 already assert `end_missing` for an over whose End was lost; the opt-in case m (`DVT_NODE1G_FOLD=<n>`) and the capture judge repeat the check with isolated overs |
+| Case | Result | Key numbers |
+|------|--------|-------------|
+| 0 | pass | both rows connected |
+| a | FAIL (FINDING 5) | (a) heard 100 / 99.6 percent (h2c / c2h, `20261124T052220Z`), 99.6 / 99.8 (`20261124T054120Z`); (b) holds: the missing frames are in late / gap counters (central late 2, hotspot late 1 and gap 1: 3 missing, 3 counted); (c) holds: row `loss_ppm` 3960 (central) and 2403 (hotspot) for 4000 and 2000 ppm missing (before: 22058 and 13157, the reordered-datagram share); host step: 6 reordered units, all 1 to 19 ms late, 0 later than 40 ms, 3 counted late |
+| b | pass | 3 percent loss: overs heard 99.2 / 96.8 percent; the 4 and 16 missing frames are `gap` units on the receiving rooms and edges (4 and 16); `loss_ppm` 3720 / 16744 |
+| c, d | pass | c: no session end, first probe 0.1 s after the end; d: `se.timeout` +1 on BOTH nodes and nothing else, `welcomed` +1, `accepted` +1, 0.68 s to relink |
+| e1, e2, e3, e4 | pass | `end_missing` +1 on the receiving room in all four (FINDING 2 did not recur: 4 of 4 here, 8 of 8 in m); the floor free between 1.0 s (probe denied) and 2.0 s (granted), 3.0 s probe 100 percent; no session end |
+| f | pass | no cut over: 0 of 3 central-to-hotspot overs cut, longest silence 0.08 to 0.10 s, heard 99 percent (gate: gap below 1.2 s, 97 percent), first probe after the second rebinding 0.11 s (hotspot to central) and 1.28 / 1.29 / 1.29 s (central to hotspot); `ounits.B.gap` +13 on the hotspot (the 3 `lossy` overs) |
+| g | pass | 0 of 3 cut, silence 0.06 to 0.08 s, heard 99 percent; router evidence: the central node sent to the new address 0.094 to 0.117 s after the change (central-to-hotspot), 3.9 s in the idle direction (a keepalive); first probe 0.32 / 1.48 / 1.48 / 1.48 s |
+| h | pass after the fix of the harness; FINDING 6 | Reject{auth} rate 1.000 per s over 100 s (0.984 and 0.997 in the other two runs); hotspot `handshakes{auth}` 15 (once per attempt: bound 25); hotspot `session_ends{revoked}` +1; central Bye record body 2 = revoked (capture); the row label `revoked` never seen; key fixed: first probe 5.16 s after the fix (limit 12 s: attempt deadline 5 s + backoff up to 6 s) |
+| j | pass | pids 48 to 48, threads 4 to 4, fds 17 to 17 |
+| k | pass | the series exist on both hubs; 3 datagrams from another source into the hotspot's uplink socket: `bad_source` +3 exactly, link unchanged; 3 records of an unknown session: central `datagrams{unknown_session}` +3 and `handshakes{unknown_session}` +3 |
+| m | pass | `20261124T054120Z`, `DVT_NODE1G_FOLD=4`: 8 of 8 isolated overs `end_missing`; the capture judge agrees for all eight (151 or 152 units, no End; FINDING 2 not reproduced) |
+| r | FAIL (FINDING 6) | account removed + `hup`: hotspot `se.revoked` +1 and nothing else; central Bye body 2 (revoked); Reject{auth} rate 1.010 / 1.015 per s (limit 1.1); hotspot hints 9 in 60 s; never connected; the row label `revoked` never seen (3 reloads); row put back: first probe 2.15 s after the reload, one handshake each side |
+| s | pass | secret-file path changed, same key: Bye body 3 (reload), hotspot `se.bye` +2 (and no `revoked`), the link back 0.5 s after each reload (capture: Hello at +0.529 s) |
 
-The exact command for the next run (one run, about 34 minutes: 21 for the cases, 6 for case m with `DVT_NODE1G_FOLD=4`, the rest rig start and stop; with `--capture` the wire check at the end fails as it did in
-`20261123T234228Z`, which is expected for the hotspot's inside LAN and does not change the pytest result):
+The refusal log (host step `python3 -m dvtest.node1g_capture out/<run>`): `dv-edge-link: handshake refused side=<central|hotspot> reason=auth suppressed=<n>`, at most one line per reason per half in 30 s (the lines
+are 30.0 s apart), the suppressed ones summarized in the next line (central 198 and hotspot 23 summarized in `20261124T055605Z`); no address, account name or key in a line. Judged "ok" for all three runs.
+
+### Findings on wip-4732c43
+
+FINDING 1 (rebinding cuts a central-to-hotspot over) and FINDING 2 (a cut over folded `complete`) did not recur on this image: f and g pass with the gate and e1 to e4 and m fold `end_missing` every time.
+FINDING 2's capture judge is in place (`DVT_NODE1G_FOLD`).
+
+5. **LINKSEQ1: units reordered by less than 20 ms are counted late and not played when they are more than two positions back.** Case a, delay only, run `20261124T054120Z` with captures: the central node received 3 reordered
+   units, 8, 17 and 19 ms late, 2, 4 and 3 positions back, and counted 2 late; the hotspot 3 reordered units, 4, 1 and 14 ms late, 2, 1 and 4 positions back, 1 counted late. The units 3 and 4 positions back are the late ones, the
+   ones at most 2 back were resequenced: the cap of two units per profile (not the 40 ms) decides. The units probably leave the sender in bursts (several within a few ms), so that a 10 ms jitter puts a unit more than 2 positions back; the capture shows positions, not the sender's timing.
+   The listeners heard 99.6 / 99.8 percent. The other two LINKSEQ1 asserts hold (accounting, `loss_ppm`).
+6. **`last_error` `revoked` is never published on the hotspot row.** The central node does send `Bye{revoked}` (capture: the body is 2) and the hotspot ends its session with `session_ends{reason=revoked}` +1 after a rekey (h, three
+   runs) and after the account's removal (r, two runs), but the admin row of the hotspot, sampled every 0.25 s from before the reload, goes from `connected` straight to `reconnecting` with `refused_key` (no sample shows
+   `revoked`; the hotspot attempts again 0.5 s after the Bye and the first Reject hint overwrites the label). The same for the ordinary Bye{reload} of case s: the row stays `connected` for the whole 8 s although the session
+   ended twice and came back after 0.5 s (`closed_by_peer` is never visible either). The row is published too rarely or the label lives under the sampling interval; the counter is the only evidence.
+7. Observation: the refusal log lines carry `side=` and `reason=` only; the first line of a burst comes at the first refusal, the next at the 30 s boundary with the number suppressed (central 39, 30, 30, 30, 7 in one h).
+8. Observation: after a key put right the link came up 2.6, 5.2, 6.1, 7.9, 9.0, 9.7 and 10.3 s later (seven runs of h): the attempt in progress runs to its 5 s deadline, then a backoff of up to 6 s. The bound for these cases is
+   12 s (`RELINK_FIX_S`, derived, no number in the contract); the blackouts keep 10 s.
+
+Not exercised: `session_ends{reason=replaced}` (a second valid Auth replaces the first: the tester would have to play the hotspot with the key).
+
+## The command for this image
 
 ```
-XLXD_SUT_IMAGE=<image> DVT_SUT_PROFILE=dvrouter DVT_SUT_LAUNCH=native DVT_SUT_CONFIG=<template> DVT_SUT_GEN=compat1 \
-DVT_NODE1G=on DVT_NODE1G_FOLD=4 DVT_LINKREBIND1=on DVT_LINKSEQ1=on \
-scripts/run.sh -m rig --capture --profile twonode -- cases/test_node1g.py -rA
-python3 -m dvtest.node1g_capture out/<run>
+XLXD_SUT_IMAGE=dv-router:wip-4732c43 DVT_SUT_PROFILE=dvrouter DVT_SUT_LAUNCH=native DVT_SUT_CONFIG=<template> DVT_SUT_GEN=compat1 \
+DVT_SUT_CONFIG_RW=1 DVT_NODE1G=on DVT_LINKOBS1=on DVT_LINKREBIND1=on DVT_LINKSEQ1=on \
+scripts/run.sh -m rig --profile twonode -- cases/test_node1g.py -rA -k "not node1g_m and not node1g_r_ and not node1g_s_"        # about 21 minutes
+XLXD_SUT_IMAGE=dv-router:wip-4732c43 ... DVT_NODE1G_FOLD=4 (the same gates) \
+scripts/run.sh -m rig --capture --profile twonode -- cases/test_node1g.py -rA -k "node1g_a or node1g_h or node1g_m or node1g_r_ or node1g_s_"   # about 24 minutes
+python3 -m dvtest.node1g_capture out/<run of the second command>
 ```
 
-To stay under 30 minutes split it: the same command with `-k "not node1g_m"` (and without `DVT_NODE1G_FOLD`), and a second run with `DVT_NODE1G_FOLD=4 ... -k "node1g_a or node1g_m"` (about 8 minutes; case a is in it so that
-its capture window is judged too). The host step prints, per window, the fold the rule gives against the fold the hub counted (`DEFECT` names the link stream id), and for case a the reordering with the lateness of
-every reordered unit and the LINKSEQ1 check. It exits 1 on any defect.
+The cases d, f, g, h, k, r and s with `DVT_LINKOBS1=on` also assert the session ends by reason; `DVT_SUT_CONFIG_RW=1` is only for r and s. The second account row of the central node (`n0call-hs2`, key `hs2.key`, listen only) keeps
+`dv-edge-link` alive when r removes the first one. With `--capture` the wire check at the end fails (the hotspot's LAN is not a rig host); the pytest result is the one that counts.
 
-## Not built
+## Not built (older image notes; the LINKOBS1 items are built on wip-4732c43)
 
 * Rebinding DURING the first 5 s of the hotspot's start (section 6 item 7: one failed attempt, then success): the hotspot cannot be restarted through the control channel (`dvr-peer` is not in the
   restart allow-list, and the allow-list was not extended).

@@ -274,7 +274,8 @@ def test_templates_carry_one_uplink_and_one_account_row():
     hs = (ROOT / "rig/config/dv-router/node1g-hotspot.toml").read_text()
     central = (ROOT / "rig/config/dv-router/node1g-central.toml").read_text()
     assert hs.count("[[edges.link.uplink]]") == 1 and 'profile = "hotspot"' in hs and "<CENTRAL_IP>:31800" in hs
-    assert central.count("[[edges.link.account]]") == 1 and 'rooms = ["C"]' in central
+    assert central.count("[[edges.link.account]]") == 2 and 'rooms = ["C"]' in central                  # hs1 and the unused hs2 that keeps the edge alive on a revocation
+    assert "link-secrets/hs2.key" in central
     for text in (hs, central):
         assert "/etc/dv-router/link-secrets/hs1.key" in text
         assert re.search(r"[0-9a-f]{64}", text) is None             # no key in a repo file
@@ -340,6 +341,57 @@ def test_linkseq1_asserts_100_percent_accounting_and_loss_ppm():
                 if p.startswith(("LINKSEQ1 b", "LINKSEQ1 c"))]
     assert n1.unit_counters({"ounits.C.late": 2.0, "eunits.link.rx.gap": 1.0, "eunits.link.tx.lost": 3.0, "dgram.rx.ok": 9.0, "ounits.C.zzz": 1.0}) == {
         "ounits.C.late": 2.0, "eunits.link.rx.gap": 1.0, "eunits.link.tx.lost": 3.0}
+
+
+def test_session_end_reasons_and_the_linkobs1_series_are_read():
+    text = ('dv_edge_link_session_ends_total{reason="timeout"} 1\ndv_edge_link_session_ends_total{reason="bye"} 0\n'
+            'dv_edge_link_session_ends_total{reason="revoked"} 2\ndv_edge_link_datagrams_total{dir="rx",result="bad_source"} 3\n'
+            'dv_edge_link_handshakes_total{result="unknown_session"} 1\n')
+    c = n1.counters(text)
+    assert c["se.timeout"] == 1 and c["se.bye"] == 0 and c["se.revoked"] == 2 and c["dgram.rx.bad_source"] == 3 and c["hs.unknown_session"] == 1
+    assert n1.ends_problems({"se.timeout": 1.0}, {"timeout": 1}) == []
+    assert len(n1.ends_problems({"se.timeout": 1.0, "se.revoked": 1.0}, {"timeout": 1})) == 1
+    assert len(n1.ends_problems({}, {"revoked": 1})) == 1 and n1.ends_problems({}) == []
+    # collateral: bad_source and unknown_session only count with LINKOBS1, and unknown_session can be allowed
+    moved = {"dgram.rx.bad_source": 1.0, "hs.unknown_session": 2.0}
+    assert n1.collateral(moved) == [] and len(n1.collateral(moved, linkobs=True)) == 2
+    assert len(n1.collateral(moved, allow_rx=("unknown_session",), linkobs=True)) == 1
+
+
+CONFIG = """[node]
+callsign = "XLX999"
+
+[[edges.link.account]]
+name = "n0call-hs1"
+callsign = "N0CALL"
+secret_file = "/etc/dv-router/link-secrets/hs1.key"
+rooms = ["C"]
+talk = true
+
+[[edges.link.account]]
+name = "n0call-hs2"
+callsign = "N0TEST"
+secret_file = "/etc/dv-router/link-secrets/hs2.key"
+rooms = ["C"]
+talk = false
+
+[edges.p25]
+enable = true
+"""
+
+
+def test_account_rows_are_removed_and_repointed_in_the_rendered_toml():
+    without = n1.remove_account(CONFIG, "n0call-hs1")
+    assert "hs1.key" not in without and "n0call-hs2" in without and without.count("[[edges.link.account]]") == 1 and "[edges.p25]" in without
+    assert n1.remove_account(without, "n0call-hs2").count("[[edges.link.account]]") == 0
+    moved = n1.set_account_secret_file(CONFIG, "n0call-hs1", "/etc/dv-router/link-secrets/hs1b.key")
+    assert moved.count("hs1b.key") == 1 and "hs2.key" in moved and moved.count("secret_file") == 2
+    assert n1.set_account_secret_file(moved, "n0call-hs1", "/etc/dv-router/link-secrets/hs1.key") == CONFIG
+    for fn in (lambda: n1.remove_account(CONFIG, "nobody"), lambda: n1.set_account_secret_file(CONFIG, "nobody", "/x")):
+        with pytest.raises(ValueError):
+            fn()
+    import tomllib
+    assert tomllib.loads(without)["edges"]["link"]["account"][0]["name"] == "n0call-hs2"
 
 
 def test_keybox_never_shows_the_key():

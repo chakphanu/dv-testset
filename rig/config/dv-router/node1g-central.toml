@@ -29,3 +29,12 @@ callsign = "N0CALL"
 secret_file = "/etc/dv-router/link-secrets/hs1.key"
 rooms = ["C"]
 talk = true
+
+# A SECOND account row that no hotspot uses (key hs2.key, listen only): the revocation case removes the row of hs1 and reloads; with this row the node still
+# has an accepting half, so dv-edge-link keeps running and sends Bye{revoked} instead of being stopped (LINKOBS1, docs/node1g-cases.md).
+[[edges.link.account]]
+name = "n0call-hs2"
+callsign = "N0TEST"
+secret_file = "/etc/dv-router/link-secrets/hs2.key"
+rooms = ["C"]
+talk = false

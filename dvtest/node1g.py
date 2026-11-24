@@ -25,8 +25,8 @@ SWITCH = "DVT_NODE1G"
 LINKOBS_SWITCH = "DVT_LINKOBS1"
 SKIP_REASON = ("DVT_NODE1G=on is not set (run scripts/run.sh --profile twonode with DVT_NODE1G=on on an image with the node link: "
                "dv-router:wip-42d5473 or later; docs/node1g-cases.md)")
-LINKOBS_REASON = ("DVT_LINKOBS1=on is not set (LINKOBS1 is a future image: a refusal log and counter on the hotspot, a session-end counter with "
-                  "reasons, Bye{revoked}, a bad-source counter; the names are not known yet)")
+LINKOBS_REASON = ("DVT_LINKOBS1=on is not set (LINKOBS1, image wip-4732c43 and later: the hotspot's Reject counter, dv_edge_link_session_ends_total, "
+                  "Bye{revoked}, datagrams bad_source, handshakes unknown_session)")
 
 # the pair
 ACCOUNT = "n0call-hs1"            # the account row of the central node (name), and the account the hotspot's uplink row names
@@ -41,6 +41,7 @@ UNMAPPED_BASE = 1030000           # radio ids of the relink probes: in no direct
 KEEPALIVE_S = 5.0
 SESSION_DEAD_S = 30.0
 RELINK_S = 10.0                   # "link up within 10 s of the blackout end"
+RELINK_FIX_S = 12.0               # after a wrong key is put right: the attempt in progress ends at its 5 s deadline, then a backoff of up to 6 s, then the handshake (no number in the contract)
 STREAM_SILENCE_S = 1.6            # an over without a Unit ends after this; the floor is released then
 NAT_GAP_S = 5.0                   # media gap after a NAT rebinding: at most one keepalive period
 NAT_GAP_SLACK_S = 0.2             # measurement slack of the arrival clock (the tester polls its sockets every 10 ms; netem off)
@@ -138,6 +139,7 @@ def counters(text):
       rtt_ms                 dv_edge_link_rtt_ms (gauge, mean of the known samples, 0 when none)
       dgram.rx.<result>      dv_edge_link_datagrams_total{dir=rx,result}
       dgram.tx.<result>      the same for dir=tx
+      se.<reason>            dv_edge_link_session_ends_total{reason} (LINKOBS1: timeout, bye, replaced, revoked)
       refused.<reason>       dv_edge_link_refused_total{reason}
       restarts.<child>       dv_launcher_child_restarts_total{child}
       overs.<room>.<result>  dv_room_overs_total{room,result}, room as the label gives it
@@ -157,6 +159,8 @@ def counters(text):
             key = "rtt_ms"
         elif s.name == "dv_edge_link_datagrams_total" and "dir" in lab and "result" in lab:
             key = "dgram.%s.%s" % (lab["dir"], lab["result"])
+        elif s.name == "dv_edge_link_session_ends_total" and "reason" in lab:
+            key = "se.%s" % lab["reason"]
         elif s.name == "dv_edge_link_refused_total" and "reason" in lab:
             key = "refused.%s" % lab["reason"]
         elif s.name == "dv_launcher_child_restarts_total" and "child" in lab:
@@ -189,12 +193,19 @@ def delta(before, after):
     return out
 
 
-def collateral(moved, allow_restarts=(), allow_rx=()):
+def collateral(moved, allow_restarts=(), allow_rx=(), linkobs=False):
     """The things that must NOT move after a recovery (answers-364 section 5), as sentences: the handshake results auth_replay, auth_capacity,
     amplification and bad_proof, the datagram results bad_tag, unknown_session and malformed (except those named in `allow_rx`: a case that
     restarts the edge on purpose sees datagrams of the old session), any link refusal, any child restart except the children in
-    `allow_restarts`, and a process of the hub's table that is down."""
+    `allow_restarts`, and a process of the hub's table that is down. `linkobs` (LINKOBS1 image): also `bad_source` datagrams (a reply from a changed
+    central source: none in any fault of the cases) and `handshakes{unknown_session}` (the server's stateless hint after it lost a session) unless
+    `unknown_session` is allowed."""
     out = []
+    if linkobs:
+        if moved.get("dgram.rx.bad_source"):
+            out.append("datagram rx result bad_source moved by %g" % moved["dgram.rx.bad_source"])
+        if "unknown_session" not in allow_rx and moved.get("hs.unknown_session"):
+            out.append("handshake result unknown_session moved by %g" % moved["hs.unknown_session"])
     for name in MUST_NOT_MOVE_HANDSHAKE:
         if moved.get("hs.%s" % name):
             out.append("handshake result %s moved by %g" % (name, moved["hs.%s" % name]))
@@ -209,7 +220,7 @@ def collateral(moved, allow_restarts=(), allow_rx=()):
     return out
 
 
-LINK_PROCESS_PREFIXES = ("hs.", "dgram.", "refused.", "sessions", "rtt_ms")      # the series of the dv-edge-link process: they restart with it
+LINK_PROCESS_PREFIXES = ("hs.", "dgram.", "refused.", "se.", "sessions", "rtt_ms")      # the series of the dv-edge-link process: they restart with it
 
 
 def rebase(before, after, restarted=LINK_PROCESS_PREFIXES):
@@ -225,6 +236,67 @@ def rebase(before, after, restarted=LINK_PROCESS_PREFIXES):
         if d:
             out[key] = d
     return out
+
+
+SE_REASONS = ("timeout", "bye", "replaced", "revoked")
+
+
+def ends_problems(moved, expect=None):
+    """LINKOBS1: the session ends a node counted (`dv_edge_link_session_ends_total{reason}`, once per ended session on each side) against what the fault
+    must give: `expect` {reason: n}, every other reason 0. Sentences, empty when they agree."""
+    expect = expect or {}
+    out = []
+    for reason in SE_REASONS:
+        got, want = int(moved.get("se.%s" % reason, 0)), int(expect.get(reason, 0))
+        if got != want:
+            out.append("session_ends{reason=%s} moved by %d, wanted %d" % (reason, got, want))
+    return out
+
+
+# ---------------------------------------------------------------- the central node's TOML (revocation cases)
+
+_TABLE = "[[edges.link.account]]"
+
+
+def _account_blocks(lines):
+    """[(start, end, name)] of the `[[edges.link.account]]` blocks of a TOML text split in lines (end exclusive)."""
+    out, i = [], 0
+    while i < len(lines):
+        if lines[i].strip() == _TABLE:
+            j = i + 1
+            while j < len(lines) and not lines[j].lstrip().startswith("["):
+                j += 1
+            name = None
+            for ln in lines[i + 1:j]:
+                key, sep, val = ln.partition("=")
+                if sep and key.strip() == "name":
+                    name = val.strip().strip('"')
+            out.append((i, j, name))
+            i = j
+        else:
+            i += 1
+    return out
+
+
+def remove_account(text, name):
+    """The TOML text without the `[[edges.link.account]]` block called `name` (ValueError when there is none)."""
+    lines = text.split("\n")
+    for start, end, found in _account_blocks(lines):
+        if found == name:
+            return "\n".join(lines[:start] + lines[end:])
+    raise ValueError("no account row called %s" % name)
+
+
+def set_account_secret_file(text, name, path):
+    """The TOML text with the `secret_file` of the account row `name` set to `path` (ValueError when there is no such row or key)."""
+    lines = text.split("\n")
+    for start, end, found in _account_blocks(lines):
+        if found == name:
+            for k in range(start + 1, end):
+                if lines[k].partition("=")[0].strip() == "secret_file":
+                    lines[k] = 'secret_file = "%s"' % path
+                    return "\n".join(lines)
+    raise ValueError("no secret_file of the account row %s" % name)
 
 
 def link_active(counts):

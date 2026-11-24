@@ -135,12 +135,14 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
                      link key out/<run>/link-secrets/hs1.key; cases/test_node1g.py tests delay, loss, blackouts of 20 s and 60 s, an over in flight, NAT rebinding (new source port and
                      address) and a rotated key (docs/node1g-cases.md); off or unset: the cases skip naming this switch. Addresses for the tester: DVT_N1G_HOTSPOT (the hotspot on the inside
                      network), DVT_N1G_ROUTER (the router's control server, TCP 9100), DVT_N1G_ALIAS (its second outside address)
-  DVT_LINKOBS1       on: LINKOBS1 (a future image: refusal log and counter on the hotspot, session-end counter with reasons, Bye{revoked}, bad-source counter): the RECORD-only case of
-                     cases/test_node1g.py notes which dv_edge_link_* series the hubs expose; off or unset: it skips naming this switch (the names are not known yet)
-  DVT_LINKREBIND1    on: LINKREBIND1 (a future image: while it receives a stream the hotspot sends a keepalive at most every 1 s, so a NAT rebinding no longer cuts a central-to-hotspot over):
+  DVT_LINKOBS1       on: LINKOBS1 (DV-Router 06fc9c55, image wip-4732c43 and later: the hotspot's Reject counter and a rate-limited refusal log on both sides, dv_edge_link_session_ends_total
+                     {reason}, Bye{revoked}, datagrams bad_source, handshakes unknown_session, last_error revoked): cases/test_node1g.py k asserts the series and the bad_source / unknown_session
+                     counts, r (the account row removed, needs DVT_SUT_CONFIG_RW=1) and s (only the secret-file path changes) the session ends, d and h and every fault the session ends by
+                     reason; off or unset: they skip naming this switch (an older image has none of it)
+  DVT_LINKREBIND1    on: LINKREBIND1 (DV-Router 6f055ae8, image wip-4732c43 and later: while it receives a stream the hotspot sends a keepalive at most every 1 s, so a NAT rebinding no longer cuts a central-to-hotspot over):
                      cases/test_node1g.py f and g then also assert the post-fix numbers (central-to-hotspot gap below 1.2 s, every over heard at least 97 percent, no cut over); off or unset:
                      they assert the contract (gap at most 5 s, 90 percent heard) and fail on the defect (docs/node1g-cases.md, FINDING 1)
-  DVT_LINKSEQ1       on: LINKSEQ1 (a future image): cases/test_node1g.py a (delay only, 60 ms +- 10 ms) also asserts that the listener hears 100 percent, that every missing frame is visible in a
+  DVT_LINKSEQ1       on: LINKSEQ1 (DV-Router 7d2af17d, image wip-4732c43 and later): cases/test_node1g.py a (delay only, 60 ms +- 10 ms) also asserts that the listener hears 100 percent, that every missing frame is visible in a
                      late / lost / gap counter of some node or edge, and that the rows' loss_ppm is within 5000 ppm of the missing-unit share; the host step
                      `python3 -m dvtest.node1g_capture out/<run>` checks that no unit reordered within 40 ms was counted late; off or unset: a only records (docs/node1g-cases.md)
   DVT_NODE1G_FOLD    <n>: the opt-in case m of cases/test_node1g.py: n isolated overs per direction cut by a blackout, each judged for its fold (end_missing) and, with --capture, against the
