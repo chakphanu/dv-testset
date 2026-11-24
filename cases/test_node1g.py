@@ -567,9 +567,9 @@ def test_node1g_d_blackout_60s_relinks(n1g):
             problems.append("LINKFIX2: %s row last_session_end is %s during the blackout (wanted timeout)" % (node, n1.row_end_reason(row)))
         if row.get("state") != want_state[node]:
             problems.append("%s row during the blackout is %s (wanted %s): %s" % (node, row.get("state"), want_state[node], n1.row_summary(row)))
-        # LINKFIX2 moved the session end into last_session_end: the central node (a server, it makes no attempts) has no attempt error any more, the hotspot's own
-        # attempts still time out (wip-ae11b8f, 20261124T100404Z: central None, hotspot timeout; contract section 5 had timeout on both)
-        allowed = (None, "timeout") if (n1.linkfix2_on() and node == "central") else ("timeout",)
+        # LINKFIX2 (dv-router confirmed, 2026-11-24): last_error is the last ATTEMPT error and a server makes no attempts: the central row has none, the hotspot's own
+        # attempts time out; the session end is last_session_end (timeout on both rows, asserted above)
+        allowed = (None,) if (n1.linkfix2_on() and node == "central") else ("timeout",)
         if row.get("last_error") not in allowed:
             problems.append("%s row last_error during the blackout is %s (wanted %s)" % (node, row.get("last_error"), " or ".join(str(a) for a in allowed)))
     for node in ("central", "hotspot"):

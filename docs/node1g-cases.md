@@ -149,9 +149,9 @@ DVT_LINKSEQ1=on DVT_LINKFIX2=on DVT_SUT_CONFIG_RW=1` and `DVT_SUT_GEN=compat1`. 
 | r | pass | rate 1.010/s; `revoked` on every sample, `refused_key`, null after the row is put back (first probe 2.25 s after the reload); hotspot `se.revoked` +1 |
 | s | pass | `se.bye` +2, the link back 0.5 and 0.4 s after the reloads; no 0.25 s sample landed between the Bye and the relink in the second reload: recorded; null after both |
 
-**FINDING 9 (to confirm with dv-router, contract section 5 changed by LINKFIX2).** During a 60 s blackout the hotspot row has `last_error` `timeout` (its own attempts time out) but the central row has no `last_error` at all: the
-session end moved to `last_session_end` (`timeout`) and a server makes no attempts. Section 5 of the first answer said `timeout` on both. The case now accepts `None` or `timeout` for the CENTRAL row under
-`DVT_LINKFIX2=on` and `timeout` for the hotspot (the run above is not repeated: the rig went back to the K9c chain).
+**FINDING 9 (confirmed by dv-router as intended).** During a 60 s blackout the hotspot row has `last_error` `timeout` (its own attempts time out) but the central row has none: `last_error` is the last ATTEMPT error and a
+server makes no attempts; the session end is `last_session_end` (`timeout` on both rows). Section 5 of the first answer (`timeout` on both) is superseded. Under `DVT_LINKFIX2=on` case d asserts the central row's `last_error`
+None, the hotspot's `timeout` and `last_session_end` `timeout` on both rows (not yet re-run on the rig: the tightened assert is unit-tested only).
 
 ## Results on wip-4732c43
 
