@@ -322,6 +322,26 @@ def test_linkrebind1_gate_is_off_by_default_and_counters_read_the_unit_families(
     assert c["ounits.C.late"] == 2 and c["ounits.C.gap"] == 18 and c["eunits.link.rx.late"] == 1 and c["eunits.p25.rx.gap"] == 3
 
 
+def test_linkseq1_asserts_100_percent_accounting_and_loss_ppm():
+    assert not n1.linkseq_on({}) and n1.linkseq_on({"DVT_LINKSEQ1": "on"})
+    rows = {"central": {"loss_ppm": 0}, "hotspot": {"loss_ppm": 0}}
+    assert n1.linkseq_problems({"h2c": 1.0, "c2h": 1.0}, 500, {"central": {}, "hotspot": {}}, rows) == []         # nothing missing, nothing needed
+    # today's behaviour (run 20261123T234228Z): 4 of 500 missing each way, late 4 / 1, row loss_ppm = the reordered-datagram share
+    mv = {"central": {"ounits.C.late": 4.0, "eunits.link.rx.late": 4.0}, "hotspot": {"ounits.B.late": 1.0, "eunits.link.rx.late": 1.0}}
+    rows = {"central": {"loss_ppm": 22058}, "hotspot": {"loss_ppm": 13157}}
+    out = n1.linkseq_problems({"h2c": 0.992, "c2h": 0.992}, 500, mv, rows)
+    assert len([p for p in out if p.startswith("LINKSEQ1 a")]) == 2                                              # not 100 percent
+    assert not [p for p in out if p.startswith("LINKSEQ1 b")]                                                    # 8 missing <= 10 counted
+    assert len([p for p in out if p.startswith("LINKSEQ1 c")]) == 2                                              # 22058 ppm against 8000 ppm, 13157 against 8000
+    mv = {"central": {"ounits.C.late": 1.0}, "hotspot": {}}
+    assert any(p.startswith("LINKSEQ1 b") for p in n1.linkseq_problems({"h2c": 0.992, "c2h": 0.992}, 500, mv, rows))        # 8 missing, 1 counted
+    ok_rows = {"central": {"loss_ppm": 8000}, "hotspot": {"loss_ppm": 11000}}
+    assert not [p for p in n1.linkseq_problems({"h2c": 0.992, "c2h": 0.992}, 500, {"central": {"ounits.C.lost": 8.0}, "hotspot": {"ounits.B.gap": 1.0}}, ok_rows)
+                if p.startswith(("LINKSEQ1 b", "LINKSEQ1 c"))]
+    assert n1.unit_counters({"ounits.C.late": 2.0, "eunits.link.rx.gap": 1.0, "eunits.link.tx.lost": 3.0, "dgram.rx.ok": 9.0, "ounits.C.zzz": 1.0}) == {
+        "ounits.C.late": 2.0, "eunits.link.rx.gap": 1.0, "eunits.link.tx.lost": 3.0}
+
+
 def test_keybox_never_shows_the_key():
     box = n1.KeyBox("ab" * 32)
     assert box.value == "ab" * 32 and "ab" not in repr(box) and "ab" not in str(box)

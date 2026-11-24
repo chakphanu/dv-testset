@@ -68,6 +68,56 @@ def linkrebind_on(environ=None):
     return (environ if environ is not None else os.environ).get(LINKREBIND_SWITCH, "").strip().lower() in ("on", "1", "true", "yes")
 
 
+LINKSEQ_SWITCH = "DVT_LINKSEQ1"
+LINKSEQ_RESEQ_MS = 40.0           # LINKSEQ1: a unit reordered within about 40 ms is resequenced and played; later ones may stay late and be refused
+LINKSEQ_LOSS_PPM_TOL = 5000.0     # LINKSEQ1: the row's loss_ppm is within this of the missing-unit share (0.5 percentage point; zero missing gives about 0)
+FRAME_COUNTER_KEYS = ("late", "lost", "gap", "dropped")
+
+
+def linkseq_on(environ=None):
+    """DVT_LINKSEQ1=on: the image has LINKSEQ1 (a reordered unit within about 40 ms is resequenced and played, every missing frame is visible as late, lost or
+    gap, the row's loss_ppm counts missing units); NODE1g-a then asserts it (default off: the current behaviour, recorded only)."""
+    return (environ if environ is not None else os.environ).get(LINKSEQ_SWITCH, "").strip().lower() in ("on", "1", "true", "yes")
+
+
+def unit_counters(moved):
+    """The late / lost / gap / dropped unit counts a node's hub delta holds: the room's (`ounits.<room>.<result>`) and the edges'
+    (`eunits.<proc>.<dir>.<result>`): {key: value} of the series that moved."""
+    return {k: v for k, v in moved.items() if k.startswith(("ounits.", "eunits.")) and k.rsplit(".", 1)[1] in FRAME_COUNTER_KEYS and v}
+
+
+def late_units(moved):
+    """The late units of the link edge's ingress (`eunits.link.rx.late`), the number LINKSEQ1 wants at 0 for reorders inside 40 ms."""
+    return moved.get("eunits.link.rx.late", 0.0)
+
+
+def linkseq_problems(heard, sent_frames, mv, rows):
+    """The LINKSEQ1 asserts of the delay-only case, as sentences (empty when they hold).
+    heard: {"h2c": share, "c2h": share} of the over's frames the listener heard; sent_frames: frames per over; mv: {node: hub delta}; rows: {node: row or None}.
+      a) every over heard 100 percent
+      b) accounting: the frames missing (both directions) are at most the sum of the late, lost, gap and dropped unit counters of every node and edge
+      c) the row's loss_ppm of the receiving node (central: h2c, hotspot: c2h) is within LINKSEQ_LOSS_PPM_TOL of the missing-unit share of that direction"""
+    out = []
+    missing = {}
+    for who, share in heard.items():
+        missing[who] = int(round((1.0 - share) * sent_frames))
+        if missing[who]:
+            out.append("LINKSEQ1 a: %s: the listener heard %.1f percent (%d of %d frames missing), wanted 100" % (who, 100 * share, missing[who], sent_frames))
+    total = sum(sum(unit_counters(m).values()) for m in mv.values())
+    if sum(missing.values()) > total:
+        out.append("LINKSEQ1 b: %d frames missing at the listeners but the late / lost / gap / dropped counters of both nodes add up to %g (%s)" % (
+            sum(missing.values()), total, {n: unit_counters(m) for n, m in mv.items()}))
+    for who, node in (("h2c", "central"), ("c2h", "hotspot")):
+        row = rows.get(node)
+        if row is None or row.get("loss_ppm") is None or who not in missing:
+            continue
+        want = 1e6 * missing[who] / float(sent_frames)
+        if abs(row["loss_ppm"] - want) > LINKSEQ_LOSS_PPM_TOL:
+            out.append("LINKSEQ1 c: %s row loss_ppm %s, the missing-unit share of %s is %.0f ppm (%d of %d), wanted within %.0f" % (
+                node, row["loss_ppm"], who, want, missing[who], sent_frames, LINKSEQ_LOSS_PPM_TOL))
+    return out
+
+
 def on(environ=None):
     """DVT_NODE1G=on: run.sh made the pair a hotspot behind a WAN router and its central node (--profile twonode)."""
     return (environ if environ is not None else os.environ).get(SWITCH, "").strip().lower() in ("on", "1", "true", "yes")

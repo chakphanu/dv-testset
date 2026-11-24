@@ -30,6 +30,7 @@ CENTRAL_PCAP, HOTSPOT_PCAP = "xlxd-sut.pcapng", "dvr-peer.pcapng"
 RECEIVER = {"h2c": "central", "c2h": "hotspot"}
 CAPTURE = {"central": CENTRAL_PCAP, "hotspot": HOTSPOT_PCAP}
 ROOM = {"central": "C", "hotspot": "B"}
+RESEQ_MS = 40.0           # LINKSEQ1: a unit reordered within about 40 ms is resequenced and played, so it is not counted late
 
 
 def is_rx(node, d):
@@ -108,7 +109,7 @@ def reorder(records, t_lo, t_hi):
     {datagrams, reordered, max_counter_back, max_late_ms, mean_late_ms, units, units_reordered, max_seq_back}."""
     top, top_ts, session = -1, None, None
     out = {"datagrams": 0, "reordered": 0, "max_counter_back": 0, "max_late_ms": 0.0, "units": 0, "units_reordered": 0, "max_seq_back": 0}
-    lates, seq_top = [], {}
+    lates, seq_top, unit_arrivals, unit_late = [], {}, {}, []
     for ts, rec in records:
         if not t_lo <= ts <= t_hi:
             continue
@@ -132,7 +133,13 @@ def reorder(records, t_lo, t_hi):
             else:
                 out["units_reordered"] += 1
                 out["max_seq_back"] = max(out["max_seq_back"], seq_top[sid] - seq)
+                # how late: after the FIRST unit of the stream that came with a higher position (the one that overtook it)
+                over = [t for t, q in unit_arrivals.get(sid, ()) if q > seq]
+                unit_late.append((ts - min(over)) * 1000.0)
+            unit_arrivals.setdefault(sid, []).append((ts, seq))
     out["mean_late_ms"] = sum(lates) / len(lates) if lates else 0.0
+    out["unit_late_ms"] = sorted(unit_late)
+    out["units_over_40ms"] = sum(1 for x in unit_late if x > RESEQ_MS)
     return out
 
 
@@ -185,6 +192,14 @@ def judge(run_dir, out=print):
                     out("%s %s: no capture of the %s node (run with --capture)" % (run, w["case"], node))
                     continue
                 r = reorder(records, w["t_start"], w["t_stop"])
+                lates = w.get("late_units", {}).get(node)
+                if w.get("linkseq1") and lates is not None:
+                    allowed = r["units_over_40ms"]
+                    seq_ok = lates <= allowed
+                    bad += 0 if seq_ok else 1
+                    out("%s %s %s LINKSEQ1: %d units reordered (lateness ms %s), %d later than %.0f ms; link-edge late units counted %g, at most %d expected -> %s" % (
+                        run, w["case"], node, r["units_reordered"], [round(x) for x in r["unit_late_ms"]], allowed, RESEQ_MS, lates, allowed,
+                        "ok" if seq_ok else "DEFECT: a unit reordered inside %.0f ms was counted late" % RESEQ_MS))
                 out("%s %s %s receives: %d datagrams, %d reordered (back by up to %d, late by up to %.0f ms, mean %.0f ms); %d units, %d reordered (back by up to %d positions)" % (
                     run, w["case"], node, r["datagrams"], r["reordered"], r["max_counter_back"], r["max_late_ms"], r["mean_late_ms"], r["units"],
                     r["units_reordered"], r["max_seq_back"]))

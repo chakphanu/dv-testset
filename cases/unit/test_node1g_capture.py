@@ -95,6 +95,34 @@ def test_reorder_counts_late_datagrams_and_units(tmp_path):
     assert r["reordered"] == 2
 
 
+def test_unit_lateness_is_measured_from_the_unit_that_overtook_it(tmp_path):
+    t0 = 4000.0
+    # positions 1 2 4 3 (3 arrives 30 ms after 4) 5 7 6 (6 arrives 60 ms after 7)
+    arrivals = [(0.00, 1, 1), (0.02, 2, 2), (0.04, 3, 4), (0.07, 4, 3), (0.09, 5, 5), (0.11, 6, 7), (0.17, 7, 6)]
+    packets = [frame(t0 + t, units(c, p)) for t, c, p in arrivals]
+    r = cap.reorder(cap.read(write(tmp_path, "l.pcapng", packets), "central"), t0 - 1, t0 + 5)
+    assert r["units_reordered"] == 2 and [round(x) for x in r["unit_late_ms"]] == [30, 60] and r["units_over_40ms"] == 1
+
+
+def test_judge_checks_linkseq1_late_counts_against_the_capture(tmp_path):
+    run = tmp_path / "20990101T000001Z"
+    (run / "node1g").mkdir(parents=True)
+    (run / "capture").mkdir()
+    t0 = 5000.0
+    arrivals = [(0.00, 1, 1), (0.02, 2, 2), (0.04, 3, 4), (0.07, 4, 3), (0.09, 5, 5), (0.11, 6, 7), (0.17, 7, 6)]            # 30 ms and 60 ms late
+    pkts = [frame(t0 + t, units(c, p)) for t, c, p in arrivals]
+    pcap.write(str(run / "capture" / cap.CENTRAL_PCAP), pkts)
+    pcap.write(str(run / "capture" / cap.HOTSPOT_PCAP), [frame(t0 + t, units(c, p), to_central=False) for t, c, p in arrivals])
+    win = {"case": "a", "kind": "delay", "t_start": t0 - 1, "t_stop": t0 + 5, "linkseq1": True, "late_units": {"central": 1.0, "hotspot": 0.0}}
+    (run / "node1g" / "windows.jsonl").write_text(json.dumps(win) + "\n")
+    lines = []
+    assert cap.judge(str(run), out=lines.append) == 0 and any("LINKSEQ1" in x and "-> ok" in x for x in lines)          # one unit over 40 ms may be late
+    win["late_units"] = {"central": 2.0, "hotspot": 0.0}
+    (run / "node1g" / "windows.jsonl").write_text(json.dumps(win) + "\n")
+    lines = []
+    assert cap.judge(str(run), out=lines.append) == 1 and any("DEFECT: a unit reordered inside 40 ms was counted late" in x for x in lines)
+
+
 def test_judge_prints_a_defect_with_the_stream_id(tmp_path):
     run = tmp_path / "20990101T000000Z"
     (run / "node1g").mkdir(parents=True)

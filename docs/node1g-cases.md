@@ -50,7 +50,7 @@ that no guard strike builds up, every 0.4 s) is an UPPER bound of the moment the
 | Case | What is done | Asserted (contract) |
 |------|--------------|---------------------|
 | NODE1g-0 | the link comes up through the NAT | both rows `connected` with a room map, the central node sees the hotspot at the router's address, an over each way heard whole (at least 90 percent), one session on each hub |
-| NODE1g-a | `delay 60ms 10ms` for 25 s, one 10 s over each way | no handshake either side (section 3), both rows connected, `rtt_ms` 100..220 (about 2 x 60: section 5), each over heard at least 95 percent and its first frame 40..200 ms after it was sent, nothing on the must-not-move list (section 5) |
+| NODE1g-a | `delay 60ms 10ms` for 25 s, one 10 s over each way | no handshake either side (section 3), both rows connected, `rtt_ms` 100..220 (about 2 x 60: section 5), each over heard at least 95 percent and its first frame 40..200 ms after it was sent, nothing on the must-not-move list (section 5); with `DVT_LINKSEQ1=on` also the LINKSEQ1 asserts below |
 | NODE1g-b | `loss 3%` for 60 s, one 10 s over each way | no handshake, both rows connected, each over heard at least 85 percent, `loss_ppm` recorded (it is in the row, not a Prometheus series) |
 | NODE1g-c | blackout of 20 s with the link idle | the session SURVIVES: no handshake (`welcomed` and `accepted` +0, section 3 "deterministic companions"), link up within 10 s of the end, overs resume both ways, `dv_status_room_onair` 0 on both rooms, one session per hub, collateral list |
 | NODE1g-d | blackout of 60 s | 42 s in: rows `reconnecting` (hotspot) and `disconnected` (central) with `last_error` `timeout`, no session on either hub; after the end ONE handshake each side (`welcomed` +1, `accepted` +1), link up within 10 s, overs resume both ways, floors free, `last_error` clear |
@@ -132,6 +132,30 @@ for by port only (an address change keeps the port), `--down` did not know the p
 | a session-end counter with reasons | none; reconnects are derived from `handshakes{welcomed}` (NODE1g-d asserts +1) | NODE1g-k |
 | `Bye{revoked}` | `ByeReason::Revoked` is never sent; a rekey shows as `Bye{reload}`: NODE1g-h records the rows right after the reload (central `disconnected`, the hotspot still `connected`, then `refused_key`; no `closed_by_peer` was seen) | NODE1g-h |
 | a bad-source counter | a reply from a changed CENTRAL source is dropped without a count (section 3 end, 6 item 8) | not built: moving the central side's source needs a second central address; GAP |
+
+## The next image: LINKFOLD1, LINKSEQ1 and LINKREBIND1 (asserts prepared, not run)
+
+dv-router opened LINKFOLD1 (FINDING 2) and LINKSEQ1 (the reordering of case a) and carries them with LINKREBIND1 (FINDING 1) in one image. Three gates, all default off (the current behaviour is kept):
+
+| Gate | Row | What it turns on |
+|------|-----|------------------|
+| `DVT_LINKREBIND1=on` | LINKREBIND1 | NODE1g-f and -g also assert: central-to-hotspot gap below 1.2 s, every over heard at least 97 percent, no cut over in any trial (the contract asserts stay on regardless) |
+| `DVT_LINKSEQ1=on` | LINKSEQ1 | NODE1g-a (delay only, 60 ms +- 10 ms) also asserts, in the case: (a) both overs heard 100 percent; (b) accounting: the frames the listeners miss, both directions, are at most the sum of the late / lost / gap / dropped unit counters of both nodes (the room's `dv_room_over_units_total` and the edges' `dv_edge_over_units_total`); (c) each row's `loss_ppm` is within 5000 ppm of the missing-unit share of the direction it receives (zero missing gives about 0), no longer the share of reordered datagrams. The host step then checks the lateness of every reorder against the capture: the link edge's late units must not exceed the number of units reordered by more than 40 ms (a reorder inside 40 ms is resequenced and played, so late 0 for it); units later than 40 ms may stay late |
+| (LINKFOLD1) | LINKFOLD1 | no gate: NODE1g-e1 and -e2 already assert `end_missing` for an over whose End was lost; the opt-in case m (`DVT_NODE1G_FOLD=<n>`) and the capture judge repeat the check with isolated overs |
+
+The exact command for the next run (one run, about 34 minutes: 21 for the cases, 6 for case m with `DVT_NODE1G_FOLD=4`, the rest rig start and stop; with `--capture` the wire check at the end fails as it did in
+`20261123T234228Z`, which is expected for the hotspot's inside LAN and does not change the pytest result):
+
+```
+XLXD_SUT_IMAGE=<image> DVT_SUT_PROFILE=dvrouter DVT_SUT_LAUNCH=native DVT_SUT_CONFIG=<template> DVT_SUT_GEN=compat1 \
+DVT_NODE1G=on DVT_NODE1G_FOLD=4 DVT_LINKREBIND1=on DVT_LINKSEQ1=on \
+scripts/run.sh -m rig --capture --profile twonode -- cases/test_node1g.py -rA
+python3 -m dvtest.node1g_capture out/<run>
+```
+
+To stay under 30 minutes split it: the same command with `-k "not node1g_m"` (and without `DVT_NODE1G_FOLD`), and a second run with `DVT_NODE1G_FOLD=4 ... -k "node1g_a or node1g_m"` (about 8 minutes; case a is in it so that
+its capture window is judged too). The host step prints, per window, the fold the rule gives against the fold the hub counted (`DEFECT` names the link stream id), and for case a the reordering with the lateness of
+every reordered unit and the LINKSEQ1 check. It exits 1 on any defect.
 
 ## Not built
 

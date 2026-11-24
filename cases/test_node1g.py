@@ -377,6 +377,9 @@ def window(n, **rec):
         fh.write(json.dumps(rec, sort_keys=True) + "\n")
 
 
+IMPAIRED_FRAMES = 500             # frames of the 10 s over each way in the delay and loss cases
+
+
 def impaired_run(n, case, args, long_s, ns_seed):
     """One impairment: set it on the router, let the link run `long_s` seconds, one 10 s over each way; returns what the judge needs."""
     before = hubs(n)
@@ -388,7 +391,7 @@ def impaired_run(n, case, args, long_s, ns_seed):
         idle(ns.all, 12.0)                                    # the first keepalive echo gives the first RTT sample (5-10 s)
         res = {}
         for who, talker, listener in (("h2c", ns.hc, ns.lc), ("c2h", ns.cc, ns.lh)):
-            sent = frames_of(500, "%s/%s" % (ns_seed, who))
+            sent = frames_of(IMPAIRED_FRAMES, "%s/%s" % (ns_seed, who))
             t0, t1 = over(talker, sent, ns.all)
             idle(ns.all, 2.0)
             arr = n1.voice_arrivals(listener)
@@ -396,7 +399,7 @@ def impaired_run(n, case, args, long_s, ns_seed):
             res[who] = {"share": n1.heard_share(arr, sent, since=t0), "first_ms": None if first is None else round((first - t0) * 1000.0)}
         idle(ns.all, max(0.0, long_s - (time.monotonic() - t_on)))
     rows = {node: get_row(n, node) for node in ("central", "hotspot")}
-    window(n, case=case, kind="delay" if args == n1.DELAY_ARGS else "loss", t_start=t_epoch_on, t_stop=time.time(), args=args)
+    n.last_window = {"t_start": t_epoch_on, "t_stop": time.time(), "args": args}          # the case writes the window once it has the hub deltas
     n.control.netem("wan", "off")
     event(n)
     after = hubs(n)
@@ -434,6 +437,14 @@ def test_node1g_a_delay(n1g):
         units = {k: v for k, v in sorted(mv[node].items()) if k.startswith(("ounits.", "eunits.")) or ".lossy" in k}
         note(n, case, "RECORD", "%s node: late / lost / gap units of the room and of the link edge, lossy overs: %s; row loss_ppm %s" % (
             node, units or "none moved", (rows[node] or {}).get("loss_ppm")))
+    # the window for the capture judge (python3 -m dvtest.node1g_capture): the late units counted by each node's link edge, what the listeners missed
+    window(n, case=case, kind="delay", linkseq1=n1.linkseq_on(), late_units={node: n1.late_units(m) for node, m in mv.items()},
+           missing={who: int(round((1.0 - r["share"]) * IMPAIRED_FRAMES)) for who, r in res.items()}, **n.last_window)
+    if n1.linkseq_on():
+        # LINKSEQ1 (a future image; default off keeps the behaviour above): a) every over heard 100 percent, b) every missing frame visible in a late / lost / gap
+        # counter of some node or edge, c) the row's loss_ppm counts missing units. The lateness of each reorder (late 0 inside 40 ms) is a host step
+        # on the capture: python3 -m dvtest.node1g_capture out/<run>
+        problems += n1.linkseq_problems({who: r["share"] for who, r in res.items()}, IMPAIRED_FRAMES, mv, rows)
     finish(n, case, problems)
 
 

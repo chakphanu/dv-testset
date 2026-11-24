@@ -140,6 +140,9 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
   DVT_LINKREBIND1    on: LINKREBIND1 (a future image: while it receives a stream the hotspot sends a keepalive at most every 1 s, so a NAT rebinding no longer cuts a central-to-hotspot over):
                      cases/test_node1g.py f and g then also assert the post-fix numbers (central-to-hotspot gap below 1.2 s, every over heard at least 97 percent, no cut over); off or unset:
                      they assert the contract (gap at most 5 s, 90 percent heard) and fail on the defect (docs/node1g-cases.md, FINDING 1)
+  DVT_LINKSEQ1       on: LINKSEQ1 (a future image): cases/test_node1g.py a (delay only, 60 ms +- 10 ms) also asserts that the listener hears 100 percent, that every missing frame is visible in a
+                     late / lost / gap counter of some node or edge, and that the rows' loss_ppm is within 5000 ppm of the missing-unit share; the host step
+                     `python3 -m dvtest.node1g_capture out/<run>` checks that no unit reordered within 40 ms was counted late; off or unset: a only records (docs/node1g-cases.md)
   DVT_NODE1G_FOLD    <n>: the opt-in case m of cases/test_node1g.py: n isolated overs per direction cut by a blackout, each judged for its fold (end_missing) and, with --capture, against the
                      link datagrams by `python3 -m dvtest.node1g_capture out/<run>`; unset: the case skips naming this variable
   DVT_RFPOS1C        on: RFPOS1 step C (DV-Router fb3167bb): with --profile asl-edge run.sh adds rfpos1c-usrp.toml (a static USRP row on module L, the tester as the peer);
