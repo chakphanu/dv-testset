@@ -174,6 +174,21 @@ def get_row(n, node):
     return n1.link_row(status, name)
 
 
+def clients_row(n, node):
+    """The same link row as a second view: the `link_edges` of the admin `GET /clients?limit=1` (the status hub's private answer, which `GET /status` projects).
+    None when the call fails or its answer has no link_edges."""
+    client = n.admin.get(node)
+    if client is None:
+        return None
+    name = "account:%s" % n1.ACCOUNT if node == "central" else "uplink:%s" % n1.UPLINK
+    try:
+        client.step_up()
+        body = client.get(client.path("/clients") + "?limit=1", expect=200).json()
+    except (OSError, web.WebError, ValueError, AttributeError):
+        return None
+    return n1.link_row(body, name)
+
+
 def wait_row(n, node, ok, budget_s, step_s=1.0):
     """Poll the row of `node` until `ok(row)`; (row, seconds waited) or (last row, None) on timeout."""
     t0 = time.monotonic()
@@ -554,6 +569,8 @@ def test_node1g_d_blackout_60s_relinks(n1g):
     for node, row in seen_mid.items():
         if row is None:
             continue
+        if n1.linkfix2_on() and n1.row_end_reason(row) != "timeout":
+            problems.append("LINKFIX2: %s row last_session_end is %s during the blackout (wanted timeout)" % (node, n1.row_end_reason(row)))
         if row.get("state") != want_state[node]:
             problems.append("%s row during the blackout is %s (wanted %s): %s" % (node, row.get("state"), want_state[node], n1.row_summary(row)))
         if row.get("last_error") != "timeout":
@@ -1183,6 +1200,12 @@ def test_node1g_r_revoked_account(n1g):
                     ends_seen.append((row.get("state"), row.get("last_error"), n1.row_end_reason(row)))
             k += 1
             tick(ns.all)
+        if n1.linkfix2_on():
+            alt = clients_row(n, "hotspot")
+            if alt is None:
+                note(n, case, "GAP", "the admin /clients answer carries no link_edges for the hotspot: the two views of the row were not compared")
+            else:
+                problems += ["r: the two views of the hotspot row differ: %s" % p for p in n1.rows_disagree(get_row(n, "hotspot"), alt)]
         mid = hubs(n, quiet=False)
         t_dead, sent = probe_until_heard(ns, ns.hc, ns.lc, 3.0, "r-dead")
         if t_dead is not None:
@@ -1223,8 +1246,8 @@ def test_node1g_r_revoked_account(n1g):
     problems += floor_free(n, after, (("central", "C"), ("hotspot", "B")))
     if n1.linkfix2_on():
         row = wait_row(n, "hotspot", connected, 15.0)[0]
-        if row is not None and n1.row_end_reason(row) == "revoked":
-            problems.append("r: the row still shows end reason revoked after the next successful handshake (wanted it cleared or replaced)")
+        note(n, case, "RECORD", "hotspot row after the next successful handshake: last_session_end %s (the field keeps the last session end), last_error %s" % (
+            n1.row_end_reason(row), (row or {}).get("last_error")))
     note(n, case, "RECORD", "row put back: first probe heard %s s after the reload; hotspot moved %s" % (
         None if rel is None else round(rel, 2), {k: v for k, v in mv["hotspot"].items() if k.startswith(("hs.", "se."))}))
     finish(n, case, problems)
@@ -1257,6 +1280,11 @@ def test_node1g_s_reload_with_the_same_key_is_a_bye(n1g):
             rel, more = resume_both_ways(ns, t0, n1.RELINK_S, "s-%s" % step.split()[0])
             problems += ["%s: %s" % (step, p) for p in more]
             labels = sampler.finish()
+        if n1.linkfix2_on():
+            final = wait_row(n, "hotspot", connected, 10.0)[0]
+            seen_ends = {e for _, _, e in sampler.full} | {n1.row_end_reason(final)}
+            if "bye" not in seen_ends:
+                problems.append("LINKFIX2: %s: the hotspot row never showed last_session_end bye after Bye{reload} (values seen %s)" % (step, sorted(str(e) for e in seen_ends)))
         note(n, case, "RECORD", "%s: hotspot row after the reload (state, last_error): %s" % (step, labels[:30]))
         if "revoked" in [e for _, e in labels]:
             problems.append("%s: the hotspot row shows revoked although the key did not change" % step)

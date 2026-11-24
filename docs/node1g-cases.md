@@ -183,12 +183,12 @@ dv-router answered both findings as defects, fixed in LINKFIX2:
 * FINDING 5: the 40 ms window is the contract, the 2-unit cap only a safety bound. NODE1g-a with `DVT_LINKSEQ1=on` already asserts it whatever the position count: the listener hears 100 percent, and the host step
   (`python3 -m dvtest.node1g_capture`) fails a link-edge late count above the number of units reordered by more than 40 ms; its line now also says how many reordered units were within 40 ms but more than 2 positions back
   (2 of 3 at the central node and 1 of 3 at the hotspot in `20261124T054120Z`). No new gate.
-* FINDING 6: the hotspot row keeps the reason of the last session end apart from the last attempt error. New gate `DVT_LINKFIX2=on` (default off, which keeps the wip-4732c43 assert that last_error shows revoked, which fails):
-  h and r assert that the row shows the end reason `revoked` in EVERY sample while the hotspot is `reconnecting` (h: the 10 s after the rekey; r: those 10 s and every 4th round of the 60 s window) with `last_error`
-  `refused_key` (the attempt error, no longer `revoked`), and that r's row no longer shows `revoked` after the next successful handshake. **The field name is assumed**: the row fields of the new image were not in the
-  DV-Router tree (no LINKFIX2 commit, `LinkSession` has only `last_error`), so `dvtest.node1g.END_REASON_FIELDS` lists the candidates and the first one a row carries is read:
-  `last_end_reason`, `end_reason`, `last_session_end`, `session_end_reason`, `last_end`, `ended`. A row with none of them fails the assert with the list of names tried: when the real name is another, add it
-  to that tuple (one line).
+* FINDING 6: the hotspot row keeps the reason of the last session end apart from the last attempt error, in the field **`last_session_end`** (values `timeout | bye | replaced | revoked`; on the status row, the admin
+  row and in the OpenAPI shape; dv-router, 2026-11-24: the only name read, `dvtest.node1g.END_REASON_FIELDS`). New gate `DVT_LINKFIX2=on` (default off, which keeps the wip-4732c43 assert that last_error shows revoked,
+  which fails): h and r assert that the row shows `last_session_end` `revoked` in EVERY sample while the hotspot is `reconnecting` (h: the 10 s after the rekey; r: those 10 s and every 4th round of the 60 s window) with
+  `last_error` `refused_key` (the attempt error, no longer `revoked`); r also compares the status row (`GET /status`) with the admin `GET /clients` view of the same row (state, last_error, last_session_end; a GAP note
+  when `/clients` carries no `link_edges`) and only records the field after the next successful handshake; d asserts `last_session_end` `timeout` on BOTH rows during the 60 s blackout; s asserts `bye` on the hotspot's row
+  after each Bye{reload} (seen in the 8 s of samples or on the row once it is connected again). The reorder cap is now 6 units per profile with the window unchanged at 40 ms: nothing changes in a.
 * Relink after a key fix: the bound stays 12 s (`RELINK_FIX_S`).
 * `session_ends{reason=replaced}`: not added. It needs the same hotspot to open a second session from a new source port while the first is alive, i.e. a second handshake the tester would have to play with the key
   (the rig cannot force one: a rebinding alone moves the existing session, the hotspot cannot be restarted through the control channel).

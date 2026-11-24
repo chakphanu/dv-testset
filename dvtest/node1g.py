@@ -120,14 +120,16 @@ def linkseq_problems(heard, sent_frames, mv, rows):
 
 
 LINKFIX2_SWITCH = "DVT_LINKFIX2"
-# LINKFIX2 (next image): the hotspot row keeps the reason of the LAST SESSION END apart from the last attempt error (`last_error`). The field name is NOT known
-# yet (the row fields of the image under test are not in the DV-Router tree this was written against): the first of these that a row carries is the one read.
-END_REASON_FIELDS = ("last_end_reason", "end_reason", "last_session_end", "session_end_reason", "last_end", "ended")
+# LINKFIX2: a link row keeps the reason of the LAST SESSION END (timeout | bye | replaced | revoked) apart from the last attempt error (`last_error`), in the
+# status row, the admin row and the OpenAPI shape. The field is `last_session_end` (dv-router, 2026-11-24).
+END_REASON_FIELDS = ("last_session_end",)
+SESSION_END_VALUES = ("timeout", "bye", "replaced", "revoked")
 
 
 def linkfix2_on(environ=None):
     """DVT_LINKFIX2=on: the image has LINKFIX2 (the row's separate end-reason field; the 40 ms reorder window is a contract with the 2-unit cap only a safety
-    bound). NODE1g-h and -r then assert the end reason `revoked` on the row while the hotspot retries and is refused, with `last_error` the attempt error."""
+    bound). NODE1g-h and -r then assert the end reason `revoked` on the row (`last_session_end`) while the hotspot retries and is refused, with `last_error` the attempt error;
+    d asserts `timeout` on both rows, s `bye` on the hotspot's."""
     return (environ if environ is not None else os.environ).get(LINKFIX2_SWITCH, "").strip().lower() in ("on", "1", "true", "yes")
 
 
@@ -144,6 +146,14 @@ def row_end_reason(row):
     name = end_reason_field(row)
     value = (row or {}).get(name) if name else None
     return value or None
+
+
+def rows_disagree(a, b):
+    """Sentences for the fields of two views of the same link row (the status row and the admin row) that differ: state, last_error, last_session_end.
+    Empty when they agree; a view that is None is not compared."""
+    if a is None or b is None:
+        return []
+    return ["%s: %r against %r" % (k, (a or {}).get(k), (b or {}).get(k)) for k in ("state", "last_error", "last_session_end") if (a or {}).get(k) != (b or {}).get(k)]
 
 
 def end_reason_problems(samples, who, want="revoked"):

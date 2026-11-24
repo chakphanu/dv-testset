@@ -143,9 +143,9 @@ allstar .40, urfd .70, mrefd .80, web-proxy .90.
                      cases/test_node1g.py f and g then also assert the post-fix numbers (central-to-hotspot gap below 1.2 s, every over heard at least 97 percent, no cut over); off or unset:
                      they assert the contract (gap at most 5 s, 90 percent heard) and fail on the defect (docs/node1g-cases.md, FINDING 1)
   DVT_LINKFIX2       on: LINKFIX2 (a future image: the hotspot's link row keeps the reason of the last session end apart from the attempt error `last_error`): cases/test_node1g.py h and r assert
-                     that the row shows the end reason `revoked` in a separate field (the name is read from dvtest.node1g.END_REASON_FIELDS: last_end_reason, end_reason, last_session_end,
-                     session_end_reason, last_end, ended; the first present wins) in every sample while the hotspot retries and is refused, with `last_error` refused_key, and not after the next
-                     successful handshake; off or unset: they assert last_error revoked (the wip-4732c43 behaviour, which fails: FINDING 6)
+                     that the row shows the end reason `revoked` in the field `last_session_end` (timeout | bye | replaced | revoked, separate from last_error, in the status row, the admin row and the
+                     OpenAPI shape) in every sample while the hotspot retries and is refused, with `last_error` refused_key; d asserts timeout on both rows during the blackout and s bye on the hotspot's
+                     after each Bye{reload}; r compares the status row with the admin /clients view; off or unset: they assert last_error revoked (the wip-4732c43 behaviour, which fails: FINDING 6)
   DVT_LINKSEQ1       on: LINKSEQ1 (DV-Router 7d2af17d, image wip-4732c43 and later): cases/test_node1g.py a (delay only, 60 ms +- 10 ms) also asserts that the listener hears 100 percent, that every missing frame is visible in a
                      late / lost / gap counter of some node or edge, and that the rows' loss_ppm is within 5000 ppm of the missing-unit share; the host step
                      `python3 -m dvtest.node1g_capture out/<run>` checks that no unit reordered within 40 ms was counted late; off or unset: a only records (docs/node1g-cases.md)
