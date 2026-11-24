@@ -58,8 +58,8 @@ def image():
 
 
 def _need_gen():
-    if sut_config.gen_value() != sut_config.COMPAT1:
-        pytest.skip("DVT_SUT_GEN must be compat1")
+    if not sut_config.gen_at_least(None, sut_config.COMPAT1):
+        pytest.skip("DVT_SUT_GEN must be compat1 or k9")
 
 
 @pytest.fixture(scope="module")
@@ -69,13 +69,13 @@ def rig_text():
     if not template or not Path(template).is_file():
         pytest.skip("DVT_SUT_CONFIG is unset or not a file (the rig's template)")
     extras = [Path(p).read_text(encoding="utf-8") for p in sut_config.split_extras(os.environ.get("DVT_CFGLOAD_EXTRA", ""))]
-    return sut_config.render(Path(template).read_text(encoding="utf-8"), NET, extras=extras, gen=sut_config.COMPAT1)
+    return sut_config.render(Path(template).read_text(encoding="utf-8"), NET, extras=extras, gen=sut_config.gen_value())
 
 
 @pytest.fixture(scope="module")
 def hotspot_text():
     _need_gen()
-    return sut_config.render((SNIPPETS / "netthr1-hotspot.toml").read_text(encoding="utf-8"), NET, gen=sut_config.COMPAT1)
+    return sut_config.render((SNIPPETS / "netthr1-hotspot.toml").read_text(encoding="utf-8"), NET, gen=sut_config.gen_value())
 
 
 @pytest.fixture(scope="module", autouse=True)

@@ -1,6 +1,9 @@
 # Outbound rows of the AllStar edge (DVT_ASL_EDGE_OUT=1, T6 T7 T8): node 2900 dials the lab node 199902
 # (app_rpt B) and keeps the link (permanent, with redial and backoff), and dials 299901 (E) once, monitor
 # only. The targets resolve through the static rows of allstar-lab.toml. Name this file after it.
+# The key `mode` is the dialect of images before wip-4732c43 (K9a). With DVT_SUT_GEN=k9 the renderer writes `direction = "both"` for
+# transceive (the only value that transmits) and `direction = "to_room"` for monitor (listen-only, also the image default); the image
+# refuses `mode` (docs/rig.md "k9"). Do not write `direction` here: the older images refuse that key.
 [[edges.allstar.outbound]]
 from = 2900
 target = 199902

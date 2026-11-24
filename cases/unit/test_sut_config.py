@@ -483,7 +483,8 @@ enable = true
 
 def test_gens_are_ordered_and_the_default_is_c165c93(monkeypatch):
     monkeypatch.delenv("DVT_SUT_GEN", raising=False)
-    assert sut_config.GENS == ("71ab207", "c165c93", "c2465de", "compat1") and sut_config.gen_value() == "c165c93"
+    assert sut_config.GENS == ("71ab207", "c165c93", "c2465de", "compat1", "k9") and sut_config.gen_value() == "c165c93"
+    assert sut_config.gen_at_least("k9", "compat1") and not sut_config.gen_at_least("compat1", "k9")
     assert sut_config.gen_at_least("c2465de", "c165c93") and not sut_config.gen_at_least("c165c93", "c2465de")
     assert sut_config.gen_at_least("compat1", "c2465de") and not sut_config.gen_at_least("c2465de", "compat1")
     assert sut_config.gen_at_least("c165c93", "71ab207")
@@ -795,3 +796,127 @@ def test_xlx_peer_tester_bm_row_keeps_its_dmr_kind_next_to_the_xlx_tester_row():
     peers = tomllib.loads(sut_config.render(text, "172.30.0", gen="compat1"))["edges"]["xlx"]["peer"]
     assert [(p["callsign"], p["kind"], p["modules"]) for p in peers] == [("XLX996", "xlx", "DE"), ("BM3109", "dmr", "D")]
     assert peers[0]["host"] == peers[1]["host"]
+
+
+# ---- k9: endpoint rows carry direction / enabled (K9a, K9b), outbound `mode` is gone, repeated USRP callsigns need a name
+
+K9_OUT = """\
+[[edges.allstar.outbound]]
+from = 2900
+target = 199902
+host = ""
+mode = "transceive"   # keeps the link
+permanent = true
+
+[[edges.allstar.outbound]]
+from = 2900
+target = 299901
+host = ""
+mode = "monitor"
+permanent = false
+
+[[edges.allstar.outbound]]
+from = 2900
+target = 299902
+permanent = false
+"""
+K9_USRP = """\
+[[edges.usrp.endpoint]]
+module = "A"
+bind = "<OWN_IP>:34001"
+peer = "<NET>.40:32001"
+callsign = "N0TEST"
+
+[[edges.usrp.endpoint]]
+module = "B"
+bind = "<OWN_IP>:34002"
+peer = "<NET>.40:32002"
+callsign = "n0test"
+
+[[edges.usrp.endpoint]]
+module = "C"
+bind = "<OWN_IP>:34003"
+peer = "<TESTER_IP>:32003"
+callsign = "N0CALL"
+"""
+
+
+def _rows(text, *path):
+    doc = tomllib.loads(text)
+    for key in path:
+        doc = doc[key]
+    return doc
+
+
+def test_k9_outbound_transceive_is_an_explicit_both_and_monitor_is_an_explicit_to_room():
+    rows = _rows(sut_config.render(K9_OUT, "172.30.0", gen="k9"), "edges", "allstar", "outbound")
+    assert [r["direction"] for r in rows] == ["both", "to_room", "to_room"]
+    assert all("mode" not in r for r in rows)
+    assert [r["permanent"] for r in rows] == [True, False, False]          # the other keys stay
+    assert "# keeps the link" in sut_config.render(K9_OUT, "172.30.0", gen="k9")
+
+
+def test_k9_outbound_older_generations_keep_the_mode_key_unchanged():
+    for gen in ("71ab207", "c165c93", "c2465de", "compat1"):
+        out = sut_config.render(K9_OUT, "172.30.0", gen=gen)
+        assert 'mode = "transceive"' in out and 'mode = "monitor"' in out and "direction" not in out, gen
+
+
+def test_k9_outbound_an_explicit_direction_wins_and_drops_a_leftover_mode():
+    text = '[[edges.allstar.outbound]]\nfrom = 2900\ntarget = 1\ndirection = "both"\nmode = "monitor"\n'
+    row = _rows(sut_config.render(text, "172.30.0", gen="k9"), "edges", "allstar", "outbound")[0]
+    assert row["direction"] == "both" and "mode" not in row
+    # an unknown mode value is not guessed: the image names it
+    text = '[[edges.allstar.outbound]]\nfrom = 2900\ntarget = 1\nmode = "other"\n'
+    assert 'mode = "other"' in sut_config.render(text, "172.30.0", gen="k9")
+
+
+def test_k9_usrp_rows_with_a_repeated_callsign_get_a_name_from_the_module_letter():
+    rows = _rows(sut_config.render(K9_USRP, "172.30.0", gen="k9"), "edges", "usrp", "endpoint")
+    assert [r.get("name") for r in rows] == ["usrp-a", "usrp-b", None]       # N0TEST twice (any case), N0CALL once
+    assert [r["module"] for r in rows] == ["A", "B", "C"] and rows[0]["bind"] == "172.30.0.11:34001"
+    for older in ("c165c93", "compat1"):
+        assert "name =" not in sut_config.render(K9_USRP, "172.30.0", gen=older), older
+
+
+def test_k9_usrp_names_are_unique_valid_and_the_snippet_s_own_name_is_kept():
+    text = K9_USRP + """
+[[edges.usrp.endpoint]]
+name = "usrp-a"
+module = "D"
+bind = "<OWN_IP>:34004"
+peer = "<NET>.40:32004"
+callsign = "N0TEST"
+
+[[edges.usrp.endpoint]]
+module = "A"
+bind = "<OWN_IP>:34005"
+peer = "<NET>.40:32005"
+callsign = "N0TEST"
+"""
+    rows = _rows(sut_config.render(text, "172.30.0", gen="k9"), "edges", "usrp", "endpoint")
+    names = [r.get("name") for r in rows]
+    assert names == ["usrp-a-2", "usrp-b", None, "usrp-a", "usrp-a-3"], names       # the written usrp-a is never reused
+    keys = [(r.get("name") or r["callsign"].upper()).upper() for r in rows]
+    assert len(set(keys)) == len(keys)
+    for name in names:
+        assert name is None or re.fullmatch(r"[a-z][a-z0-9-]{0,31}", name), name
+
+
+def test_k9_usrp_rig_snippets_together_have_unique_routing_keys():
+    snippets = RF_DIR
+    extras = [(snippets / n).read_text(encoding="utf-8") for n in ("usrp-rig.toml", "rfpos1c-usrp.toml")]
+    rows = _rows(sut_config.render("[node]\ncallsign = \"XLX999\"\n", "172.30.0", extras=extras, gen="k9"), "edges", "usrp", "endpoint")
+    assert [r["name"] for r in rows] == ["usrp-a", "usrp-b", "usrp-c", "usrp-l"]
+    assert len({r["name"] for r in rows}) == 4 and {r["callsign"] for r in rows} == {"N0TEST"}
+
+
+def test_k9_allstar_lab_out_snippet_transmits_only_to_the_row_that_says_so():
+    extras = [(RF_DIR / n).read_text(encoding="utf-8") for n in ("allstar-lab.toml", "allstar-lab-out.toml")]
+    rows = _rows(sut_config.render("[node]\ncallsign = \"XLX999\"\n", "172.30.0", extras=extras, gen="k9"), "edges", "allstar", "outbound")
+    assert {r["target"]: r["direction"] for r in rows} == {199902: "both", 299901: "to_room"}
+
+
+def test_k9_leaves_a_template_without_those_rows_unchanged_from_compat1():
+    for text in (TOTP_TEMPLATE, MMDVM_TEMPLATE):
+        assert sut_config.render(text, "172.30.0", gen="k9") == sut_config.render(text, "172.30.0", gen="compat1")

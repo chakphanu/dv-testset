@@ -6,7 +6,7 @@ exits 2 with `<file>: N error(s), not started` when it is invalid. This tool run
 (`docker run --rm --network none`, the dvtest.limits caps, read-only root, all capabilities dropped, no-new-privileges, the caller's uid (so the 0600 stand-ins are readable without CAP_DAC_OVERRIDE), the file mounted read-only, no ports; the root is read-only, so no state can be written), reads the
 startup lines, and kills the container as soon as the router is past validation (it is never left running). Usage:
 
-  python3 -m dvtest.tools.config_check --image dv-router:wip-c165c93 --template TEMPLATE [--extra FILE ...] [--gen 71ab207|c165c93|c2465de|compat1] [--mode auto|start|check]
+  python3 -m dvtest.tools.config_check --image dv-router:wip-c165c93 --template TEMPLATE [--extra FILE ...] [--gen 71ab207|c165c93|c2465de|compat1|k9] [--mode auto|start|check]
 
 For `--gen compat1` (or `--mode check`) it runs `dv-router config check FILE` instead, which prints the errors and exits by itself
 (`judge_check`; no network, no writes; exit 0 valid, 2 invalid on wip-488b89d). Exit 0 = valid (warnings are printed), 1 = invalid (the errors are printed), 2 = the check itself failed (no docker, no image).
@@ -28,7 +28,7 @@ NOT_STARTED = re.compile(r"(\d+) error\(s\), not started")
 SECRET_FILE = re.compile(r'^\s*[A-Za-z0-9_]+_file\s*=\s*"(/[^"]+)"', re.M)
 INSIDE = "/etc/dv-router/dv-router.toml"
 MODES = ("start", "check")
-GENS_WITH_CHECK = ("compat1",)       # DVT_SUT_GEN values whose image has `dv-router config check FILE`
+GENS_WITH_CHECK = ("compat1", "k9")       # DVT_SUT_GEN values whose image has `dv-router config check FILE`
 PAST_VALIDATION = re.compile(r"(?:fabric: |callhome: |edges: |wrote .*config-entries)")
 
 

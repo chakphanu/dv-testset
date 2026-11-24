@@ -109,11 +109,20 @@ def dp15_tx_enable_value(value=None):
 # `admin.totp` are rejected (the key is `totp_required`), every `[[edges.xlx.peer]]` row needs `kind = "xlx"`, env DV_MMDVM_* is
 # gone (DV_DMRHB_* only), `[edges.mmdvm]` no longer loads. The repo snippets keep the keys of the older images; the renames happen at
 # render time for compat1 only (`apply_gen`, `adapt_text`), so every older generation renders as before.
-GENS = ("71ab207", "c165c93", "c2465de", "compat1")
+# `k9` (images from wip-4732c43, DV-Router 0a6ec3e5: K9a + K9b; a superset of compat1) gives every endpoint row `direction` and `enabled` and
+# rejects what the old dialect said: the AllStar outbound key `mode` is gone (`direction`: default `to_room` = the listen-only Monitor call,
+# a call transmits room audio and keying only with an explicit `direction = "both"`), and several `[[edges.usrp.endpoint]]` rows with one
+# callsign need a unique `name` (the routing key; without it the load fails with "duplicate endpoint key"). The repo snippets keep the keys of
+# the older images (mode = "transceive", repeated callsigns); `apply_k9` rewrites them at render time for k9 only: `mode = "transceive"` becomes
+# `direction = "both"`, `mode = "monitor"` (or no mode) `direction = "to_room"`, a repeated USRP callsign gets `name = "usrp-<module letter>"`.
+# A non-both direction on any other row stays refused by the image until K9c ("direction enforcement is not built yet"): the renderer never
+# writes `direction` there, the default `both` is what the old behaviour was.
+GENS = ("71ab207", "c165c93", "c2465de", "compat1", "k9")
 DEFAULT_GEN = "c165c93"
 RENAMES = {"mmdvm": "dmrhb"}          # edge name before -> from generation c2465de on
 RENAMED_FROM = "c2465de"
 COMPAT1 = "compat1"
+K9 = "k9"
 KEY_RENAMES = {("web", "operator_totp"): "totp_required", ("admin", "totp"): "totp_required"}   # (table, old key) -> new key, compat1
 
 
@@ -144,6 +153,11 @@ def env_prefix(name, gen=None):
 
 _EDGES_HEADER = re.compile(r"^(\s*\[\[?\s*)edges\.mmdvm(\b)")
 _XLX_PEER_HEADER = re.compile(r"^\s*\[\[\s*edges\.xlx\.peer\s*\]\]\s*(#.*)?$")
+_ALLSTAR_OUT_HEADER = re.compile(r"^\s*\[\[\s*edges\.allstar\.outbound\s*\]\]\s*(#.*)?$")
+_USRP_ENDPOINT_HEADER = re.compile(r"^\s*\[\[\s*edges\.usrp\.endpoint\s*\]\]\s*(#.*)?$")
+_MODE_LINE = re.compile(r'^(\s*)mode\s*=\s*"([^"]*)"(\s*#.*)?\s*$')
+_MODULE_LINE = re.compile(r'^\s*module\s*=\s*"([A-Za-z0-9])"')
+_STR_VALUE_LINE = re.compile(r'^\s*%s\s*=\s*"([^"]*)"')
 
 
 def adapt_text(text, gen):
@@ -187,12 +201,80 @@ def _add_peer_kind(text):
     return _join_tables(parts)
 
 
+def _k9_outbound(text):
+    """Every `[[edges.allstar.outbound]]` row with an explicit `direction` (K9a): the old key `mode` is refused by k9 images. `mode =
+    "transceive"` becomes `direction = "both"` (the only value that transmits), `mode = "monitor"` and a row without `mode` get
+    `direction = "to_room"` (the listen-only Monitor call, also the image default, written out so the intent is visible). A row that
+    has a `direction` already keeps it and loses a leftover `mode` line. Another `mode` value is left alone (the image names it)."""
+    parts = _split_tables(text)
+    for part in parts:
+        if part[2] is None or not _ALLSTAR_OUT_HEADER.match(part[2]):
+            continue
+        body = part[3]
+        has_direction = any(m and m.group(1) == "direction" for m in map(_KEY.match, body))
+        out, done = [], has_direction
+        for line in body:
+            m = _MODE_LINE.match(line)
+            if not m or m.group(2) not in ("transceive", "monitor"):
+                out.append(line)
+            elif not done:
+                done = True
+                out.append('%sdirection = "%s"%s' % (m.group(1), "both" if m.group(2) == "transceive" else "to_room", m.group(3) or ""))
+            # else: a direction is there already, the old mode line is dropped
+        if not done:
+            at = max([i for i, line in enumerate(out) if line.strip() and not line.lstrip().startswith("#")] or [-1]) + 1
+            out.insert(at, 'direction = "to_room"')
+        part[3] = out
+    return _join_tables(parts)
+
+
+def usrp_endpoint_name(module, taken):
+    """A routing name for a USRP endpoint row of module letter `module`: `usrp-<letter>` in lower case (a digit module works too), `-2`,
+    `-3`, ... when `taken` (a set of lower case names) has it already; the result is added to `taken`. DV-Router wants 1..32 lower case
+    ASCII letters, digits or dash, starting with a letter."""
+    base = "usrp-%s" % (module or "x").lower()
+    name, n = base, 1
+    while name in taken:
+        n += 1
+        name = "%s-%d" % (base, n)
+    taken.add(name)
+    return name
+
+
+def _k9_usrp_names(text):
+    """A unique `name` for every `[[edges.usrp.endpoint]]` row that shares its callsign (compared in upper case) with another row and has
+    no `name` of its own (K9a: the routing key of an unnamed row is its callsign, and a repeated key is a load error). Rows with a
+    unique callsign stay unnamed; a name the snippet wrote itself is kept and never reused."""
+    parts = _split_tables(text)
+    rows = [p for p in parts if p[2] is not None and _USRP_ENDPOINT_HEADER.match(p[2])]
+
+    def field(part, key):
+        rx = re.compile(_STR_VALUE_LINE.pattern % re.escape(key))
+        return next((m.group(1) for m in map(rx.match, part[3]) if m), None)
+
+    count = {}
+    for part in rows:
+        call = (field(part, "callsign") or "").upper()
+        count[call] = count.get(call, 0) + 1
+    taken = {(field(part, "name") or "").lower() for part in rows} - {""}
+    for part in rows:
+        if field(part, "name") is None and count[(field(part, "callsign") or "").upper()] > 1:
+            module = _MODULE_LINE.match(next((line for line in part[3] if _MODULE_LINE.match(line)), ""))
+            part[3].insert(0, 'name = "%s"' % usrp_endpoint_name(module.group(1) if module else None, taken))
+    return _join_tables(parts)
+
+
+def apply_k9(text):
+    """The rendered text in the k9 dialect (see GENS): `_k9_outbound`, then `_k9_usrp_names`."""
+    return _k9_usrp_names(_k9_outbound(text))
+
+
 def apply_gen(text, gen):
     """The rendered text in the dialect of generation `gen`. 71ab207: unchanged. From c165c93 on: the `[fabric]` table is removed (the
     broker ACL is gone: its only key `acl` was ignored with a warning before, and the table itself is an unknown field now, so the
     validator refuses the file); sub-tables `[fabric.x]` go with it. From c2465de on: every `[edges.mmdvm]`, `[edges.mmdvm.x]` and
     `[[edges.mmdvm.x]]` header becomes `edges.dmrhb`. From compat1 on: every `[[edges.xlx.peer]]` row gets `kind = "xlx"` (the totp key
-    renames are done per text before the merge: `adapt_text`). Other removed keys (access.allow_file / deny_file, callhome interlink_file) are
+    renames are done per text before the merge: `adapt_text`). From k9 on: `apply_k9` (AllStar outbound `direction`, USRP names). Other removed keys (access.allow_file / deny_file, callhome interlink_file) are
     not rewritten: dvtest/tools/config_check.py reports them."""
     gen = gen_value(gen)
     if gen == "71ab207":
@@ -203,6 +285,8 @@ def apply_gen(text, gen):
         text = "\n".join(_EDGES_HEADER.sub(lambda m: m.group(1) + "edges.dmrhb" + m.group(2), line) for line in text.split("\n"))
     if gen_at_least(gen, COMPAT1):
         text = _add_peer_kind(text)
+    if gen_at_least(gen, K9):
+        text = apply_k9(text)
     return text
 
 

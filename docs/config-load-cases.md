@@ -19,7 +19,7 @@ DVT_CFGLOAD_IMAGE=dv-router:wip-488b89d DVT_SUT_GEN=compat1 DVT_SUT_CONFIG=/path
 | Env | Meaning |
 |-----|---------|
 | `DVT_CFGLOAD_IMAGE` | the compat1 image (needs the `config check` subcommand); unset = skip |
-| `DVT_SUT_GEN` | must be `compat1`; anything else = skip (the old keys load on older images, with a warning) |
+| `DVT_SUT_GEN` | must be `compat1` or `k9` (images from wip-4732c43); anything else = skip (the old keys load on older images, with a warning) |
 | `DVT_SUT_CONFIG` | the rig's template (the same file the rig uses); unset or missing = skip |
 | `DVT_CFGLOAD_EXTRA` | optional `a:b` list of snippets merged like `DVT_SUT_CONFIG_EXTRA` (default none) |
 | `DVT_OUT` | results directory; the exact error text of every case goes to `$DVT_OUT/config-load/results.json` (else the pytest tmp dir) |

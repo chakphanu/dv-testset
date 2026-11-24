@@ -129,4 +129,4 @@ def test_docker_command_check_mode_runs_config_check_with_the_same_caps():
     assert cmd[cmd.index("--cap-drop") + 1] == "ALL" and "-p" not in cmd and "--privileged" not in cmd
     with pytest.raises(ValueError):
         cc.docker_command("i", "/x", "n", mode="bogus")
-    assert "compat1" in cc.GENS_WITH_CHECK and "c2465de" not in cc.GENS_WITH_CHECK
+    assert "compat1" in cc.GENS_WITH_CHECK and "k9" in cc.GENS_WITH_CHECK and "c2465de" not in cc.GENS_WITH_CHECK

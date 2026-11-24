@@ -41,11 +41,11 @@ def rendered():
         pytest.skip("DVT_SUT_CONFIG is unset (the rig's template, e.g. /path/to/rig-dv-router.toml)")
     if not Path(template).is_file():
         pytest.skip("DVT_SUT_CONFIG=%s is not a file" % template)
-    if sut_config.gen_value() != sut_config.COMPAT1:
-        pytest.skip("DVT_SUT_GEN must be compat1 (the old keys are refused only there)")
+    if not sut_config.gen_at_least(None, sut_config.COMPAT1):
+        pytest.skip("DVT_SUT_GEN must be compat1 or k9 (the old keys are refused only there)")
     extras = sut_config.split_extras(os.environ.get("DVT_CFGLOAD_EXTRA", ""))
     texts = [Path(p).read_text(encoding="utf-8") for p in extras]
-    return sut_config.render(Path(template).read_text(encoding="utf-8"), NET, extras=texts, gen=sut_config.COMPAT1)
+    return sut_config.render(Path(template).read_text(encoding="utf-8"), NET, extras=texts, gen=sut_config.gen_value())
 
 
 @pytest.fixture(scope="module")

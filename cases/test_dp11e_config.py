@@ -33,8 +33,8 @@ def template():
     value = os.environ.get("DVT_SUT_CONFIG")
     if not value or not Path(value).is_file():
         pytest.skip("DVT_SUT_CONFIG is unset or not a file (the rig's template)")
-    if sut_config.gen_value() != sut_config.COMPAT1:
-        pytest.skip("DVT_SUT_GEN must be compat1")
+    if not sut_config.gen_at_least(None, sut_config.COMPAT1):
+        pytest.skip("DVT_SUT_GEN must be compat1 or k9")
     return Path(value).read_text(encoding="utf-8")
 
 
@@ -62,7 +62,7 @@ def results():
 @pytest.mark.parametrize("case", dp11e.CONFIG_CASES, ids=[c.id for c in dp11e.CONFIG_CASES])
 def test_dp11e_config(case, image, template, results):
     text = case.mutate(SNIPPET.read_text(encoding="utf-8"))
-    rendered = sut_config.render(template, tcl.NET, extras=[text], gen=sut_config.COMPAT1)
+    rendered = sut_config.render(template, tcl.NET, extras=[text], gen=sut_config.gen_value())
     verdict, code = tcl.run_config_check(image, rendered)
     assert "kiss_server" in rendered, "the snippet did not reach the rendered file"
     problems = dp11e.config_problems(case, verdict, code)

@@ -33,8 +33,8 @@ def template():
     value = os.environ.get("DVT_SUT_CONFIG")
     if not value or not Path(value).is_file():
         pytest.skip("DVT_SUT_CONFIG is unset or not a file (the rig's template)")
-    if sut_config.gen_value() != sut_config.COMPAT1:
-        pytest.skip("DVT_SUT_GEN must be compat1")
+    if not sut_config.gen_at_least(None, sut_config.COMPAT1):
+        pytest.skip("DVT_SUT_GEN must be compat1 or k9")
     return Path(value).read_text(encoding="utf-8")
 
 
@@ -62,7 +62,7 @@ def results():
 @pytest.mark.parametrize("case", digi1cfg.CONFIG_CASES, ids=[c.id for c in digi1cfg.CONFIG_CASES])
 def test_digi1_config(case, image, template, results):
     extras = digi1cfg.render_extras(case, lambda name: (SNIPPETS / name).read_text(encoding="utf-8"))
-    rendered = sut_config.render(template, tcl.NET, extras=extras, gen=sut_config.COMPAT1)
+    rendered = sut_config.render(template, tcl.NET, extras=extras, gen=sut_config.gen_value())
     assert "digi = " in rendered, "the snippet did not reach the rendered file"
     verdict, code = tcl.run_config_check(image, rendered)
     problems = digi1cfg.config_problems(case, verdict, code)
