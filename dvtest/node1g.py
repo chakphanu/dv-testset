@@ -119,6 +119,50 @@ def linkseq_problems(heard, sent_frames, mv, rows):
     return out
 
 
+LINKFIX2_SWITCH = "DVT_LINKFIX2"
+# LINKFIX2 (next image): the hotspot row keeps the reason of the LAST SESSION END apart from the last attempt error (`last_error`). The field name is NOT known
+# yet (the row fields of the image under test are not in the DV-Router tree this was written against): the first of these that a row carries is the one read.
+END_REASON_FIELDS = ("last_end_reason", "end_reason", "last_session_end", "session_end_reason", "last_end", "ended")
+
+
+def linkfix2_on(environ=None):
+    """DVT_LINKFIX2=on: the image has LINKFIX2 (the row's separate end-reason field; the 40 ms reorder window is a contract with the 2-unit cap only a safety
+    bound). NODE1g-h and -r then assert the end reason `revoked` on the row while the hotspot retries and is refused, with `last_error` the attempt error."""
+    return (environ if environ is not None else os.environ).get(LINKFIX2_SWITCH, "").strip().lower() in ("on", "1", "true", "yes")
+
+
+def end_reason_field(row):
+    """The name of the end-reason field a link row carries (the first of END_REASON_FIELDS that is present), or None."""
+    for name in END_REASON_FIELDS:
+        if name in (row or {}):
+            return name
+    return None
+
+
+def row_end_reason(row):
+    """The end reason a link row shows (None when the row has no such field or it is empty)."""
+    name = end_reason_field(row)
+    value = (row or {}).get(name) if name else None
+    return value or None
+
+
+def end_reason_problems(samples, who, want="revoked"):
+    """LINKFIX2 asserts over the hotspot row samples [(state, last_error, end_reason)] taken while it retries after a revocation: the row has an end-reason
+    field (any of END_REASON_FIELDS), every sample in which the hotspot is `reconnecting` shows it as `want`, and `last_error` keeps the attempt error:
+    `refused_key` is seen, and `revoked` is not what last_error says any more. Sentences, empty when they hold."""
+    out = []
+    retrying = [s for s in samples if s[0] == "reconnecting"]
+    if not retrying:
+        return ["%s: no sample of the row while it retries" % who]
+    wrong = sorted({str(s[2]) for s in retrying if s[2] != want})
+    if wrong:
+        out.append("%s: the row shows end reason %s while it retries (wanted %s in all %d samples; field names tried %s)" % (
+            who, wrong, want, len(retrying), list(END_REASON_FIELDS)))
+    if "refused_key" not in {s[1] for s in retrying}:
+        out.append("%s: last_error never showed the attempt error refused_key while it retried (seen %s)" % (who, sorted({str(s[1]) for s in retrying})))
+    return out
+
+
 def on(environ=None):
     """DVT_NODE1G=on: run.sh made the pair a hotspot behind a WAN router and its central node (--profile twonode)."""
     return (environ if environ is not None else os.environ).get(SWITCH, "").strip().lower() in ("on", "1", "true", "yes")

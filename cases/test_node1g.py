@@ -890,7 +890,7 @@ class RowSampler:
     joins and returns [(state, last_error)] in time order. Used only around a reload, before the main thread reads rows again."""
 
     def __init__(self, n, node, seconds):
-        self.n, self.node, self.seconds, self.rows = n, node, seconds, []
+        self.n, self.node, self.seconds, self.rows, self.full = n, node, seconds, [], []
         self.thread = threading.Thread(target=self._run, daemon=True)
 
     def _run(self):
@@ -899,6 +899,7 @@ class RowSampler:
             row = get_row(self.n, self.node)
             if row is not None:
                 self.rows.append((row.get("state"), row.get("last_error")))
+                self.full.append((row.get("state"), row.get("last_error"), n1.row_end_reason(row)))
             time.sleep(0.25)
 
     def start(self):
@@ -934,7 +935,10 @@ def test_node1g_h_rotated_key(n1g):
     event(n)
     first_labels = sampler.finish()
     note(n, case, "RECORD", "hotspot row right after the reload (state, last_error): %s" % first_labels[:40])
-    if n1.linkobs_on() and "revoked" not in [e for _, e in first_labels]:
+    if n1.linkfix2_on():
+        # LINKFIX2: the row keeps the end reason apart from the attempt error: revoked while it retries, last_error the refusal
+        problems += n1.end_reason_problems(sampler.full, "h")
+    elif n1.linkobs_on() and "revoked" not in [e for _, e in first_labels]:
         problems.append("LINKOBS1: the hotspot row never showed last_error revoked after the rekey (labels seen %s)" % sorted(set(str(e) for _, e in first_labels)))
     window = 120.0
     t_start = time.monotonic()
@@ -1163,9 +1167,11 @@ def test_node1g_r_revoked_account(n1g):
     event(n)
     labels = sampler.finish()
     note(n, case, "RECORD", "hotspot row right after the reload (state, last_error): %s" % labels[:40])
-    if "revoked" not in [e for _, e in labels]:
+    if n1.linkfix2_on():
+        problems += n1.end_reason_problems(sampler.full, "r")
+    elif "revoked" not in [e for _, e in labels]:
         problems.append("the hotspot row never showed last_error revoked (labels seen %s)" % sorted(set(str(e) for _, e in labels)))
-    window, t_start, samples, seen = 60.0, time.monotonic(), [], []
+    window, t_start, samples, seen, ends_seen = 60.0, time.monotonic(), [], [], []
     with lan(n) as ns:
         k = 0
         while time.monotonic() - t_start < window:
@@ -1174,12 +1180,16 @@ def test_node1g_r_revoked_account(n1g):
                 row = get_row(n, "hotspot")
                 if row is not None:
                     seen.append((round(time.monotonic() - t_start, 1), row.get("state"), row.get("last_error")))
+                    ends_seen.append((row.get("state"), row.get("last_error"), n1.row_end_reason(row)))
             k += 1
             tick(ns.all)
         mid = hubs(n, quiet=False)
         t_dead, sent = probe_until_heard(ns, ns.hc, ns.lc, 3.0, "r-dead")
         if t_dead is not None:
             problems.append("an over crossed the link after the account was revoked")
+    if n1.linkfix2_on():
+        # until the next successful handshake the row still says why the last session ended, while it retries and is refused (every 4th round of the window)
+        problems += n1.end_reason_problems(ends_seen, "r window")
     rate = n1.refusal_rate(samples)
     note(n, case, "RECORD", "revoked at +0 s; central Reject{auth} rate %s; hotspot rows %s" % (
         None if rate is None else "%.3f per s over %.0f s (%g)" % rate, seen[::2]))
@@ -1211,6 +1221,10 @@ def test_node1g_r_revoked_account(n1g):
     mv = {"central": n1.rebase(before["central"], after["central"]), "hotspot": n1.delta(before["hotspot"], after["hotspot"])}
     problems += counters_problems(mv, (1, 1), allow_restarts=("dv-edge-link",), allow_rx=("unknown_session",), ends={"hotspot": {"revoked": 1}})
     problems += floor_free(n, after, (("central", "C"), ("hotspot", "B")))
+    if n1.linkfix2_on():
+        row = wait_row(n, "hotspot", connected, 15.0)[0]
+        if row is not None and n1.row_end_reason(row) == "revoked":
+            problems.append("r: the row still shows end reason revoked after the next successful handshake (wanted it cleared or replaced)")
     note(n, case, "RECORD", "row put back: first probe heard %s s after the reload; hotspot moved %s" % (
         None if rel is None else round(rel, 2), {k: v for k, v in mv["hotspot"].items() if k.startswith(("hs.", "se."))}))
     finish(n, case, problems)

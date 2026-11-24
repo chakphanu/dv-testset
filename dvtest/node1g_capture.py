@@ -259,9 +259,11 @@ def judge(run_dir, out=print):
                 if w.get("linkseq1") and lates is not None:
                     allowed = r["units_over_40ms"]
                     seq_ok = lates <= allowed
+                    deep = sum(1 for late, back in zip(r["unit_late_ms"], r["unit_back"]) if late <= RESEQ_MS and back > 2)
                     bad += 0 if seq_ok else 1
-                    out("%s %s %s LINKSEQ1: %d units reordered (lateness ms %s, positions back %s), %d later than %.0f ms; link-edge late units counted %g, at most %d expected -> %s" % (
-                        run, w["case"], node, r["units_reordered"], [round(x) for x in r["unit_late_ms"]], r["unit_back"], allowed, RESEQ_MS, lates, allowed,
+                    out("%s %s %s LINKSEQ1: %d units reordered (lateness ms %s, positions back %s; %d within %.0f ms but more than 2 positions back), %d later than %.0f ms; "
+                        "link-edge late units counted %g, at most %d expected (the 40 ms window is the contract, whatever the position count) -> %s" % (
+                        run, w["case"], node, r["units_reordered"], [round(x) for x in r["unit_late_ms"]], r["unit_back"], deep, RESEQ_MS, allowed, RESEQ_MS, lates, allowed,
                         "ok" if seq_ok else "DEFECT: a unit reordered inside %.0f ms was counted late" % RESEQ_MS))
                 out("%s %s %s receives: %d datagrams, %d reordered (back by up to %d, late by up to %.0f ms, mean %.0f ms); %d units, %d reordered (back by up to %d positions)" % (
                     run, w["case"], node, r["datagrams"], r["reordered"], r["max_counter_back"], r["max_late_ms"], r["mean_late_ms"], r["units"],

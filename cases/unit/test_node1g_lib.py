@@ -394,6 +394,22 @@ def test_account_rows_are_removed_and_repointed_in_the_rendered_toml():
     assert tomllib.loads(without)["edges"]["link"]["account"][0]["name"] == "n0call-hs2"
 
 
+def test_linkfix2_end_reason_is_read_from_a_separate_row_field():
+    assert not n1.linkfix2_on({}) and n1.linkfix2_on({"DVT_LINKFIX2": "on"})
+    row = {"state": "reconnecting", "last_error": "refused_key", "last_end_reason": "revoked"}
+    assert n1.end_reason_field(row) == "last_end_reason" and n1.row_end_reason(row) == "revoked"
+    assert n1.row_end_reason({"state": "connected", "end_reason": "bye"}) == "bye" and n1.row_end_reason({"state": "connected"}) is None
+    assert n1.row_end_reason({"end_reason": ""}) is None and n1.row_end_reason(None) is None
+    good = [("connected", None, None), ("reconnecting", "refused_key", "revoked"), ("reconnecting", "refused_key", "revoked")]
+    assert n1.end_reason_problems(good, "r") == []
+    # today's image: last_error carries the reason for under a second, then refused_key; no end-reason field at all
+    today = [("connected", None, None), ("reconnecting", "refused_key", None)]
+    out = n1.end_reason_problems(today, "r")
+    assert len(out) == 1 and "None" in out[0] and "last_end_reason" in out[0]
+    assert any("refused_key" in p for p in n1.end_reason_problems([("reconnecting", "revoked", "revoked")], "r"))        # last_error must stay the attempt error
+    assert n1.end_reason_problems([("connected", None, None)], "r") == ["r: no sample of the row while it retries"]
+
+
 def test_keybox_never_shows_the_key():
     box = n1.KeyBox("ab" * 32)
     assert box.value == "ab" * 32 and "ab" not in repr(box) and "ab" not in str(box)
