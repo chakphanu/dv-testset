@@ -132,6 +132,27 @@ for by port only (an address change keeps the port), `--down` did not know the p
 
 Built on `wip-4732c43` (cases k, r, s and the asserts of d and h, see below); on the older image these notes were RECORD-only.
 
+## Results on wip-ae11b8f (LINKFIX2, DV-Router 0d1ba106; also K9c)
+
+Runs `20261124T094809Z` (a, h, m, r, s with `--capture`, `DVT_NODE1G_FOLD=4`: **5 of 5 pass**, 730 s) and `20261124T100404Z` (all the others: 11 passed, 1 failed, 869 s), all with `DVT_LINKOBS1=on DVT_LINKREBIND1=on
+DVT_LINKSEQ1=on DVT_LINKFIX2=on DVT_SUT_CONFIG_RW=1` and `DVT_SUT_GEN=compat1`. Both node1g configs load on the image (the config check is valid; they render no `direction`, so K9c changes nothing for them).
+
+| Case | Result | Key numbers |
+|------|--------|-------------|
+| 0, b, c, j, k | pass | b: heard 95.2 / 97.2 percent for 3 percent loss, `loss_ppm` 42105 / 24561; c: no session end; j: pids 48 to 48, threads 4 to 4, fds 17 to 17; k: `bad_source` and `unknown_session` as before |
+| a | **pass** | heard 100 / 100 percent; late 0 and lost 0 on both nodes; row `loss_ppm` 0 and 0; host step: 3 reordered units at the central node (1, 3 and 10 ms late, 3, 2 and 2 positions back) and 4 at the hotspot (3 to 13 ms, up to 4 back), 3 of them more than 2 positions back and all played, link-edge late 0 -> ok |
+| d | FAIL (FINDING 9, one assert) | `last_session_end` `timeout` on both rows during the blackout and null after the relink, the hub counters agree, `se.timeout` +1 on both, one handshake each side, 1.26 s to relink; the failing line is `last_error` of the CENTRAL row during the blackout: None (the case wanted `timeout` on both) |
+| e1 to e4 | pass | `end_missing` +1 on the receiving room, 3.0 s probe 100 percent, floor free between 1.0 s and 2.0 s |
+| f, g | pass | 0 of 3 central-to-hotspot overs cut, longest silence 0.06 to 0.08 s, heard 99 percent; first datagram to the new address 0.096 to 0.116 s after the change (central to hotspot), 1.75 s in the idle direction |
+| h | pass | Reject{auth} rate 1.000/s (limit 1.1); `last_session_end` `revoked` in every reconnecting sample, `last_error` `refused_key`, null after the fix (first probe 3.89 s after the fix); hotspot `se.revoked` +1 |
+| m | pass | 8 of 8 isolated overs `end_missing`; the capture judge agrees for all eight |
+| r | pass | rate 1.010/s; `revoked` on every sample, `refused_key`, null after the row is put back (first probe 2.25 s after the reload); hotspot `se.revoked` +1 |
+| s | pass | `se.bye` +2, the link back 0.5 and 0.4 s after the reloads; no 0.25 s sample landed between the Bye and the relink in the second reload: recorded; null after both |
+
+**FINDING 9 (to confirm with dv-router, contract section 5 changed by LINKFIX2).** During a 60 s blackout the hotspot row has `last_error` `timeout` (its own attempts time out) but the central row has no `last_error` at all: the
+session end moved to `last_session_end` (`timeout`) and a server makes no attempts. Section 5 of the first answer said `timeout` on both. The case now accepts `None` or `timeout` for the CENTRAL row under
+`DVT_LINKFIX2=on` and `timeout` for the hotspot (the run above is not repeated: the rig went back to the K9c chain).
+
 ## Results on wip-4732c43
 
 Gates (all default off, so the older images still run the contract cases): `DVT_LINKOBS1=on` (k, r, s, and in the other cases the session ends by reason and `bad_source` / `unknown_session` must not move),
