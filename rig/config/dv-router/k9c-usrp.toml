@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Snippet for DVT_SUT_CONFIG_EXTRA (native launch, DVT_SUT_GEN=k9, images from wip-ae11b8f = DV-Router K9c; docs/k9c-cases.md): two STATIC USRP rows on
+# modules K and M (one USRP row per module: the image refuses a second one), the tester (<TESTER_IP>) as the far end of both, each with its own direction:
+#   k9c-from  K  <OWN_IP>:34022 <-> <TESTER_IP>:32022   direction from_room: hears the room, every RTS is refused (deny reason TxAcl)
+#   k9c-to    M  <OWN_IP>:34023 <-> <TESTER_IP>:32023   direction to_room: supplies the room, hears nothing
+# The third party of each room is a client of the dynamic hub (DVT_USRP_DYNAMIC=1, class 0). The rows carry their own `name` and `direction`: an older
+# image refuses both keys (and a non-both direction before K9c), so this file is only for DVT_K9C=on. Ports 34022 / 34023 and 32022 / 32023 are free of
+# usrp-rig.toml (34001-34003), rfpos1c-usrp.toml (34004), echo-usrp-peer.toml (34003) and the dynamic hub (34101); modules K and M are free of them too.
+[edges.usrp]
+enable = "auto"
+
+[[edges.usrp.endpoint]]
+name = "k9c-from"
+module = "K"
+bind = "<OWN_IP>:34022"
+peer = "<TESTER_IP>:32022"
+callsign = "N0KF"
+direction = "from_room"
+
+[[edges.usrp.endpoint]]
+name = "k9c-to"
+module = "M"
+bind = "<OWN_IP>:34023"
+peer = "<TESTER_IP>:32023"
+callsign = "N0KT"
+direction = "to_room"

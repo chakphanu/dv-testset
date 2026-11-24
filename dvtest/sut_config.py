@@ -115,8 +115,9 @@ def dp15_tx_enable_value(value=None):
 # callsign need a unique `name` (the routing key; without it the load fails with "duplicate endpoint key"). The repo snippets keep the keys of
 # the older images (mode = "transceive", repeated callsigns); `apply_k9` rewrites them at render time for k9 only: `mode = "transceive"` becomes
 # `direction = "both"`, `mode = "monitor"` (or no mode) `direction = "to_room"`, a repeated USRP callsign gets `name = "usrp-<module letter>"`.
-# A non-both direction on any other row stays refused by the image until K9c ("direction enforcement is not built yet"): the renderer never
-# writes `direction` there, the default `both` is what the old behaviour was.
+# The renderer writes `direction` only on an outbound row. Any other row takes the default `both` (what the old behaviour was) unless a snippet
+# names a direction itself: images before wip-ae11b8f (K9c) refuse a non-both direction there ("direction enforcement is not built yet"),
+# later images enforce it (rig/config/dv-router/k9c-usrp.toml, DVT_K9C=on; docs/k9c-cases.md); the renderer passes it through untouched.
 GENS = ("71ab207", "c165c93", "c2465de", "compat1", "k9")
 DEFAULT_GEN = "c165c93"
 RENAMES = {"mmdvm": "dmrhb"}          # edge name before -> from generation c2465de on

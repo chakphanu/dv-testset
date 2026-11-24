@@ -612,6 +612,8 @@ services:
       DVT_LINKOBS1: ${DVT_LINKOBS1:-}
       # on for DV-Router LINKREBIND1 (the hotspot sends a keepalive at most every 1 s while it receives a stream; image wip-4732c43 and later): NODE1g-f / -g also assert the post-fix numbers (docs/node1g-cases.md)
       DVT_LINKREBIND1: ${DVT_LINKREBIND1:-}
+      # on for DV-Router K9c (endpoint direction is enforced; image wip-ae11b8f and later; needs DVT_SUT_GEN=k9): cases/test_k9c.py (docs/k9c-cases.md)
+      DVT_K9C: ${DVT_K9C:-}
       # on for DV-Router LINKFIX2 (a future image: the hotspot row keeps the end reason of the last session end apart from last_error; the 40 ms reorder window is the contract): NODE1g-h and -r assert it
       DVT_LINKFIX2: ${DVT_LINKFIX2:-}
       # on for DV-Router LINKSEQ1 (image wip-4732c43 and later: a unit reordered within about 40 ms is resequenced and played; every missing frame is counted; loss_ppm counts missing units): NODE1g-a asserts it
